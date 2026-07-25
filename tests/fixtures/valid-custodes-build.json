@@ -1,0 +1,13 @@
+{
+  "input": {
+    "prompt": "Build a 1,000 point fast Custodes army with no named characters",
+    "name": "Custodes Mobility Acceptance"
+  },
+  "expected": {
+    "factionId": "adeptus-custodes",
+    "pointsLimit": 1000,
+    "totalPoints": 990,
+    "legal": true,
+    "allowNamedCharacters": false
+  }
+}

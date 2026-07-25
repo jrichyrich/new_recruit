@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "gameSystem": "warhammer-40000-11e",
+  "sourceData": {
+    "package": "@alpaca-software/40kdc-data",
+    "version": "1.2.0",
+    "edition": "11th",
+    "dataslate": "launch"
+  },
+  "id": "golden-boys-435",
+  "name": "Golden Boys",
+  "factionId": "adeptus-custodes",
+  "factionName": "Adeptus Custodes",
+  "pointsLimit": 0,
+  "totalPoints": 435,
+  "battleSize": "incursion",
+  "detachmentId": "unconfigured",
+  "detachmentName": "Unconfigured",
+  "forceDispositionId": "unconfigured",
+  "forceDispositionName": "Unconfigured",
+  "preferences": [
+    "mobility"
+  ],
+  "constraints": {
+    "allowNamedCharacters": true,
+    "allowLegends": false,
+    "collectionUnitIds": null
+  },
+  "units": [
+    {
+      "selectionId": "golden-boys-vertus-1",
+      "unitId": "vertus-praetors",
+      "name": "Vertus Praetors",
+      "role": "Mounted",
+      "modelCount": 2,
+      "ordinal": 1,
+      "points": 145,
+      "isWarlord": false,
+      "enhancementId": null,
+      "enhancementName": null,
+      "equipment": [
+        {
+          "itemId": "interceptor-lance-vertus-praetors",
+          "name": "Interceptor lance",
+          "count": 2
+        },
+        {
+          "itemId": "salvo-launcher",
+          "name": "Salvo launcher",
+          "count": 2
+        }
+      ],
+      "tags": [
+        "mobility",
+        "durability",
+        "objective",
+        "shooting",
+        "melee",
+        "elite"
+      ]
+    },
+    {
+      "selectionId": "golden-boys-vertus-2",
+      "unitId": "vertus-praetors",
+      "name": "Vertus Praetors",
+      "role": "Mounted",
+      "modelCount": 2,
+      "ordinal": 2,
+      "points": 145,
+      "isWarlord": false,
+      "enhancementId": null,
+      "enhancementName": null,
+      "equipment": [
+        {
+          "itemId": "interceptor-lance-vertus-praetors",
+          "name": "Interceptor lance",
+          "count": 2
+        },
+        {
+          "itemId": "salvo-launcher",
+          "name": "Salvo launcher",
+          "count": 2
+        }
+      ],
+      "tags": [
+        "mobility",
+        "durability",
+        "objective",
+        "shooting",
+        "melee",
+        "elite"
+      ]
+    },
+    {
+      "selectionId": "golden-boys-vertus-3",
+      "unitId": "vertus-praetors",
+      "name": "Vertus Praetors",
+      "role": "Mounted",
+      "modelCount": 2,
+      "ordinal": 3,
+      "points": 145,
+      "isWarlord": false,
+      "enhancementId": null,
+      "enhancementName": null,
+      "equipment": [
+        {
+          "itemId": "interceptor-lance-vertus-praetors",
+          "name": "Interceptor lance",
+          "count": 2
+        },
+        {
+          "itemId": "salvo-launcher",
+          "name": "Salvo launcher",
+          "count": 2
+        }
+      ],
+      "tags": [
+        "mobility",
+        "durability",
+        "objective",
+        "shooting",
+        "melee",
+        "elite"
+      ]
+    }
+  ],
+  "createdAt": "2026-07-25T00:00:00.000Z",
+  "updatedAt": "2026-07-25T00:00:00.000Z"
+}

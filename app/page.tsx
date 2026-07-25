@@ -1,386 +1,298 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+} from "react";
 
-type Unit = {
-  name: string;
-  role: "Character" | "Battleline" | "Infantry" | "Mounted" | "Vehicle";
-  points: number;
-  tags: string[];
-  note: string;
+import {
+  buildRoster,
+  exportRoster,
+  getDataStatus,
+  listDetachments,
+  modifyRoster,
+  searchFactions,
+  searchUnits,
+  validateRoster,
+  type ExportArtifact,
+  type ExportFormat,
+  type FactionSummary,
+  type PreferenceTag,
+  type RosterDraftV1,
+  type UnitSummary,
+} from "@/lib/rosterpilot";
+
+const STORAGE_KEY = "rosterpilot.drafts.v1";
+const DEFAULT_RESULT = buildRoster({
+  prompt: "Build a 1,000 point fast Custodes army with no named characters",
+  name: "Golden Vanguard",
+});
+const DEFAULT_DRAFT = DEFAULT_RESULT.data as RosterDraftV1;
+const DATA_STATUS = getDataStatus().data;
+
+const PREFERENCES: Array<{ id: PreferenceTag; label: string }> = [
+  { id: "mobility", label: "Mobility" },
+  { id: "durability", label: "Durability" },
+  { id: "objective", label: "Objectives" },
+  { id: "shooting", label: "Shooting" },
+  { id: "melee", label: "Melee" },
+  { id: "elite", label: "Elite" },
+];
+
+const PROMPT_IDEAS = [
+  "Build a 1,000 point fast Custodes army with no named characters",
+  "Build a durable 1,500 point Custodes army for objective play",
+  "Build a 2,000 point elite Custodes force with shooting support",
+];
+
+type DraftStore = {
+  version: 1;
+  drafts: RosterDraftV1[];
 };
 
-type Faction = {
-  name: string;
-  alliance: "Imperium" | "Chaos" | "Xenos";
-  mark: string;
-  color: string;
-  summary: string;
-  styles: string[];
-  units: Unit[];
-};
-
-type RosterEntry = Unit & { id: number; quantity: number };
-
-const factions: Faction[] = [
-  {
-    name: "Adeptus Custodes",
-    alliance: "Imperium",
-    mark: "AC",
-    color: "#e2b84b",
-    summary: "A compact force of elite warriors that rewards deliberate movement.",
-    styles: ["Elite", "Durable", "Melee"],
-    units: [
-      { name: "Blade Champion", role: "Character", points: 110, tags: ["melee", "leader"], note: "Aggressive duelist and unit leader." },
-      { name: "Custodian Guard", role: "Battleline", points: 180, tags: ["durable", "objective"], note: "Reliable objective holders." },
-      { name: "Allarus Custodians", role: "Infantry", points: 195, tags: ["elite", "deep strike"], note: "Flexible heavy infantry." },
-      { name: "Vertus Praetors", role: "Mounted", points: 145, tags: ["fast", "pressure"], note: "Fast pressure and flanking unit." },
-    ],
-  },
-  {
-    name: "Space Marines",
-    alliance: "Imperium",
-    mark: "SM",
-    color: "#5d8fd8",
-    summary: "A flexible tool kit with answers for nearly every battlefield problem.",
-    styles: ["Flexible", "Elite", "Combined arms"],
-    units: [
-      { name: "Captain", role: "Character", points: 80, tags: ["leader", "flexible"], note: "Efficient all-round leader." },
-      { name: "Intercessor Squad", role: "Battleline", points: 80, tags: ["objective", "flexible"], note: "Dependable scoring infantry." },
-      { name: "Inceptor Squad", role: "Infantry", points: 120, tags: ["fast", "deep strike"], note: "Mobile reserve threat." },
-      { name: "Redemptor Dreadnought", role: "Vehicle", points: 210, tags: ["durable", "shooting"], note: "Heavy multi-role anchor." },
-    ],
-  },
-  {
-    name: "Astra Militarum",
-    alliance: "Imperium",
-    mark: "AM",
-    color: "#7f9567",
-    summary: "Massed soldiers, orders, and armored support working as one machine.",
-    styles: ["Shooting", "Horde", "Combined arms"],
-    units: [
-      { name: "Cadian Command Squad", role: "Character", points: 65, tags: ["leader", "support"], note: "Issues orders and supports the line." },
-      { name: "Infantry Squad", role: "Battleline", points: 60, tags: ["objective", "horde"], note: "Low-cost board control." },
-      { name: "Kasrkin", role: "Infantry", points: 100, tags: ["elite", "shooting"], note: "Specialist infantry firepower." },
-      { name: "Leman Russ", role: "Vehicle", points: 170, tags: ["durable", "shooting"], note: "Armored fire-support platform." },
-    ],
-  },
-  {
-    name: "Orks",
-    alliance: "Xenos",
-    mark: "OK",
-    color: "#91bd58",
-    summary: "A loud, direct army built around momentum, numbers, and glorious risk.",
-    styles: ["Aggressive", "Horde", "Melee"],
-    units: [
-      { name: "Warboss", role: "Character", points: 75, tags: ["leader", "melee"], note: "Hard-hitting frontline leader." },
-      { name: "Boyz", role: "Battleline", points: 80, tags: ["horde", "objective"], note: "Core mob for pressure and scoring." },
-      { name: "Deffkoptas", role: "Mounted", points: 90, tags: ["fast", "pressure"], note: "Mobile harassment unit." },
-      { name: "Trukk", role: "Vehicle", points: 65, tags: ["transport", "fast"], note: "Gets the mob where it needs to go." },
-    ],
-  },
-  {
-    name: "T'au Empire",
-    alliance: "Xenos",
-    mark: "TE",
-    color: "#e8784a",
-    summary: "A mobile ranged force that wins through positioning and focused fire.",
-    styles: ["Shooting", "Mobile", "Technical"],
-    units: [
-      { name: "Commander", role: "Character", points: 95, tags: ["leader", "shooting"], note: "Mobile battlesuit leader." },
-      { name: "Breacher Team", role: "Battleline", points: 100, tags: ["objective", "shooting"], note: "Close-range objective pressure." },
-      { name: "Crisis Battlesuits", role: "Infantry", points: 150, tags: ["mobile", "shooting"], note: "Flexible mobile firepower." },
-      { name: "Devilfish", role: "Vehicle", points: 85, tags: ["transport", "fast"], note: "Protected infantry delivery." },
-    ],
-  },
-  {
-    name: "Aeldari",
-    alliance: "Xenos",
-    mark: "AE",
-    color: "#8d7bd1",
-    summary: "Fast specialists that reward planning, precision, and careful trades.",
-    styles: ["Fast", "Technical", "Specialists"],
-    units: [
-      { name: "Autarch", role: "Character", points: 80, tags: ["leader", "technical"], note: "Utility commander with flexible support." },
-      { name: "Guardian Defenders", role: "Battleline", points: 100, tags: ["objective", "shooting"], note: "Scoring unit with ranged support." },
-      { name: "Windriders", role: "Mounted", points: 80, tags: ["fast", "pressure"], note: "Rapid objective and flank play." },
-      { name: "Fire Prism", role: "Vehicle", points: 170, tags: ["shooting", "specialist"], note: "Long-range anti-armor platform." },
-    ],
-  },
-  {
-    name: "Necrons",
-    alliance: "Xenos",
-    mark: "NE",
-    color: "#4ec39b",
-    summary: "Relentless formations that grind opponents down and refuse to disappear.",
-    styles: ["Durable", "Attrition", "Shooting"],
-    units: [
-      { name: "Overlord", role: "Character", points: 85, tags: ["leader", "durable"], note: "Durable command piece." },
-      { name: "Necron Warriors", role: "Battleline", points: 90, tags: ["objective", "attrition"], note: "Regenerating core infantry." },
-      { name: "Immortals", role: "Infantry", points: 70, tags: ["shooting", "durable"], note: "Efficient armored infantry." },
-      { name: "Doomsday Ark", role: "Vehicle", points: 200, tags: ["shooting", "durable"], note: "Heavy long-range fire support." },
-    ],
-  },
-  {
-    name: "Tyranids",
-    alliance: "Xenos",
-    mark: "TY",
-    color: "#d35f9e",
-    summary: "An adaptive swarm that mixes board-filling organisms with giant monsters.",
-    styles: ["Swarm", "Adaptive", "Melee"],
-    units: [
-      { name: "Winged Tyranid Prime", role: "Character", points: 65, tags: ["leader", "fast"], note: "Mobile synapse leader." },
-      { name: "Termagants", role: "Battleline", points: 60, tags: ["swarm", "objective"], note: "Numerous scoring bodies." },
-      { name: "Zoanthropes", role: "Infantry", points: 100, tags: ["shooting", "support"], note: "Psychic ranged support." },
-      { name: "Carnifexes", role: "Vehicle", points: 250, tags: ["durable", "melee"], note: "Heavy monster pressure." },
-    ],
-  },
-  {
-    name: "Chaos Space Marines",
-    alliance: "Chaos",
-    mark: "CS",
-    color: "#b86565",
-    summary: "Hard-hitting veterans combining dark pacts, armor, and close combat.",
-    styles: ["Aggressive", "Flexible", "Elite"],
-    units: [
-      { name: "Chaos Lord", role: "Character", points: 85, tags: ["leader", "melee"], note: "Frontline melee commander." },
-      { name: "Legionaries", role: "Battleline", points: 90, tags: ["objective", "flexible"], note: "Flexible core infantry." },
-      { name: "Chaos Terminators", role: "Infantry", points: 185, tags: ["durable", "elite"], note: "Armored pressure unit." },
-      { name: "Predator Destructor", role: "Vehicle", points: 140, tags: ["shooting", "vehicle"], note: "Efficient armored firepower." },
-    ],
-  },
-  {
-    name: "Death Guard",
-    alliance: "Chaos",
-    mark: "DG",
-    color: "#8a9a54",
-    summary: "Slow, resilient infantry and daemon engines that dominate close space.",
-    styles: ["Durable", "Attrition", "Melee"],
-    units: [
-      { name: "Lord of Contagion", role: "Character", points: 80, tags: ["leader", "melee"], note: "Durable close-combat leader." },
-      { name: "Plague Marines", role: "Battleline", points: 100, tags: ["objective", "durable"], note: "Tough, flexible core infantry." },
-      { name: "Deathshroud Terminators", role: "Infantry", points: 160, tags: ["elite", "melee"], note: "Elite bodyguard unit." },
-      { name: "Plagueburst Crawler", role: "Vehicle", points: 180, tags: ["durable", "shooting"], note: "Resilient indirect fire support." },
-    ],
-  },
-];
-
-const starterRoster: RosterEntry[] = [
-  { ...factions[0].units[3], id: 1, quantity: 1 },
-  { ...factions[0].units[3], id: 2, quantity: 1 },
-  { ...factions[0].units[3], id: 3, quantity: 1 },
-];
-
-const promptIdeas = [
-  "Build a 1,000 point Custodes list with fast objective play",
-  "I want a durable army that is forgiving for a new player",
-  "Make me a mobile T'au force focused on shooting",
-];
-
-function downloadFile(name: string, content: string, type: string) {
-  const blob = new Blob([content], { type });
+function downloadArtifact(artifact: ExportArtifact): void {
+  const blob = new Blob([artifact.content as BlobPart], {
+    type: artifact.mimeType,
+  });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = name;
+  anchor.download = artifact.filename;
   anchor.click();
   URL.revokeObjectURL(url);
 }
 
+function factionMark(faction: FactionSummary): string {
+  return faction.name
+    .split(/\s+/)
+    .map((word) => word[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function factionColor(index: number): string {
+  return ["#d9b84c", "#7ea5d8", "#8db56c", "#d47757", "#8c7bd1"][
+    index % 5
+  ];
+}
+
+function parseStoredDrafts(): DraftStore | null {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DraftStore;
+    if (parsed.version !== 1 || !Array.isArray(parsed.drafts)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export default function Home() {
+  const [draft, setDraft] = useState<RosterDraftV1>(DEFAULT_DRAFT);
+  const [history, setHistory] = useState<RosterDraftV1[]>([DEFAULT_DRAFT]);
   const [factionQuery, setFactionQuery] = useState("");
-  const [selectedFaction, setSelectedFaction] = useState(factions[0]);
-  const [roster, setRoster] = useState<RosterEntry[]>(starterRoster);
+  const [unitQuery, setUnitQuery] = useState("");
+  const [selectedFaction, setSelectedFaction] = useState("adeptus-custodes");
+  const [prompt, setPrompt] = useState(PROMPT_IDEAS[0]);
   const [target, setTarget] = useState(1000);
-  const [prompt, setPrompt] = useState("");
+  const [preferences, setPreferences] = useState<PreferenceTag[]>(["mobility"]);
+  const [allowNamed, setAllowNamed] = useState(false);
   const [agentNote, setAgentNote] = useState(
-    "I loaded your Golden Boys list as a starting point. Add a Character and configuration choices in New Recruit before play."
+    "A legal 1,000-point Custodes draft is ready. The engine calculated every point and loadout from pinned community data.",
   );
   const [copied, setCopied] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
 
-  const filteredFactions = useMemo(() => {
-    const query = factionQuery.trim().toLowerCase();
-    if (!query) return factions;
-    return factions.filter((faction) =>
-      [faction.name, faction.alliance, faction.summary, ...faction.styles]
-        .join(" ")
-        .toLowerCase()
-        .includes(query)
-    );
-  }, [factionQuery]);
+  useEffect(() => {
+    const restore = window.setTimeout(() => {
+      const stored = parseStoredDrafts();
+      if (stored?.drafts.length) {
+        setHistory(stored.drafts);
+        setDraft(stored.drafts[0]);
+        setTarget(stored.drafts[0].pointsLimit);
+        setPreferences(stored.drafts[0].preferences);
+        setSelectedFaction(stored.drafts[0].factionId);
+      }
+    }, 0);
+    return () => window.clearTimeout(restore);
+  }, []);
 
-  const totalPoints = roster.reduce(
-    (sum, entry) => sum + entry.points * entry.quantity,
-    0
+  const factionResult = useMemo(
+    () => searchFactions(factionQuery, 40).data ?? [],
+    [factionQuery],
   );
-  const hasCharacter = roster.some((entry) => entry.role === "Character");
-  const withinLimit = totalPoints <= target;
-  const ready = hasCharacter && withinLimit && roster.length > 0;
+  const unitResult = useMemo(
+    () =>
+      searchUnits({
+        faction: selectedFaction,
+        query: unitQuery,
+        includeLegends: false,
+        limit: 12,
+      }).data ?? [],
+    [selectedFaction, unitQuery],
+  );
+  const validation = useMemo(() => validateRoster(draft), [draft]);
+  const detachments = useMemo(() => listDetachments(draft.factionId), [draft.factionId]);
+  const selectedDetachment = detachments.find(
+    (detachment) => detachment.id === draft.detachmentId,
+  );
 
-  const rosterText = [
-    `${selectedFaction.name} — ${totalPoints}/${target} pts`,
-    "",
-    ...roster.map(
-      (entry) =>
-        `${entry.quantity}× ${entry.name} (${entry.role}) — ${
-          entry.points * entry.quantity
-        } pts`
-    ),
-    "",
-    `Validation: ${ready ? "Ready for review" : "Needs attention"}`,
-    "Points are a planning snapshot. Confirm the current values and required configuration in New Recruit.",
-  ].join("\n");
+  function commitDraft(next: RosterDraftV1, note?: string): void {
+    setDraft(next);
+    setHistory((current) => {
+      const deduped = [next, ...current.filter((item) => item.id !== next.id)].slice(
+        0,
+        12,
+      );
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, drafts: deduped } satisfies DraftStore),
+      );
+      return deduped;
+    });
+    if (note) setAgentNote(note);
+  }
 
-  const agentBrief = `In New Recruit, create a ${target}-point ${selectedFaction.name} roster named "RosterPilot Draft". Add: ${roster
-    .map((entry) => `${entry.quantity}× ${entry.name}`)
-    .join(", ")}. Then choose the required battle size, detachment, force disposition, and a Warlord. Stop before deleting or overwriting any existing list.`;
-
-  function chooseFaction(faction: Faction) {
-    setSelectedFaction(faction);
-    setRoster([]);
-    setAgentNote(
-      `${faction.name} selected. Tell me a point limit and the kind of game you want to play, or add units from the field guide.`
+  function togglePreference(preference: PreferenceTag): void {
+    setPreferences((current) =>
+      current.includes(preference)
+        ? current.filter((item) => item !== preference)
+        : [...current, preference],
     );
   }
 
-  function addUnit(unit: Unit) {
-    setRoster((current) => [
-      ...current,
-      { ...unit, id: Date.now() + Math.random(), quantity: 1 },
-    ]);
-  }
-
-  function changeQuantity(id: number, amount: number) {
-    setRoster((current) =>
-      current
-        .map((entry) =>
-          entry.id === id
-            ? { ...entry, quantity: Math.max(0, entry.quantity + amount) }
-            : entry
-        )
-        .filter((entry) => entry.quantity > 0)
-    );
-  }
-
-  function generateRoster() {
-    const request = prompt.trim();
-    if (!request) {
-      setAgentNote("Give me a faction, point limit, or play style and I’ll shape a first draft.");
+  function generateDraft(): void {
+    const result = buildRoster({
+      prompt,
+      faction: selectedFaction,
+      pointsLimit: target,
+      preferences,
+      allowNamedCharacters: allowNamed,
+      name: `${target.toLocaleString()}pt ${selectedFaction === "adeptus-custodes" ? "Custodes" : "RosterPilot"} Draft`,
+    });
+    if (!result.data) {
+      setAgentNote(
+        result.violations[0]?.message ??
+          "The engine could not build that roster with the supplied constraints.",
+      );
       return;
     }
-
-    const lower = request.toLowerCase();
-    const aliases: Record<string, string> = {
-      custodes: "Adeptus Custodes",
-      marines: "Space Marines",
-      guard: "Astra Militarum",
-      tau: "T'au Empire",
-      "t'au": "T'au Empire",
-      eldar: "Aeldari",
-      chaos: "Chaos Space Marines",
-      tyranid: "Tyranids",
-      ork: "Orks",
-      necron: "Necrons",
-      "death guard": "Death Guard",
-    };
-
-    let faction =
-      factions.find((item) => lower.includes(item.name.toLowerCase())) ??
-      factions.find((item) =>
-        Object.entries(aliases).some(
-          ([alias, name]) => lower.includes(alias) && item.name === name
-        )
-      ) ??
-      selectedFaction;
-
-    const requestedPoints = lower.match(/\b(500|750|1000|1,000|1500|1,500|2000|2,000)\b/);
-    const nextTarget = requestedPoints
-      ? Number(requestedPoints[1].replace(",", ""))
-      : target;
-
-    if (
-      lower.includes("durable") ||
-      lower.includes("forgiving") ||
-      lower.includes("new player")
-    ) {
-      faction =
-        factions.find((item) => item.name === "Necrons") ?? faction;
-    }
-
-    const desiredTags = [
-      "fast",
-      "mobile",
-      "shooting",
-      "melee",
-      "durable",
-      "objective",
-      "horde",
-      "elite",
-    ].filter((tag) => lower.includes(tag));
-
-    const character =
-      faction.units.find((unit) => unit.role === "Character") ?? faction.units[0];
-    const battleline =
-      faction.units.find((unit) => unit.role === "Battleline") ?? faction.units[1];
-    const ranked = [...faction.units].sort((a, b) => {
-      const aScore = a.tags.filter((tag) => desiredTags.includes(tag)).length;
-      const bScore = b.tags.filter((tag) => desiredTags.includes(tag)).length;
-      return bScore - aScore || a.points - b.points;
-    });
-
-    const draft: RosterEntry[] = [];
-    let points = 0;
-    let id = Date.now();
-    for (const required of [character, battleline]) {
-      if (points + required.points <= nextTarget) {
-        draft.push({ ...required, id: id++, quantity: 1 });
-        points += required.points;
-      }
-    }
-
-    let safety = 0;
-    while (safety < 24) {
-      const candidate = ranked.find((unit) => unit.points + points <= nextTarget);
-      if (!candidate) break;
-      const existing = draft.find((entry) => entry.name === candidate.name);
-      if (existing && existing.quantity < 3) {
-        existing.quantity += 1;
-      } else if (!existing) {
-        draft.push({ ...candidate, id: id++, quantity: 1 });
-      } else {
-        const alternative = ranked.find(
-          (unit) =>
-            unit.name !== candidate.name &&
-            unit.points + points <= nextTarget &&
-            !draft.some((entry) => entry.name === unit.name && entry.quantity >= 3)
-        );
-        if (!alternative) break;
-        const altExisting = draft.find((entry) => entry.name === alternative.name);
-        if (altExisting) altExisting.quantity += 1;
-        else draft.push({ ...alternative, id: id++, quantity: 1 });
-        points += alternative.points;
-        safety += 1;
-        continue;
-      }
-      points += candidate.points;
-      safety += 1;
-    }
-
-    setSelectedFaction(faction);
-    setTarget(nextTarget);
-    setRoster(draft);
-    setAgentNote(
-      `Drafted ${faction.name} at ${points}/${nextTarget} points${
-        desiredTags.length ? ` around ${desiredTags.join(" and ")}` : ""
-      }. I kept it under the limit and included a Character and Battleline unit.`
+    commitDraft(
+      result.data,
+      `${result.data.name} built at ${result.data.totalPoints}/${result.data.pointsLimit} points. ${
+        result.ok
+          ? "Deterministic validation passed."
+          : "Review the validation issues before exporting."
+      }`,
     );
   }
 
-  async function copyAgentBrief() {
-    await navigator.clipboard.writeText(agentBrief);
+  function applyModification(
+    operation: Parameters<typeof modifyRoster>[1],
+    successMessage: string,
+  ): void {
+    const result = modifyRoster(draft, operation);
+    if (!result.data) {
+      setAgentNote(result.violations[0]?.message ?? "That change could not be applied.");
+      return;
+    }
+    commitDraft(
+      result.data,
+      `${successMessage} ${
+        result.ok ? "The roster remains legal." : "The roster now needs attention."
+      }`,
+    );
+  }
+
+  function addUnit(unit: UnitSummary): void {
+    if (unit.factionId !== draft.factionId) {
+      setAgentNote(
+        `${unit.name} is available for research, but this active roster belongs to ${draft.factionName}. Build a supported faction roster before adding it.`,
+      );
+      return;
+    }
+    applyModification(
+      { type: "add", unitId: unit.id, modelCount: unit.modelCounts[0] },
+      `${unit.name} added.`,
+    );
+  }
+
+  function removeUnit(selectionId: string, name: string): void {
+    applyModification({ type: "remove", selectionId }, `${name} removed.`);
+  }
+
+  function setModelCount(selectionId: string, modelCount: number): void {
+    applyModification(
+      { type: "set-model-count", selectionId, modelCount },
+      "Model count updated.",
+    );
+  }
+
+  function setDetachment(detachmentId: string): void {
+    applyModification(
+      { type: "set-detachment", detachmentId },
+      "Detachment and compatible disposition updated.",
+    );
+  }
+
+  function setDisposition(forceDispositionId: string): void {
+    applyModification(
+      { type: "set-disposition", forceDispositionId },
+      "Force disposition updated.",
+    );
+  }
+
+  function handleExport(format: ExportFormat): void {
+    const result = exportRoster(draft, format);
+    if (!result.data) {
+      setAgentNote(
+        `Export blocked: ${result.violations.map((item) => item.message).join(" ")}`,
+      );
+      return;
+    }
+    downloadArtifact(result.data);
+    setAgentNote(`${result.data.filename} downloaded and ready for handoff.`);
+  }
+
+  async function copyRosterJson(): Promise<void> {
+    await navigator.clipboard.writeText(JSON.stringify(draft, null, 2));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
   }
+
+  async function importDraft(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as RosterDraftV1;
+      const result = validateRoster(parsed);
+      commitDraft(
+        parsed,
+        result.ok
+          ? `${file.name} imported and validated.`
+          : `${file.name} imported with ${result.violations.length} issue(s).`,
+      );
+      setSelectedFaction(parsed.factionId);
+      setTarget(parsed.pointsLimit);
+      setPreferences(parsed.preferences);
+    } catch {
+      setAgentNote(
+        "Import failed. Choose a RosterPilot roster JSON file; New Recruit .ros/.rosz files are used as outbound handoffs in v1.",
+      );
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  const ready = validation.ok;
+  const remaining = draft.pointsLimit - draft.totalPoints;
+  const rosterCommand = `Build or review "${draft.name}" as a ${draft.pointsLimit}-point ${draft.factionName} roster. Validate it before making any legality claim, then export .rosz for New Recruit.`;
 
   return (
     <main className="app-shell">
@@ -395,13 +307,19 @@ export default function Home() {
           </div>
         </div>
         <nav aria-label="Primary navigation">
-          <a className="nav-link active" href="#builder">Builder</a>
-          <a className="nav-link" href="#factions">Factions</a>
-          <a className="nav-link" href="#exports">Exports</a>
+          <a className="nav-link active" href="#builder">
+            Builder
+          </a>
+          <a className="nav-link" href="#factions">
+            Factions
+          </a>
+          <a className="nav-link" href="#exports">
+            Exports
+          </a>
         </nav>
         <div className="status-pill">
           <span className="status-dot" />
-          Local agent ready
+          Data {DATA_STATUS?.packageVersion ?? "1.2.0"} · local engine
         </div>
       </header>
 
@@ -410,87 +328,133 @@ export default function Home() {
           <div className="section-heading">
             <div>
               <span className="eyebrow">Armory</span>
-              <h2>Choose a faction</h2>
+              <h2>Explore factions</h2>
             </div>
-            <span className="count-badge">{filteredFactions.length}</span>
+            <span className="count-badge">{factionResult.length}</span>
           </div>
           <label className="search-box">
             <span aria-hidden="true">⌕</span>
             <input
               aria-label="Search factions"
-              placeholder="Name, style, alliance…"
+              placeholder="Name, keyword, alliance…"
               value={factionQuery}
               onChange={(event) => setFactionQuery(event.target.value)}
             />
           </label>
           <div className="faction-list">
-            {filteredFactions.map((faction) => (
+            {factionResult.map((faction, index) => (
               <button
                 className={`faction-card ${
-                  faction.name === selectedFaction.name ? "selected" : ""
+                  faction.id === selectedFaction ? "selected" : ""
                 }`}
-                key={faction.name}
-                onClick={() => chooseFaction(faction)}
+                key={faction.id}
+                onClick={() => {
+                  setSelectedFaction(faction.id);
+                  setUnitQuery("");
+                  setAgentNote(
+                    faction.supported
+                      ? "Custodes roster building is enabled."
+                      : `${faction.name} is available for research; deterministic building is not enabled until its coverage gate passes.`,
+                  );
+                }}
                 type="button"
               >
                 <span
                   className="faction-mark"
-                  style={{ "--faction-color": faction.color } as React.CSSProperties}
+                  style={
+                    {
+                      "--faction-color": factionColor(index),
+                    } as CSSProperties
+                  }
                 >
-                  {faction.mark}
+                  {factionMark(faction)}
                 </span>
                 <span className="faction-copy">
                   <strong>{faction.name}</strong>
-                  <small>{faction.styles.slice(0, 2).join(" · ")}</small>
+                  <small>
+                    {faction.styles.slice(0, 2).join(" · ") || "research"} ·{" "}
+                    {faction.unitCount} units
+                  </small>
                 </span>
-                <span className="chevron" aria-hidden="true">›</span>
+                <span
+                  className={faction.supported ? "support-dot supported" : "support-dot"}
+                  title={faction.supported ? "Build supported" : "Research only"}
+                />
               </button>
             ))}
           </div>
           <p className="data-note">
-            Starter catalog for planning. Confirm current points and rules in New Recruit.
+            Browse every embedded faction. Legal roster construction is gated to
+            Adeptus Custodes while coverage is verified.
           </p>
         </aside>
 
         <section className="command-column">
           <div className="hero-copy">
-            <span className="eyebrow">Warhammer 40,000 · planning workspace</span>
+            <span className="eyebrow">
+              Warhammer 40,000 11th · deterministic planning
+            </span>
             <h1>Build the army you mean to play.</h1>
             <p>
-              Describe the feel, faction, and point limit. RosterPilot turns it into
-              an editable draft, checks the basics, and prepares a clean New Recruit handoff.
+              Describe the feel, faction, and point limit. The shared engine turns
+              it into an editable roster, calculates every point, validates the
+              construction rules, and creates a real New Recruit handoff.
             </p>
           </div>
 
           <div className="agent-card">
             <div className="agent-label">
-              <span className="agent-avatar" aria-hidden="true">A</span>
+              <span className="agent-avatar" aria-hidden="true">
+                A
+              </span>
               <div>
                 <strong>Ask the roster agent</strong>
-                <small>Natural-language drafting</small>
+                <small>Natural language → structured constraints</small>
               </div>
               <kbd>⌘ ↵</kbd>
             </div>
             <textarea
               aria-label="Describe the army you want"
-              placeholder="Build a 2,000 point army that is fast, forgiving, and strong at holding objectives…"
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                  generateRoster();
+                  generateDraft();
                 }
               }}
             />
+            <div className="preference-grid" aria-label="Roster preferences">
+              {PREFERENCES.map((preference) => (
+                <button
+                  className={
+                    preferences.includes(preference.id) ? "selected" : ""
+                  }
+                  key={preference.id}
+                  type="button"
+                  aria-pressed={preferences.includes(preference.id)}
+                  onClick={() => togglePreference(preference.id)}
+                >
+                  {preference.label}
+                </button>
+              ))}
+              <label className="named-toggle">
+                <input
+                  type="checkbox"
+                  checked={allowNamed}
+                  onChange={(event) => setAllowNamed(event.target.checked)}
+                />
+                Named characters
+              </label>
+            </div>
             <div className="agent-actions">
               <div className="prompt-chips" aria-label="Prompt examples">
-                {promptIdeas.map((idea) => (
+                {PROMPT_IDEAS.map((idea) => (
                   <button key={idea} type="button" onClick={() => setPrompt(idea)}>
-                    {idea.split(" ").slice(0, 4).join(" ")}…
+                    {idea.split(" ").slice(0, 5).join(" ")}…
                   </button>
                 ))}
               </div>
-              <button className="primary-button" type="button" onClick={generateRoster}>
+              <button className="primary-button" type="button" onClick={generateDraft}>
                 Build draft <span aria-hidden="true">↗</span>
               </button>
             </div>
@@ -505,11 +469,14 @@ export default function Home() {
             <div className="roster-header">
               <div>
                 <span className="eyebrow">Active roster</span>
-                <h2 id="roster-title">{selectedFaction.name}</h2>
+                <h2 id="roster-title">{draft.name}</h2>
+                <p className="roster-subtitle">
+                  {draft.detachmentName} · {draft.forceDispositionName}
+                </p>
               </div>
               <div className="points-target">
-                <span>{totalPoints.toLocaleString()}</span>
-                <small>/ {target.toLocaleString()} pts</small>
+                <span>{draft.totalPoints.toLocaleString()}</span>
+                <small>/ {draft.pointsLimit.toLocaleString()} pts</small>
               </div>
             </div>
 
@@ -529,30 +496,95 @@ export default function Home() {
               </div>
             </div>
 
+            <div className="configuration-row">
+              <label>
+                <span>Detachment</span>
+                <select
+                  value={draft.detachmentId}
+                  onChange={(event) => setDetachment(event.target.value)}
+                >
+                  {detachments.map((detachment) => (
+                    <option key={detachment.id} value={detachment.id}>
+                      {detachment.name} ({detachment.detachmentPoints} DP)
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Disposition</span>
+                <select
+                  value={draft.forceDispositionId}
+                  onChange={(event) => setDisposition(event.target.value)}
+                >
+                  {(selectedDetachment?.forceDispositions ?? []).map(
+                    (disposition) => (
+                      <option key={disposition.id} value={disposition.id}>
+                        {disposition.name}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
+            </div>
+
             <div className="roster-list">
-              {roster.length === 0 ? (
-                <div className="empty-roster">
-                  <span aria-hidden="true">＋</span>
-                  <strong>Your roster is clear</strong>
-                  <p>Add a unit from the field guide or ask the agent for a draft.</p>
-                </div>
-              ) : (
-                roster.map((entry) => (
-                  <article className="roster-row" key={entry.id}>
-                    <div className="role-token">{entry.role.slice(0, 2).toUpperCase()}</div>
+              {draft.units.map((selection) => {
+                const summary = searchUnits({
+                  faction: draft.factionId,
+                  query: selection.name,
+                  includeLegends: true,
+                  limit: 3,
+                }).data?.find((unit) => unit.id === selection.unitId);
+                return (
+                  <article className="roster-row" key={selection.selectionId}>
+                    <div className="role-token">
+                      {selection.isWarlord
+                        ? "★"
+                        : selection.role.slice(0, 2).toUpperCase()}
+                    </div>
                     <div className="unit-main">
-                      <strong>{entry.name}</strong>
-                      <span>{entry.role} · {entry.note}</span>
+                      <strong>{selection.name}</strong>
+                      <span>
+                        {selection.role} · {selection.equipment
+                          .slice(0, 2)
+                          .map((item) => item.name)
+                          .join(", ")}
+                      </span>
                     </div>
-                    <div className="stepper" aria-label={`Quantity for ${entry.name}`}>
-                      <button type="button" onClick={() => changeQuantity(entry.id, -1)} aria-label={`Remove one ${entry.name}`}>−</button>
-                      <span>{entry.quantity}</span>
-                      <button type="button" onClick={() => changeQuantity(entry.id, 1)} aria-label={`Add one ${entry.name}`}>+</button>
-                    </div>
-                    <strong className="unit-points">{entry.points * entry.quantity}</strong>
+                    <label className="model-select">
+                      <span className="sr-only">Models for {selection.name}</span>
+                      <select
+                        value={selection.modelCount}
+                        onChange={(event) =>
+                          setModelCount(
+                            selection.selectionId,
+                            Number(event.target.value),
+                          )
+                        }
+                      >
+                        {(summary?.modelCounts ?? [selection.modelCount]).map(
+                          (count) => (
+                            <option key={count} value={count}>
+                              {count} models
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    </label>
+                    <strong className="unit-points">{selection.points}</strong>
+                    <button
+                      className="remove-unit"
+                      type="button"
+                      aria-label={`Remove ${selection.name}`}
+                      onClick={() =>
+                        removeUnit(selection.selectionId, selection.name)
+                      }
+                    >
+                      ×
+                    </button>
                   </article>
-                ))
-              )}
+                );
+              })}
             </div>
           </section>
 
@@ -560,24 +592,39 @@ export default function Home() {
             <div className="section-heading">
               <div>
                 <span className="eyebrow">Field guide</span>
-                <h2 id="catalog-title">Recommended units</h2>
+                <h2 id="catalog-title">Search real units</h2>
               </div>
-              <span className="subtle-label">{selectedFaction.alliance}</span>
+              <span className="subtle-label">{unitResult.length} matches</span>
             </div>
+            <label className="search-box unit-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                aria-label="Search units"
+                placeholder="Unit, role, keyword, style…"
+                value={unitQuery}
+                onChange={(event) => setUnitQuery(event.target.value)}
+              />
+            </label>
             <div className="unit-grid">
-              {selectedFaction.units.map((unit) => (
-                <article className="unit-card" key={unit.name}>
+              {unitResult.map((unit) => (
+                <article className="unit-card" key={unit.id}>
                   <div className="unit-card-top">
                     <span>{unit.role}</span>
-                    <strong>{unit.points} pts</strong>
+                    <strong>{unit.pointsFrom} pts+</strong>
                   </div>
                   <h3>{unit.name}</h3>
-                  <p>{unit.note}</p>
+                  <p>
+                    {unit.modelCounts.join(", ")} model options ·{" "}
+                    {unit.isNamedCharacter ? "Epic Hero" : "standard datasheet"}
+                  </p>
                   <div className="tag-row">
-                    {unit.tags.map((tag) => <span key={tag}>{tag}</span>)}
+                    {unit.tags.slice(0, 5).map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
                   </div>
                   <button type="button" onClick={() => addUnit(unit)}>
-                    Add to roster <span aria-hidden="true">＋</span>
+                    {unit.supported ? "Add to roster" : "Research only"}{" "}
+                    <span aria-hidden="true">＋</span>
                   </button>
                 </article>
               ))}
@@ -589,67 +636,167 @@ export default function Home() {
           <section className="inspector-block">
             <span className="eyebrow">Readiness</span>
             <div className={`readiness ${ready ? "ready" : ""}`}>
-              <div className="readiness-ring">
-                {ready ? "✓" : totalPoints > target ? "!" : "…"}
-              </div>
+              <div className="readiness-ring">{ready ? "✓" : "!"}</div>
               <div>
-                <strong>{ready ? "Draft ready" : "Draft incomplete"}</strong>
-                <small>{ready ? "Ready for New Recruit review" : "Resolve the checks below"}</small>
+                <strong>{ready ? "Roster legal" : "Needs attention"}</strong>
+                <small>
+                  {ready
+                    ? `${remaining} points remain`
+                    : `${validation.violations.length} blocking issue(s)`}
+                </small>
               </div>
             </div>
             <div className="check-list">
-              <div className={hasCharacter ? "pass" : "warn"}>
-                <span>{hasCharacter ? "✓" : "!"}</span>
-                <p><strong>Character</strong><small>{hasCharacter ? "Included" : "Add at least one"}</small></p>
-              </div>
-              <div className={withinLimit ? "pass" : "warn"}>
-                <span>{withinLimit ? "✓" : "!"}</span>
-                <p><strong>Point limit</strong><small>{withinLimit ? `${target - totalPoints} pts remain` : `${totalPoints - target} pts over`}</small></p>
-              </div>
-              <div className="neutral">
-                <span>→</span>
-                <p><strong>Game configuration</strong><small>Finish in New Recruit</small></p>
-              </div>
+              {validation.violations.map((item) => (
+                <div className="warn" key={`${item.code}-${item.selectionId ?? ""}`}>
+                  <span>!</span>
+                  <p>
+                    <strong>{item.code.replaceAll("_", " ")}</strong>
+                    <small>{item.message}</small>
+                  </p>
+                </div>
+              ))}
+              {validation.warnings.map((item) => (
+                <div className="neutral" key={item.code}>
+                  <span>→</span>
+                  <p>
+                    <strong>{item.code.replaceAll("_", " ")}</strong>
+                    <small>{item.message}</small>
+                  </p>
+                </div>
+              ))}
+              {ready && (
+                <div className="pass">
+                  <span>✓</span>
+                  <p>
+                    <strong>Deterministic validation</strong>
+                    <small>Passed</small>
+                  </p>
+                </div>
+              )}
             </div>
           </section>
 
           <section className="inspector-block export-block">
             <span className="eyebrow">Export desk</span>
             <h2>Take the list with you</h2>
-            <p>Download a clean copy or hand the exact build instructions to your browser agent.</p>
+            <p>
+              New Recruit accepts `.ros`, `.rosz`, and JSON. Exports remain blocked
+              until validation passes.
+            </p>
             <div className="export-grid">
-              <button type="button" onClick={() => downloadFile("rosterpilot-list.txt", rosterText, "text/plain")}>
-                <span aria-hidden="true">TXT</span>
-                Plain text
+              {(
+                [
+                  ["rosz", "ROSZ", "New Recruit"],
+                  ["ros", "ROS", "BattleScribe"],
+                  ["newrecruit-json", "{ }", "NR JSON"],
+                  ["html", "HTML", "Print"],
+                  ["text", "TXT", "Plain text"],
+                  ["roster-json", "RP", "RosterPilot"],
+                ] as Array<[ExportFormat, string, string]>
+              ).map(([format, icon, label]) => (
+                <button
+                  key={format}
+                  type="button"
+                  disabled={!ready}
+                  onClick={() => handleExport(format)}
+                >
+                  <span aria-hidden="true">{icon}</span>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="import-actions">
+              <input
+                ref={importRef}
+                className="sr-only"
+                type="file"
+                accept=".json,application/json"
+                onChange={importDraft}
+              />
+              <button type="button" onClick={() => importRef.current?.click()}>
+                Import RosterPilot JSON
               </button>
-              <button type="button" onClick={() => downloadFile("rosterpilot-list.json", JSON.stringify({ faction: selectedFaction.name, target, totalPoints, roster }, null, 2), "application/json")}>
-                <span aria-hidden="true">{`{ }`}</span>
-                JSON
+              <button type="button" onClick={copyRosterJson}>
+                {copied ? "Copied" : "Copy roster JSON"}
               </button>
             </div>
           </section>
 
           <section className="handoff-card">
             <div className="handoff-heading">
-              <span className="nr-mark" aria-hidden="true">NR</span>
+              <span className="nr-mark" aria-hidden="true">
+                AI
+              </span>
               <div>
-                <strong>New Recruit handoff</strong>
-                <small>Agent-ready instructions</small>
+                <strong>Agent handoff</strong>
+                <small>Codex · Claude · MCP clients</small>
               </div>
             </div>
-            <p>{agentBrief}</p>
-            <button className="copy-button" type="button" onClick={copyAgentBrief}>
-              {copied ? "Copied" : "Copy agent command"}
+            <p>{rosterCommand}</p>
+            <button
+              className="copy-button"
+              type="button"
+              onClick={async () => {
+                await navigator.clipboard.writeText(rosterCommand);
+                setAgentNote("Agent command copied.");
+              }}
+            >
+              Copy agent command
             </button>
-            <a href="https://www.newrecruit.eu/app/MyLists" target="_blank" rel="noreferrer">
+            <a
+              href="https://www.newrecruit.eu/app/MyLists"
+              target="_blank"
+              rel="noreferrer"
+            >
               Open New Recruit <span aria-hidden="true">↗</span>
             </a>
           </section>
 
+          <section className="history-card" aria-labelledby="history-title">
+            <span className="eyebrow" id="history-title">
+              Local draft history
+            </span>
+            {history.slice(0, 5).map((item) => (
+              <button
+                key={`${item.id}-${item.updatedAt}`}
+                type="button"
+                className={item.updatedAt === draft.updatedAt ? "active" : ""}
+                onClick={() => {
+                  setDraft(item);
+                  setTarget(item.pointsLimit);
+                  setPreferences(item.preferences);
+                  setSelectedFaction(item.factionId);
+                  setAgentNote(`${item.name} restored from local history.`);
+                }}
+              >
+                <span>{item.name}</span>
+                <small>
+                  {item.totalPoints}/{item.pointsLimit} pts
+                </small>
+              </button>
+            ))}
+          </section>
+
           <div className="privacy-note">
             <span aria-hidden="true">◉</span>
-            <p><strong>Private by default</strong><small>This prototype keeps roster work in your browser.</small></p>
+            <p>
+              <strong>Private by default</strong>
+              <small>Drafts stay in this browser. No account or cloud roster DB.</small>
+            </p>
           </div>
+          <a
+            className="attribution"
+            href="https://40kdc.alpacasoft.dev"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Powered by 40kdc-data
+          </a>
+          <p className="source-caveat">
+            Structured community data {DATA_STATUS?.packageVersion}; verify
+            event-specific rulings before play.
+          </p>
         </aside>
       </section>
     </main>

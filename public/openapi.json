@@ -1,0 +1,304 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RosterPilot API",
+    "version": "0.2.0",
+    "description": "Stateless deterministic roster search, build, validation, explanation, and export."
+  },
+  "servers": [
+    {
+      "url": "https://rosterpilot-army-builder.jasonricha.chatgpt.site"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/data-status": {
+      "get": {
+        "operationId": "getDataStatus",
+        "summary": "Get pinned data status",
+        "responses": {
+          "200": {
+            "description": "Data status"
+          }
+        }
+      }
+    },
+    "/api/v1/factions": {
+      "get": {
+        "operationId": "searchFactions",
+        "summary": "Search factions",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Faction search result"
+          }
+        }
+      }
+    },
+    "/api/v1/units": {
+      "get": {
+        "operationId": "searchUnits",
+        "summary": "Search units",
+        "parameters": [
+          {
+            "name": "faction",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "adeptus-custodes"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "description": "Comma-separated preference tags.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unit search result"
+          }
+        }
+      }
+    },
+    "/api/v1/rosters/build": {
+      "post": {
+        "operationId": "buildRoster",
+        "summary": "Build a deterministic Custodes roster",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildRosterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Roster result"
+          }
+        }
+      }
+    },
+    "/api/v1/rosters/modify": {
+      "post": {
+        "operationId": "modifyRoster",
+        "summary": "Modify and revalidate a roster",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "roster",
+                  "operation"
+                ],
+                "properties": {
+                  "roster": {
+                    "type": "object"
+                  },
+                  "operation": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Modified roster result"
+          }
+        }
+      }
+    },
+    "/api/v1/rosters/validate": {
+      "post": {
+        "operationId": "validateRoster",
+        "summary": "Validate a roster",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "roster"
+                ],
+                "properties": {
+                  "roster": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation result"
+          }
+        }
+      }
+    },
+    "/api/v1/rosters/explain": {
+      "post": {
+        "operationId": "explainRoster",
+        "summary": "Explain a validated roster",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "roster"
+                ],
+                "properties": {
+                  "roster": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Explanation result"
+          }
+        }
+      }
+    },
+    "/api/v1/rosters/export": {
+      "post": {
+        "operationId": "exportRoster",
+        "summary": "Export a validated roster",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "roster",
+                  "format"
+                ],
+                "properties": {
+                  "roster": {
+                    "type": "object"
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "ros",
+                      "rosz",
+                      "newrecruit-json",
+                      "roster-json",
+                      "text",
+                      "html"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Inline export result"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "BuildRosterRequest": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "faction": {
+            "type": "string",
+            "default": "adeptus-custodes"
+          },
+          "pointsLimit": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 5000,
+            "default": 1000
+          },
+          "name": {
+            "type": "string"
+          },
+          "preferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "mobility",
+                "durability",
+                "objective",
+                "shooting",
+                "melee",
+                "elite",
+                "horde"
+              ]
+            }
+          },
+          "allowNamedCharacters": {
+            "type": "boolean"
+          },
+          "allowLegends": {
+            "type": "boolean"
+          },
+          "collectionUnitIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "detachmentId": {
+            "type": "string"
+          },
+          "forceDispositionId": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
