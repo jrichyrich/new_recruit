@@ -14,12 +14,16 @@ import {
   buildRoster,
   exportRoster,
   modifyRoster,
+  prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
   validateRoster,
   type RosterDraftV1,
 } from "../lib/rosterpilot";
-import { writeExportArtifact } from "../lib/rosterpilot/io";
+import {
+  writeExportArtifact,
+  writeExportArtifacts,
+} from "../lib/rosterpilot/io";
 
 const fixtures = new URL("./fixtures/", import.meta.url);
 
@@ -345,6 +349,36 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", () => {
   }
 });
 
+test("prepares a validated New Recruit handoff with editable and printable artifacts", () => {
+  const built = buildRoster({
+    prompt: "Build a 1,000 point fast Custodes army with no named characters",
+  });
+  assert.ok(built.data);
+
+  const handoff = prepareNewRecruitHandoff(built.data);
+  assert.equal(handoff.ok, true);
+  assert.ok(handoff.data);
+  assert.equal(
+    handoff.data.importUrl,
+    "https://www.newrecruit.eu/app/MyLists",
+  );
+  assert.deepEqual(
+    handoff.data.artifacts.map((artifact) => artifact.format),
+    ["rosz", "html"],
+  );
+  assert.equal(handoff.data.artifacts[0].encoding, "binary");
+  assert.equal(handoff.data.artifacts[1].encoding, "utf8");
+
+  const invalid = {
+    ...built.data,
+    totalPoints: built.data.totalPoints + 1,
+  };
+  const blocked = prepareNewRecruitHandoff(invalid);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.data, null);
+  assert.ok(blocked.violations.length > 0);
+});
+
 test("exports every browser prompt idea with real New Recruit references", () => {
   const prompts = [
     {
@@ -388,7 +422,9 @@ test("exports every browser prompt idea with real New Recruit references", () =>
 test("protects export paths and existing files", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-test-"));
   try {
-    const built = buildRoster({ pointsLimit: 1000 });
+    const built = buildRoster({
+      prompt: "Build a 1,000 point fast Custodes army with no named characters",
+    });
     assert.ok(built.data);
     const result = exportRoster(built.data, "text");
     assert.ok(result.data);
@@ -405,6 +441,35 @@ test("protects export paths and existing files", async () => {
         rootDir: directory,
       }),
       /outside/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("preflights every New Recruit handoff file before batch writing", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-handoff-"));
+  try {
+    const built = buildRoster({
+      prompt: "Build a 1,000 point fast Custodes army with no named characters",
+    });
+    assert.ok(built.data);
+    const handoff = prepareNewRecruitHandoff(built.data);
+    assert.ok(handoff.data);
+
+    const written = await writeExportArtifacts(
+      handoff.data.artifacts,
+      "exports",
+      { rootDir: directory },
+    );
+    assert.equal(written.length, 2);
+    assert.ok(written.every((filename) => path.dirname(filename).endsWith("exports")));
+
+    await assert.rejects(
+      writeExportArtifacts(handoff.data.artifacts, "exports", {
+        rootDir: directory,
+      }),
+      /Refusing to overwrite existing files/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

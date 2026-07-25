@@ -1333,6 +1333,79 @@ kbd {
   cursor: pointer;
 }
 
+.new-recruit-flow {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #3c3928;
+  border-radius: 9px;
+  background: rgba(217, 184, 76, 0.035);
+}
+
+.new-recruit-flow.ready {
+  border-color: #665a2a;
+  background: rgba(217, 184, 76, 0.07);
+}
+
+.new-recruit-flow > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.new-recruit-flow strong {
+  font-size: 10px;
+}
+
+.new-recruit-flow small,
+.new-recruit-flow > p {
+  color: #777970;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.new-recruit-flow > p {
+  margin: 0;
+}
+
+.new-recruit-flow button,
+.new-recruit-flow-actions a {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border: 1px solid #474536;
+  border-radius: 7px;
+  color: #b8b39e;
+  background: #191b16;
+  font-size: 9px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.new-recruit-flow > button {
+  color: #1d1c12;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.new-recruit-flow button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.new-recruit-flow-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.new-recruit-flow-actions a span {
+  margin-left: 6px;
+}
+
 .history-card {
   display: grid;
   gap: 5px;

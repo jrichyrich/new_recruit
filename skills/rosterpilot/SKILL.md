@@ -16,6 +16,13 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 5. Call `validate_roster` after every build or modification.
 6. Call `explain_roster` only after validation so the explanation includes current cautions.
 7. Call `export_roster` only for a validated roster.
+8. When the user asks for New Recruit delivery, call
+   `prepare_new_recruit_handoff` after validation. Prefer its `.rosz` artifact
+   for editing and its HTML artifact for local printing.
+9. Call `deliver_roster_to_new_recruit` only when the user explicitly asks to
+   upload, import, or send the roster to New Recruit. Use
+   `get_new_recruit_connection_status` first. If local automation is
+   unavailable, fall back to `prepare_new_recruit_handoff`.
 
 ## Validation rules
 
@@ -31,7 +38,22 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - Omit `outputPath` when the user only wants content returned to the chat.
 - Supply `outputPath` only when the user asked to create a file.
 - Do not set `overwrite: true` unless the user explicitly approved replacing that exact file.
-- Do not automate New Recruit clicks, inspect credentials, or modify an existing New Recruit list as part of this workflow.
+- Default to file handoff; importing into New Recruit is not required for a
+  successful export.
+- Browser-assisted import is allowed only when the user explicitly asks to
+  upload or import the roster and browser control is available.
+- Credential configuration and removal are manual terminal operations. Never
+  ask the user to place a password in chat or an MCP argument.
+- The macOS companion may request Keychain authorization when its dedicated
+  browser session has expired. A cancelled prompt cancels delivery.
+- For browser assistance, open New Recruit My Lists, import the generated
+  `.rosz`, verify the roster name, faction, points, and units, and optionally
+  use Export > Pretty > Save as HTML.
+- Never inspect credentials, cookies, browser storage, or access tokens. Never
+  call New Recruit's private RPC endpoints.
+- Never include a login page in diagnostics or screenshots.
+- Imports must create a new list copy. Do not replace, delete, or mutate an
+  existing New Recruit list without a separate explicit request.
 
 ## Example requests
 
@@ -39,3 +61,5 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - “Compare Custodes and Space Marines, then show mobile Custodes units.”
 - “Replace this unit with a more durable option and revalidate.”
 - “Export the validated list as `.rosz` and printable HTML.”
+- “Prepare this roster for New Recruit and give me both files.”
+- “Upload this validated roster to New Recruit and download Pretty HTML.”

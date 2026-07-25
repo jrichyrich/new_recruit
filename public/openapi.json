@@ -235,6 +235,42 @@
           }
         }
       }
+    },
+    "/api/v1/rosters/new-recruit-handoff": {
+      "post": {
+        "operationId": "prepareNewRecruitHandoff",
+        "summary": "Prepare validated New Recruit handoff artifacts",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "roster"
+                ],
+                "properties": {
+                  "roster": {
+                    "type": "object"
+                  },
+                  "includeHtml": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Inline New Recruit handoff artifacts"
+          },
+          "422": {
+            "description": "Roster validation or export failure"
+          }
+        }
+      }
     }
   },
   "components": {

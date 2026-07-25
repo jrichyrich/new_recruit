@@ -6,6 +6,7 @@ import {
   exportRoster,
   getDataStatus,
   modifyRoster,
+  prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
   validateRoster,
@@ -27,6 +28,25 @@ function routePath(request: Request): string {
 
 function json(payload: unknown, status = 200): Response {
   return Response.json(payload, { status });
+}
+
+function inlineExportArtifact(artifact: {
+  format: ExportFormat;
+  filename: string;
+  mimeType: string;
+  encoding: "utf8" | "binary";
+  content: string | Uint8Array;
+}) {
+  return {
+    format: artifact.format,
+    filename: artifact.filename,
+    mimeType: artifact.mimeType,
+    encoding: artifact.encoding === "binary" ? "base64" : "utf8",
+    content:
+      typeof artifact.content === "string"
+        ? artifact.content
+        : bytesToBase64(artifact.content),
+  };
 }
 
 function guarded(request: Request, handler: () => Promise<Response> | Response) {
@@ -122,15 +142,20 @@ export function POST(request: Request) {
       if (!result.data) return json(result, 422);
       return json({
         ...result,
+        data: inlineExportArtifact(result.data),
+      });
+    }
+    if (path === "rosters/new-recruit-handoff") {
+      const result = prepareNewRecruitHandoff(
+        body.roster as RosterDraftV1,
+        body.includeHtml !== false,
+      );
+      if (!result.data) return json(result, 422);
+      return json({
+        ...result,
         data: {
-          format: result.data.format,
-          filename: result.data.filename,
-          mimeType: result.data.mimeType,
-          encoding: result.data.encoding === "binary" ? "base64" : "utf8",
-          content:
-            typeof result.data.content === "string"
-              ? result.data.content
-              : bytesToBase64(result.data.content),
+          ...result.data,
+          artifacts: result.data.artifacts.map(inlineExportArtifact),
         },
       });
     }

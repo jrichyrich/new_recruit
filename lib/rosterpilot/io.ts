@@ -45,8 +45,77 @@ export async function writeExportArtifact(
     throw new Error(`Refusing to overwrite existing file: ${resolved}`);
   }
   await mkdir(path.dirname(resolved), { recursive: true });
-  await writeFile(resolved, artifact.content);
+  await writeFile(resolved, artifact.content, {
+    flag: options.overwrite ? "w" : "wx",
+  });
   return resolved;
+}
+
+export async function writeExportArtifacts(
+  artifacts: ExportArtifact[],
+  outputDirectory: string,
+  options: WriteOptions = {},
+): Promise<string[]> {
+  const targets = await resolveExportArtifactTargets(
+    artifacts,
+    outputDirectory,
+    options,
+  );
+  const directory = path.dirname(targets[0]);
+  await mkdir(directory, { recursive: true });
+  await Promise.all(
+    artifacts.map((artifact, index) =>
+      writeFile(targets[index], artifact.content, {
+        flag: options.overwrite ? "w" : "wx",
+      }),
+    ),
+  );
+  return targets;
+}
+
+export async function resolveExportArtifactTargets(
+  artifacts: ExportArtifact[],
+  outputDirectory: string,
+  options: WriteOptions = {},
+): Promise<string[]> {
+  if (artifacts.length === 0) {
+    throw new Error("At least one export artifact is required.");
+  }
+  const rootDir = path.resolve(options.rootDir ?? process.cwd());
+  const directory = path.resolve(rootDir, outputDirectory);
+  if (!options.allowOutsideRoot && !pathInside(rootDir, directory)) {
+    throw new Error(`Refusing to write outside ${rootDir}.`);
+  }
+  if (directory === path.parse(directory).root) {
+    throw new Error("Refusing to use a filesystem root as an output directory.");
+  }
+
+  const filenames = artifacts.map((artifact) => artifact.filename);
+  if (new Set(filenames).size !== filenames.length) {
+    throw new Error("Refusing to write handoff artifacts with duplicate filenames.");
+  }
+  const targets = filenames.map((filename) => path.resolve(directory, filename));
+  for (const target of targets) {
+    if (
+      !pathInside(directory, target) ||
+      (!options.allowOutsideRoot && !pathInside(rootDir, target))
+    ) {
+      throw new Error(`Refusing to write outside ${directory}.`);
+    }
+  }
+  if (!options.overwrite) {
+    const collisions = (
+      await Promise.all(
+        targets.map(async (target) => ((await pathExists(target)) ? target : null)),
+      )
+    ).filter((target): target is string => target !== null);
+    if (collisions.length) {
+      throw new Error(
+        `Refusing to overwrite existing file${collisions.length === 1 ? "" : "s"}: ${collisions.join(", ")}`,
+      );
+    }
+  }
+  return targets;
 }
 
 export async function writeRosterDraft(

@@ -17,6 +17,7 @@
     "db:generate": "drizzle-kit generate",
     "rosterpilot": "node --import tsx cli/rosterpilot.ts",
     "mcp": "node --import tsx mcp/stdio.ts",
+    "companion:build": "node scripts/build-new-recruit-companion.mjs",
     "data:check": "node --import tsx scripts/check-roster-data.ts",
     "data:check-latest": "node --import tsx scripts/check-roster-data.ts --latest",
     "fixtures:sanitize": "node --import tsx scripts/sanitize-new-recruit-fixtures.ts"
@@ -27,6 +28,7 @@
     "drizzle-orm": "0.45.2",
     "fflate": "^0.8.2",
     "next": "16.2.6",
+    "playwright-core": "^1.54.2",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "zod": "^3.25.76"

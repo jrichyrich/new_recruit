@@ -19,6 +19,12 @@ import {
   writeExportArtifact,
   writeRosterDraft,
 } from "../lib/rosterpilot/io";
+import {
+  configureNewRecruitCredentials,
+  deliverRosterToNewRecruit,
+  forgetNewRecruitCredentials,
+  getNewRecruitConnectionStatus,
+} from "../local/new-recruit/companion";
 
 type Args = Record<string, string | boolean | string[]>;
 
@@ -75,6 +81,10 @@ Usage:
   rosterpilot validate --file roster.json
   rosterpilot explain --file roster.json
   rosterpilot export --file roster.json --format rosz --out roster.rosz [--overwrite]
+  rosterpilot new-recruit configure
+  rosterpilot new-recruit status
+  rosterpilot new-recruit forget
+  rosterpilot new-recruit deliver --file roster.json [--out-dir exports/new-recruit] [--no-pretty]
   rosterpilot mcp
 
 Writes are restricted to the current directory unless --allow-outside-root is supplied.
@@ -91,6 +101,42 @@ async function main(): Promise<void> {
   if (command === "mcp") {
     await import("../mcp/stdio");
     return;
+  }
+  if (command === "new-recruit") {
+    const action = positionals[0] ?? "status";
+    if (action === "configure") {
+      const result = await configureNewRecruitCredentials();
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "status") {
+      print(await getNewRecruitConnectionStatus());
+      return;
+    }
+    if (action === "forget") {
+      const result = await forgetNewRecruitCredentials();
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "deliver") {
+      const inputFile = value(args, "file");
+      if (!inputFile) {
+        throw new Error("The new-recruit deliver command requires --file.");
+      }
+      const roster = await readRosterDraft(path.resolve(inputFile));
+      const result = await deliverRosterToNewRecruit(roster, {
+        downloadPrettyHtml: !flag(args, "no-pretty"),
+        outputDirectory: value(args, "out-dir") ?? "exports/new-recruit",
+        overwrite: flag(args, "overwrite"),
+        allowOutsideRoot: flag(args, "allow-outside-root"),
+      });
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    throw new Error(`Unknown new-recruit command "${action}".`);
   }
   if (command === "status") {
     print(getDataStatus());

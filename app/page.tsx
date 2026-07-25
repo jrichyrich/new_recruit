@@ -15,12 +15,14 @@ import {
   getDataStatus,
   listDetachments,
   modifyRoster,
+  prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
   validateRoster,
   type ExportArtifact,
   type ExportFormat,
   type FactionSummary,
+  type NewRecruitHandoff,
   type PreferenceTag,
   type RosterDraftV1,
   type UnitSummary,
@@ -107,6 +109,8 @@ export default function Home() {
     "A legal 1,000-point Custodes draft is ready. The engine calculated every point and loadout from pinned community data.",
   );
   const [copied, setCopied] = useState(false);
+  const [newRecruitHandoff, setNewRecruitHandoff] =
+    useState<NewRecruitHandoff | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -145,6 +149,7 @@ export default function Home() {
 
   function commitDraft(next: RosterDraftV1, note?: string): void {
     setDraft(next);
+    setNewRecruitHandoff(null);
     setHistory((current) => {
       const deduped = [next, ...current.filter((item) => item.id !== next.id)].slice(
         0,
@@ -258,6 +263,38 @@ export default function Home() {
     }
     downloadArtifact(result.data);
     setAgentNote(`${result.data.filename} downloaded and ready for handoff.`);
+  }
+
+  function prepareNewRecruit(): void {
+    const result = prepareNewRecruitHandoff(draft);
+    if (!result.data) {
+      setAgentNote(
+        `New Recruit handoff blocked: ${result.violations.map((item) => item.message).join(" ")}`,
+      );
+      return;
+    }
+    const rosz = result.data.artifacts.find((artifact) => artifact.format === "rosz");
+    if (!rosz) {
+      setAgentNote("New Recruit handoff failed to produce a .rosz artifact.");
+      return;
+    }
+    downloadArtifact(rosz);
+    setNewRecruitHandoff(result.data);
+    setAgentNote(
+      `${rosz.filename} downloaded. Import it in New Recruit to create a new list copy.`,
+    );
+  }
+
+  function downloadHandoffHtml(): void {
+    const html = newRecruitHandoff?.artifacts.find(
+      (artifact) => artifact.format === "html",
+    );
+    if (!html) {
+      setAgentNote("No printable HTML artifact is available for this handoff.");
+      return;
+    }
+    downloadArtifact(html);
+    setAgentNote(`${html.filename} downloaded for printing.`);
   }
 
   async function copyRosterJson(): Promise<void> {
@@ -721,6 +758,33 @@ export default function Home() {
                 {copied ? "Copied" : "Copy roster JSON"}
               </button>
             </div>
+            <div className={`new-recruit-flow ${newRecruitHandoff ? "ready" : ""}`}>
+              <div>
+                <strong>New Recruit handoff</strong>
+                <small>Validated ROSZ · creates a new list copy</small>
+              </div>
+              <button type="button" disabled={!ready} onClick={prepareNewRecruit}>
+                Download &amp; prepare
+              </button>
+              {newRecruitHandoff && (
+                <div className="new-recruit-flow-actions">
+                  <a
+                    href={newRecruitHandoff.importUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open My Lists <span aria-hidden="true">↗</span>
+                  </a>
+                  <button type="button" onClick={downloadHandoffHtml}>
+                    Download printable HTML
+                  </button>
+                </div>
+              )}
+              <p>
+                RosterPilot never reads New Recruit credentials or replaces an
+                existing list.
+              </p>
+            </div>
           </section>
 
           <section className="handoff-card">
@@ -764,6 +828,7 @@ export default function Home() {
                 className={item.updatedAt === draft.updatedAt ? "active" : ""}
                 onClick={() => {
                   setDraft(item);
+                  setNewRecruitHandoff(null);
                   setTarget(item.pointsLimit);
                   setPreferences(item.preferences);
                   setSelectedFaction(item.factionId);

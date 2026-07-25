@@ -33,3 +33,29 @@ test("CLI preserves natural-language build preferences and constraints", async (
   assert.deepEqual(result.data.preferences, ["mobility"]);
   assert.equal(result.data.constraints.allowNamedCharacters, false);
 });
+
+test("CLI reports sanitized local New Recruit companion status", async () => {
+  const { stdout } = await run(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "cli/rosterpilot.ts",
+      "new-recruit",
+      "status",
+    ],
+    { cwd: process.cwd() },
+  );
+  const result = JSON.parse(stdout) as {
+    ok: boolean;
+    data: {
+      platform: string;
+      credentialsConfigured: boolean;
+      profileDirectory: string | null;
+    };
+  };
+  assert.equal(result.ok, true);
+  assert.equal(result.data.platform, process.platform);
+  assert.equal(typeof result.data.credentialsConfigured, "boolean");
+  assert.doesNotMatch(stdout, /password|cookie|access.?token/i);
+});

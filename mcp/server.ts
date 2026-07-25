@@ -9,12 +9,16 @@ import {
   exportRoster,
   getDataStatus,
   modifyRoster,
+  prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
   validateRoster,
   type ExportArtifact,
   type ExportFormat,
   type ModifyRosterOperation,
+  type NewRecruitConnectionStatus,
+  type NewRecruitDelivery,
+  type NewRecruitHandoff,
   type PreferenceTag,
   type ResultEnvelope,
   type RosterDraftV1,
@@ -26,8 +30,26 @@ type ArtifactWriter = (
   overwrite: boolean,
 ) => Promise<string>;
 
+type HandoffWriter = (
+  artifacts: ExportArtifact[],
+  outputDirectory: string,
+  overwrite: boolean,
+) => Promise<string[]>;
+
 type ServerOptions = {
   artifactWriter?: ArtifactWriter;
+  handoffWriter?: HandoffWriter;
+  newRecruitCompanion?: {
+    status: () => Promise<ResultEnvelope<NewRecruitConnectionStatus>>;
+    deliver: (
+      roster: RosterDraftV1,
+      options: {
+        downloadPrettyHtml: boolean;
+        outputDirectory: string;
+        overwrite: boolean;
+      },
+    ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
+  };
 };
 
 function serializable<T>(value: T): T {
@@ -46,7 +68,17 @@ function resultContent<T>(result: ResultEnvelope<T>) {
 function inlineArtifact(result: ResultEnvelope<ExportArtifact>) {
   if (!result.data) return resultContent(result);
   const artifact = result.data;
-  const data = {
+  const data = serializableArtifact(artifact);
+  return resultContent({
+    ok: result.ok,
+    data,
+    violations: result.violations,
+    warnings: result.warnings,
+  });
+}
+
+function serializableArtifact(artifact: ExportArtifact) {
+  return {
     format: artifact.format,
     filename: artifact.filename,
     mimeType: artifact.mimeType,
@@ -55,6 +87,14 @@ function inlineArtifact(result: ResultEnvelope<ExportArtifact>) {
       typeof artifact.content === "string"
         ? artifact.content
         : bytesToBase64(artifact.content),
+  };
+}
+
+function inlineHandoff(result: ResultEnvelope<NewRecruitHandoff>) {
+  if (!result.data) return resultContent(result);
+  const data = {
+    ...result.data,
+    artifacts: result.data.artifacts.map(serializableArtifact),
   };
   return resultContent({
     ok: result.ok,
@@ -301,6 +341,137 @@ export function createRosterPilotMcpServer(
       }
     },
   );
+
+  server.registerTool(
+    "prepare_new_recruit_handoff",
+    {
+      title: "Prepare a New Recruit handoff",
+      description:
+        "Validate a roster and prepare an editable .rosz plus optional printable HTML. Local stdio may write both files to a directory; remote transports return inline content.",
+      inputSchema: {
+        roster: z.unknown(),
+        includeHtml: z.boolean().default(true),
+        outputDirectory: z.string().optional(),
+        overwrite: z.boolean().default(false),
+      },
+    },
+    async ({ roster, includeHtml, outputDirectory, overwrite }) => {
+      const result = prepareNewRecruitHandoff(
+        roster as RosterDraftV1,
+        includeHtml,
+      );
+      if (!result.data || !outputDirectory) return inlineHandoff(result);
+      if (!options.handoffWriter) {
+        return resultContent({
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code: "FILE_WRITES_DISABLED",
+              message:
+                "This MCP transport does not permit filesystem writes; omit outputDirectory to receive inline content.",
+              severity: "error",
+            },
+          ],
+          warnings: result.warnings,
+        });
+      }
+      try {
+        const written = await options.handoffWriter(
+          result.data.artifacts,
+          outputDirectory,
+          overwrite,
+        );
+        return resultContent({
+          ok: true,
+          data: {
+            rosterId: result.data.rosterId,
+            rosterName: result.data.rosterName,
+            totalPoints: result.data.totalPoints,
+            pointsLimit: result.data.pointsLimit,
+            importUrl: result.data.importUrl,
+            instructions: result.data.instructions,
+            artifacts: result.data.artifacts.map((artifact, index) => ({
+              format: artifact.format,
+              filename: artifact.filename,
+              mimeType: artifact.mimeType,
+              written: written[index],
+            })),
+          },
+          violations: [],
+          warnings: result.warnings,
+        });
+      } catch (error) {
+        return resultContent({
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code: "WRITE_FAILED",
+              message: error instanceof Error ? error.message : "Write failed.",
+              severity: "error",
+            },
+          ],
+          warnings: result.warnings,
+        });
+      }
+    },
+  );
+
+  if (options.newRecruitCompanion) {
+    server.registerTool(
+      "get_new_recruit_connection_status",
+      {
+        title: "Get local New Recruit connection status",
+        description:
+          "Check whether the macOS-only New Recruit companion, dedicated Chrome profile, and login-Keychain credential are ready. Never returns credentials or browser storage.",
+        inputSchema: {},
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async () => resultContent(await options.newRecruitCompanion!.status()),
+    );
+
+    server.registerTool(
+      "deliver_roster_to_new_recruit",
+      {
+        title: "Deliver a roster to New Recruit",
+        description:
+          "After an explicit user request, validate a roster, import it into New Recruit as a new list, verify the result, and optionally download Pretty HTML. This is a non-idempotent external action.",
+        inputSchema: {
+          roster: z.unknown(),
+          downloadPrettyHtml: z.boolean().default(true),
+          outputDirectory: z.string().default("exports/new-recruit"),
+          overwrite: z.boolean().default(false),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({
+        roster,
+        downloadPrettyHtml,
+        outputDirectory,
+        overwrite,
+      }) =>
+        resultContent(
+          await options.newRecruitCompanion!.deliver(
+            roster as RosterDraftV1,
+            {
+              downloadPrettyHtml,
+              outputDirectory,
+              overwrite,
+            },
+          ),
+        ),
+    );
+  }
 
   return server;
 }

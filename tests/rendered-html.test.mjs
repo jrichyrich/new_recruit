@@ -46,6 +46,7 @@ test("publishes an authenticated OpenAPI surface without enabling secrets", asyn
   assert.equal(openapi.openapi, "3.1.0");
   assert.ok(openapi.paths["/api/v1/rosters/build"]);
   assert.ok(openapi.paths["/api/v1/rosters/export"]);
+  assert.ok(openapi.paths["/api/v1/rosters/new-recruit-handoff"]);
   assert.equal(openapi.components.securitySchemes.bearerAuth.scheme, "bearer");
 
   const response = await render("/api/v1/data-status", {

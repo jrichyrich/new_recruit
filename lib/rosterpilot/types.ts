@@ -180,6 +180,52 @@ export type ExportArtifact = {
   content: string | Uint8Array;
 };
 
+export type NewRecruitHandoff = {
+  rosterId: string;
+  rosterName: string;
+  totalPoints: number;
+  pointsLimit: number;
+  importUrl: "https://www.newrecruit.eu/app/MyLists";
+  artifacts: ExportArtifact[];
+  instructions: string[];
+};
+
+export type NewRecruitConnectionStatus = {
+  available: boolean;
+  platform: NodeJS.Platform;
+  browserAvailable: boolean;
+  brokerAvailable: boolean;
+  credentialsConfigured: boolean;
+  profileDirectory: string | null;
+};
+
+export type NewRecruitVerification = {
+  name: boolean;
+  faction: boolean;
+  points: boolean;
+  units: Array<{
+    name: string;
+    modelCount: number;
+    matched: boolean;
+  }>;
+  mismatches: string[];
+};
+
+export type NewRecruitDelivery = {
+  rosterId: string;
+  rosterName: string;
+  listUrl: string | null;
+  imported: boolean;
+  sessionReused: boolean;
+  verification: NewRecruitVerification | null;
+  artifacts: Array<{
+    format: "rosz" | "new-recruit-pretty-html";
+    filename: string;
+    mimeType: string;
+    written: string;
+  }>;
+};
+
 export type UnitSummary = {
   id: string;
   name: string;
