@@ -272,31 +272,115 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", () => {
     assert.equal(result.ok, true, `${format} export should pass`);
     assert.ok(result.data);
     if (format === "ros") {
-      assert.match(result.data.content as string, /<roster\b/);
-      assert.match(result.data.content as string, /Adeptus Custodes/);
+      const xml = result.data.content as string;
+      assert.match(xml, /<roster\b/);
+      assert.match(xml, /Adeptus Custodes/);
       assert.match(
-        result.data.content as string,
+        xml,
         /battleScribeVersion="2\.03"/,
       );
       assert.match(
-        result.data.content as string,
+        xml,
         /gameSystemId="sys-352e-adc2-7639-d610"/,
       );
       assert.match(
-        result.data.content as string,
+        xml,
         /catalogueId="1f19-6509-d906-ca10"/,
       );
-      assert.match(result.data.content as string, /name="Force Disposition"/);
+      assert.match(xml, /name="Force Disposition"/);
+      assert.doesNotMatch(xml, /\bentry(?:Group)?Id="rp-/);
+      assert.match(
+        xml,
+        /name="Battle Size" entryId="7380-3e40-6ed6-b7cc::564e-fbc6-5266-3ea4"/,
+      );
+      assert.match(
+        xml,
+        /name="Detachments" entryId="9d4f-c524-e432-f877::5218-339c-eb34-9ac0"/,
+      );
+      assert.match(
+        xml,
+        /name="Shield Host" entryId="9d4f-c524-e432-f877::70eb-2978-3ad5-5901"/,
+      );
+      assert.match(
+        xml,
+        /name="Purge the Foe" entryId="8bc8-6bfe-78bd-2480::9c70-af87-0c32-afcf::7da4-f0a6-65ec-da48"/,
+      );
+      assert.match(
+        xml,
+        /name="Blade Champion" entryId="473-b72d-a70b-e3aa::48b7-e713-d5b1-f11c"/,
+      );
+      assert.match(
+        xml,
+        /name="Allarus Custodians" entryId="9f10-d8db-a7b3-5784::c8a6-a4c5-703e-b717"/,
+      );
+      assert.match(
+        xml,
+        /name="Agamatus Custodians" entryId="28a9-923b-c230-bc66::00ab-41c4-cf52-4ad2"/,
+      );
+      assert.match(
+        xml,
+        /name="Pallas Grav-attack" entryId="7b13-004f-1fb5-97f8::06df-2fb2-8dfa-2fce"/,
+      );
     }
     if (format === "rosz") {
       const entries = unzipSync(result.data.content as Uint8Array);
       const names = Object.keys(entries);
       assert.equal(names.length, 1);
       assert.match(names[0], /\.ros$/);
-      assert.match(strFromU8(entries[names[0]]), /<roster\b/);
+      const xml = strFromU8(entries[names[0]]);
+      assert.match(xml, /<roster\b/);
+      assert.doesNotMatch(xml, /\bentry(?:Group)?Id="rp-/);
+      assert.match(
+        xml,
+        /name="Allarus Custodian \(Guardian Spear\)" entryId="9f10-d8db-a7b3-5784::b690-3f83-ec6a-401f"/,
+      );
+      assert.match(
+        xml,
+        /name="Agamatus Custodian \(Lastrum bolt cannon\)" entryId="28a9-923b-c230-bc66::de32-bd86-91c0-6d95"/,
+      );
     }
     if (format === "html") {
       assert.match(result.data.content as string, /@media print/);
+    }
+  }
+});
+
+test("exports every browser prompt idea with real New Recruit references", () => {
+  const prompts = [
+    {
+      prompt: "Build a 1,000 point fast Custodes army with no named characters",
+      pointsLimit: 1000,
+    },
+    {
+      prompt: "Build a durable 1,500 point Custodes army for objective play",
+      pointsLimit: 1500,
+    },
+    {
+      prompt: "Build a 2,000 point elite Custodes force with shooting support",
+      pointsLimit: 2000,
+    },
+  ];
+
+  for (const input of prompts) {
+    const built = buildRoster({
+      ...input,
+      preferences: ["mobility"],
+      allowNamedCharacters: false,
+    });
+    assert.ok(built.data);
+    const exported = exportRoster(built.data, "rosz");
+    assert.equal(
+      exported.ok,
+      true,
+      `${input.pointsLimit}-point browser prompt should export`,
+    );
+    assert.ok(exported.data);
+    const entries = unzipSync(exported.data.content as Uint8Array);
+    const [filename] = Object.keys(entries);
+    const xml = strFromU8(entries[filename]);
+    assert.doesNotMatch(xml, /\bentry(?:Group)?Id="rp-/);
+    for (const selection of built.data.units) {
+      assert.match(xml, new RegExp(`name="${selection.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
     }
   }
 });

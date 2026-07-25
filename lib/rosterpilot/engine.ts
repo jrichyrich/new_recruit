@@ -40,6 +40,7 @@ import {
   type RosterIssue,
   type UnitSummary,
 } from "./types";
+import { newRecruitRos } from "./new-recruit";
 
 export const DATA_PACKAGE_VERSION = "1.2.0";
 export const DATA_EDITION = "11th";
@@ -72,19 +73,6 @@ const ROLE_LABELS: Record<string, string> = {
   character: "Character",
   battleline: "Battleline",
 };
-
-const NEW_RECRUIT_XML = {
-  battleScribeVersion: "2.03",
-  catalogueId: "1f19-6509-d906-ca10",
-  catalogueName: "Imperium - Adeptus Custodes",
-  catalogueRevision: "5",
-  forceEntryId: "bb9d-299a-ed60-2d8a",
-  gameSystemId: "sys-352e-adc2-7639-d610",
-  gameSystemName: "Warhammer 40,000 11th Edition",
-  gameSystemRevision: "6",
-  pointsTypeId: "51b2-306e-1021-d207",
-  xmlns: "http://www.battlescribe.net/schema/rosterSchema",
-} as const;
 
 function issue(
   code: string,
@@ -1273,151 +1261,6 @@ article div{display:flex;flex-direction:column}article span{font-size:12px;color
 </body></html>`;
 }
 
-type XmlNode = Record<string, unknown>;
-
-const XML_COLLECTION_NAMES: Record<string, string> = {
-  categories: "category",
-  costs: "cost",
-  forces: "force",
-  selections: "selection",
-};
-
-function escapeXml(value: unknown): string {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
-
-function serializeXmlNode(tag: string, node: XmlNode): string {
-  const attributes: string[] = [];
-  const children: string[] = [];
-
-  for (const [key, value] of Object.entries(node)) {
-    if (value === undefined || value === null) continue;
-    if (Array.isArray(value)) {
-      if (value.length === 0) continue;
-      const childTag = XML_COLLECTION_NAMES[key] ?? key.replace(/s$/, "");
-      const serialized = value
-        .map((child) => serializeXmlNode(childTag, child as XmlNode))
-        .join("");
-      children.push(`<${key}>${serialized}</${key}>`);
-      continue;
-    }
-    if (typeof value === "object") {
-      children.push(serializeXmlNode(key, value as XmlNode));
-      continue;
-    }
-    attributes.push(`${key}="${escapeXml(value)}"`);
-  }
-
-  const open = attributes.length ? `<${tag} ${attributes.join(" ")}>` : `<${tag}>`;
-  return children.length
-    ? `${open}${children.join("")}</${tag}>`
-    : `${open.slice(0, -1)} />`;
-}
-
-function newRecruitRos(draft: RosterDraftV1, canonical: Roster): string {
-  const payload = JSON.parse(
-    export40kRoster(canonical, "newrecruit-json"),
-  ) as { roster: XmlNode };
-  const roster = payload.roster;
-  const forces = roster.forces as XmlNode[];
-  const force = forces[0];
-  const selections = force.selections as XmlNode[];
-  const configurationCategory = {
-    id: "4ac9-fd30-1e3d-b249",
-    entryId: "4ac9-fd30-1e3d-b249",
-    name: "Configuration",
-    primary: true,
-  };
-
-  selections.splice(2, 0, {
-    id: deterministicId([draft.id, "force-disposition"]),
-    entryId: deterministicId(["entry", "force-disposition"]),
-    name: "Force Disposition",
-    number: 1,
-    type: "upgrade",
-    from: "entry",
-    categories: [configurationCategory],
-    selections: [
-      {
-        id: deterministicId([draft.id, "force-disposition-value"]),
-        entryId: deterministicId([
-          "entry",
-          "force-disposition",
-          draft.forceDispositionId,
-        ]),
-        name: draft.forceDispositionName,
-        number: 1,
-        type: "upgrade",
-        from: "entry",
-      },
-    ],
-  });
-
-  const normalizeNode = (node: XmlNode, path: string): void => {
-    if (typeof node.id !== "string") node.id = deterministicId([draft.id, path]);
-    if (
-      (node.type === "unit" ||
-        node.type === "model" ||
-        node.type === "upgrade") &&
-      typeof node.entryId !== "string"
-    ) {
-      node.entryId = deterministicId(["entry", path, String(node.name ?? "")]);
-      node.from = node.from ?? "entry";
-    }
-    if (Array.isArray(node.costs)) {
-      for (const cost of node.costs as XmlNode[]) {
-        cost.typeId = NEW_RECRUIT_XML.pointsTypeId;
-      }
-    }
-    if (Array.isArray(node.categories)) {
-      for (const [index, category] of (node.categories as XmlNode[]).entries()) {
-        category.id =
-          category.id ??
-          deterministicId(["category", String(category.name ?? ""), index]);
-        category.entryId = category.entryId ?? category.id;
-      }
-    }
-    if (Array.isArray(node.selections)) {
-      for (const [index, selection] of (node.selections as XmlNode[]).entries()) {
-        normalizeNode(selection, `${path}/selection-${index}`);
-      }
-    }
-  };
-
-  for (const [index, selection] of selections.entries()) {
-    normalizeNode(selection, `force/selection-${index}`);
-  }
-  for (const cost of roster.costs as XmlNode[]) {
-    cost.typeId = NEW_RECRUIT_XML.pointsTypeId;
-  }
-
-  Object.assign(roster, {
-    id: deterministicId([draft.id, "roster"]),
-    name: draft.name,
-    battleScribeVersion: NEW_RECRUIT_XML.battleScribeVersion,
-    generatedBy: "RosterPilot",
-    gameSystemId: NEW_RECRUIT_XML.gameSystemId,
-    gameSystemName: NEW_RECRUIT_XML.gameSystemName,
-    gameSystemRevision: NEW_RECRUIT_XML.gameSystemRevision,
-    xmlns: NEW_RECRUIT_XML.xmlns,
-  });
-  Object.assign(force, {
-    id: deterministicId([draft.id, "force"]),
-    name: "Army Roster",
-    entryId: NEW_RECRUIT_XML.forceEntryId,
-    catalogueId: NEW_RECRUIT_XML.catalogueId,
-    catalogueRevision: NEW_RECRUIT_XML.catalogueRevision,
-    catalogueName: NEW_RECRUIT_XML.catalogueName,
-  });
-
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${serializeXmlNode("roster", roster)}`;
-}
-
 export function exportRoster(
   draft: RosterDraftV1,
   format: ExportFormat,
@@ -1473,7 +1316,7 @@ export function exportRoster(
         validation.warnings,
       );
     }
-    const ros = newRecruitRos(draft, canonical);
+    const ros = newRecruitRos(draft);
     if (format === "ros") {
       return envelope(
         {

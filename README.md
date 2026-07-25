@@ -42,9 +42,9 @@ Codex project `.codex/config.toml`:
 
 ```toml
 [mcp_servers.rosterpilot]
-command = "node"
-args = ["--import", "tsx", "/Users/jasricha/Documents/new_recruit/mcp/stdio.ts"]
-cwd = "/Users/jasricha/Documents/new_recruit"
+command = "/opt/homebrew/bin/node"
+args = ["--import", "/Users/jasricha/Documents/Github_Personal/new_recruit/node_modules/tsx/dist/loader.mjs", "/Users/jasricha/Documents/Github_Personal/new_recruit/mcp/stdio.ts"]
+cwd = "/Users/jasricha/Documents/Github_Personal/new_recruit"
 ```
 
 Claude Desktop configuration:
@@ -53,13 +53,13 @@ Claude Desktop configuration:
 {
   "mcpServers": {
     "rosterpilot": {
-      "command": "node",
+      "command": "/opt/homebrew/bin/node",
       "args": [
         "--import",
-        "tsx",
-        "/Users/jasricha/Documents/new_recruit/mcp/stdio.ts"
+        "/Users/jasricha/Documents/Github_Personal/new_recruit/node_modules/tsx/dist/loader.mjs",
+        "/Users/jasricha/Documents/Github_Personal/new_recruit/mcp/stdio.ts"
       ],
-      "cwd": "/Users/jasricha/Documents/new_recruit"
+      "cwd": "/Users/jasricha/Documents/Github_Personal/new_recruit"
     }
   }
 }
@@ -91,6 +91,11 @@ REST routes include faction/unit search and roster build, modify, validate, expl
 ## New Recruit handoff
 
 Validate first, then export `.rosz` or `.ros` and import the file at [New Recruit](https://www.newrecruit.eu/app/MyLists). RosterPilot also exports New Recruit-shaped JSON, canonical roster JSON, text, and print-ready HTML.
+
+ROS/ROSZ exports use versioned BSData catalogue references for configuration,
+units, models, and wargear. If a selected item has no catalogue mapping,
+RosterPilot rejects the export instead of emitting a file that New Recruit
+would import as an empty roster.
 
 The website stores versioned draft history in browser `localStorage`. It does not inspect New Recruit credentials, automate browser mutations, or use a cloud roster database.
 
