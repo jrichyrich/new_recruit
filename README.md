@@ -10,7 +10,11 @@ RosterPilot is a deterministic Warhammer 40,000 roster engine with four surfaces
 See [Architecture](docs/architecture.md) for system boundaries, delivery
 workflow, authentication state, and credential flow diagrams.
 
-Warhammer 40,000 11th Edition Adeptus Custodes is the first build-supported faction. Every embedded faction remains searchable. Points and legality come from pinned [`@alpaca-software/40kdc-data`](https://github.com/wn-mitch/40kdc-data), not from an LLM.
+All 35 embedded Warhammer 40,000 11th Edition faction entries are searchable
+and buildable, including Space Marine chapter entries that inherit their parent
+datasheet pool. Points and legality come from pinned
+[`@alpaca-software/40kdc-data`](https://github.com/wn-mitch/40kdc-data), not
+from an LLM.
 
 ## Run locally
 
@@ -28,6 +32,7 @@ npm run rosterpilot -- status
 npm run rosterpilot -- search custodes
 npm run rosterpilot -- search praetors --faction adeptus-custodes
 npm run rosterpilot -- build --prompt "Build a 1,000 point fast Custodes army with no named characters" --out roster.json
+npm run rosterpilot -- build --faction aeldari --points 1000 --preferences mobility,shooting,objective --out aeldari.json
 npm run rosterpilot -- validate --file roster.json
 npm run rosterpilot -- export --file roster.json --format rosz --out roster.rosz
 npm run mcp
@@ -95,15 +100,21 @@ inline; remote agents cannot write server files.
 
 ## New Recruit handoff
 
-Validate first, then export `.rosz` or `.ros` and import the file at [New Recruit](https://www.newrecruit.eu/app/MyLists). RosterPilot also exports New Recruit-shaped JSON, canonical roster JSON, text, and print-ready HTML.
+Every validated faction can export New Recruit-shaped JSON, canonical roster
+JSON, text, and print-ready HTML. Custodes additionally has complete BSData
+catalogue mappings for `.ros/.rosz` import at
+[New Recruit](https://www.newrecruit.eu/app/MyLists). Other factions fail
+closed with `NEW_RECRUIT_MAPPING_UNAVAILABLE` instead of emitting an invalid
+import file.
 
-`prepare_new_recruit_handoff` returns the editable `.rosz` and, by default, a
-printable HTML companion in one validated response. Local stdio clients may
-write both artifacts to a directory; remote clients receive inline content.
+For a mapped faction, `prepare_new_recruit_handoff` returns the editable
+`.rosz` and, by default, a printable HTML companion in one validated response.
+Local stdio clients may write both artifacts to a directory; remote clients
+receive inline content.
 
 ### Local automated delivery on macOS
 
-The local stdio MCP and terminal CLI can optionally use a dedicated Chrome
+For mapped factions, the local stdio MCP and terminal CLI can optionally use a dedicated Chrome
 profile plus a dedicated credential in the traditional macOS login Keychain to
 import a validated roster and download New Recruit's Pretty HTML. These tools
 are intentionally absent from hosted MCP, REST, OpenAPI, and the public
@@ -170,6 +181,10 @@ ROSTERPILOT_BROWSER_TESTS=1 \
 
 ## Data and verification
 
-`npm run data:check` verifies Custodes point coverage, a legal natural-language acceptance roster, and all interoperable export formats. `npm run data:check-latest` additionally checks the npm registry but does not update anything automatically.
+`npm run data:check` verifies the cross-faction build matrix, provisional point
+coverage, a legal natural-language acceptance roster, universal exports, and
+the mapped Custodes `.ros/.rosz` exports. `npm run data:check-latest`
+additionally checks the npm registry but does not update anything
+automatically.
 
 Community data is pinned for reproducibility. Confirm event-specific rulings before play. Public deployments must display the included “Powered by 40kdc-data” attribution.

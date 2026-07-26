@@ -1,3 +1,4 @@
+import { factions } from "@alpaca-software/40kdc-data";
 import {
   buildRoster,
   exportRoster,
@@ -25,6 +26,24 @@ if (status.data.provisionalCustodesPoints > 0) {
     `${status.data.provisionalCustodesPoints} Custodes datasheets still have provisional points.`,
   );
 }
+
+const factionCoverage = factions.all.map((faction) => {
+  const result = buildRoster({
+    faction: faction.id,
+    pointsLimit: 1000,
+    name: `${faction.name} coverage check`,
+    preferences: ["mobility", "objective", "shooting"],
+    allowLegends: false,
+  });
+  if (!result.ok || !result.data) {
+    throw new Error(
+      `${faction.name} coverage failed: ${result.violations
+        .map((item) => item.message)
+        .join("; ")}`,
+    );
+  }
+  return faction.id;
+});
 
 const fixture = buildRoster({
   prompt: "Build a 1,000 point fast Custodes army with no named characters",
@@ -57,6 +76,9 @@ process.stdout.write(
       updateAvailable:
         latest !== null && latest !== status.data.packageVersion,
       custodesUnits: status.data.custodesUnitCount,
+      buildableFactions: factionCoverage.length,
+      totalUnits: status.data.unitCount,
+      provisionalPoints: status.data.provisionalPoints,
       acceptanceRosterPoints: fixture.data.totalPoints,
       exports: ["ros", "rosz", "newrecruit-json", "roster-json"],
     },

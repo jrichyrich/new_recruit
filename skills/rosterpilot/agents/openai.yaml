@@ -1,4 +1,4 @@
 interface:
   display_name: "RosterPilot"
   short_description: "Build and validate tabletop army rosters"
-  default_prompt: "Use $rosterpilot to build a validated Custodes roster and export it for New Recruit."
+  default_prompt: "Use $rosterpilot to build and validate a roster for the requested faction, then choose a supported printable or New Recruit export."

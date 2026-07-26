@@ -47,8 +47,8 @@ const PREFERENCES: Array<{ id: PreferenceTag; label: string }> = [
 
 const PROMPT_IDEAS = [
   "Build a 1,000 point fast Custodes army with no named characters",
-  "Build a durable 1,500 point Custodes army for objective play",
-  "Build a 2,000 point elite Custodes force with shooting support",
+  "Build a fast 1,000 point Aeldari army for objective play",
+  "Build a durable 1,500 point Ork army with melee pressure",
 ];
 
 type DraftStore = {
@@ -131,6 +131,13 @@ export default function Home() {
     () => searchFactions(factionQuery, 40).data ?? [],
     [factionQuery],
   );
+  const selectedFactionSummary = useMemo(
+    () =>
+      searchFactions(selectedFaction, 5).data?.find(
+        (faction) => faction.id === selectedFaction,
+      ),
+    [selectedFaction],
+  );
   const unitResult = useMemo(
     () =>
       searchUnits({
@@ -179,7 +186,9 @@ export default function Home() {
       pointsLimit: target,
       preferences,
       allowNamedCharacters: allowNamed,
-      name: `${target.toLocaleString()}pt ${selectedFaction === "adeptus-custodes" ? "Custodes" : "RosterPilot"} Draft`,
+      name: `${target.toLocaleString()}pt ${
+        selectedFactionSummary?.name ?? "Army"
+      } Draft`,
     });
     if (!result.data) {
       setAgentNote(
@@ -216,9 +225,9 @@ export default function Home() {
   }
 
   function addUnit(unit: UnitSummary): void {
-    if (unit.factionId !== draft.factionId) {
+    if (selectedFaction !== draft.factionId) {
       setAgentNote(
-        `${unit.name} is available for research, but this active roster belongs to ${draft.factionName}. Build a supported faction roster before adding it.`,
+        `${unit.name} belongs to the selected faction, but the active roster is ${draft.factionName}. Build the selected faction before adding units.`,
       );
       return;
     }
@@ -328,8 +337,13 @@ export default function Home() {
   }
 
   const ready = validation.ok;
+  const newRecruitMapped = draft.factionId === "adeptus-custodes";
   const remaining = draft.pointsLimit - draft.totalPoints;
-  const rosterCommand = `Build or review "${draft.name}" as a ${draft.pointsLimit}-point ${draft.factionName} roster. Validate it before making any legality claim, then export .rosz for New Recruit.`;
+  const rosterCommand = `Build or review "${draft.name}" as a ${draft.pointsLimit}-point ${draft.factionName} roster. Validate it before making any legality claim, then ${
+    newRecruitMapped
+      ? "export .rosz for New Recruit"
+      : "export printable HTML or roster JSON; New Recruit catalogue mapping is not yet available for this faction"
+  }.`;
 
   return (
     <main className="app-shell">
@@ -390,8 +404,8 @@ export default function Home() {
                   setUnitQuery("");
                   setAgentNote(
                     faction.supported
-                      ? "Custodes roster building is enabled."
-                      : `${faction.name} is available for research; deterministic building is not enabled until its coverage gate passes.`,
+                      ? `${faction.name} deterministic roster building is enabled.`
+                      : `${faction.name} is available for research, but its priced-unit or detachment coverage is incomplete.`,
                   );
                 }}
                 type="button"
@@ -421,8 +435,8 @@ export default function Home() {
             ))}
           </div>
           <p className="data-note">
-            Browse every embedded faction. Legal roster construction is gated to
-            Adeptus Custodes while coverage is verified.
+            Browse and build every faction whose priced units and matched-play
+            detachments pass the deterministic coverage gate.
           </p>
         </aside>
 
@@ -718,8 +732,8 @@ export default function Home() {
             <span className="eyebrow">Export desk</span>
             <h2>Take the list with you</h2>
             <p>
-              New Recruit accepts `.ros`, `.rosz`, and JSON. Exports remain blocked
-              until validation passes.
+              Printable HTML, text, and JSON work for every validated faction.
+              New Recruit `.ros/.rosz` currently requires a mapped catalogue.
             </p>
             <div className="export-grid">
               {(
@@ -735,7 +749,11 @@ export default function Home() {
                 <button
                   key={format}
                   type="button"
-                  disabled={!ready}
+                  disabled={
+                    !ready ||
+                    ((format === "ros" || format === "rosz") &&
+                      !newRecruitMapped)
+                  }
                   onClick={() => handleExport(format)}
                 >
                   <span aria-hidden="true">{icon}</span>
@@ -761,9 +779,17 @@ export default function Home() {
             <div className={`new-recruit-flow ${newRecruitHandoff ? "ready" : ""}`}>
               <div>
                 <strong>New Recruit handoff</strong>
-                <small>Validated ROSZ · creates a new list copy</small>
+                <small>
+                  {newRecruitMapped
+                    ? "Validated ROSZ · creates a new list copy"
+                    : "Catalogue mapping unavailable for this faction"}
+                </small>
               </div>
-              <button type="button" disabled={!ready} onClick={prepareNewRecruit}>
+              <button
+                type="button"
+                disabled={!ready || !newRecruitMapped}
+                onClick={prepareNewRecruit}
+              >
                 Download &amp; prepare
               </button>
               {newRecruitHandoff && (

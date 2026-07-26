@@ -117,7 +117,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Get roster data status",
       description:
-        "Return the pinned data version, supported faction gate, coverage, and attribution.",
+        "Return the pinned data version, buildable factions, coverage, and attribution.",
       inputSchema: {},
     },
     async () => resultContent(getDataStatus()),
@@ -128,7 +128,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Search factions",
       description:
-        "Search all embedded 11th-edition factions. Building support is currently gated to Adeptus Custodes.",
+        "Search all embedded 11th-edition factions and report deterministic build support.",
       inputSchema: {
         query: z.string().default(""),
         limit: z.number().int().min(1).max(100).default(20),
@@ -190,7 +190,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Build a deterministic roster",
       description:
-        "Build a Custodes roster from natural language and/or structured constraints. Points and legality are calculated by the engine, never by the model.",
+        "Build any supported faction roster from natural language and/or structured constraints. Points and legality are calculated by the engine, never by the model.",
       inputSchema: {
         prompt: z.string().optional(),
         faction: z.string().optional(),
@@ -272,7 +272,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Export a roster",
       description:
-        "Export a validated roster as .ros, .rosz, New Recruit JSON, canonical roster JSON, text, or printable HTML. Writing requires an explicit path and never overwrites by default.",
+        "Export a validated roster as New Recruit JSON, canonical roster JSON, text, or printable HTML. Custodes also supports mapped .ros/.rosz output. Writing requires an explicit path and never overwrites by default.",
       inputSchema: {
         roster: z.unknown(),
         format: z.enum([

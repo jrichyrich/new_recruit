@@ -1,6 +1,6 @@
 ---
 name: rosterpilot
-description: Build, inspect, modify, validate, explain, and export Warhammer 40,000 army rosters through the RosterPilot MCP server. Use for faction or unit research, natural-language Adeptus Custodes roster requests, collection-constrained army planning, legality checks, and New Recruit .ros/.rosz/JSON handoffs.
+description: Build, inspect, modify, validate, explain, and export Warhammer 40,000 army rosters for any build-supported faction through the RosterPilot MCP server. Use for faction or unit research, natural-language roster requests, collection-constrained army planning, legality checks, printable HTML, and mapped New Recruit .ros/.rosz handoffs.
 ---
 
 # RosterPilot
@@ -28,13 +28,18 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 
 - Say a roster is legal only when `validate_roster.ok` is true and `violations` is empty.
 - Treat `warnings` as visible caveats, not as hidden failures.
-- If the tool returns `UNSUPPORTED_FACTION`, offer faction research or explain that deterministic building is currently Custodes-only.
+- If the tool returns `UNSUPPORTED_FACTION`, explain which priced-unit or
+  matched-play-detachment coverage requirement is missing.
 - Preserve the roster’s `sourceData` version. Rebuild or revalidate when `DATA_VERSION_CHANGED` appears.
 - Treat community data as a planning source; remind users to confirm event-specific rulings.
 
 ## Export safety
 
-- Prefer `.rosz` for New Recruit file handoff and `html` for printing.
+- Prefer `html` for universal printing. Use `.rosz` for New Recruit only when
+  the faction has a complete catalogue mapping; currently that mapping is
+  available for Adeptus Custodes.
+- Treat `NEW_RECRUIT_MAPPING_UNAVAILABLE` as a capability boundary, not a
+  roster-legality failure. Offer printable HTML or roster JSON.
 - Omit `outputPath` when the user only wants content returned to the chat.
 - Supply `outputPath` only when the user asked to create a file.
 - Do not set `overwrite: true` unless the user explicitly approved replacing that exact file.
@@ -58,7 +63,8 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 ## Example requests
 
 - “Build a 1,000-point fast Custodes army with no named characters.”
-- “Compare Custodes and Space Marines, then show mobile Custodes units.”
+- “Build a fast 1,000-point Aeldari army that can capture objectives.”
+- “Compare Custodes and Space Marines, then show mobile units.”
 - “Replace this unit with a more durable option and revalidate.”
 - “Export the validated list as `.rosz` and printable HTML.”
 - “Prepare this roster for New Recruit and give me both files.”

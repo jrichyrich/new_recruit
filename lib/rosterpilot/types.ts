@@ -2,7 +2,9 @@ import { z } from "zod";
 
 export const ROSTER_SCHEMA_VERSION = 1 as const;
 export const SUPPORTED_GAME = "warhammer-40000-11e" as const;
-export const SUPPORTED_FACTION_ID = "adeptus-custodes" as const;
+export const DEFAULT_FACTION_ID = "adeptus-custodes" as const;
+/** @deprecated Use DEFAULT_FACTION_ID. Kept for persisted clients. */
+export const SUPPORTED_FACTION_ID = DEFAULT_FACTION_ID;
 
 export const PreferenceTagSchema = z.enum([
   "mobility",
@@ -256,6 +258,9 @@ export type DataStatus = {
   dataslate: string;
   supportedFactionIds: string[];
   factionCount: number;
+  buildableFactionCount: number;
+  unitCount: number;
+  provisionalPoints: number;
   custodesUnitCount: number;
   provisionalCustodesPoints: number;
   attribution: {

@@ -5,6 +5,49 @@ web, CLI, MCP, and REST surfaces. The roster engine and pinned data remain the
 source of truth. New Recruit is an optional local delivery and Pretty HTML
 backend, not the canonical validator.
 
+## Capability model
+
+Roster construction and New Recruit interoperability are deliberately separate
+capabilities:
+
+| Capability | Coverage | Authority |
+| --- | --- | --- |
+| Search, build, modify, validate, explain | All 35 embedded faction entries | Pinned `40kdc-data` units, detachments, pricing, loadouts, and army checks |
+| Printable HTML, text, roster JSON, New Recruit-shaped JSON | Every validated roster | RosterPilot serializers |
+| `.ros/.rosz` import | Factions with complete BSData catalogue mappings; currently Adeptus Custodes | Versioned catalogue, selection, model, and wargear IDs |
+| New Recruit import and Pretty HTML automation | Same mapped-faction set as `.rosz` | Local macOS companion |
+
+Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
+retaining their chapter detachments, faction exclusions, and validation
+context. Missing data or catalogue mappings fail closed; generic building never
+implies generic New Recruit import support.
+
+### Universal New Recruit mapping path
+
+[New Recruit](https://www.newrecruit.eu/) states that it consumes community
+catalogues from the [BSData GitHub organization](https://github.com/BSData).
+RosterPilot should therefore replace hand-authored faction maps with a
+versioned catalogue adapter, not scrape the New Recruit UI or call private
+APIs:
+
+1. Pin a BSData repository and commit whose game-system edition matches
+   RosterPilot's pinned rules dataset.
+2. Parse `.gst` and `.cat`/`.catz` files into a local catalogue index.
+3. Match entities by faction, normalized name, role, composition, and wargear
+   signatures rather than by name alone.
+4. Materialize a reviewed mapping manifest containing the source commit and
+   catalogue revision identifiers.
+5. Round-trip one golden `.rosz` per faction and reject unresolved or ambiguous
+   mappings.
+6. Enable automated New Recruit delivery for a faction only after those checks
+   pass in CI.
+
+The active public
+[`BSData/wh40k-10e`](https://github.com/BSData/wh40k-10e) repository contains
+catalogue identifiers for 10th Edition, but those identifiers must not be mixed
+with RosterPilot's pinned 11th Edition data. Until a matching source is pinned,
+universal HTML/JSON export is safe while New Recruit delivery remains gated.
+
 ## System architecture
 
 ```mermaid

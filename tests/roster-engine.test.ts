@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   dataset,
+  factions,
   tryImportRoster,
 } from "@alpaca-software/40kdc-data";
 import { unzipSync, strFromU8 } from "fflate";
@@ -27,7 +28,7 @@ import {
 
 const fixtures = new URL("./fixtures/", import.meta.url);
 
-test("searches real faction and unit data while gating build support", () => {
+test("searches and builds real faction data across the supported catalog", () => {
   const factionResult = searchFactions("custodes");
   assert.equal(factionResult.ok, true);
   assert.equal(factionResult.data?.[0].id, "adeptus-custodes");
@@ -40,12 +41,59 @@ test("searches real faction and unit data while gating build support", () => {
   assert.equal(unitResult.ok, true);
   assert.ok(unitResult.data?.some((unit) => unit.id === "vertus-praetors"));
 
-  const unsupported = buildRoster({
+  const aeldari = buildRoster({
     faction: "aeldari",
     pointsLimit: 1000,
+    preferences: ["mobility", "shooting", "objective"],
   });
-  assert.equal(unsupported.ok, false);
-  assert.equal(unsupported.violations[0]?.code, "UNSUPPORTED_FACTION");
+  assert.equal(aeldari.ok, true);
+  assert.equal(aeldari.data?.factionId, "aeldari");
+  assert.equal(aeldari.data?.totalPoints, 1000);
+  assert.ok(aeldari.data?.units.some((unit) => unit.tags.includes("mobility")));
+});
+
+test("builds and validates every embedded faction at common game sizes", () => {
+  for (const pointsLimit of [500, 1000, 2000]) {
+    for (const faction of factions.all) {
+      const result = buildRoster({
+        faction: faction.id,
+        pointsLimit,
+        name: `${faction.name} coverage`,
+        preferences: ["mobility", "objective", "shooting"],
+        allowLegends: false,
+      });
+      assert.equal(
+        result.ok,
+        true,
+        `${faction.name} at ${pointsLimit}: ${result.violations
+          .map((item) => `${item.code}: ${item.message}`)
+          .join("; ")}`,
+      );
+      assert.equal(result.data?.factionId, faction.id);
+      assert.ok((result.data?.units.length ?? 0) > 0);
+    }
+  }
+});
+
+test("exports any validated faction to HTML but fails closed on unmapped ROSZ", () => {
+  const result = buildRoster({
+    faction: "aeldari",
+    pointsLimit: 1000,
+    name: "Aeldari Rapid Strike",
+    preferences: ["mobility", "shooting", "objective"],
+  });
+  assert.ok(result.data);
+
+  const html = exportRoster(result.data, "html");
+  assert.equal(html.ok, true);
+  assert.match(String(html.data?.content), /Aeldari Rapid Strike/);
+
+  const rosz = exportRoster(result.data, "rosz");
+  assert.equal(rosz.ok, false);
+  assert.equal(
+    rosz.violations[0]?.code,
+    "NEW_RECRUIT_MAPPING_UNAVAILABLE",
+  );
 });
 
 test("returns a stable envelope for malformed roster schemas", () => {

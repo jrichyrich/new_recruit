@@ -11,6 +11,7 @@ import {
   normalizeName,
   pointsTierMissing,
   units,
+  validateRosterCore,
   wargearPoints,
 } from "@alpaca-software/40kdc-data";
 import type {
@@ -22,9 +23,9 @@ import { strToU8, zipSync } from "fflate";
 
 import {
   ROSTER_SCHEMA_VERSION,
+  DEFAULT_FACTION_ID,
   ModifyRosterOperationSchema,
   RosterDraftV1Schema,
-  SUPPORTED_FACTION_ID,
   SUPPORTED_GAME,
   type BuildRosterInput,
   type DataStatus,
@@ -72,6 +73,10 @@ const PREFERENCE_ALIASES: Record<PreferenceTag, string[]> = {
 const ROLE_LABELS: Record<string, string> = {
   character: "Character",
   battleline: "Battleline",
+  "dedicated-transport": "Dedicated Transport",
+  fortification: "Fortification",
+  allied: "Allied",
+  "epic-hero": "Epic Hero",
 };
 
 function issue(
@@ -124,11 +129,78 @@ function unitRole(unit: UnitView): string {
   return "Unit";
 }
 
+function isCharacterUnit(unit: UnitView): boolean {
+  const keywords = normalizedKeywords(unit);
+  return (
+    unit.raw.role === "character" ||
+    unit.raw.role === "epic-hero" ||
+    keywords.includes("character")
+  );
+}
+
 function isNamedCharacter(unit: UnitView): boolean {
   const keywords = normalizedKeywords(unit);
   return (
     keywords.includes("epic hero") ||
     keywords.includes("named character")
+  );
+}
+
+function factionAncestry(factionId: string): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  let current = factions.get(factionId);
+  while (current && !seen.has(current.id)) {
+    ids.push(current.id);
+    seen.add(current.id);
+    const parentId = current.raw.parent_faction_id;
+    current = parentId ? factions.get(parentId) : undefined;
+  }
+  return ids;
+}
+
+function factionUnits(factionId: string): UnitView[] {
+  const seen = new Set<string>();
+  const result: UnitView[] = [];
+  for (const sourceFactionId of factionAncestry(factionId)) {
+    for (const unit of units.byFaction(sourceFactionId)) {
+      if (seen.has(unit.id)) continue;
+      seen.add(unit.id);
+      result.push(unit);
+    }
+  }
+  return result;
+}
+
+function matchedPlayDetachments(factionId: string) {
+  const seen = new Set<string>();
+  return factionAncestry(factionId).flatMap((sourceFactionId) =>
+    detachments.byFaction(sourceFactionId).filter((detachment) => {
+      if (seen.has(detachment.id)) return false;
+      const matchedPlay =
+        !detachment.game_modes ||
+        detachment.game_modes.includes("matched-play");
+      if (matchedPlay) seen.add(detachment.id);
+      return matchedPlay;
+    }),
+  );
+}
+
+function resolveDetachment(detachmentId: string, factionId: string) {
+  for (const sourceFactionId of factionAncestry(factionId)) {
+    const found = detachments.getInFaction(detachmentId, sourceFactionId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function isBuildableFaction(factionId: string): boolean {
+  return (
+    factionUnits(factionId).some(
+      (unit) =>
+        (unit.raw.points ?? []).length > 0 &&
+        unit.raw.attachment_role !== "support",
+    ) && matchedPlayDetachments(factionId).length > 0
   );
 }
 
@@ -216,6 +288,57 @@ function getEquipment(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function validEquipmentIds(unit: UnitView): Set<string> {
+  const ids = new Set(unit.raw.weapon_ids ?? []);
+  for (const option of dataset.wargearOptionsOf(unit.raw)) {
+    for (const id of option.replaces ?? []) ids.add(id);
+    for (const id of option.replacement ?? []) ids.add(id);
+    for (const branch of option.replacement_choice ?? []) {
+      for (const id of branch) ids.add(id);
+    }
+  }
+  for (const model of dataset.unitCompositionOf(unit.raw)?.models ?? []) {
+    for (const id of model.default_weapon_ids ?? []) ids.add(id);
+  }
+  return ids;
+}
+
+function equipmentLoadoutIsLegal(
+  unit: UnitView,
+  modelCount: number,
+  equipment: EquipmentSelection[],
+): boolean {
+  const counts = new Map(
+    equipment.map((entry) => [entry.itemId, entry.count]),
+  );
+  const verdict = validateRosterCore(
+    {
+      factionId: unit.raw.faction_id,
+      battleSize: null,
+      forceDisposition: null,
+      detachmentIds: [],
+      units: [
+        {
+          unitId: unit.id,
+          modelCount,
+          isWarlord: true,
+          enhancementId: null,
+          leaderBodyguardId: null,
+          counts,
+        },
+      ],
+    },
+    dataset,
+  );
+  return (
+    verdict.units.find(
+      (candidate) =>
+        candidate.unitId === unit.id &&
+        candidate.modelCount === modelCount,
+    )?.violations.length === 0
+  );
+}
+
 function enhancementDetails(enhancementId: string | null): {
   name: string | null;
   cost: number;
@@ -284,8 +407,18 @@ function makeSelection(
 }
 
 function resolveFaction(query?: string) {
-  if (!query) return factions.get(SUPPORTED_FACTION_ID);
+  if (!query) return factions.get(DEFAULT_FACTION_ID);
   const normalized = normalizeName(query);
+  const exact = factions.all.find(
+    (faction) =>
+      faction.id === query ||
+      normalizeName(faction.id) === normalized ||
+      normalizeName(faction.name) === normalized ||
+      (faction.raw.aliases ?? []).some(
+        (alias) => normalizeName(alias) === normalized,
+      ),
+  );
+  if (exact) return exact;
   const aliasId = Object.entries(FACTION_ALIASES).find(([alias]) =>
     normalized.includes(normalizeName(alias)),
   )?.[1];
@@ -302,12 +435,19 @@ function resolveFaction(query?: string) {
 
 function resolveUnit(unitId: string, factionId?: string): UnitView | undefined {
   if (factionId) {
-    const factionUnit = units
-      .byFaction(factionId)
-      .find((unit) => unit.id === unitId || normalizeName(unit.name) === normalizeName(unitId));
-    if (factionUnit) return factionUnit;
+    for (const sourceFactionId of factionAncestry(factionId)) {
+      const factionUnit = units
+        .byFaction(sourceFactionId)
+        .find(
+          (unit) =>
+            unit.id === unitId ||
+            normalizeName(unit.name) === normalizeName(unitId),
+        );
+      if (factionUnit) return factionUnit;
+    }
+    return undefined;
   }
-  return units.get(unitId) ?? units.find(unitId);
+  return units.getAny(unitId) ?? units.find(unitId);
 }
 
 function dispositionName(dispositionId: string): string {
@@ -357,9 +497,7 @@ export function parseRosterPrompt(prompt: string): BuildRosterInput {
       aliases.some((alias) => normalized.includes(normalizeName(alias))),
     )
     .map(([preference]) => preference);
-  const faction = Object.entries(FACTION_ALIASES).find(([alias]) =>
-    normalized.includes(normalizeName(alias)),
-  )?.[1];
+  const faction = resolveFaction(prompt)?.id;
 
   return {
     prompt,
@@ -374,14 +512,22 @@ export function parseRosterPrompt(prompt: string): BuildRosterInput {
 }
 
 export function getDataStatus(): ResultEnvelope<DataStatus> {
-  const custodesUnits = units.byFaction(SUPPORTED_FACTION_ID);
+  const custodesUnits = units.byFaction(DEFAULT_FACTION_ID);
+  const supportedFactionIds = factions.all
+    .filter((faction) => isBuildableFaction(faction.id))
+    .map((faction) => faction.id);
   return envelope({
     package: "@alpaca-software/40kdc-data",
     packageVersion: DATA_PACKAGE_VERSION,
     edition: "11th",
     dataslate: DATA_DATASLATE,
-    supportedFactionIds: [SUPPORTED_FACTION_ID],
+    supportedFactionIds,
     factionCount: factions.all.length,
+    buildableFactionCount: supportedFactionIds.length,
+    unitCount: units.all.length,
+    provisionalPoints: units.all.filter(
+      (unit) => unit.raw.points_provisional === true,
+    ).length,
     custodesUnitCount: custodesUnits.length,
     provisionalCustodesPoints: custodesUnits.filter(
       (unit) => unit.raw.points_provisional === true,
@@ -396,9 +542,9 @@ export function getDataStatus(): ResultEnvelope<DataStatus> {
 function summarizeFaction(factionId: string): FactionSummary | null {
   const faction = factions.get(factionId);
   if (!faction) return null;
-  const factionUnits = units.byFaction(faction.id);
+  const factionUnitPool = factionUnits(faction.id);
   const tagCounts = new Map<PreferenceTag, number>();
-  for (const unit of factionUnits) {
+  for (const unit of factionUnitPool) {
     for (const tag of unitTags(unit)) {
       tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
     }
@@ -410,8 +556,8 @@ function summarizeFaction(factionId: string): FactionSummary | null {
   return {
     id: faction.id,
     name: faction.name,
-    unitCount: factionUnits.length,
-    supported: faction.id === SUPPORTED_FACTION_ID,
+    unitCount: factionUnitPool.length,
+    supported: isBuildableFaction(faction.id),
     keywords: faction.raw.keywords ?? [],
     styles,
   };
@@ -475,7 +621,7 @@ function summarizeUnit(unit: UnitView): UnitSummary {
     keywords: [...(unit.raw.keywords ?? []), ...(unit.raw.faction_keywords ?? [])],
     isNamedCharacter: isNamedCharacter(unit),
     isLegend: unit.raw.is_legend === true,
-    supported: unit.raw.faction_id === SUPPORTED_FACTION_ID,
+    supported: isBuildableFaction(unit.raw.faction_id),
   };
 }
 
@@ -494,8 +640,7 @@ export function searchUnits(input: {
   }
   const normalized = normalizeName(input.query ?? "");
   const desiredTags = new Set(input.tags ?? []);
-  const matches = units
-    .byFaction(faction.id)
+  const matches = factionUnits(faction.id)
     .filter((unit) => input.includeLegends || unit.raw.is_legend !== true)
     .map(summarizeUnit)
     .filter((unit) => {
@@ -536,7 +681,7 @@ function mergeBuildInput(input: BuildRosterInput): Required<
   return {
     ...parsed,
     ...input,
-    faction: input.faction ?? parsed.faction ?? SUPPORTED_FACTION_ID,
+    faction: input.faction ?? parsed.faction ?? DEFAULT_FACTION_ID,
     pointsLimit: Math.max(
       100,
       Math.min(input.pointsLimit ?? parsed.pointsLimit ?? 1000, 5000),
@@ -572,7 +717,7 @@ function candidateScore(
   const objectiveFloor = tags.includes("objective") ? 8 : 0;
   const duplicatePenalty = currentCopies * 7;
   const extraCharacterPenalty =
-    hasWarlord && unitRole(unit) === "Character" ? 18 : 0;
+    hasWarlord && isCharacterUnit(unit) ? 18 : 0;
   return (
     preferenceScore +
     fillScore +
@@ -594,45 +739,132 @@ export function buildRoster(
       issue("FACTION_NOT_FOUND", `No faction matched "${input.faction}".`),
     ]);
   }
-  if (faction.id !== SUPPORTED_FACTION_ID) {
+  if (!isBuildableFaction(faction.id)) {
     return envelope<RosterDraftV1>(null, [
       issue(
         "UNSUPPORTED_FACTION",
-        `${faction.name} can be explored, but deterministic roster building is currently enabled only for Adeptus Custodes.`,
+        `${faction.name} does not have the priced units and matched-play detachments required for deterministic roster building.`,
       ),
     ]);
   }
 
-  const factionDetachments = detachments
-    .byFaction(faction.id)
-    .filter((detachment) => !detachment.game_modes?.includes("combat-patrol"));
+  const battleSize =
+    input.pointsLimit <= 1000 ? ("incursion" as const) : ("strike-force" as const);
+  const detachmentCap = battleSize === "incursion" ? 2 : 3;
+  const matchedDetachments = matchedPlayDetachments(faction.id);
+  const requestedDetachment = input.detachmentId
+    ? matchedDetachments.find(
+        (detachment) => detachment.id === input.detachmentId,
+      )
+    : undefined;
+  if (input.detachmentId && !requestedDetachment) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "DETACHMENT_NOT_FOUND",
+        `"${input.detachmentId}" is not a matched-play ${faction.name} detachment.`,
+      ),
+    ]);
+  }
+  if (
+    requestedDetachment &&
+    (requestedDetachment.detachment_points ?? 0) > detachmentCap
+  ) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "DETACHMENT_POINTS_OVER",
+        `${requestedDetachment.name} costs ${requestedDetachment.detachment_points} DP; ${battleSize} armies allow ${detachmentCap}.`,
+      ),
+    ]);
+  }
+  const factionDetachments = matchedDetachments.filter(
+    (detachment) =>
+      detachment.detachment_points == null ||
+      detachment.detachment_points <= detachmentCap,
+  );
   const selectedDetachment =
-    factionDetachments.find((detachment) => detachment.id === input.detachmentId) ??
+    requestedDetachment ??
     factionDetachments.find((detachment) => detachment.id === "shield-host") ??
-    factionDetachments[0];
+    [...factionDetachments].sort(
+      (a, b) =>
+        Number(Boolean(a.unit_minimums?.length)) -
+          Number(Boolean(b.unit_minimums?.length)) ||
+        Number(Boolean(a.restrictions)) - Number(Boolean(b.restrictions)) ||
+        (a.detachment_points ?? 0) - (b.detachment_points ?? 0) ||
+        a.name.localeCompare(b.name),
+    )[0];
   if (!selectedDetachment) {
     return envelope<RosterDraftV1>(null, [
-      issue("DETACHMENT_NOT_FOUND", "No supported Custodes detachment is available."),
+      issue(
+        "DETACHMENT_NOT_FOUND",
+        `No matched-play ${faction.name} detachment fits the ${detachmentCap} DP limit.`,
+      ),
+    ]);
+  }
+  if (
+    input.forceDispositionId &&
+    !(selectedDetachment.force_dispositions ?? []).includes(
+      input.forceDispositionId,
+    )
+  ) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "DISPOSITION_INVALID",
+        `${input.forceDispositionId} is not offered by ${selectedDetachment.name}.`,
+      ),
     ]);
   }
   const selectedDisposition =
-    input.forceDispositionId &&
-    (selectedDetachment.force_dispositions ?? []).includes(input.forceDispositionId)
-      ? input.forceDispositionId
-      : selectedDetachment.force_dispositions?.[0] ?? "purge-the-foe";
+    input.forceDispositionId ??
+    selectedDetachment.force_dispositions?.[0] ??
+    "purge-the-foe";
 
   const collection = input.collectionUnitIds
     ? new Set(input.collectionUnitIds)
     : null;
-  const factionUnits = units
-    .byFaction(faction.id)
+  const factionKeywords = new Set(faction.raw.keywords ?? []);
+  const detachmentRestrictions = selectedDetachment.restrictions;
+  const unitAllowedByDetachment = (unit: UnitView) => {
+    const keywords = new Set([
+      ...(unit.raw.keywords ?? []),
+      ...(unit.raw.faction_keywords ?? []),
+    ]);
+    if (
+      (unit.raw.excluded_faction_keywords ?? []).some((keyword) =>
+        factionKeywords.has(keyword),
+      )
+    ) {
+      return false;
+    }
+    if (
+      (detachmentRestrictions?.required_keywords ?? []).some(
+        (keyword) => !keywords.has(keyword),
+      )
+    ) {
+      return false;
+    }
+    if (
+      (detachmentRestrictions?.excluded_keywords ?? []).some((keyword) =>
+        keywords.has(keyword),
+      )
+    ) {
+      return false;
+    }
+    return true;
+  };
+  const factionUnitPool = factionUnits(faction.id)
+    .filter(
+      (unit) =>
+        !unit.raw.game_modes || unit.raw.game_modes.includes("matched-play"),
+    )
     .filter((unit) => input.allowLegends || unit.raw.is_legend !== true)
     .filter((unit) => input.allowNamedCharacters || !isNamedCharacter(unit))
     .filter((unit) => !collection || collection.has(unit.id))
+    .filter((unit) => unit.raw.attachment_role !== "support")
+    .filter(unitAllowedByDetachment)
     .filter((unit) => availableModelCounts(unit, 1).length > 0);
 
-  const characterCandidates = factionUnits
-    .filter((unit) => unitRole(unit) === "Character")
+  const characterCandidates = factionUnitPool
+    .filter(isCharacterUnit)
     .map((unit) => {
       const modelCount = availableModelCounts(unit, 1)[0];
       const equipment = getEquipment(unit, modelCount);
@@ -643,6 +875,13 @@ export function buildRoster(
         points: selectionPoints(unit, modelCount, 1, equipment, null),
       };
     })
+    .filter((candidate) =>
+      equipmentLoadoutIsLegal(
+        candidate.unit,
+        candidate.modelCount,
+        candidate.equipment,
+      ),
+    )
     .filter((candidate) => candidate.points <= input.pointsLimit)
     .sort(
       (a, b) =>
@@ -672,7 +911,7 @@ export function buildRoster(
     return envelope<RosterDraftV1>(null, [
       issue(
         "NO_WARLORD_CANDIDATE",
-        "No eligible Custodes Character fits the point limit and collection constraints.",
+        `No eligible ${faction.name} Character fits the point limit, detachment, and collection constraints.`,
       ),
     ]);
   }
@@ -694,13 +933,14 @@ export function buildRoster(
       score: number;
     }> = [];
 
-    for (const unit of factionUnits) {
+    for (const unit of factionUnitPool) {
       const currentCopies = copies.get(unit.id) ?? 0;
       const maximumCopies = isNamedCharacter(unit) ? 1 : 3;
       if (currentCopies >= maximumCopies) continue;
       const ordinal = currentCopies + 1;
       for (const modelCount of availableModelCounts(unit, ordinal)) {
         const equipment = getEquipment(unit, modelCount);
+        if (!equipmentLoadoutIsLegal(unit, modelCount, equipment)) continue;
         const points = selectionPoints(unit, modelCount, ordinal, equipment, null);
         if (points <= 0 || points > remaining) continue;
         candidates.push({
@@ -767,7 +1007,7 @@ export function buildRoster(
     factionName: faction.name,
     pointsLimit: input.pointsLimit,
     totalPoints,
-    battleSize: input.pointsLimit <= 1000 ? "incursion" : "strike-force",
+    battleSize,
     detachmentId: selectedDetachment.id,
     detachmentName: selectedDetachment.name,
     forceDispositionId: selectedDisposition,
@@ -820,7 +1060,7 @@ export function toCanonicalRoster(draft: RosterDraftV1): Roster {
       leader_attachment: null,
     };
   });
-  const detachment = detachments.get(draft.detachmentId);
+  const detachment = resolveDetachment(draft.detachmentId, draft.factionId);
   const resolvedUnits = rosterUnits.filter((unit) => unit.ref.resolved).length;
   const resolvedWargear = rosterUnits.reduce(
     (sum, unit) =>
@@ -891,11 +1131,12 @@ export function validateRoster(
   if (draft.gameSystem !== SUPPORTED_GAME) {
     violations.push(issue("GAME_SYSTEM", `Unsupported game system "${draft.gameSystem}".`));
   }
-  if (draft.factionId !== SUPPORTED_FACTION_ID) {
+  const configuredFaction = factions.get(draft.factionId);
+  if (!configuredFaction || !isBuildableFaction(draft.factionId)) {
     violations.push(
       issue(
         "UNSUPPORTED_FACTION",
-        "Deterministic validation is currently enabled only for Adeptus Custodes.",
+        `"${draft.factionName}" does not have complete deterministic build inputs in the pinned dataset.`,
       ),
     );
   }
@@ -920,7 +1161,10 @@ export function validateRoster(
   } else if (warlords.length > 1) {
     violations.push(issue("MULTIPLE_WARLORDS", "Army has multiple warlords."));
   }
-  const configuredDetachment = detachments.get(draft.detachmentId);
+  const configuredDetachment = resolveDetachment(
+    draft.detachmentId,
+    draft.factionId,
+  );
   if (
     !configuredDetachment ||
     configuredDetachment.faction_id !== draft.factionId
@@ -967,11 +1211,9 @@ export function validateRoster(
       );
       continue;
     }
+    const equipmentIds = validEquipmentIds(unit);
     for (const equipment of selection.equipment) {
-      const exists =
-        unit.weapons.some((weapon) => weapon.id === equipment.itemId) ||
-        dataset.wargear.all.some((item) => item.id === equipment.itemId);
-      if (!exists) {
+      if (!equipmentIds.has(equipment.itemId)) {
         violations.push(
           issue(
             "EQUIPMENT_NOT_FOUND",
@@ -1146,8 +1388,11 @@ export function modifyRoster(
     if (!selection) return fail("SELECTION_NOT_FOUND", "Roster selection was not found.");
     selection.enhancementId = operation.enhancementId;
   } else if (operation.type === "set-detachment") {
-    const detachment = detachments.get(operation.detachmentId);
-    if (!detachment || detachment.faction_id !== draft.factionId) {
+    const detachment = resolveDetachment(
+      operation.detachmentId,
+      draft.factionId,
+    );
+    if (!detachment) {
       return fail("DETACHMENT_NOT_FOUND", "Detachment is not valid for this faction.");
     }
     next.detachmentId = detachment.id;
@@ -1316,6 +1561,14 @@ export function exportRoster(
         validation.warnings,
       );
     }
+    if (draft.factionId !== DEFAULT_FACTION_ID) {
+      return envelope<ExportArtifact>(null, [
+        issue(
+          "NEW_RECRUIT_MAPPING_UNAVAILABLE",
+          `New Recruit .ros/.rosz catalogue mappings are not yet available for ${draft.factionName}. Export printable HTML or roster JSON instead.`,
+        ),
+      ]);
+    }
     const ros = newRecruitRos(draft);
     if (format === "ros") {
       return envelope(
@@ -1351,10 +1604,8 @@ export function exportRoster(
   }
 }
 
-export function listDetachments(factionId = SUPPORTED_FACTION_ID) {
-  return detachments
-    .byFaction(factionId)
-    .filter((detachment) => !detachment.game_modes?.includes("combat-patrol"))
+export function listDetachments(factionId: string = DEFAULT_FACTION_ID) {
+  return matchedPlayDetachments(factionId)
     .map((detachment) => ({
       id: detachment.id,
       name: detachment.name,

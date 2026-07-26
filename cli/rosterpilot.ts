@@ -76,7 +76,7 @@ Usage:
   rosterpilot status
   rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective]
   rosterpilot compare <faction> <faction>
-  rosterpilot build --prompt "Build a 1,000 point fast Custodes army" [--out roster.json]
+  rosterpilot build --prompt "Build a fast 1,000 point Aeldari army" [--out roster.json]
   rosterpilot modify --file roster.json --operation '{"type":"remove","selectionId":"..."}' [--out next.json]
   rosterpilot validate --file roster.json
   rosterpilot explain --file roster.json

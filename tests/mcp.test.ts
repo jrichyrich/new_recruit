@@ -113,6 +113,25 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     assert.equal(structured.data.factionId, "adeptus-custodes");
     assert.equal(structured.data.totalPoints, 990);
 
+    const aeldariResponse = await client.callTool({
+      name: "build_roster",
+      arguments: {
+        prompt:
+          "Build a 1,000 point fast Aeldari army that shoots and captures objectives",
+        faction: "aeldari",
+        pointsLimit: 1000,
+        preferences: ["mobility", "shooting", "objective"],
+      },
+    });
+    assert.equal(aeldariResponse.isError, false);
+    const aeldari = aeldariResponse.structuredContent as {
+      ok: boolean;
+      data: { factionId: string; totalPoints: number };
+    };
+    assert.equal(aeldari.ok, true);
+    assert.equal(aeldari.data.factionId, "aeldari");
+    assert.equal(aeldari.data.totalPoints, 1000);
+
     const handoff = await client.callTool({
       name: "prepare_new_recruit_handoff",
       arguments: {

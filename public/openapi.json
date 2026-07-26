@@ -86,7 +86,7 @@
     "/api/v1/rosters/build": {
       "post": {
         "operationId": "buildRoster",
-        "summary": "Build a deterministic Custodes roster",
+        "summary": "Build a deterministic roster for any supported faction",
         "requestBody": {
           "required": true,
           "content": {
@@ -215,6 +215,7 @@
                   },
                   "format": {
                     "type": "string",
+                    "description": "HTML, text, and JSON formats support every validated faction. ROS/ROSZ require a complete New Recruit catalogue mapping.",
                     "enum": [
                       "ros",
                       "rosz",
@@ -240,6 +241,7 @@
       "post": {
         "operationId": "prepareNewRecruitHandoff",
         "summary": "Prepare validated New Recruit handoff artifacts",
+        "description": "Requires a faction with complete New Recruit catalogue mappings; currently Adeptus Custodes.",
         "requestBody": {
           "required": true,
           "content": {
