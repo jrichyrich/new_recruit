@@ -26,6 +26,8 @@ function fixturePage(requestUrl: string): string {
   const mismatch = url.searchParams.get("mismatch") === "1";
   const broken = url.searchParams.get("broken") === "1";
   const noDownload = url.searchParams.get("nodownload") === "1";
+  const delayedRow = url.searchParams.get("delayedrow") === "1";
+  const stuckRow = url.searchParams.get("stuckrow") === "1";
   return `<!doctype html>
 <html>
 <body></body>
@@ -34,6 +36,8 @@ const loginRequired = ${JSON.stringify(login)};
 const mismatch = ${JSON.stringify(mismatch)};
 const broken = ${JSON.stringify(broken)};
 const noDownload = ${JSON.stringify(noDownload)};
+const delayedRow = ${JSON.stringify(delayedRow)};
+const stuckRow = ${JSON.stringify(stuckRow)};
 function roster() {
   document.body.innerHTML = \`
     <h1>Custodes Mobile Strike Force</h1>
@@ -56,12 +60,25 @@ function roster() {
 function lists() {
   document.body.innerHTML = '<a href="/app/Profile">Profile</a>' + (broken
     ? '<h1>My Lists</h1><button>Unknown action</button>'
-    : '<h1>My Lists</h1><button id="import">Import List</button><input hidden id="file" type="file">');
+    : '<h1>My Lists</h1><button id="import">Import List</button><input hidden id="file" type="file"><table><tbody id="lists"></tbody></table>');
   if (broken) return;
   document.querySelector("#import").onclick = () => {
     document.querySelector("#file").hidden = false;
   };
   document.querySelector("#file").onchange = () => {
+    if (delayedRow || stuckRow) {
+      document.querySelector("#lists").innerHTML =
+        '<tr class="listRow"><td><span>Custodes Mobile Strike Force</span></td></tr>';
+      if (delayedRow) {
+        setTimeout(() => {
+          document.querySelector("tr.listRow").onclick = () => {
+            history.pushState({}, "", "/app/Lists/fixture");
+            roster();
+          };
+        }, 750);
+      }
+      return;
+    }
     history.pushState({}, "", "/app/Lists/fixture");
     roster();
   };
@@ -175,6 +192,85 @@ test(
       assert.equal(result.imported, true);
       assert.match(result.listUrl ?? "", /\/app\/Lists\/fixture$/);
       assert.match(result.message ?? "", /990 points/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "browser companion retries a created row until it can open and verify it",
+  { skip: !runBrowserTests },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "rosterpilot-browser-delayed-row-"),
+    );
+    try {
+      const roszPath = path.join(directory, "roster.rosz");
+      await writeFile(roszPath, "fixture");
+      const result = await runNewRecruitBrowserDelivery(
+        {
+          action: "deliver",
+          brokerPath: "/not-used",
+          profileDirectory: path.join(directory, "profile"),
+          roszPath,
+          prettyHtmlPath: null,
+          expected,
+        },
+        {
+          baseUrl: "https://rosterpilot.test/app/MyLists?delayedrow=1",
+          headless: true,
+          timeoutMs: 5_000,
+          prepareContext: fixtureBrowserDependency(),
+          getCredentials: async () => {
+            throw new Error("Active sessions must not request credentials.");
+          },
+        },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.imported, true);
+      assert.match(result.listUrl ?? "", /\/app\/Lists\/fixture$/);
+      assert.deepEqual(result.verification?.mismatches, []);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "browser companion reports a created list when its row cannot be opened",
+  { skip: !runBrowserTests },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "rosterpilot-browser-stuck-row-"),
+    );
+    try {
+      const roszPath = path.join(directory, "roster.rosz");
+      await writeFile(roszPath, "fixture");
+      const result = await runNewRecruitBrowserDelivery(
+        {
+          action: "deliver",
+          brokerPath: "/not-used",
+          profileDirectory: path.join(directory, "profile"),
+          roszPath,
+          prettyHtmlPath: null,
+          expected,
+        },
+        {
+          baseUrl: "https://rosterpilot.test/app/MyLists?stuckrow=1",
+          headless: true,
+          timeoutMs: 750,
+          prepareContext: fixtureBrowserDependency(),
+          getCredentials: async () => {
+            throw new Error("Active sessions must not request credentials.");
+          },
+        },
+      );
+      assert.equal(result.ok, false);
+      assert.equal(result.code, "IMPORTED_LIST_NOT_OPENED");
+      assert.equal(result.imported, true);
+      assert.equal(result.listUrl, null);
+      assert.match(result.message ?? "", /Do not retry/);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

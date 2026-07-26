@@ -27,6 +27,13 @@ type BrowserDependencies = {
   timeoutMs?: number;
 };
 
+type ImportRosterResult = {
+  imported: boolean;
+  listUrl: string | null;
+};
+
+const listUrlPattern = /\/app\/Lists\//i;
+
 function normalized(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
 }
@@ -231,9 +238,9 @@ async function importRoster(
   page: Page,
   roszPath: string,
   rosterName: string,
-): Promise<void> {
+  timeoutMs = 30_000,
+): Promise<ImportRosterResult> {
   const rosterRows = page.getByText(rosterName, { exact: true });
-  const initialRosterCount = await rosterRows.count();
   const importButton = page
     .getByRole("button", { name: /import( list| roster)?/i })
     .first();
@@ -243,6 +250,7 @@ async function importRoster(
     .first()
     .waitFor({ state: "visible", timeout: 8_000 })
     .catch(() => undefined);
+  const initialRosterCount = await rosterRows.count();
   const fileChooserPromise = page
     .waitForEvent("filechooser", { timeout: 3_000 })
     .catch(() => null);
@@ -277,7 +285,7 @@ async function importRoster(
   }
 
   await page.waitForTimeout(250);
-  if (!/\/app\/Lists\//i.test(page.url())) {
+  if (!listUrlPattern.test(page.url())) {
     const confirms = page.getByRole("button", {
       name: /import|upload|create/i,
     });
@@ -289,27 +297,49 @@ async function importRoster(
       }
     }
   }
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (/\/app\/Lists\//i.test(page.url())) return;
+    if (listUrlPattern.test(page.url())) {
+      return { imported: true, listUrl: page.url() };
+    }
     if ((await rosterRows.count()) > initialRosterCount) {
       const matchingRows = page
         .locator("tr.listRow")
         .filter({ hasText: rosterName });
-      const newestRoster =
-        (await matchingRows.count()) > 0
-          ? matchingRows.first()
-          : rosterRows.first();
-      if (await newestRoster.isVisible().catch(() => false)) {
-        await newestRoster.click();
-        await page
-          .waitForURL(/\/app\/Lists\//i, { timeout: 8_000 })
-          .catch(() => undefined);
+      while (Date.now() < deadline) {
+        if (listUrlPattern.test(page.url())) {
+          return { imported: true, listUrl: page.url() };
+        }
+        const candidates =
+          (await matchingRows.count()) > 0 ? matchingRows : rosterRows;
+        for (
+          let index = 0;
+          index < (await candidates.count()) && Date.now() < deadline;
+          index += 1
+        ) {
+          const candidate = candidates.nth(index);
+          if (!(await candidate.isVisible().catch(() => false))) continue;
+          await candidate.scrollIntoViewIfNeeded().catch(() => undefined);
+          await candidate.click({ timeout: 2_000 }).catch(() => undefined);
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) break;
+          const opened = await page
+            .waitForURL(listUrlPattern, {
+              timeout: Math.min(2_000, remainingMs),
+            })
+            .then(() => true)
+            .catch(() => false);
+          if (opened) {
+            return { imported: true, listUrl: page.url() };
+          }
+        }
+        await page.waitForTimeout(250);
       }
-      return;
+      return { imported: true, listUrl: null };
     }
     await page.waitForTimeout(250);
   }
+  return { imported: false, listUrl: null };
 }
 
 async function verifyRoster(page: Page, expected: WorkerRequest["expected"]) {
@@ -433,13 +463,24 @@ export async function runNewRecruitBrowserDelivery(
       dependencies.getCredentials,
       allowedOrigin,
     );
-    await importRoster(page, input.roszPath, input.expected.name);
-    imported = /\/app\/Lists\//i.test(page.url());
-    listUrl = imported ? page.url() : null;
+    const importResult = await importRoster(
+      page,
+      input.roszPath,
+      input.expected.name,
+      dependencies.timeoutMs,
+    );
+    imported = importResult.imported;
+    listUrl = importResult.listUrl;
     if (!imported) {
       throw new NewRecruitAutomationError(
         "IMPORT_FAILED",
-        "New Recruit did not open a newly imported list.",
+        "New Recruit did not create a newly imported list.",
+      );
+    }
+    if (!listUrl) {
+      throw new NewRecruitAutomationError(
+        "IMPORTED_LIST_NOT_OPENED",
+        "New Recruit created the imported list, but the companion could not open it for verification. Do not retry the import automatically.",
       );
     }
     verification = await verifyRoster(page, input.expected);
