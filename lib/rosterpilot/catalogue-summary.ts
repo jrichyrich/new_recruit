@@ -128,28 +128,58 @@ export function conflictsForRoster(input: {
   detachmentId: string;
   units: Array<{
     unitId: string;
-    equipment: Array<{ name: string; count: number }>;
+    modelCount?: number;
+    enhancementId?: string | null;
+    equipment: Array<{
+      itemId?: string;
+      name: string;
+      count: number;
+    }>;
   }>;
 }): DataConflict[] {
   const faction = getNewRecruitFactionSummary(input.factionId);
   if (!faction) return [];
   const unitIds = new Set(input.units.map((unit) => unit.unitId));
-  const entityIds = new Set([
-    input.detachmentId,
-    ...unitIds,
-    ...input.units.flatMap((unit) =>
+  const equipmentIds = new Set(
+    input.units.flatMap((unit) =>
       unit.equipment
         .filter((equipment) => equipment.count > 0)
-        .map((equipment) => `${unit.unitId}:${equipment.name}`),
+        .flatMap((equipment) => [
+          `${unit.unitId}:${equipment.name}`,
+          ...(equipment.itemId
+            ? [`${unit.unitId}:${equipment.itemId}`]
+            : []),
+        ]),
     ),
-  ]);
+  );
+  const enhancementIds = new Set(
+    input.units.flatMap((unit) =>
+      unit.enhancementId ? [unit.enhancementId] : [],
+    ),
+  );
   return faction.conflicts.filter(
-    (item) =>
-      item.entityType === "catalogue" ||
-      entityIds.has(item.entityId) ||
-      [...unitIds].some(
-        (unitId) =>
-          item.entityId === unitId || item.entityId.startsWith(`${unitId}:`),
-      ),
+    (item) => {
+      if (item.entityType === "catalogue") return true;
+      if (item.entityType === "detachment") {
+        return item.entityId === input.detachmentId;
+      }
+      if (item.entityType === "unit") return unitIds.has(item.entityId);
+      if (item.entityType === "points") {
+        return [...unitIds].some(
+          (unitId) =>
+            item.entityId === unitId ||
+            item.entityId.startsWith(`${unitId}:`),
+        );
+      }
+      if (item.entityType === "equipment") {
+        return (
+          unitIds.has(item.entityId) || equipmentIds.has(item.entityId)
+        );
+      }
+      if (item.entityType === "enhancement") {
+        return enhancementIds.has(item.entityId);
+      }
+      return false;
+    },
   );
 }

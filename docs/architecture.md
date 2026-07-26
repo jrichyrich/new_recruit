@@ -37,6 +37,14 @@ version and content hash. `scripts/sync-bsdata.ts` resolves catalogue imports,
 configuration trees, units, models, wargear, and enhancements, then writes the
 deterministic `data/generated/new-recruit-catalogues.json` overlay.
 
+Roster export decomposes each validated unit-wide equipment bag with the same
+exact model-composition solver used by `40kdc-data` legality checks. The shared
+New Recruit resolver then maps each leader, regular model, specialist, and
+loadout variant to one BSData model entry. Catalogue generation runs every
+deterministic base loadout through that resolver and separately indexes legal
+equipment absent from BSData, so preflight and runtime export cannot disagree
+about a selection they both claim to support.
+
 The rules engine remains authoritative for construction and validation. BSData
 is authoritative for New Recruit identifiers and is a cross-check for points
 and loadouts. A disagreement becomes a structured conflict:

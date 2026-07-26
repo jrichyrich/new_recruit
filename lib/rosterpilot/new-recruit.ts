@@ -1,21 +1,14 @@
-import { normalizeName } from "@alpaca-software/40kdc-data";
-
 import {
   getNewRecruitFactionCatalogue,
   newRecruitCatalogueMappings,
 } from "./catalogue";
 import { conflictsForRoster } from "./catalogue-summary";
 import type {
-  CatalogueModelReference,
   CatalogueSelectionReference,
-  CatalogueUnitReference,
   NewRecruitFactionCatalogue,
 } from "./catalogue-types";
-import type {
-  DraftUnit,
-  EquipmentSelection,
-  RosterDraftV1,
-} from "./types";
+import { resolveNewRecruitUnit } from "./new-recruit-resolver";
+import type { DraftUnit, RosterDraftV1 } from "./types";
 
 type XmlNode = Record<string, unknown>;
 
@@ -94,59 +87,6 @@ function selectionFromReference(
   };
 }
 
-function equipmentReference(
-  equipment: EquipmentSelection,
-  references: CatalogueSelectionReference[],
-  selection: DraftUnit,
-): CatalogueSelectionReference {
-  const normalizedName = normalizeName(equipment.name);
-  const matches = references.filter(
-    (reference) => reference.normalizedName === normalizedName,
-  );
-  if (matches.length !== 1) {
-    throw new Error(
-      `New Recruit catalogue mapping for ${selection.name} equipment "${equipment.name}" is ${
-        matches.length === 0 ? "missing" : "ambiguous"
-      }.`,
-    );
-  }
-  return matches[0];
-}
-
-function modelForSelection(
-  mapping: CatalogueUnitReference,
-  selection: DraftUnit,
-): CatalogueModelReference {
-  const equippedNames = new Set(
-    selection.equipment
-      .filter((equipment) => equipment.count > 0)
-      .map((equipment) => normalizeName(equipment.name)),
-  );
-  const ranked = mapping.models
-    .map((model) => ({
-      model,
-      score: model.equipment.filter((equipment) =>
-        equippedNames.has(equipment.normalizedName),
-      ).length,
-    }))
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        left.model.name.localeCompare(right.model.name),
-    );
-  const best = ranked[0];
-  if (
-    !best ||
-    (best.score === 0 && ranked.length > 1) ||
-    (ranked[1]?.score === best.score && best.score > 0)
-  ) {
-    throw new Error(
-      `New Recruit model mapping for ${selection.name} is missing or ambiguous.`,
-    );
-  }
-  return best.model;
-}
-
 function rosterUnitSelection(
   selection: DraftUnit,
   faction: NewRecruitFactionCatalogue,
@@ -195,81 +135,49 @@ function rosterUnitSelection(
     );
   }
 
-  const positiveEquipment = selection.equipment.filter(
-    (equipment) => equipment.count > 0,
-  );
-  if (mapping.models.length > 0) {
-    const model = modelForSelection(mapping, selection);
-    const modelNames = new Set(
-      model.equipment.map((reference) => reference.normalizedName),
-    );
-    const modelEquipment = positiveEquipment.filter((equipment) =>
-      modelNames.has(normalizeName(equipment.name)),
-    );
-    const directEquipment = positiveEquipment.filter(
-      (equipment) => !modelNames.has(normalizeName(equipment.name)),
-    );
-    for (const equipment of modelEquipment) {
-      if (equipment.count !== selection.modelCount) {
-        throw new Error(
-          `New Recruit export does not yet support mixed ${selection.name} model loadouts.`,
-        );
-      }
-    }
-    children.push({
-      ...selectionFromReference(
-        model,
-        deterministicId([selection.selectionId, "model", model.entryId]),
-        selection.modelCount,
-      ),
-      selections: modelEquipment.map((equipment) =>
-        selectionFromReference(
-          equipmentReference(equipment, model.equipment, selection),
-          deterministicId([
-            selection.selectionId,
-            "equipment",
-            equipment.itemId,
-          ]),
-          equipment.count,
-        ),
-      ),
-    });
-    children.push(
-      ...directEquipment.map((equipment) =>
-        selectionFromReference(
-          equipmentReference(
-            equipment,
-            mapping.directEquipment,
-            selection,
-          ),
-          deterministicId([
-            selection.selectionId,
-            "equipment",
-            equipment.itemId,
-          ]),
-          equipment.count,
-        ),
-      ),
-    );
-  } else {
-    children.push(
-      ...positiveEquipment.map((equipment) =>
-        selectionFromReference(
-          equipmentReference(
-            equipment,
-            mapping.directEquipment,
-            selection,
-          ),
-          deterministicId([
-            selection.selectionId,
-            "equipment",
-            equipment.itemId,
-          ]),
-          equipment.count,
-        ),
-      ),
-    );
+  const resolution = resolveNewRecruitUnit(mapping, selection);
+  if (!resolution.ok) {
+    throw new Error(resolution.reason);
   }
+  children.push(
+    ...resolution.models.map((model, modelIndex) => ({
+      ...selectionFromReference(
+        model.reference,
+        deterministicId([
+          selection.selectionId,
+          "model",
+          model.reference.entryId,
+          modelIndex,
+        ]),
+        model.count,
+      ),
+      selections: model.equipment.map((equipment) =>
+        selectionFromReference(
+          equipment.reference,
+          deterministicId([
+            selection.selectionId,
+            "model-equipment",
+            modelIndex,
+            equipment.itemId,
+            equipment.reference.entryId,
+          ]),
+          equipment.count,
+        ),
+      ),
+    })),
+    ...resolution.directEquipment.map((equipment) =>
+      selectionFromReference(
+        equipment.reference,
+        deterministicId([
+          selection.selectionId,
+          "direct-equipment",
+          equipment.itemId,
+          equipment.reference.entryId,
+        ]),
+        equipment.count,
+      ),
+    ),
+  );
 
   return {
     id: deterministicId([selection.selectionId, "new-recruit"]),

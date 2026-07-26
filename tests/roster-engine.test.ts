@@ -25,6 +25,7 @@ import {
   validateRoster,
   type RosterDraftV1,
 } from "../lib/rosterpilot";
+import { conflictsForRoster } from "../lib/rosterpilot/catalogue-summary";
 import {
   writeExportArtifact,
   writeExportArtifacts,
@@ -469,6 +470,102 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", async () =
   }
 });
 
+test("exports mixed model compositions using canonical unit roles and loadouts", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    prompt: "Build a legal Custodes roster that must include Prosecutors",
+  });
+  assert.ok(built.data);
+  const prosecutors = built.data.units.find(
+    (selection) => selection.unitId === "prosecutors",
+  );
+  assert.ok(prosecutors);
+  assert.equal(prosecutors.modelCount, 6);
+
+  const exported = await exportRoster(built.data, "ros");
+  assert.equal(
+    exported.ok,
+    true,
+    exported.violations.map((item) => item.message).join("; "),
+  );
+  assert.ok(exported.data);
+  const xml = exported.data.content as string;
+  assert.match(
+    xml,
+    /name="Prosecutor Sister Superior"[^>]+number="1"[^>]+type="model"/,
+  );
+  assert.match(
+    xml,
+    /name="Prosecutor"[^>]+group="3-9 Prosecutors"[^>]+number="5"[^>]+type="model"/,
+  );
+  assert.match(
+    xml,
+    /name="Boltgun"[^>]+number="1"[^>]+type="upgrade"/,
+  );
+  assert.match(
+    xml,
+    /name="Boltgun"[^>]+number="5"[^>]+type="upgrade"/,
+  );
+});
+
+test("exports legal mixed weapon choices as separate New Recruit model groups", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 2000,
+    allowNamedCharacters: false,
+  });
+  assert.ok(built.data);
+  const replacedSelection = built.data.units.find(
+    (selection) => !selection.isWarlord && selection.points >= 215,
+  );
+  assert.ok(replacedSelection);
+  const replaced = modifyRoster(built.data, {
+    type: "replace",
+    selectionId: replacedSelection.selectionId,
+    unitId: "vertus-praetors",
+    modelCount: 3,
+  });
+  assert.ok(replaced.data);
+  const praetors = replaced.data.units.find(
+    (selection) => selection.unitId === "vertus-praetors",
+  );
+  assert.ok(praetors);
+
+  const mixed = modifyRoster(replaced.data, {
+    type: "set-equipment",
+    selectionId: praetors.selectionId,
+    equipment: [
+      { itemId: "interceptor-lance-vertus-praetors", count: 3 },
+      { itemId: "salvo-launcher", count: 1 },
+      { itemId: "vertus-hurricane-bolter", count: 2 },
+    ],
+  });
+  assert.equal(
+    mixed.ok,
+    true,
+    mixed.violations.map((item) => item.message).join("; "),
+  );
+  assert.ok(mixed.data);
+
+  const exported = await exportRoster(mixed.data, "ros");
+  assert.equal(
+    exported.ok,
+    true,
+    exported.violations.map((item) => item.message).join("; "),
+  );
+  assert.ok(exported.data);
+  const xml = exported.data.content as string;
+  assert.match(
+    xml,
+    /name="Vertus Praetor \(Hurricane Bolter\)"[^>]+number="2"[^>]+type="model"/,
+  );
+  assert.match(
+    xml,
+    /name="Vertus Praetor \(Salvo Launcher\)"[^>]+number="1"[^>]+type="model"/,
+  );
+});
+
 test("prepares a validated New Recruit handoff with editable and printable artifacts", async () => {
   const built = buildRoster({
     prompt: "Build a 1,000 point fast Custodes army with no named characters",
@@ -537,6 +634,79 @@ test("exports every browser prompt idea with real New Recruit references", async
       assert.match(xml, new RegExp(`name="${selection.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
     }
   }
+});
+
+test("exports every conflict-free default faction build accepted by preflight", async () => {
+  let attempted = 0;
+  for (const faction of factions.all) {
+    const built = buildRoster({
+      faction: faction.id,
+      pointsLimit: 1000,
+      allowLegends: false,
+    });
+    assert.ok(built.data, `${faction.name} should build`);
+    if (!built.data || !getNewRecruitCapability(faction.id).available) {
+      continue;
+    }
+    const conflicts = conflictsForRoster(built.data).filter(
+      (item) => item.blocking,
+    );
+    if (conflicts.length > 0) continue;
+
+    attempted += 1;
+    const exported = await exportRoster(built.data, "rosz");
+    assert.equal(
+      exported.ok,
+      true,
+      `${faction.name}: ${exported.violations
+        .map((item) => item.message)
+        .join("; ")}`,
+    );
+  }
+  assert.ok(attempted > 0);
+});
+
+test("scopes New Recruit equipment conflicts to selected wargear", () => {
+  const base = {
+    factionId: "adeptus-custodes",
+    detachmentId: "shield-host",
+    units: [
+      {
+        unitId: "allarus-custodians",
+        modelCount: 2,
+        equipment: [
+          {
+            itemId: "guardian-spear",
+            name: "Guardian spear",
+            count: 2,
+          },
+        ],
+      },
+    ],
+  };
+  assert.equal(
+    conflictsForRoster(base).some(
+      (item) => item.entityId === "allarus-custodians:vexilla",
+    ),
+    false,
+  );
+  assert.equal(
+    conflictsForRoster({
+      ...base,
+      units: [
+        {
+          ...base.units[0],
+          equipment: [
+            ...base.units[0].equipment,
+            { itemId: "vexilla", name: "Vexilla", count: 1 },
+          ],
+        },
+      ],
+    }).some(
+      (item) => item.entityId === "allarus-custodians:vexilla",
+    ),
+    true,
+  );
 });
 
 test("protects export paths and existing files", async () => {

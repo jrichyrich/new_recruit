@@ -35,6 +35,10 @@ import type {
   NewRecruitConfiguration,
   NewRecruitFactionCatalogue,
 } from "../lib/rosterpilot/catalogue-types";
+import {
+  resolveNewRecruitUnit,
+  type NewRecruitUnitInput,
+} from "../lib/rosterpilot/new-recruit-resolver";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -576,9 +580,9 @@ function equipmentName(unit: NonNullable<ReturnType<typeof units.get>>, id: stri
   );
 }
 
-function baseEquipmentNames(
+function baseSelections(
   unit: NonNullable<ReturnType<typeof units.get>>,
-): string[][] {
+): NewRecruitUnitInput[] {
   const composition = dataset.unitCompositionOf(unit.raw);
   return modelCounts(unit).map((count) => {
     const loadout = baseLoadout(
@@ -587,16 +591,25 @@ function baseEquipmentNames(
       dataset.wargearOptionsOf(unit.raw),
       composition?.models,
     );
-    return [...loadout.counts.entries()]
-      .filter(([, amount]) => amount > 0)
-      .map(([id]) => normalizeName(equipmentName(unit, id)))
-      .sort();
+    return {
+      unitId: unit.id,
+      name: unit.name,
+      modelCount: count,
+      equipment: [...loadout.counts.entries()]
+        .filter(([, amount]) => amount > 0)
+        .map(([itemId, amount]) => ({
+          itemId,
+          name: equipmentName(unit, itemId),
+          count: amount,
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    };
   });
 }
 
-function validEquipmentNames(
+function validEquipment(
   unit: NonNullable<ReturnType<typeof units.get>>,
-): Set<string> {
+): Array<{ itemId: string; name: string; normalizedName: string }> {
   const ids = new Set(unit.raw.weapon_ids ?? []);
   for (const option of dataset.wargearOptionsOf(unit.raw)) {
     for (const id of option.replaces ?? []) ids.add(id);
@@ -608,26 +621,16 @@ function validEquipmentNames(
   for (const model of dataset.unitCompositionOf(unit.raw)?.models ?? []) {
     for (const id of model.default_weapon_ids ?? []) ids.add(id);
   }
-  return new Set(
-    [...ids].map((id) => normalizeName(equipmentName(unit, id))),
-  );
-}
-
-function mappingSupportsLoadout(
-  mapping: CatalogueUnitReference,
-  equipmentNames: string[],
-): boolean {
-  if (equipmentNames.length === 0) return true;
-  const direct = new Set(
-    mapping.directEquipment.map((reference) => reference.normalizedName),
-  );
-  if (equipmentNames.every((name) => direct.has(name))) return true;
-  return mapping.models.some((model) => {
-    const available = new Set(
-      model.equipment.map((reference) => reference.normalizedName),
+  return [...ids]
+    .map((itemId) => {
+      const name = equipmentName(unit, itemId);
+      return { itemId, name, normalizedName: normalizeName(name) };
+    })
+    .sort(
+      (left, right) =>
+        left.normalizedName.localeCompare(right.normalizedName) ||
+        left.itemId.localeCompare(right.itemId),
     );
-    return equipmentNames.every((name) => available.has(name));
-  });
 }
 
 function conflict(
@@ -1051,20 +1054,27 @@ function generate(
         );
         continue;
       }
+      const equipment = validEquipment(unit);
       const mapping = unitMapping(
         selected,
         shared,
         pointsTypeId,
         relevantEnhancements,
-        validEquipmentNames(unit),
+        new Set(equipment.map((item) => item.normalizedName)),
       );
-      const loadouts = baseEquipmentNames(unit);
-      const supportsBase = loadouts.every((loadout) =>
-        mappingSupportsLoadout(mapping, loadout),
+      const baseResolutions = baseSelections(unit).map((selection) => ({
+        selection,
+        resolution: resolveNewRecruitUnit(mapping, selection),
+      }));
+      const supportsBase = baseResolutions.every(
+        ({ resolution }) => resolution.ok,
       );
       if (supportsBase) {
         mappedBaseLoadouts += 1;
       } else {
+        const failure = baseResolutions.find(
+          ({ resolution }) => !resolution.ok,
+        );
         conflicts.push(
           conflict(
             faction.id,
@@ -1072,7 +1082,33 @@ function generate(
             unit.id,
             unit.name,
             "UNMAPPED",
-            `At least one deterministic ${unit.name} base loadout is not represented unambiguously in the New Recruit catalogue.`,
+            `At least one deterministic ${unit.name} base loadout cannot be represented in the New Recruit catalogue. ${
+              failure && !failure.resolution.ok
+                ? failure.resolution.reason
+                : ""
+            }`.trim(),
+          ),
+        );
+      }
+
+      const availableEquipment = new Set([
+        ...mapping.directEquipment.map(
+          (reference) => reference.normalizedName,
+        ),
+        ...mapping.models.flatMap((model) =>
+          model.equipment.map((reference) => reference.normalizedName),
+        ),
+      ]);
+      for (const item of equipment) {
+        if (availableEquipment.has(item.normalizedName)) continue;
+        conflicts.push(
+          conflict(
+            faction.id,
+            "equipment",
+            `${unit.id}:${item.itemId}`,
+            `${unit.name}: ${item.name}`,
+            "UNMAPPED",
+            `${item.name} for ${unit.name} is legal in 40kdc but has no New Recruit catalogue selection.`,
           ),
         );
       }
