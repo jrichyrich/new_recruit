@@ -312,9 +312,13 @@ export function resolveNewRecruitUnit(
   const models: ResolvedModelReference[] = [];
   const directEquipment: ResolvedEquipmentReference[] = [];
   for (const group of groups) {
+    const bestNameRank = Math.min(
+      ...mapping.models.map((model) => modelNameRank(group.modelName, model)),
+    );
     const candidates = mapping.models
       .map((model) => candidateForGroup(mapping, model, group))
       .filter((candidate): candidate is ModelCandidate => candidate !== null)
+      .filter((candidate) => candidate.nameRank === bestNameRank)
       .sort(compareCandidates);
     const best = candidates[0];
     if (!best) {

@@ -75,7 +75,7 @@ type CatalogueDocument = {
   name: string;
 };
 
-type SharedIndex = {
+type SelectionIndex = {
   entries: Map<string, JsonRecord>;
   groups: Map<string, JsonRecord>;
 };
@@ -174,19 +174,35 @@ function selectionReference(
   };
 }
 
-function localSharedIndex(root: JsonRecord): SharedIndex {
-  return {
-    entries: new Map(
-      records(root.sharedSelectionEntries)
-        .map((entry) => [text(entry.id), entry] as const)
-        .filter((pair): pair is [string, JsonRecord] => pair[0] !== undefined),
-    ),
-    groups: new Map(
-      records(root.sharedSelectionEntryGroups)
-        .map((group) => [text(group.id), group] as const)
-        .filter((pair): pair is [string, JsonRecord] => pair[0] !== undefined),
-    ),
+function localSelectionIndex(root: JsonRecord): SelectionIndex {
+  const entries = new Map<string, JsonRecord>();
+  const groups = new Map<string, JsonRecord>();
+  const visited = new Set<JsonRecord>();
+
+  const visit = (node: JsonRecord) => {
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    for (const entry of [
+      ...records(node.sharedSelectionEntries),
+      ...records(node.selectionEntries),
+    ]) {
+      const id = text(entry.id);
+      if (id) entries.set(id, entry);
+      visit(entry);
+    }
+    for (const group of [
+      ...records(node.sharedSelectionEntryGroups),
+      ...records(node.selectionEntryGroups),
+    ]) {
+      const id = text(group.id);
+      if (id) groups.set(id, group);
+      visit(group);
+    }
   };
+
+  visit(root);
+  return { entries, groups };
 }
 
 function dependencyDocuments(
@@ -209,13 +225,13 @@ function dependencyDocuments(
   return result;
 }
 
-function combinedSharedIndex(
+function combinedSelectionIndex(
   documents: CatalogueDocument[],
   gameSystem: JsonRecord,
-): SharedIndex {
+): SelectionIndex {
   const indexes = [
-    ...documents.map((document) => localSharedIndex(document.root)),
-    localSharedIndex(gameSystem),
+    ...documents.map((document) => localSelectionIndex(document.root)),
+    localSelectionIndex(gameSystem),
   ];
   const entries = new Map<string, JsonRecord>();
   const groups = new Map<string, JsonRecord>();
@@ -228,7 +244,7 @@ function combinedSharedIndex(
 
 function resolveLink(
   link: JsonRecord,
-  index: SharedIndex,
+  index: SelectionIndex,
 ): { target: JsonRecord; kind: "entry" | "group" } | undefined {
   const targetId = text(link.targetId);
   if (!targetId) return undefined;
@@ -243,7 +259,7 @@ function resolveLink(
 function walkSelections(
   node: JsonRecord,
   rootPrefix: string,
-  index: SharedIndex,
+  index: SelectionIndex,
   currentModelId?: string,
   linkedPrefix = rootPrefix,
   currentGroup?: JsonRecord,
@@ -430,7 +446,7 @@ function categoryReferences(node: JsonRecord): CatalogueCategoryReference[] {
 
 function unitMapping(
   candidate: UnitCandidate,
-  index: SharedIndex,
+  index: SelectionIndex,
   pointsTypeId: string,
   relevantEnhancements: Map<string, string>,
   relevantEquipment: Set<string>,
@@ -661,7 +677,7 @@ function buildConfiguration(
   primary: CatalogueDocument,
   documents: CatalogueDocument[],
   gameSystem: JsonRecord,
-  index: SharedIndex,
+  index: SelectionIndex,
   engineDetachments: ReturnType<typeof factionDetachments>,
   overrides: Overrides,
   pointsTypeId: string,
@@ -992,10 +1008,10 @@ function generate(
     }
 
     const availableDocuments = dependencyDocuments(primary, byId);
-    const shared = combinedSharedIndex(availableDocuments, gameSystem);
+    const shared = combinedSelectionIndex(availableDocuments, gameSystem);
     const unitCandidates = new Map<string, UnitCandidate[]>();
     for (const document of availableDocuments) {
-      const local = localSharedIndex(document.root);
+      const local = localSelectionIndex(document.root);
       for (const link of records(document.root.entryLinks)) {
         if (link.type !== "selectionEntry") continue;
         const targetId = text(link.targetId);

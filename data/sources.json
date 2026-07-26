@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026-07-26.2",
+  "releaseId": "2026-07-26.3",
   "rules": {
     "package": "@alpaca-software/40kdc-data",
     "version": "1.2.0",

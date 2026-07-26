@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026-07-26.2",
+  "releaseId": "2026-07-26.3",
   "generatedAt": "2026-07-26T20:35:08+01:00",
   "sources": {
     "rules": {
@@ -5197,7 +5197,7 @@
       "coverage": {
         "engineUnits": 37,
         "mappedUnits": 33,
-        "mappedBaseLoadouts": 26,
+        "mappedBaseLoadouts": 22,
         "engineDetachments": 8,
         "mappedDetachments": 8,
         "complete": false
@@ -5212,6 +5212,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "At least one deterministic Aestred Thurga and Agathae Dolan base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Agathae Dolan model with the selected equipment."
+        },
+        {
+          "id": "fecefe47c5a96562",
+          "factionId": "adepta-sororitas",
+          "entityType": "equipment",
+          "entityId": "battle-sisters-squad",
+          "entityName": "Battle Sisters Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Battle Sisters Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Sister Superior model with the selected equipment."
         },
         {
           "id": "e73384bbdd6154c8",
@@ -5294,6 +5304,16 @@
           "message": "Power weapon for Battle Sisters Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "e77507d872c20977",
+          "factionId": "adepta-sororitas",
+          "entityType": "equipment",
+          "entityId": "celestian-sacresants",
+          "entityName": "Celestian Sacresants",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Celestian Sacresants base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Sacresant Superior model with the selected equipment."
+        },
+        {
           "id": "9937038ca041245a",
           "factionId": "adepta-sororitas",
           "entityType": "equipment",
@@ -5342,6 +5362,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "The Outcast’s Weapons for Daemonifuge is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "ebf3e838ba1e5b40",
+          "factionId": "adepta-sororitas",
+          "entityType": "equipment",
+          "entityId": "dominion-squad",
+          "entityName": "Dominion Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Dominion Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Dominion Superior model with the selected equipment."
         },
         {
           "id": "17ce2d80d152e129",
@@ -5482,6 +5512,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "At least one deterministic Sanctifiers base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 2 Missionary models with the selected equipment."
+        },
+        {
+          "id": "e36716760f4ca5ac",
+          "factionId": "adepta-sororitas",
+          "entityType": "equipment",
+          "entityId": "seraphim-squad",
+          "entityName": "Seraphim Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Seraphim Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Seraphim Superior model with the selected equipment."
         },
         {
           "id": "dee323425aff7b44",
@@ -6560,6 +6600,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -7393,6 +7439,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -7494,6 +7546,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -8725,6 +8783,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -9726,6 +9790,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -12118,6 +12188,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -12494,6 +12570,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -13856,6 +13944,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -15237,26 +15331,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "9c444583d8712494",
-          "factionId": "adeptus-astartes",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "3f4f9456558b98a4",
-          "factionId": "adeptus-astartes",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "3f9990f3f996dac9",
           "factionId": "adeptus-astartes",
           "entityType": "equipment",
@@ -15307,6 +15381,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "5c8663bf48cd1de0",
+          "factionId": "adeptus-astartes",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "5921af059ddc2af5",
           "factionId": "adeptus-astartes",
           "entityType": "equipment",
@@ -15325,16 +15409,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "dae45542e08a6aa8",
-          "factionId": "adeptus-astartes",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "82901a910ce956e5",
@@ -25456,7 +25530,7 @@
       "coverage": {
         "engineUnits": 38,
         "mappedUnits": 34,
-        "mappedBaseLoadouts": 30,
+        "mappedBaseLoadouts": 28,
         "engineDetachments": 10,
         "mappedDetachments": 8,
         "complete": false
@@ -25481,6 +25555,26 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Luminen Auto-choir matched 0 New Recruit detachment entries."
+        },
+        {
+          "id": "a44d5e8523c6dc24",
+          "factionId": "adeptus-mechanicus",
+          "entityType": "equipment",
+          "entityId": "pteraxii-skystalkers",
+          "entityName": "Pteraxii Skystalkers",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Pteraxii Skystalkers base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 4 Pteraxii Skystalker models with the selected equipment."
+        },
+        {
+          "id": "157a158bef7e322c",
+          "factionId": "adeptus-mechanicus",
+          "entityType": "equipment",
+          "entityId": "pteraxii-sterylizors",
+          "entityName": "Pteraxii Sterylizors",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Pteraxii Sterylizors base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 4 Pteraxii Sterylizor models with the selected equipment."
         },
         {
           "id": "81124bfffe0c34c4",
@@ -33286,7 +33380,7 @@
       "coverage": {
         "engineUnits": 76,
         "mappedUnits": 71,
-        "mappedBaseLoadouts": 57,
+        "mappedBaseLoadouts": 55,
         "engineDetachments": 15,
         "mappedDetachments": 15,
         "complete": false
@@ -33383,6 +33477,16 @@
           "message": "Shredder for Corsair Voidscarred is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "214eb5cddc3a8b04",
+          "factionId": "aeldari",
+          "entityType": "equipment",
+          "entityId": "dire-avengers",
+          "entityName": "Dire Avengers",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Dire Avengers base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Dire Avenger Exarch model with the selected equipment."
+        },
+        {
           "id": "4bfb8bce218dc69a",
           "factionId": "aeldari",
           "entityType": "equipment",
@@ -33441,6 +33545,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Wraithbone hull for Hemlock Wraithfighter is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "d15067b8cb40d7bd",
+          "factionId": "aeldari",
+          "entityType": "equipment",
+          "entityId": "howling-banshees",
+          "entityName": "Howling Banshees",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Howling Banshees base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Howling Banshee Exarch model with the selected equipment."
         },
         {
           "id": "081a116916bae8d2",
@@ -38595,14 +38709,14 @@
           "message": "At least one deterministic Sanctifiers base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 2 Missionary models with the selected equipment."
         },
         {
-          "id": "dc60bbcc7438a382",
+          "id": "7299a24997b10fb0",
           "factionId": "agents-of-the-imperium",
           "entityType": "equipment",
           "entityId": "sisters-of-battle-squad",
           "entityName": "Sisters of Battle Squad",
           "code": "UNMAPPED",
           "blocking": true,
-          "message": "At least one deterministic Sisters of Battle Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit model mapping for Sister Superior is ambiguous between: Battle Sister, Battle Sister w/ Simulacrum Imperialis."
+          "message": "At least one deterministic Sisters of Battle Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Sister Superior model with the selected equipment."
         },
         {
           "id": "b3c4029845fba46e",
@@ -48049,7 +48163,7 @@
       "coverage": {
         "engineUnits": 75,
         "mappedUnits": 72,
-        "mappedBaseLoadouts": 41,
+        "mappedBaseLoadouts": 40,
         "engineDetachments": 11,
         "mappedDetachments": 11,
         "complete": false
@@ -48174,6 +48288,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Hunter-killer missile for Basilisk is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "a2dff5e89ac82e8a",
+          "factionId": "astra-militarum",
+          "entityType": "equipment",
+          "entityId": "cadian-command-squad",
+          "entityName": "Cadian Command Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Cadian Command Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 4 Cadian Veteran Guardsman models with the selected equipment."
         },
         {
           "id": "d71cad0a6064acd1",
@@ -50318,6 +50442,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -51241,6 +51371,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -51342,6 +51478,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -52976,6 +53118,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -54155,6 +54303,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -56725,6 +56879,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -57101,6 +57261,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -58472,6 +58644,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -59975,26 +60153,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "be68bb8d273fc824",
-          "factionId": "black-templars",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "3fdd732b0399b8e7",
-          "factionId": "black-templars",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "c99756fe1366b816",
           "factionId": "black-templars",
           "entityType": "equipment",
@@ -60055,6 +60213,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "a3f6d485bf1fb708",
+          "factionId": "black-templars",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "9cf447081a50f1d8",
           "factionId": "black-templars",
           "entityType": "equipment",
@@ -60073,16 +60241,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "324038ec91f49c9c",
-          "factionId": "black-templars",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "6f5e70961b288c84",
@@ -62495,6 +62653,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -63413,6 +63577,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -63514,6 +63684,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -64715,6 +64891,14 @@
                   "normalizedName": "eviscerator",
                   "type": "upgrade",
                   "entryId": "585d-874f-7f12-77a4::a550-8e99-07b0-f03b::515e-8dca-b455-dc02"
+                },
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "585d-874f-7f12-77a4::064d-c623-58e7-3dd8::a3b1-a4d1-6857-384c",
+                  "entryGroupId": "585d-874f-7f12-77a4::064d-c623-58e7-3dd8",
+                  "group": "Replace Pistol"
                 }
               ]
             },
@@ -65698,6 +65882,12 @@
                   "normalizedName": "bolt pistol",
                   "type": "upgrade",
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
+                },
+                {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
                 },
                 {
                   "name": "Close combat weapon",
@@ -66701,6 +66891,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -69175,6 +69371,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -69551,6 +69753,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -71086,6 +71300,12 @@
               "group": "Suppressors",
               "equipment": [
                 {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
+                {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
                   "type": "upgrade",
@@ -72548,26 +72768,6 @@
           "message": "Heavy bolter for Baal Predator is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "1cfac01c0509cf3e",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "45f608219fba0a37",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "6e1ec89c3e661fef",
           "factionId": "blood-angels",
           "entityType": "equipment",
@@ -72678,6 +72878,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "1bedd325b0d137d1",
+          "factionId": "blood-angels",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "d3016838807c7336",
           "factionId": "blood-angels",
           "entityType": "equipment",
@@ -72716,16 +72926,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "da777f7f7856214a",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "eed49a64632cdb3e",
@@ -104011,6 +104211,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -104844,6 +105050,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -104945,6 +105157,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -106248,6 +106466,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -107249,6 +107473,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -109719,6 +109949,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -110095,6 +110331,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -111457,6 +111705,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -113056,26 +113310,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "74461598e25058cd",
-          "factionId": "crimson-fists",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "874f4d53afa9276b",
-          "factionId": "crimson-fists",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "51854ae38f08be2d",
           "factionId": "crimson-fists",
           "entityType": "equipment",
@@ -113126,6 +113360,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "04d2c6de416e57f8",
+          "factionId": "crimson-fists",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "4f4ecdbb44fe3bb1",
           "factionId": "crimson-fists",
           "entityType": "equipment",
@@ -113144,16 +113388,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "44940c3090e9f9aa",
-          "factionId": "crimson-fists",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "ec1fb96b3cb7ca35",
@@ -115558,6 +115792,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -116474,6 +116714,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -116575,6 +116821,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -118076,6 +118328,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -119171,6 +119429,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -121969,6 +122233,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -122796,6 +123066,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -124264,6 +124546,12 @@
               "group": "Suppressors",
               "equipment": [
                 {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
+                {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
                   "type": "upgrade",
@@ -125644,26 +125932,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "246ceebfe0044ea0",
-          "factionId": "dark-angels",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "977dcfd6da6cc505",
-          "factionId": "dark-angels",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "ab7552d8d0d7cff7",
           "factionId": "dark-angels",
           "entityType": "equipment",
@@ -125714,6 +125982,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "4968b842cc2008c1",
+          "factionId": "dark-angels",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "b88d8246d037f6d2",
           "factionId": "dark-angels",
           "entityType": "equipment",
@@ -125732,16 +126010,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "c93bc340c1f4e225",
-          "factionId": "dark-angels",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "16a3c83a8dc84eb5",
@@ -133232,6 +133500,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -134065,6 +134339,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -134166,6 +134446,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -136428,6 +136714,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -137823,6 +138115,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -140433,6 +140731,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -140809,6 +141113,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -142463,6 +142779,12 @@
               "group": "Suppressors",
               "equipment": [
                 {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
+                {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
                   "type": "upgrade",
@@ -144027,26 +144349,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "234aca20ca314538",
-          "factionId": "deathwatch",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "f193408542935cd8",
-          "factionId": "deathwatch",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "61515fa29b569203",
           "factionId": "deathwatch",
           "entityType": "equipment",
@@ -144167,6 +144469,16 @@
           "message": "At least one deterministic Indomitor Kill Team base loadout cannot be represented in the New Recruit catalogue. The legal Indomitor Kill Team loadout could not be decomposed into New Recruit model selections."
         },
         {
+          "id": "c4f59e75fba04cf1",
+          "factionId": "deathwatch",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "5fb698d0c7bf15a1",
           "factionId": "deathwatch",
           "entityType": "equipment",
@@ -144185,16 +144497,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "dc907f3f8acf0851",
-          "factionId": "deathwatch",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "0a26b72dbb9e16e6",
@@ -151407,7 +151709,7 @@
       "coverage": {
         "engineUnits": 20,
         "mappedUnits": 17,
-        "mappedBaseLoadouts": 15,
+        "mappedBaseLoadouts": 14,
         "engineDetachments": 10,
         "mappedDetachments": 10,
         "complete": false
@@ -151422,6 +151724,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "At least one deterministic Chaos Rhino base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Chaos Rhino equipment \"Combi-bolter\" is ambiguous."
+        },
+        {
+          "id": "e569adfdf13cdf65",
+          "factionId": "emperors-children",
+          "entityType": "equipment",
+          "entityId": "chaos-terminators",
+          "entityName": "Chaos Terminators",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Chaos Terminators base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Terminator Champion model with the selected equipment."
         },
         {
           "id": "27eab3b4ad1b0d82",
@@ -153794,7 +154106,7 @@
       "coverage": {
         "engineUnits": 28,
         "mappedUnits": 24,
-        "mappedBaseLoadouts": 21,
+        "mappedBaseLoadouts": 20,
         "engineDetachments": 9,
         "mappedDetachments": 8,
         "complete": false
@@ -153889,6 +154201,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Leader’s cult weapons for Hybrid Metamorphs is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "c85d638871ec31d3",
+          "factionId": "genestealer-cults",
+          "entityType": "equipment",
+          "entityId": "neophyte-hybrids",
+          "entityName": "Neophyte Hybrids",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Neophyte Hybrids base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Neophyte Leader model with the selected equipment."
         },
         {
           "id": "4911ed84bbc67535",
@@ -157893,6 +158215,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -158726,6 +159054,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -158827,6 +159161,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -160130,6 +160470,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -161131,6 +161477,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -163601,6 +163953,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -163977,6 +164335,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -165339,6 +165709,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -166948,26 +167324,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "fa6fcca7f179bee2",
-          "factionId": "imperial-fists",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "099f2e5eb3f96386",
-          "factionId": "imperial-fists",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "2a7664700a13074c",
           "factionId": "imperial-fists",
           "entityType": "equipment",
@@ -167018,6 +167374,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "4d3e7311a8097158",
+          "factionId": "imperial-fists",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "1883ad7c97f7eb8c",
           "factionId": "imperial-fists",
           "entityType": "equipment",
@@ -167036,16 +167402,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "d2f6d04b03a47646",
-          "factionId": "imperial-fists",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "95b7822bc3122668",
@@ -171793,6 +172149,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -172704,6 +173066,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -172805,6 +173173,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -174036,6 +174410,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -175037,6 +175417,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -177514,6 +177900,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -177890,6 +178282,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -179252,6 +179656,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -180633,26 +181043,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "9821e31343c2cbcd",
-          "factionId": "iron-hands",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "55dfef58d77ee8ec",
-          "factionId": "iron-hands",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "c667e796503c849a",
           "factionId": "iron-hands",
           "entityType": "equipment",
@@ -180703,6 +181093,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "7b0657a8f7de9b16",
+          "factionId": "iron-hands",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "6b3a98268c6dea53",
           "factionId": "iron-hands",
           "entityType": "equipment",
@@ -180721,16 +181121,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "8a834eccfbeafa7c",
-          "factionId": "iron-hands",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "acdc0a9f1496676f",
@@ -197651,7 +198041,7 @@
       "coverage": {
         "engineUnits": 63,
         "mappedUnits": 58,
-        "mappedBaseLoadouts": 43,
+        "mappedBaseLoadouts": 42,
         "engineDetachments": 12,
         "mappedDetachments": 12,
         "complete": false
@@ -197806,6 +198196,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Close combat weapon for Mek is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "22dcab01ae9b102b",
+          "factionId": "orks",
+          "entityType": "equipment",
+          "entityId": "nobz",
+          "entityName": "Nobz",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Nobz base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Boss Nob model with the selected equipment."
         },
         {
           "id": "4c64546fa6787167",
@@ -199061,6 +199461,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -199894,6 +200300,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -199995,6 +200407,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -201226,6 +201644,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -202227,6 +202651,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -204707,6 +205137,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -205083,6 +205519,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -206445,6 +206893,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -207826,26 +208280,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "99049329ee7fcbbe",
-          "factionId": "raven-guard",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "60648256b5642d14",
-          "factionId": "raven-guard",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "5bad14b1c55ce866",
           "factionId": "raven-guard",
           "entityType": "equipment",
@@ -207896,6 +208330,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "92abd2e77def01db",
+          "factionId": "raven-guard",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "401d277863202868",
           "factionId": "raven-guard",
           "entityType": "equipment",
@@ -207914,16 +208358,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "45224261ce923efd",
-          "factionId": "raven-guard",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "4a036e130caa3919",
@@ -210177,6 +210611,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -211010,6 +211450,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -211111,6 +211557,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -212342,6 +212794,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -213343,6 +213801,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -215735,6 +216199,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -216111,6 +216581,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -217473,6 +217955,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -218943,26 +219431,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "19a03adb0fdb5228",
-          "factionId": "salamanders",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "3c8d94ba3305f2b5",
-          "factionId": "salamanders",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "0fb4341eb51809e3",
           "factionId": "salamanders",
           "entityType": "equipment",
@@ -219013,6 +219481,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "e2a514e70eae7153",
+          "factionId": "salamanders",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "81d97aaf2bcb75ba",
           "factionId": "salamanders",
           "entityType": "equipment",
@@ -219031,16 +219509,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "b5cf47dc1fb5a2f8",
-          "factionId": "salamanders",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "a4d4cdd653f47fc7",
@@ -221337,6 +221805,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -222383,6 +222857,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -222484,6 +222964,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -223715,6 +224201,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -224903,6 +225395,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -227614,6 +228112,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -228073,6 +228577,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -229435,6 +229951,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -231230,6 +231752,12 @@
                   "entryId": "5167-2675-f8da-b1d7::bf02-8951-4f2d-2a64"
                 },
                 {
+                  "name": "Storm Bolter",
+                  "normalizedName": "storm bolter",
+                  "type": "upgrade",
+                  "entryId": "5167-2675-f8da-b1d7::5a23-b62b-b8dc-d0ac::70f9-7a89-bbac-a9a7"
+                },
+                {
                   "name": "Storm shield",
                   "normalizedName": "storm shield",
                   "type": "upgrade",
@@ -231915,7 +232443,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 106,
-        "mappedBaseLoadouts": 91,
+        "mappedBaseLoadouts": 90,
         "engineDetachments": 22,
         "mappedDetachments": 21,
         "complete": false
@@ -231950,26 +232478,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "7b30f98ef6d1420d",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "d4a576f12ee35eb1",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "eb06f0effdd4d4ef",
@@ -232022,6 +232530,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "cd5377b1ab0fb961",
+          "factionId": "space-wolves",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "ef08e606d9928320",
           "factionId": "space-wolves",
           "entityType": "equipment",
@@ -232040,16 +232558,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "488ff570dadf53cd",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "44e79c16dbe7f40d",
@@ -232180,6 +232688,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master‑crafted power weapon for Wolf Guard Battle Leader is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "1823f0c6ca1e0dbb",
+          "factionId": "space-wolves",
+          "entityType": "equipment",
+          "entityId": "wolf-guard-terminators",
+          "entityName": "Wolf Guard Terminators",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Wolf Guard Terminators base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Wolf Guard Terminator Pack Leader model with the selected equipment."
         },
         {
           "id": "97dac6c18a8eb874",
@@ -237861,7 +238379,7 @@
       "coverage": {
         "engineUnits": 47,
         "mappedUnits": 43,
-        "mappedBaseLoadouts": 42,
+        "mappedBaseLoadouts": 40,
         "engineDetachments": 7,
         "mappedDetachments": 7,
         "complete": false
@@ -237978,6 +238496,16 @@
           "message": "Shield Drone for Commander in Enforcer Battlesuit is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "15b22f97eb756756",
+          "factionId": "tau-empire",
+          "entityType": "equipment",
+          "entityId": "crisis-fireknife-battlesuits",
+          "entityName": "Crisis Fireknife Battlesuits",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Crisis Fireknife Battlesuits base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 2 Crisis Fireknife Shas’ui models with the selected equipment."
+        },
+        {
           "id": "62fc9822cc468722",
           "factionId": "tau-empire",
           "entityType": "equipment",
@@ -238056,6 +238584,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Shield Drone for Ethereal is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "bbccd51fb3912ab3",
+          "factionId": "tau-empire",
+          "entityType": "equipment",
+          "entityId": "kroot-carnivores",
+          "entityName": "Kroot Carnivores",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Kroot Carnivores base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 9 Kroot Carnivore models with the selected equipment."
         },
         {
           "id": "d20748176d5798a6",
@@ -246780,7 +247318,7 @@
       "coverage": {
         "engineUnits": 57,
         "mappedUnits": 52,
-        "mappedBaseLoadouts": 47,
+        "mappedBaseLoadouts": 45,
         "engineDetachments": 10,
         "mappedDetachments": 10,
         "complete": false
@@ -246795,6 +247333,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "At least one deterministic Hive Tyrant base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Hive Tyrant equipment \"Monstrous scything talons\" is ambiguous."
+        },
+        {
+          "id": "4b1e778fa0d60503",
+          "factionId": "tyranids",
+          "entityType": "equipment",
+          "entityId": "hyperadapted-raveners",
+          "entityName": "Hyperadapted Raveners",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Hyperadapted Raveners base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 4 Raveners models with the selected equipment."
         },
         {
           "id": "c75fff4076539ad5",
@@ -246885,6 +247433,16 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Sporocyst bio-weapons for Sporocyst is legal in 40kdc but has no New Recruit catalogue selection."
+        },
+        {
+          "id": "de8cb533c5fa9a6b",
+          "factionId": "tyranids",
+          "entityType": "equipment",
+          "entityId": "termagants",
+          "entityName": "Termagants",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Termagants base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 10 Termagant models with the selected equipment."
         },
         {
           "id": "737d83ca8434f588",
@@ -247995,6 +248553,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -249000,6 +249564,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -249101,6 +249671,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -250411,6 +250987,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -251412,6 +251994,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -253876,6 +254464,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -254252,6 +254846,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -255686,6 +256292,12 @@
               "entryGroupId": "dd1b-428a-9463-f1ee::ab58-1ce6-4f05-262a",
               "group": "Suppressors",
               "equipment": [
+                {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
                 {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
@@ -257436,26 +258048,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "32af12bf28e01e93",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "3710b8a4db4d2ea2",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "50e210b50de35e64",
           "factionId": "ultramarines",
           "entityType": "equipment",
@@ -257506,6 +258098,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "458c886d420b8815",
+          "factionId": "ultramarines",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "c82297fd7463ca40",
           "factionId": "ultramarines",
           "entityType": "equipment",
@@ -257524,16 +258126,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "7b6cefd2404f9e6b",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "f8f70c10083af117",
@@ -259669,6 +260261,12 @@
               "normalizedName": "ballistus missile launcher",
               "type": "upgrade",
               "entryId": "fa66-cda4-10fa-4c69::f24d-42a1-5821-2fd4"
+            },
+            {
+              "name": "Twin Storm Bolter",
+              "normalizedName": "twin storm bolter",
+              "type": "upgrade",
+              "entryId": "fa66-cda4-10fa-4c69::1822-9299-fd13-dd3::1063-59-2a38-61fd"
             }
           ],
           "models": [],
@@ -260502,6 +261100,12 @@
                   "entryId": "61b4-2eed-923d-90b1::12e5-03de-2c6f-e778::953c-b525-10be-f7cd"
                 },
                 {
+                  "name": "Siege Drills",
+                  "normalizedName": "siege drills",
+                  "type": "upgrade",
+                  "entryId": "61b4-2eed-923d-90b1::6b70-8fcd-20a7-2216::49b6-aac1-32e6-e423"
+                },
+                {
                   "name": "Twin flamer",
                   "normalizedName": "twin flamer",
                   "type": "upgrade",
@@ -260603,6 +261207,12 @@
                   "normalizedName": "centurion bolters",
                   "type": "upgrade",
                   "entryId": "4b75-80fc-e858-ff91::b684-2f1c-016f-4369::953c-b525-10be-f7cd"
+                },
+                {
+                  "name": "Centurion Fists",
+                  "normalizedName": "centurion fists",
+                  "type": "upgrade",
+                  "entryId": "4b75-80fc-e858-ff91::6cf2-346f-ed8c-fa7c::90b8-aced-49e6-c2ae"
                 },
                 {
                   "name": "Centurion missile launcher",
@@ -261834,6 +262444,12 @@
                   "entryId": "be63-b837-d723-d3c6::ce5a-e2c7-b6d6-2f65::18b0-8c2-173f-5"
                 },
                 {
+                  "name": "Bolt Sniper Rifle",
+                  "normalizedName": "bolt sniper rifle",
+                  "type": "upgrade",
+                  "entryId": "be63-b837-d723-d3c6::30cd-9443-83f7-d3ad::ab36-4f93-71d9-3d73"
+                },
+                {
                   "name": "Close combat weapon",
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
@@ -262835,6 +263451,12 @@
                   "normalizedName": "close combat weapon",
                   "type": "upgrade",
                   "entryId": "4c8-e877-566b-a1ee::67ab-26a0-66b8-5b73::6c7d-af5b-482-6fbe"
+                },
+                {
+                  "name": "Plasma Incinerator",
+                  "normalizedName": "plasma incinerator",
+                  "type": "upgrade",
+                  "entryId": "4c8-e877-566b-a1ee::9119-f6ca-9836-c7ca::bb24-ed3f-7468-4f61"
                 },
                 {
                   "name": "Plasma pistol",
@@ -265305,6 +265927,12 @@
               "entryId": "90c2-1ed5-bebf-73e8::2e52-f16b-e82c-fd2c::2523-36d-531f-9910"
             },
             {
+              "name": "Lascannon",
+              "normalizedName": "lascannon",
+              "type": "upgrade",
+              "entryId": "90c2-1ed5-bebf-73e8::d993-301b-49be-bd72::200b-3f66-2458-aa0f"
+            },
+            {
               "name": "Predator Autocannon",
               "normalizedName": "predator autocannon",
               "type": "upgrade",
@@ -265681,6 +266309,18 @@
                   "normalizedName": "bolt carbine",
                   "type": "upgrade",
                   "entryId": "72c7-e95f-cade-27d7::51b8-ba4a-c6e6-e111"
+                },
+                {
+                  "name": "Combat Knife",
+                  "normalizedName": "combat knife",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::ec5d-f3fc-26df-5b7a::118c-911c-2f73-6803"
+                },
+                {
+                  "name": "Special Issue Bolt Pistol",
+                  "normalizedName": "special issue bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "72c7-e95f-cade-27d7::c1bb-f158-1d11-22c3::3f4f-efd-2d8f-e37d"
                 }
               ]
             }
@@ -267134,6 +267774,12 @@
               "group": "Suppressors",
               "equipment": [
                 {
+                  "name": "Accelerator Autocannon",
+                  "normalizedName": "accelerator autocannon",
+                  "type": "upgrade",
+                  "entryId": "dd1b-428a-9463-f1ee::d0fe-b03b-4f85-cf65::e1d9-f403-9ab4-8db8"
+                },
+                {
                   "name": "Bolt pistol",
                   "normalizedName": "bolt pistol",
                   "type": "upgrade",
@@ -268514,26 +269160,6 @@
           "message": "Twin power fists for Aggressor Squad is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
-          "id": "6d574259cc482400",
-          "factionId": "white-scars",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "At least one deterministic Ballistus Dreadnought base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Ballistus Dreadnought equipment \"Twin storm bolter\" is missing."
-        },
-        {
-          "id": "5449359b179e7f5c",
-          "factionId": "white-scars",
-          "entityType": "equipment",
-          "entityId": "ballistus-dreadnought:twin-storm-bolter-ballistus-dreadnought",
-          "entityName": "Ballistus Dreadnought: Twin storm bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin storm bolter for Ballistus Dreadnought is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
           "id": "f88cf3cc66c8fd0a",
           "factionId": "white-scars",
           "entityType": "equipment",
@@ -268584,6 +269210,16 @@
           "message": "drop-pod for Drop Pod is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
+          "id": "e829e49537989076",
+          "factionId": "white-scars",
+          "entityType": "equipment",
+          "entityId": "intercessor-squad",
+          "entityName": "Intercessor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "At least one deterministic Intercessor Squad base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment."
+        },
+        {
           "id": "b3c49caff58739e2",
           "factionId": "white-scars",
           "entityType": "equipment",
@@ -268602,16 +269238,6 @@
           "code": "UNMAPPED",
           "blocking": true,
           "message": "Master-crafted bolt carbine for Lieutenant in Phobos Armour is legal in 40kdc but has no New Recruit catalogue selection."
-        },
-        {
-          "id": "afe1ce3ff225e741",
-          "factionId": "white-scars",
-          "entityType": "equipment",
-          "entityId": "predator-destructor:lascannon",
-          "entityName": "Predator Destructor: Lascannon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lascannon for Predator Destructor is legal in 40kdc but has no New Recruit catalogue selection."
         },
         {
           "id": "15e9410859f62228",
@@ -273485,14 +274111,14 @@
           "message": "At least one deterministic Chaos Rhino base loadout cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Chaos Rhino equipment \"Combi-bolter\" is ambiguous."
         },
         {
-          "id": "ae4861888c315669",
+          "id": "653c7f6cd5595efd",
           "factionId": "world-eaters",
           "entityType": "equipment",
           "entityId": "chaos-terminators",
           "entityName": "Chaos Terminators",
           "code": "UNMAPPED",
           "blocking": true,
-          "message": "At least one deterministic Chaos Terminators base loadout cannot be represented in the New Recruit catalogue. The legal Chaos Terminators loadout could not be decomposed into New Recruit model selections."
+          "message": "At least one deterministic Chaos Terminators base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Terminator Champion model with the selected equipment."
         },
         {
           "id": "46b31d3d613e8f4d",
@@ -273515,14 +274141,14 @@
           "message": "At least one deterministic Goremongers base loadout cannot be represented in the New Recruit catalogue. New Recruit model mapping for Goremongers is ambiguous between: Blood Herald, Goremonger w/ chainblade."
         },
         {
-          "id": "e394b1f0f21ed604",
+          "id": "b87a199d26efb90c",
           "factionId": "world-eaters",
           "entityType": "equipment",
           "entityId": "jakhals",
           "entityName": "Jakhals",
           "code": "UNMAPPED",
           "blocking": true,
-          "message": "At least one deterministic Jakhals base loadout cannot be represented in the New Recruit catalogue. The legal Jakhals loadout could not be decomposed into New Recruit model selections."
+          "message": "At least one deterministic Jakhals base loadout cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 8 Jakhal models with the selected equipment."
         },
         {
           "id": "6ff618e1b3281d59",
@@ -273573,8 +274199,8 @@
     "completeFactions": 0,
     "engineUnits": 3421,
     "mappedUnits": 2024,
-    "mappedBaseLoadouts": 1749,
-    "conflicts": 2164,
-    "blockingConflicts": 2164
+    "mappedBaseLoadouts": 1732,
+    "conflicts": 2155,
+    "blockingConflicts": 2155
   }
 }
