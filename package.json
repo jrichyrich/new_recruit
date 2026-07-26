@@ -20,6 +20,9 @@
     "companion:build": "node scripts/build-new-recruit-companion.mjs",
     "data:check": "node --import tsx scripts/check-roster-data.ts",
     "data:check-latest": "node --import tsx scripts/check-roster-data.ts --latest",
+    "data:prepare-update": "node --import tsx scripts/prepare-data-update.ts",
+    "data:sync": "node --import tsx scripts/sync-bsdata.ts --write",
+    "data:sync-check": "node --import tsx scripts/sync-bsdata.ts --check",
     "fixtures:sanitize": "node --import tsx scripts/sanitize-new-recruit-fixtures.ts"
   },
   "dependencies": {

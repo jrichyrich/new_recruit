@@ -9,10 +9,10 @@ import type {
 export const NEW_RECRUIT_IMPORT_URL =
   "https://www.newrecruit.eu/app/MyLists" as const;
 
-export function prepareNewRecruitHandoff(
+export async function prepareNewRecruitHandoff(
   draft: RosterDraftV1,
   includeHtml = true,
-): ResultEnvelope<NewRecruitHandoff> {
+): Promise<ResultEnvelope<NewRecruitHandoff>> {
   const validation = validateRoster(draft);
   if (!validation.ok) {
     return {
@@ -26,7 +26,7 @@ export function prepareNewRecruitHandoff(
   const formats = includeHtml ? (["rosz", "html"] as const) : (["rosz"] as const);
   const artifacts: ExportArtifact[] = [];
   for (const format of formats) {
-    const exported = exportRoster(draft, format);
+    const exported = await exportRoster(draft, format);
     if (!exported.ok || !exported.data) {
       return {
         ok: false,

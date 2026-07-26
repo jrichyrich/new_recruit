@@ -42,3 +42,9 @@ next-env.d.ts
 /outputs/
 /work/
 /native/.build/
+
+# local roster exports
+/exports/
+/*.ros
+/*.rosz
+/custodes-*.json

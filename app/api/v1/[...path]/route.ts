@@ -1,10 +1,14 @@
 import {
+  addFreshnessWarnings,
   buildRoster,
   bytesToBase64,
+  checkDataFreshnessCached,
   compareFactions,
   explainRoster,
   exportRoster,
+  getNewRecruitCapability,
   getDataStatus,
+  listDataConflicts,
   modifyRoster,
   prepareNewRecruitHandoff,
   searchFactions,
@@ -73,10 +77,61 @@ export function OPTIONS(request: Request) {
 }
 
 export function GET(request: Request) {
-  return guarded(request, () => {
+  return guarded(request, async () => {
     const url = new URL(request.url);
     const path = routePath(request);
     if (path === "data-status") return json(getDataStatus());
+    if (path === "data-freshness") {
+      return json(
+        await checkDataFreshnessCached({
+          force: url.searchParams.get("force") === "true",
+        }),
+      );
+    }
+    if (path === "data-conflicts") {
+      const entityType = url.searchParams.get("entityType");
+      return json({
+        ok: true,
+        data: listDataConflicts({
+          factionId: url.searchParams.get("factionId") ?? undefined,
+          entityType:
+            entityType === "catalogue" ||
+            entityType === "unit" ||
+            entityType === "points" ||
+            entityType === "equipment" ||
+            entityType === "detachment" ||
+            entityType === "enhancement"
+              ? entityType
+              : undefined,
+          blocking:
+            url.searchParams.has("blocking")
+              ? url.searchParams.get("blocking") === "true"
+              : undefined,
+          limit: Number(url.searchParams.get("limit") ?? 50),
+          offset: Number(url.searchParams.get("offset") ?? 0),
+        }),
+        violations: [],
+        warnings: [],
+      });
+    }
+    if (path === "new-recruit-capability") {
+      const factionId = url.searchParams.get("factionId");
+      if (!factionId) {
+        return json(
+          errorEnvelope(
+            "FACTION_REQUIRED",
+            "The factionId query parameter is required.",
+          ),
+          400,
+        );
+      }
+      return json({
+        ok: true,
+        data: getNewRecruitCapability(factionId),
+        violations: [],
+        warnings: [],
+      });
+    }
     if (path === "factions") {
       return json(
         searchFactions(
@@ -118,7 +173,9 @@ export function POST(request: Request) {
     const path = routePath(request);
     const body = (await request.json()) as Record<string, unknown>;
     if (path === "rosters/build") {
-      return json(buildRoster(body as BuildRosterInput));
+      const result = buildRoster(body as BuildRosterInput);
+      const freshness = await checkDataFreshnessCached();
+      return json(addFreshnessWarnings(result, freshness));
     }
     if (path === "rosters/modify") {
       return json(
@@ -135,7 +192,7 @@ export function POST(request: Request) {
       return json(explainRoster(body.roster as RosterDraftV1));
     }
     if (path === "rosters/export") {
-      const result = exportRoster(
+      const result = await exportRoster(
         body.roster as RosterDraftV1,
         body.format as ExportFormat,
       );
@@ -146,7 +203,7 @@ export function POST(request: Request) {
       });
     }
     if (path === "rosters/new-recruit-handoff") {
-      const result = prepareNewRecruitHandoff(
+      const result = await prepareNewRecruitHandoff(
         body.roster as RosterDraftV1,
         body.includeHtml !== false,
       );

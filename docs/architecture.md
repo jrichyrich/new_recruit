@@ -14,39 +14,57 @@ capabilities:
 | --- | --- | --- |
 | Search, build, modify, validate, explain | All 35 embedded faction entries | Pinned `40kdc-data` units, detachments, pricing, loadouts, and army checks |
 | Printable HTML, text, roster JSON, New Recruit-shaped JSON | Every validated roster | RosterPilot serializers |
-| `.ros/.rosz` import | Factions with complete BSData catalogue mappings; currently Adeptus Custodes | Versioned catalogue, selection, model, and wargear IDs |
-| New Recruit import and Pretty HTML automation | Same mapped-faction set as `.rosz` | Local macOS companion |
+| `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
+| New Recruit import and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
 
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation
-context. Missing data or catalogue mappings fail closed; generic building never
-implies generic New Recruit import support.
+context. Missing or ambiguous data fails closed for New Recruit exports;
+generic building never implies that every possible selection in that faction
+is mapped.
 
-### Universal New Recruit mapping path
+### Pinned data and New Recruit compatibility
 
 [New Recruit](https://www.newrecruit.eu/) states that it consumes community
 catalogues from the [BSData GitHub organization](https://github.com/BSData).
-RosterPilot should therefore replace hand-authored faction maps with a
-versioned catalogue adapter, not scrape the New Recruit UI or call private
-APIs:
+RosterPilot therefore consumes the public
+[`BSData/wh40k-11e`](https://github.com/BSData/wh40k-11e) repository at an
+exact commit. It does not scrape the New Recruit UI or call private APIs.
 
-1. Pin a BSData repository and commit whose game-system edition matches
-   RosterPilot's pinned rules dataset.
-2. Parse `.gst` and `.cat`/`.catz` files into a local catalogue index.
-3. Match entities by faction, normalized name, role, composition, and wargear
-   signatures rather than by name alone.
-4. Materialize a reviewed mapping manifest containing the source commit and
-   catalogue revision identifiers.
-5. Round-trip one golden `.rosz` per faction and reject unresolved or ambiguous
-   mappings.
-6. Enable automated New Recruit delivery for a faction only after those checks
-   pass in CI.
+`data/sources.json` is the reviewed release manifest. It pins the rules package,
+the BSData branch and commit, and the official Munitorum Field Manual app
+version and content hash. `scripts/sync-bsdata.ts` resolves catalogue imports,
+configuration trees, units, models, wargear, and enhancements, then writes the
+deterministic `data/generated/new-recruit-catalogues.json` overlay.
 
-The active public
-[`BSData/wh40k-10e`](https://github.com/BSData/wh40k-10e) repository contains
-catalogue identifiers for 10th Edition, but those identifiers must not be mixed
-with RosterPilot's pinned 11th Edition data. Until a matching source is pinned,
-universal HTML/JSON export is safe while New Recruit delivery remains gated.
+The rules engine remains authoritative for construction and validation. BSData
+is authoritative for New Recruit identifiers and is a cross-check for points
+and loadouts. A disagreement becomes a structured conflict:
+
+- roster validation warns about conflicts affecting selected units;
+- `.ros/.rosz` and automated delivery block when a selected reference is
+  missing, ambiguous, or conflicting;
+- printable and canonical JSON exports remain available for a legal roster;
+- unresolved mappings are never guessed.
+
+Each V2 roster stores the complete release provenance. V1 roster JSON is
+migrated on read and marked with incomplete historical provenance.
+
+### Freshness policy
+
+Reproducibility and freshness are separate checks. An army is always built from
+the exact pinned release; a live source check never changes points in the
+middle of a build.
+
+- MCP and authenticated REST builds check the npm package, BSData branch head,
+  and official points app through a 15-minute cache.
+- The browser checks the same server-side freshness endpoint on startup and
+  after generating an army.
+- `check_data_freshness` and `rosterpilot freshness` expose an explicit live
+  check.
+- A daily GitHub workflow prepares a reviewable pull request when a source
+  changes. It regenerates the overlay and runs the data acceptance checks; it
+  does not merge itself.
 
 ## System architecture
 
@@ -63,6 +81,8 @@ flowchart LR
 
     subgraph core["Deterministic RosterPilot core"]
         data["Pinned 40kdc data"]
+        catalogue["Pinned BSData overlay and conflict index"]
+        freshness["Cached live freshness check"]
         engine["Search, build, and modify"]
         validator["Roster validation"]
         exporter["ROSZ, ROS, JSON, text, and HTML exporters"]
@@ -98,6 +118,8 @@ flowchart LR
     site --> web
 
     data --> engine
+    catalogue --> engine
+    freshness -. "warnings only" .-> engine
     engine --> validator
     validator --> exporter
     exporter --> handoff
@@ -276,6 +298,8 @@ Security invariants:
 | Component | Responsibility | Primary source |
 | --- | --- | --- |
 | Roster engine | Search, build, modify, validate, explain, export | `lib/rosterpilot/` |
+| Catalogue generator | Pin and reconcile BSData identifiers, coverage, and conflicts | `scripts/sync-bsdata.ts` |
+| Freshness monitor | Compare pins with npm, BSData, and the official MFM app | `lib/rosterpilot/freshness.ts` |
 | Local CLI | Terminal commands and local file operations | `cli/rosterpilot.ts` |
 | MCP server | Shared roster tools plus conditionally registered local tools | `mcp/server.ts` |
 | Local stdio MCP | Injects local file writers and macOS companion | `mcp/stdio.ts` |

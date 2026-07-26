@@ -309,7 +309,7 @@ export async function deliverRosterToNewRecruit(
     };
   }
 
-  const handoff = prepareNewRecruitHandoff(draft, false);
+  const handoff = await prepareNewRecruitHandoff(draft, false);
   const rosz = handoff.data?.artifacts[0];
   if (!handoff.ok || !rosz) {
     return {

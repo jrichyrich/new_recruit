@@ -25,7 +25,6 @@ import {
   ROSTER_SCHEMA_VERSION,
   DEFAULT_FACTION_ID,
   ModifyRosterOperationSchema,
-  RosterDraftV1Schema,
   SUPPORTED_GAME,
   type BuildRosterInput,
   type DataStatus,
@@ -41,11 +40,18 @@ import {
   type RosterIssue,
   type UnitSummary,
 } from "./types";
-import { newRecruitRos } from "./new-recruit";
+import {
+  conflictsForRoster,
+  getNewRecruitCapability,
+  newRecruitCatalogue,
+} from "./catalogue-summary";
+import { currentRosterSourceData, parseRosterDraft } from "./draft";
 
-export const DATA_PACKAGE_VERSION = "1.2.0";
-export const DATA_EDITION = "11th";
-export const DATA_DATASLATE = "launch";
+export const DATA_PACKAGE_VERSION =
+  newRecruitCatalogue.sources.rules.version;
+export const DATA_EDITION = newRecruitCatalogue.sources.rules.edition;
+export const DATA_DATASLATE =
+  newRecruitCatalogue.sources.rules.dataslate;
 
 const FACTION_ALIASES: Record<string, string> = {
   custodes: "adeptus-custodes",
@@ -536,6 +542,41 @@ export function getDataStatus(): ResultEnvelope<DataStatus> {
       text: "Powered by 40kdc-data",
       url: "https://40kdc.alpacasoft.dev",
     },
+    sources: {
+      releaseId: newRecruitCatalogue.releaseId,
+      rules: newRecruitCatalogue.sources.rules,
+      newRecruit: {
+        repository: newRecruitCatalogue.sources.newRecruit.repository,
+        commit: newRecruitCatalogue.sources.newRecruit.commit,
+        gameSystemRevision: newRecruitCatalogue.gameSystem.revision,
+        generatedAt: newRecruitCatalogue.generatedAt,
+      },
+      official: {
+        mfmVersion: newRecruitCatalogue.sources.official.mfmVersion,
+        updatedAt: newRecruitCatalogue.sources.official.updatedAt,
+        contentSha256:
+          newRecruitCatalogue.sources.official.contentSha256,
+        checkedAt: newRecruitCatalogue.sources.official.checkedAt,
+      },
+    },
+    freshness: {
+      state: "pinned",
+      checkedAt: newRecruitCatalogue.sources.official.checkedAt,
+    },
+    newRecruitCoverage: {
+      factionCount: newRecruitCatalogue.summary.factionCount,
+      exportCapableFactions:
+        newRecruitCatalogue.summary.exportCapableFactions,
+      completeFactions: newRecruitCatalogue.summary.completeFactions,
+      engineUnits: newRecruitCatalogue.summary.engineUnits,
+      mappedUnits: newRecruitCatalogue.summary.mappedUnits,
+      mappedBaseLoadouts:
+        newRecruitCatalogue.summary.mappedBaseLoadouts,
+    },
+    conflicts: {
+      total: newRecruitCatalogue.summary.conflicts,
+      blocking: newRecruitCatalogue.summary.blockingConflicts,
+    },
   });
 }
 
@@ -990,10 +1031,7 @@ export function buildRoster(
     schemaVersion: ROSTER_SCHEMA_VERSION,
     gameSystem: SUPPORTED_GAME,
     sourceData: {
-      package: "@alpaca-software/40kdc-data",
-      version: DATA_PACKAGE_VERSION,
-      edition: "11th",
-      dataslate: DATA_DATASLATE,
+      ...currentRosterSourceData(faction.id),
     },
     id: deterministicId([
       faction.id,
@@ -1105,26 +1143,27 @@ export function toCanonicalRoster(draft: RosterDraftV1): Roster {
 export function validateRoster(
   draft: RosterDraftV1,
 ): ResultEnvelope<{ legal: boolean; totalPoints: number }> {
-  const schema = RosterDraftV1Schema.safeParse(draft);
-  if (!schema.success) {
-    return envelope(null, [
+  const parsed = parseRosterDraft(draft);
+  if (!parsed.success) {
+    return envelope<{ legal: boolean; totalPoints: number }>(null, [
       issue(
         "MALFORMED_ROSTER",
-        `RosterDraftV1 validation failed: ${schema.error.issues
+        `Roster draft validation failed: ${parsed.error.issues
           .slice(0, 3)
           .map((problem) => `${problem.path.join(".") || "root"}: ${problem.message}`)
           .join("; ")}`,
       ),
     ]);
   }
-  draft = schema.data;
+  draft = parsed.data;
   const violations: RosterIssue[] = [];
   const warnings: RosterIssue[] = [];
-  if (draft.schemaVersion !== ROSTER_SCHEMA_VERSION) {
-    violations.push(
+  if (parsed.migrated) {
+    warnings.push(
       issue(
-        "SCHEMA_VERSION",
-        `Expected roster schema ${ROSTER_SCHEMA_VERSION}; received ${draft.schemaVersion}.`,
+        "DATA_PROVENANCE_INCOMPLETE",
+        "This V1 roster was migrated to the current data release; rebuild it when historical source provenance matters.",
+        "warn",
       ),
     );
   }
@@ -1273,6 +1312,54 @@ export function validateRoster(
       ),
     );
   }
+  if (draft.sourceData.releaseId !== newRecruitCatalogue.releaseId) {
+    warnings.push(
+      issue(
+        "DATA_RELEASE_CHANGED",
+        `This roster was created with release ${draft.sourceData.releaseId}; the engine is pinned to ${newRecruitCatalogue.releaseId}.`,
+        "warn",
+      ),
+    );
+  }
+  if (
+    draft.sourceData.newRecruit.commit !==
+    newRecruitCatalogue.sources.newRecruit.commit
+  ) {
+    warnings.push(
+      issue(
+        "CATALOGUE_VERSION_CHANGED",
+        "The pinned New Recruit catalogue changed after this roster was created.",
+        "warn",
+      ),
+    );
+  }
+  for (const sourceConflict of conflictsForRoster(draft)) {
+    warnings.push(
+      issue(
+        "DATA_SOURCE_CONFLICT",
+        sourceConflict.message,
+        "warn",
+        draft.units.find(
+          (selection) =>
+            sourceConflict.entityId === selection.unitId ||
+            sourceConflict.entityId.startsWith(`${selection.unitId}:`),
+        )?.selectionId,
+      ),
+    );
+  }
+  for (const selection of draft.units) {
+    const unit = resolveUnit(selection.unitId, draft.factionId);
+    if (unit?.raw.points_provisional === true) {
+      warnings.push(
+        issue(
+          "PROVISIONAL_POINTS",
+          `${selection.name} uses provisional community points.`,
+          "warn",
+          selection.selectionId,
+        ),
+      );
+    }
+  }
   if (draft.pointsLimit > 0 && draft.totalPoints < draft.pointsLimit) {
     warnings.push(
       issue(
@@ -1294,10 +1381,10 @@ export function modifyRoster(
   draft: RosterDraftV1,
   operation: ModifyRosterOperation,
 ): ResultEnvelope<RosterDraftV1> {
-  const schema = RosterDraftV1Schema.safeParse(draft);
-  if (!schema.success) {
+  const parsed = parseRosterDraft(draft);
+  if (!parsed.success) {
     return envelope<RosterDraftV1>(null, [
-      issue("MALFORMED_ROSTER", "The supplied roster is not a valid RosterDraftV1."),
+      issue("MALFORMED_ROSTER", "The supplied roster is not a valid roster draft."),
     ]);
   }
   const operationSchema = ModifyRosterOperationSchema.safeParse(operation);
@@ -1306,7 +1393,7 @@ export function modifyRoster(
       issue("MALFORMED_OPERATION", "The requested roster modification is invalid."),
     ]);
   }
-  draft = schema.data;
+  draft = parsed.data;
   operation = operationSchema.data;
   let next = structuredClone(draft);
   const fail = (code: string, message: string) => envelope<RosterDraftV1>(null, [
@@ -1428,8 +1515,21 @@ export function explainRoster(draft: RosterDraftV1): ResultEnvelope<{
     !validation.ok &&
     validation.violations.some((item) => item.code === "MALFORMED_ROSTER")
   ) {
-    return envelope(null, validation.violations, validation.warnings);
+    return envelope<{
+      summary: string;
+      choices: string[];
+      cautions: string[];
+    }>(null, validation.violations, validation.warnings);
   }
+  const parsed = parseRosterDraft(draft);
+  if (!parsed.success) {
+    return envelope<{
+      summary: string;
+      choices: string[];
+      cautions: string[];
+    }>(null, validation.violations, validation.warnings);
+  }
+  draft = parsed.data;
   const preferenceText = draft.preferences.length
     ? draft.preferences.join(", ")
     : "general-purpose play";
@@ -1506,10 +1606,10 @@ article div{display:flex;flex-direction:column}article span{font-size:12px;color
 </body></html>`;
 }
 
-export function exportRoster(
+export async function exportRoster(
   draft: RosterDraftV1,
   format: ExportFormat,
-): ResultEnvelope<ExportArtifact> {
+): Promise<ResultEnvelope<ExportArtifact>> {
   const validation = validateRoster(draft);
   if (!validation.ok) {
     return {
@@ -1519,6 +1619,13 @@ export function exportRoster(
       warnings: validation.warnings,
     };
   }
+  const parsed = parseRosterDraft(draft);
+  if (!parsed.success) {
+    return envelope<ExportArtifact>(null, [
+      issue("MALFORMED_ROSTER", "The supplied roster is not a valid roster draft."),
+    ]);
+  }
+  draft = parsed.data;
   const canonical = toCanonicalRoster(draft);
   const basename = slug(draft.name) || "rosterpilot-draft";
   try {
@@ -1561,14 +1668,32 @@ export function exportRoster(
         validation.warnings,
       );
     }
-    if (draft.factionId !== DEFAULT_FACTION_ID) {
+    const capability = getNewRecruitCapability(draft.factionId);
+    if (!capability.available) {
       return envelope<ExportArtifact>(null, [
         issue(
           "NEW_RECRUIT_MAPPING_UNAVAILABLE",
-          `New Recruit .ros/.rosz catalogue mappings are not yet available for ${draft.factionName}. Export printable HTML or roster JSON instead.`,
+          `New Recruit .ros/.rosz catalogue mappings are not available for ${draft.factionName}. ${capability.reason ?? "Export printable HTML or roster JSON instead."}`,
         ),
       ]);
     }
+    const blockingConflicts = conflictsForRoster(draft).filter(
+      (item) => item.blocking,
+    );
+    if (blockingConflicts.length > 0) {
+      return envelope<ExportArtifact>(null, [
+        issue(
+          "NEW_RECRUIT_DATA_CONFLICT",
+          `New Recruit export is blocked because ${blockingConflicts.length} selected mapping or source conflict${
+            blockingConflicts.length === 1 ? "" : "s"
+          } require review: ${blockingConflicts
+            .slice(0, 3)
+            .map((item) => item.message)
+            .join(" ")}`,
+        ),
+      ]);
+    }
+    const { newRecruitRos } = await import("./new-recruit");
     const ros = newRecruitRos(draft);
     if (format === "ros") {
       return envelope(
@@ -1595,10 +1720,17 @@ export function exportRoster(
       validation.warnings,
     );
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Roster export failed.";
+    const newRecruitMappingFailure =
+      (format === "ros" || format === "rosz") &&
+      message.startsWith("New Recruit");
     return envelope<ExportArtifact>(null, [
       issue(
-        "EXPORT_FAILED",
-        error instanceof Error ? error.message : "Roster export failed.",
+        newRecruitMappingFailure
+          ? "NEW_RECRUIT_MAPPING_UNAVAILABLE"
+          : "EXPORT_FAILED",
+        message,
       ),
     ]);
   }

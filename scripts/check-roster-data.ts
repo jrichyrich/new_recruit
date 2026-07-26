@@ -1,26 +1,24 @@
 import { factions } from "@alpaca-software/40kdc-data";
 import {
   buildRoster,
+  checkDataFreshness,
   exportRoster,
   getDataStatus,
+  newRecruitCatalogue,
   validateRoster,
 } from "../lib/rosterpilot";
 
-async function latestPublishedVersion(): Promise<string | null> {
-  if (!process.argv.includes("--latest")) return null;
-  const response = await fetch(
-    "https://registry.npmjs.org/@alpaca-software%2F40kdc-data/latest",
-    { signal: AbortSignal.timeout(10_000) },
-  );
-  if (!response.ok) {
-    throw new Error(`Registry check failed with HTTP ${response.status}.`);
-  }
-  const payload = (await response.json()) as { version?: string };
-  return payload.version ?? null;
-}
-
 const status = getDataStatus();
 if (!status.ok || !status.data) throw new Error("Roster data status failed.");
+if (status.data.packageVersion !== newRecruitCatalogue.sources.rules.version) {
+  throw new Error("The engine and generated catalogue use different rules pins.");
+}
+if (
+  status.data.factionCount !== newRecruitCatalogue.summary.factionCount ||
+  status.data.conflicts.total !== newRecruitCatalogue.summary.conflicts
+) {
+  throw new Error("Generated catalogue summary does not match runtime status.");
+}
 if (status.data.provisionalCustodesPoints > 0) {
   throw new Error(
     `${status.data.provisionalCustodesPoints} Custodes datasheets still have provisional points.`,
@@ -60,27 +58,48 @@ if (!validation.ok) {
   );
 }
 for (const format of ["ros", "rosz", "newrecruit-json", "roster-json"] as const) {
-  const result = exportRoster(fixture.data, format);
+  const result = await exportRoster(fixture.data, format);
   if (!result.ok || !result.data) {
     throw new Error(`${format} export failed.`);
   }
 }
 
-const latest = await latestPublishedVersion();
+const crossFactionFixture = buildRoster({
+  faction: "necrons",
+  pointsLimit: 1000,
+  allowNamedCharacters: false,
+});
+if (!crossFactionFixture.ok || !crossFactionFixture.data) {
+  throw new Error("Cross-faction New Recruit acceptance roster failed.");
+}
+const crossFactionExport = await exportRoster(crossFactionFixture.data, "rosz");
+if (!crossFactionExport.ok || !crossFactionExport.data) {
+  throw new Error(
+    `Cross-faction ROSZ export failed: ${crossFactionExport.violations
+      .map((item) => item.message)
+      .join("; ")}`,
+  );
+}
+
+const freshness = process.argv.includes("--latest")
+  ? await checkDataFreshness()
+  : null;
 process.stdout.write(
   `${JSON.stringify(
     {
       ok: true,
+      releaseId: status.data.sources.releaseId,
       pinnedVersion: status.data.packageVersion,
-      latestPublishedVersion: latest,
-      updateAvailable:
-        latest !== null && latest !== status.data.packageVersion,
+      liveFreshness: freshness?.data ?? null,
       custodesUnits: status.data.custodesUnitCount,
       buildableFactions: factionCoverage.length,
       totalUnits: status.data.unitCount,
       provisionalPoints: status.data.provisionalPoints,
+      newRecruitCoverage: status.data.newRecruitCoverage,
+      conflicts: status.data.conflicts,
       acceptanceRosterPoints: fixture.data.totalPoints,
       exports: ["ros", "rosz", "newrecruit-json", "roster-json"],
+      crossFactionRosz: crossFactionFixture.data.factionName,
     },
     null,
     2,

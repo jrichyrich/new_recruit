@@ -4,17 +4,24 @@ import { z } from "zod";
 import {
   buildRoster,
   bytesToBase64,
+  checkDataFreshness,
   compareFactions,
   explainRoster,
   exportRoster,
+  getNewRecruitCapability,
   getDataStatus,
+  listDataConflicts,
   modifyRoster,
   prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
   validateRoster,
+  addFreshnessWarnings,
+  ModifyRosterOperationSchema,
+  RosterDraftSchema,
   type ExportArtifact,
   type ExportFormat,
+  type LiveDataFreshness,
   type ModifyRosterOperation,
   type NewRecruitConnectionStatus,
   type NewRecruitDelivery,
@@ -50,6 +57,8 @@ type ServerOptions = {
       },
     ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
   };
+  freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
+  freshnessCacheMs?: number;
 };
 
 function serializable<T>(value: T): T {
@@ -111,6 +120,26 @@ export function createRosterPilotMcpServer(
     name: "rosterpilot",
     version: "0.2.0",
   });
+  let freshnessCache:
+    | {
+        expiresAt: number;
+        result: ResultEnvelope<LiveDataFreshness>;
+      }
+    | undefined;
+
+  async function currentFreshness(
+    force = false,
+  ): Promise<ResultEnvelope<LiveDataFreshness>> {
+    if (!force && freshnessCache && freshnessCache.expiresAt > Date.now()) {
+      return freshnessCache.result;
+    }
+    const result = await (options.freshnessChecker ?? checkDataFreshness)();
+    freshnessCache = {
+      expiresAt: Date.now() + (options.freshnessCacheMs ?? 15 * 60_000),
+      result,
+    };
+    return result;
+  }
 
   server.registerTool(
     "get_data_status",
@@ -121,6 +150,83 @@ export function createRosterPilotMcpServer(
       inputSchema: {},
     },
     async () => resultContent(getDataStatus()),
+  );
+
+  server.registerTool(
+    "check_data_freshness",
+    {
+      title: "Check live roster data freshness",
+      description:
+        "Compare the exact pinned rules package, BSData commit, and official points app with their current live versions. Cached for 15 minutes unless force is true.",
+      inputSchema: {
+        force: z.boolean().default(false),
+      },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ force }) => resultContent(await currentFreshness(force)),
+  );
+
+  server.registerTool(
+    "list_data_conflicts",
+    {
+      title: "List roster data conflicts",
+      description:
+        "List explicit unit, points, equipment, detachment, enhancement, or catalogue disagreements between the pinned rules engine and New Recruit's BSData source.",
+      inputSchema: {
+        factionId: z.string().optional(),
+        entityType: z
+          .enum([
+            "catalogue",
+            "unit",
+            "points",
+            "equipment",
+            "detachment",
+            "enhancement",
+          ])
+          .optional(),
+        blocking: z.boolean().optional(),
+        limit: z.number().int().min(1).max(200).default(50),
+        offset: z.number().int().nonnegative().default(0),
+      },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) => resultContent({
+      ok: true,
+      data: listDataConflicts(input),
+      violations: [],
+      warnings: [],
+    }),
+  );
+
+  server.registerTool(
+    "get_new_recruit_capability",
+    {
+      title: "Get New Recruit export coverage",
+      description:
+        "Report current catalogue, unit, loadout, detachment, and conflict coverage for one faction.",
+      inputSchema: {
+        factionId: z.string().min(1),
+      },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ factionId }) => resultContent({
+      ok: true,
+      data: getNewRecruitCapability(factionId),
+      violations: [],
+      warnings: [],
+    }),
   );
 
   server.registerTool(
@@ -216,13 +322,15 @@ export function createRosterPilotMcpServer(
         forceDispositionId: z.string().optional(),
       },
     },
-    async (input) =>
-      resultContent(
-        buildRoster({
+    async (input) => {
+      const result = buildRoster({
           ...input,
           preferences: input.preferences as PreferenceTag[] | undefined,
-        }),
-      ),
+      });
+      return resultContent(
+        addFreshnessWarnings(result, await currentFreshness()),
+      );
+    },
   );
 
   server.registerTool(
@@ -232,8 +340,8 @@ export function createRosterPilotMcpServer(
       description:
         "Apply one explicit add, remove, replace, model-count, warlord, equipment, enhancement, detachment, or disposition operation and revalidate.",
       inputSchema: {
-        roster: z.unknown(),
-        operation: z.unknown(),
+        roster: RosterDraftSchema,
+        operation: ModifyRosterOperationSchema,
       },
     },
     async ({ roster, operation }) =>
@@ -251,7 +359,7 @@ export function createRosterPilotMcpServer(
       title: "Validate a roster",
       description:
         "Recalculate points and run the pinned loadout and army-construction legality checks.",
-      inputSchema: { roster: z.unknown() },
+      inputSchema: { roster: RosterDraftSchema },
     },
     async ({ roster }) => resultContent(validateRoster(roster as RosterDraftV1)),
   );
@@ -262,7 +370,7 @@ export function createRosterPilotMcpServer(
       title: "Explain a roster",
       description:
         "Explain how each selection supports the requested preferences and include every validation caution.",
-      inputSchema: { roster: z.unknown() },
+      inputSchema: { roster: RosterDraftSchema },
     },
     async ({ roster }) => resultContent(explainRoster(roster as RosterDraftV1)),
   );
@@ -272,9 +380,9 @@ export function createRosterPilotMcpServer(
     {
       title: "Export a roster",
       description:
-        "Export a validated roster as New Recruit JSON, canonical roster JSON, text, or printable HTML. Custodes also supports mapped .ros/.rosz output. Writing requires an explicit path and never overwrites by default.",
+        "Export a validated roster as New Recruit JSON, canonical roster JSON, text, or printable HTML. ROS/ROSZ is available when every selected New Recruit catalogue reference is mapped and conflict-free. Writing requires an explicit path and never overwrites by default.",
       inputSchema: {
-        roster: z.unknown(),
+        roster: RosterDraftSchema,
         format: z.enum([
           "ros",
           "rosz",
@@ -288,7 +396,7 @@ export function createRosterPilotMcpServer(
       },
     },
     async ({ roster, format, outputPath, overwrite }) => {
-      const result = exportRoster(
+      const result = await exportRoster(
         roster as RosterDraftV1,
         format as ExportFormat,
       );
@@ -349,14 +457,14 @@ export function createRosterPilotMcpServer(
       description:
         "Validate a roster and prepare an editable .rosz plus optional printable HTML. Local stdio may write both files to a directory; remote transports return inline content.",
       inputSchema: {
-        roster: z.unknown(),
+        roster: RosterDraftSchema,
         includeHtml: z.boolean().default(true),
         outputDirectory: z.string().optional(),
         overwrite: z.boolean().default(false),
       },
     },
     async ({ roster, includeHtml, outputDirectory, overwrite }) => {
-      const result = prepareNewRecruitHandoff(
+      const result = await prepareNewRecruitHandoff(
         roster as RosterDraftV1,
         includeHtml,
       );
@@ -442,7 +550,7 @@ export function createRosterPilotMcpServer(
         description:
           "After an explicit user request, validate a roster, import it into New Recruit as a new list, verify the result, and optionally download Pretty HTML. This is a non-idempotent external action.",
         inputSchema: {
-          roster: z.unknown(),
+          roster: RosterDraftSchema,
           downloadPrettyHtml: z.boolean().default(true),
           outputDirectory: z.string().default("exports/new-recruit"),
           overwrite: z.boolean().default(false),

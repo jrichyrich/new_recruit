@@ -13,8 +13,10 @@ import {
   buildRoster,
   exportRoster,
   getDataStatus,
+  getNewRecruitCapability,
   listDetachments,
   modifyRoster,
+  parseRosterDraft,
   prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
@@ -23,12 +25,14 @@ import {
   type ExportFormat,
   type FactionSummary,
   type NewRecruitHandoff,
+  type LiveDataFreshness,
   type PreferenceTag,
   type RosterDraftV1,
   type UnitSummary,
 } from "@/lib/rosterpilot";
 
-const STORAGE_KEY = "rosterpilot.drafts.v1";
+const STORAGE_KEY = "rosterpilot.drafts.v2";
+const LEGACY_STORAGE_KEY = "rosterpilot.drafts.v1";
 const DEFAULT_RESULT = buildRoster({
   prompt: "Build a 1,000 point fast Custodes army with no named characters",
   name: "Golden Vanguard",
@@ -52,7 +56,7 @@ const PROMPT_IDEAS = [
 ];
 
 type DraftStore = {
-  version: 1;
+  version: 2;
   drafts: RosterDraftV1[];
 };
 
@@ -85,14 +89,33 @@ function factionColor(index: number): string {
 
 function parseStoredDrafts(): DraftStore | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw =
+      window.localStorage.getItem(STORAGE_KEY) ??
+      window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as DraftStore;
-    if (parsed.version !== 1 || !Array.isArray(parsed.drafts)) return null;
-    return parsed;
+    const parsed = JSON.parse(raw) as { drafts?: unknown[] };
+    if (!Array.isArray(parsed.drafts)) return null;
+    const drafts = parsed.drafts.flatMap((value) => {
+      const result = parseRosterDraft(value);
+      return result.success ? [result.data] : [];
+    });
+    return drafts.length ? { version: 2, drafts } : null;
   } catch {
     return null;
   }
+}
+
+function freshnessMessage(freshness: LiveDataFreshness): string {
+  if (freshness.state === "current") {
+    return "Live source check: the pinned release is current.";
+  }
+  if (freshness.state === "official-update-pending") {
+    return "Live source check: the official points source changed and is pending reconciliation.";
+  }
+  if (freshness.state === "update-available") {
+    return "Live source check: newer rules or New Recruit data is available for review.";
+  }
+  return "Live source check was incomplete; this roster remains reproducible from its pinned release.";
 }
 
 export default function Home() {
@@ -125,6 +148,28 @@ export default function Home() {
       }
     }, 0);
     return () => window.clearTimeout(restore);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/data-freshness")
+      .then((response) => response.json())
+      .then((result: { data?: LiveDataFreshness | null }) => {
+        if (!cancelled && result.data) {
+          setAgentNote((current) => `${current} ${freshnessMessage(result.data!)}`);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAgentNote(
+            (current) =>
+              `${current} Live source check was unavailable; the roster remains pinned.`,
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const factionResult = useMemo(
@@ -164,7 +209,7 @@ export default function Home() {
       );
       window.localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ version: 1, drafts: deduped } satisfies DraftStore),
+        JSON.stringify({ version: 2, drafts: deduped } satisfies DraftStore),
       );
       return deduped;
     });
@@ -197,14 +242,28 @@ export default function Home() {
       );
       return;
     }
-    commitDraft(
-      result.data,
-      `${result.data.name} built at ${result.data.totalPoints}/${result.data.pointsLimit} points. ${
+    const buildNote = `${result.data.name} built at ${result.data.totalPoints}/${result.data.pointsLimit} points. ${
         result.ok
           ? "Deterministic validation passed."
           : "Review the validation issues before exporting."
-      }`,
-    );
+      }`;
+    commitDraft(result.data, `${buildNote} Checking live data sources…`);
+    void fetch("/api/data-freshness")
+      .then((response) => response.json())
+      .then((freshness: { data?: LiveDataFreshness | null }) => {
+        setAgentNote(
+          `${buildNote} ${
+            freshness.data
+              ? freshnessMessage(freshness.data)
+              : "Live source check was unavailable; the roster remains pinned."
+          }`,
+        );
+      })
+      .catch(() => {
+        setAgentNote(
+          `${buildNote} Live source check was unavailable; the roster remains pinned.`,
+        );
+      });
   }
 
   function applyModification(
@@ -262,8 +321,8 @@ export default function Home() {
     );
   }
 
-  function handleExport(format: ExportFormat): void {
-    const result = exportRoster(draft, format);
+  async function handleExport(format: ExportFormat): Promise<void> {
+    const result = await exportRoster(draft, format);
     if (!result.data) {
       setAgentNote(
         `Export blocked: ${result.violations.map((item) => item.message).join(" ")}`,
@@ -274,8 +333,8 @@ export default function Home() {
     setAgentNote(`${result.data.filename} downloaded and ready for handoff.`);
   }
 
-  function prepareNewRecruit(): void {
-    const result = prepareNewRecruitHandoff(draft);
+  async function prepareNewRecruit(): Promise<void> {
+    const result = await prepareNewRecruitHandoff(draft);
     if (!result.data) {
       setAgentNote(
         `New Recruit handoff blocked: ${result.violations.map((item) => item.message).join(" ")}`,
@@ -316,17 +375,21 @@ export default function Home() {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const parsed = JSON.parse(await file.text()) as RosterDraftV1;
-      const result = validateRoster(parsed);
+      const parsed = parseRosterDraft(JSON.parse(await file.text()));
+      if (!parsed.success) {
+        throw new Error("Roster schema mismatch.");
+      }
+      const imported = parsed.data;
+      const result = validateRoster(imported);
       commitDraft(
-        parsed,
+        imported,
         result.ok
-          ? `${file.name} imported and validated.`
+          ? `${file.name} imported and validated${parsed.migrated ? " after upgrading its V1 provenance" : ""}.`
           : `${file.name} imported with ${result.violations.length} issue(s).`,
       );
-      setSelectedFaction(parsed.factionId);
-      setTarget(parsed.pointsLimit);
-      setPreferences(parsed.preferences);
+      setSelectedFaction(imported.factionId);
+      setTarget(imported.pointsLimit);
+      setPreferences(imported.preferences);
     } catch {
       setAgentNote(
         "Import failed. Choose a RosterPilot roster JSON file; New Recruit .ros/.rosz files are used as outbound handoffs in v1.",
@@ -337,7 +400,8 @@ export default function Home() {
   }
 
   const ready = validation.ok;
-  const newRecruitMapped = draft.factionId === "adeptus-custodes";
+  const newRecruitCapability = getNewRecruitCapability(draft.factionId);
+  const newRecruitMapped = newRecruitCapability.available;
   const remaining = draft.pointsLimit - draft.totalPoints;
   const rosterCommand = `Build or review "${draft.name}" as a ${draft.pointsLimit}-point ${draft.factionName} roster. Validate it before making any legality claim, then ${
     newRecruitMapped
@@ -370,7 +434,7 @@ export default function Home() {
         </nav>
         <div className="status-pill">
           <span className="status-dot" />
-          Data {DATA_STATUS?.packageVersion ?? "1.2.0"} · local engine
+          Release {DATA_STATUS?.sources.releaseId ?? "pinned"} · local engine
         </div>
       </header>
 
@@ -754,7 +818,7 @@ export default function Home() {
                     ((format === "ros" || format === "rosz") &&
                       !newRecruitMapped)
                   }
-                  onClick={() => handleExport(format)}
+                  onClick={() => void handleExport(format)}
                 >
                   <span aria-hidden="true">{icon}</span>
                   {label}
@@ -781,14 +845,17 @@ export default function Home() {
                 <strong>New Recruit handoff</strong>
                 <small>
                   {newRecruitMapped
-                    ? "Validated ROSZ · creates a new list copy"
-                    : "Catalogue mapping unavailable for this faction"}
+                    ? newRecruitCapability.complete
+                      ? "Complete catalogue mapping · creates a new list copy"
+                      : "Selected rosters export when all references are conflict-free"
+                    : newRecruitCapability.reason ??
+                      "Catalogue mapping unavailable for this faction"}
                 </small>
               </div>
               <button
                 type="button"
                 disabled={!ready || !newRecruitMapped}
-                onClick={prepareNewRecruit}
+                onClick={() => void prepareNewRecruit()}
               >
                 Download &amp; prepare
               </button>
@@ -885,8 +952,10 @@ export default function Home() {
             Powered by 40kdc-data
           </a>
           <p className="source-caveat">
-            Structured community data {DATA_STATUS?.packageVersion}; verify
-            event-specific rulings before play.
+            Rules {DATA_STATUS?.packageVersion} · BSData{" "}
+            {DATA_STATUS?.sources.newRecruit.commit.slice(0, 8)} · MFM v
+            {DATA_STATUS?.sources.official.mfmVersion}. Verify event-specific
+            rulings before play.
           </p>
         </aside>
       </section>

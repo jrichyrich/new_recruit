@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const ROSTER_SCHEMA_VERSION = 1 as const;
+export const ROSTER_SCHEMA_VERSION = 2 as const;
 export const SUPPORTED_GAME = "warhammer-40000-11e" as const;
 export const DEFAULT_FACTION_ID = "adeptus-custodes" as const;
 /** @deprecated Use DEFAULT_FACTION_ID. Kept for persisted clients. */
@@ -61,44 +61,82 @@ export const DraftUnitSchema = z
 
 export type DraftUnit = z.infer<typeof DraftUnitSchema>;
 
-export const RosterDraftV1Schema = z
-  .object({
-    schemaVersion: z.literal(ROSTER_SCHEMA_VERSION),
-    gameSystem: z.literal(SUPPORTED_GAME),
-    sourceData: z
-      .object({
-        package: z.literal("@alpaca-software/40kdc-data"),
-        version: z.string().min(1),
-        edition: z.literal("11th"),
-        dataslate: z.string().min(1),
-      })
-      .strict(),
-    id: z.string().min(1),
-    name: z.string().min(1),
-    factionId: z.string().min(1),
-    factionName: z.string().min(1),
-    pointsLimit: z.number().int().nonnegative(),
-    totalPoints: z.number().int().nonnegative(),
-    battleSize: z.enum(["incursion", "strike-force"]),
-    detachmentId: z.string().min(1),
-    detachmentName: z.string().min(1),
-    forceDispositionId: z.string().min(1),
-    forceDispositionName: z.string().min(1),
-    preferences: z.array(PreferenceTagSchema),
-    constraints: z
-      .object({
-        allowNamedCharacters: z.boolean(),
-        allowLegends: z.boolean(),
-        collectionUnitIds: z.array(z.string().min(1)).nullable(),
-      })
-      .strict(),
-    units: z.array(DraftUnitSchema),
-    createdAt: z.string().min(1),
-    updatedAt: z.string().min(1),
-  })
-  .strict();
+const RosterDraftBodySchema = z.object({
+  gameSystem: z.literal(SUPPORTED_GAME),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  factionId: z.string().min(1),
+  factionName: z.string().min(1),
+  pointsLimit: z.number().int().nonnegative(),
+  totalPoints: z.number().int().nonnegative(),
+  battleSize: z.enum(["incursion", "strike-force"]),
+  detachmentId: z.string().min(1),
+  detachmentName: z.string().min(1),
+  forceDispositionId: z.string().min(1),
+  forceDispositionName: z.string().min(1),
+  preferences: z.array(PreferenceTagSchema),
+  constraints: z
+    .object({
+      allowNamedCharacters: z.boolean(),
+      allowLegends: z.boolean(),
+      collectionUnitIds: z.array(z.string().min(1)).nullable(),
+    })
+    .strict(),
+  units: z.array(DraftUnitSchema),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+});
 
-export type RosterDraftV1 = z.infer<typeof RosterDraftV1Schema>;
+export const RosterDraftV1Schema = RosterDraftBodySchema.extend({
+  schemaVersion: z.literal(1),
+  sourceData: z
+    .object({
+      package: z.literal("@alpaca-software/40kdc-data"),
+      version: z.string().min(1),
+      edition: z.literal("11th"),
+      dataslate: z.string().min(1),
+    })
+    .strict(),
+}).strict();
+
+export const RosterDraftV2Schema = RosterDraftBodySchema.extend({
+  schemaVersion: z.literal(ROSTER_SCHEMA_VERSION),
+  sourceData: z
+    .object({
+      package: z.literal("@alpaca-software/40kdc-data"),
+      version: z.string().min(1),
+      edition: z.literal("11th"),
+      dataslate: z.string().min(1),
+      releaseId: z.string().min(1),
+      newRecruit: z
+        .object({
+          repository: z.literal("BSData/wh40k-11e"),
+          commit: z.string().regex(/^[0-9a-f]{40}$/),
+          gameSystemRevision: z.number().int().nonnegative(),
+          catalogueRevision: z.number().int().nonnegative().nullable(),
+        })
+        .strict(),
+      official: z
+        .object({
+          mfmVersion: z.string().min(1),
+          updatedAt: z.string().min(1),
+          contentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        })
+        .strict(),
+      migratedFrom: z.literal(1).optional(),
+    })
+    .strict(),
+}).strict();
+
+export const RosterDraftSchema = z.union([
+  RosterDraftV2Schema,
+  RosterDraftV1Schema,
+]);
+
+export type LegacyRosterDraftV1 = z.infer<typeof RosterDraftV1Schema>;
+export type RosterDraftV2 = z.infer<typeof RosterDraftV2Schema>;
+/** @deprecated Name retained for transport compatibility; new drafts are V2. */
+export type RosterDraftV1 = RosterDraftV2;
 
 export type BuildRosterInput = {
   prompt?: string;
@@ -266,5 +304,64 @@ export type DataStatus = {
   attribution: {
     text: "Powered by 40kdc-data";
     url: "https://40kdc.alpacasoft.dev";
+  };
+  sources: {
+    releaseId: string;
+    rules: {
+      package: "@alpaca-software/40kdc-data";
+      version: string;
+      edition: "11th";
+      dataslate: string;
+    };
+    newRecruit: {
+      repository: "BSData/wh40k-11e";
+      commit: string;
+      gameSystemRevision: number;
+      generatedAt: string;
+    };
+    official: {
+      mfmVersion: string;
+      updatedAt: string;
+      contentSha256: string;
+      checkedAt: string;
+    };
+  };
+  freshness: {
+    state: "pinned" | "update-available" | "official-update-pending" | "unknown";
+    checkedAt: string;
+  };
+  newRecruitCoverage: {
+    factionCount: number;
+    exportCapableFactions: number;
+    completeFactions: number;
+    engineUnits: number;
+    mappedUnits: number;
+    mappedBaseLoadouts: number;
+  };
+  conflicts: {
+    total: number;
+    blocking: number;
+  };
+};
+
+export type LiveDataFreshness = {
+  checkedAt: string;
+  state: "current" | "update-available" | "official-update-pending" | "unknown";
+  rules: {
+    pinnedVersion: string;
+    latestVersion: string | null;
+    updateAvailable: boolean | null;
+  };
+  newRecruit: {
+    pinnedCommit: string;
+    latestCommit: string | null;
+    updateAvailable: boolean | null;
+  };
+  official: {
+    pinnedVersion: string;
+    latestVersion: string | null;
+    pinnedContentSha256: string;
+    latestContentSha256: string | null;
+    updateAvailable: boolean | null;
   };
 };

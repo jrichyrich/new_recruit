@@ -13,8 +13,12 @@ import { unzipSync, strFromU8 } from "fflate";
 
 import {
   buildRoster,
+  checkDataFreshness,
   exportRoster,
+  getDataStatus,
+  getNewRecruitCapability,
   modifyRoster,
+  parseRosterDraft,
   prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
@@ -75,7 +79,7 @@ test("builds and validates every embedded faction at common game sizes", () => {
   }
 });
 
-test("exports any validated faction to HTML but fails closed on unmapped ROSZ", () => {
+test("exports any validated faction to HTML but fails closed on conflicted ROSZ", async () => {
   const result = buildRoster({
     faction: "aeldari",
     pointsLimit: 1000,
@@ -84,15 +88,83 @@ test("exports any validated faction to HTML but fails closed on unmapped ROSZ", 
   });
   assert.ok(result.data);
 
-  const html = exportRoster(result.data, "html");
+  const html = await exportRoster(result.data, "html");
   assert.equal(html.ok, true);
   assert.match(String(html.data?.content), /Aeldari Rapid Strike/);
 
-  const rosz = exportRoster(result.data, "rosz");
+  const rosz = await exportRoster(result.data, "rosz");
   assert.equal(rosz.ok, false);
+  assert.ok(
+    ["NEW_RECRUIT_DATA_CONFLICT", "NEW_RECRUIT_MAPPING_UNAVAILABLE"].includes(
+      rosz.violations[0]?.code ?? "",
+    ),
+  );
+});
+
+test("records exact source provenance and migrates V1 drafts", async () => {
+  const built = buildRoster({ faction: "adeptus-custodes", pointsLimit: 1000 });
+  assert.ok(built.data);
+  assert.equal(built.data.schemaVersion, 2);
+  assert.match(built.data.sourceData.newRecruit.commit, /^[0-9a-f]{40}$/);
+  assert.match(built.data.sourceData.official.contentSha256, /^[0-9a-f]{64}$/);
+
+  const legacy = JSON.parse(
+    await readFile(new URL("golden-boys-435.json", fixtures), "utf8"),
+  ) as unknown;
+  const migrated = parseRosterDraft(legacy);
+  assert.equal(migrated.success, true);
+  if (!migrated.success) return;
+  assert.equal(migrated.migrated, true);
+  assert.equal(migrated.data.schemaVersion, 2);
+  assert.equal(migrated.data.sourceData.migratedFrom, 1);
+
+  const status = getDataStatus();
+  assert.equal(status.data?.sources.releaseId, built.data.sourceData.releaseId);
   assert.equal(
-    rosz.violations[0]?.code,
-    "NEW_RECRUIT_MAPPING_UNAVAILABLE",
+    status.data?.sources.newRecruit.commit,
+    built.data.sourceData.newRecruit.commit,
+  );
+});
+
+test("exports a conflict-free non-Custodes roster through generated mappings", async () => {
+  const built = buildRoster({
+    faction: "necrons",
+    pointsLimit: 1000,
+    allowNamedCharacters: false,
+  });
+  assert.ok(built.data);
+  assert.equal(getNewRecruitCapability("necrons").available, true);
+  const exported = await exportRoster(built.data, "rosz");
+  assert.equal(
+    exported.ok,
+    true,
+    exported.violations.map((item) => item.message).join("; "),
+  );
+  assert.ok(exported.data);
+});
+
+test("checks all live source classes without changing the pinned build", async () => {
+  const mockFetch = async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes("registry.npmjs.org")) {
+      return new Response(JSON.stringify({ version: "1.2.0" }));
+    }
+    if (url.includes("api.github.com")) {
+      return new Response(
+        JSON.stringify({ sha: "1111111111111111111111111111111111111111" }),
+      );
+    }
+    return new Response("<html><h2>v1.1</h2><main>changed</main></html>");
+  };
+  const freshness = await checkDataFreshness({
+    fetch: mockFetch as typeof fetch,
+  });
+  assert.equal(freshness.ok, true);
+  assert.equal(freshness.data?.state, "update-available");
+  assert.equal(freshness.data?.rules.updateAvailable, false);
+  assert.equal(freshness.data?.newRecruit.updateAvailable, true);
+  assert.ok(
+    freshness.warnings.some((item) => item.code === "DATA_UPDATE_AVAILABLE"),
   );
 });
 
@@ -307,7 +379,7 @@ test("parses sanitized authenticated New Recruit fixtures without rules prose", 
   assert.equal(strFromU8(entries["golden-boys.ros"]), xml);
 });
 
-test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", () => {
+test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", async () => {
   const built = buildRoster({
     prompt: "Build a 1,000 point fast Custodes army with no named characters",
   });
@@ -320,7 +392,7 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", () => {
     "text",
     "html",
   ] as const) {
-    const result = exportRoster(built.data, format);
+    const result = await exportRoster(built.data, format);
     assert.equal(result.ok, true, `${format} export should pass`);
     assert.ok(result.data);
     if (format === "ros") {
@@ -397,13 +469,13 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", () => {
   }
 });
 
-test("prepares a validated New Recruit handoff with editable and printable artifacts", () => {
+test("prepares a validated New Recruit handoff with editable and printable artifacts", async () => {
   const built = buildRoster({
     prompt: "Build a 1,000 point fast Custodes army with no named characters",
   });
   assert.ok(built.data);
 
-  const handoff = prepareNewRecruitHandoff(built.data);
+  const handoff = await prepareNewRecruitHandoff(built.data);
   assert.equal(handoff.ok, true);
   assert.ok(handoff.data);
   assert.equal(
@@ -421,13 +493,13 @@ test("prepares a validated New Recruit handoff with editable and printable artif
     ...built.data,
     totalPoints: built.data.totalPoints + 1,
   };
-  const blocked = prepareNewRecruitHandoff(invalid);
+  const blocked = await prepareNewRecruitHandoff(invalid);
   assert.equal(blocked.ok, false);
   assert.equal(blocked.data, null);
   assert.ok(blocked.violations.length > 0);
 });
 
-test("exports every browser prompt idea with real New Recruit references", () => {
+test("exports every browser prompt idea with real New Recruit references", async () => {
   const prompts = [
     {
       prompt: "Build a 1,000 point fast Custodes army with no named characters",
@@ -450,7 +522,7 @@ test("exports every browser prompt idea with real New Recruit references", () =>
       allowNamedCharacters: false,
     });
     assert.ok(built.data);
-    const exported = exportRoster(built.data, "rosz");
+    const exported = await exportRoster(built.data, "rosz");
     assert.equal(
       exported.ok,
       true,
@@ -474,7 +546,7 @@ test("protects export paths and existing files", async () => {
       prompt: "Build a 1,000 point fast Custodes army with no named characters",
     });
     assert.ok(built.data);
-    const result = exportRoster(built.data, "text");
+    const result = await exportRoster(built.data, "text");
     assert.ok(result.data);
     const written = await writeExportArtifact(result.data, "list.txt", {
       rootDir: directory,
@@ -502,7 +574,7 @@ test("preflights every New Recruit handoff file before batch writing", async () 
       prompt: "Build a 1,000 point fast Custodes army with no named characters",
     });
     assert.ok(built.data);
-    const handoff = prepareNewRecruitHandoff(built.data);
+    const handoff = await prepareNewRecruitHandoff(built.data);
     assert.ok(handoff.data);
 
     const written = await writeExportArtifacts(

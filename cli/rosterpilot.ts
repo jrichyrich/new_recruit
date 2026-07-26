@@ -2,10 +2,13 @@ import path from "node:path";
 
 import {
   buildRoster,
+  checkDataFreshness,
   compareFactions,
   explainRoster,
   exportRoster,
+  getNewRecruitCapability,
   getDataStatus,
+  listDataConflicts,
   modifyRoster,
   searchFactions,
   searchUnits,
@@ -74,6 +77,8 @@ function help(): void {
 
 Usage:
   rosterpilot status
+  rosterpilot freshness
+  rosterpilot conflicts [--faction adeptus-custodes] [--blocking true]
   rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective]
   rosterpilot compare <faction> <faction>
   rosterpilot build --prompt "Build a fast 1,000 point Aeldari army" [--out roster.json]
@@ -83,6 +88,7 @@ Usage:
   rosterpilot export --file roster.json --format rosz --out roster.rosz [--overwrite]
   rosterpilot new-recruit configure
   rosterpilot new-recruit status
+  rosterpilot new-recruit coverage --faction adeptus-custodes
   rosterpilot new-recruit forget
   rosterpilot new-recruit deliver --file roster.json [--out-dir exports/new-recruit] [--no-pretty]
   rosterpilot mcp
@@ -114,6 +120,17 @@ async function main(): Promise<void> {
       print(await getNewRecruitConnectionStatus());
       return;
     }
+    if (action === "coverage") {
+      print({
+        ok: true,
+        data: getNewRecruitCapability(
+          value(args, "faction") ?? "adeptus-custodes",
+        ),
+        violations: [],
+        warnings: [],
+      });
+      return;
+    }
     if (action === "forget") {
       const result = await forgetNewRecruitCredentials();
       print(result);
@@ -140,6 +157,26 @@ async function main(): Promise<void> {
   }
   if (command === "status") {
     print(getDataStatus());
+    return;
+  }
+  if (command === "freshness") {
+    print(await checkDataFreshness());
+    return;
+  }
+  if (command === "conflicts") {
+    print({
+      ok: true,
+      data: listDataConflicts({
+        factionId: value(args, "faction"),
+        blocking: value(args, "blocking")
+          ? flag(args, "blocking")
+          : undefined,
+        limit: Number(value(args, "limit") ?? 50),
+        offset: Number(value(args, "offset") ?? 0),
+      }),
+      violations: [],
+      warnings: [],
+    });
     return;
   }
   if (command === "search") {
@@ -224,7 +261,7 @@ async function main(): Promise<void> {
   }
   if (command === "export") {
     const format = (value(args, "format") ?? "rosz") as ExportFormat;
-    const result = exportRoster(draft, format);
+    const result = await exportRoster(draft, format);
     if (!result.data) {
       print(result);
       process.exitCode = 2;

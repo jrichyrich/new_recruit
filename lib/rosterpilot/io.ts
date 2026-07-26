@@ -3,10 +3,10 @@ import { constants } from "node:fs";
 import path from "node:path";
 
 import {
-  RosterDraftV1Schema,
   type ExportArtifact,
   type RosterDraftV1,
 } from "./types";
+import { parseRosterDraft } from "./draft";
 
 export type WriteOptions = {
   rootDir?: string;
@@ -139,10 +139,10 @@ export async function writeRosterDraft(
 export async function readRosterDraft(filename: string): Promise<RosterDraftV1> {
   const content = await readFile(filename, "utf8");
   const parsed: unknown = JSON.parse(content);
-  const result = RosterDraftV1Schema.safeParse(parsed);
+  const result = parseRosterDraft(parsed);
   if (!result.success) {
     throw new Error(
-      `${filename} is not a valid RosterDraftV1: ${result.error.issues[0]?.message ?? "schema mismatch"}`,
+      `${filename} is not a valid RosterPilot roster: ${result.error.issues[0]?.message ?? "schema mismatch"}`,
     );
   }
   return result.data;

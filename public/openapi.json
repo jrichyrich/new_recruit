@@ -27,6 +27,85 @@
         }
       }
     },
+    "/api/v1/data-freshness": {
+      "get": {
+        "operationId": "checkDataFreshness",
+        "summary": "Compare pinned roster data with live sources",
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Bypass the 15-minute server cache.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rules package, BSData commit, and official points freshness"
+          }
+        }
+      }
+    },
+    "/api/v1/data-conflicts": {
+      "get": {
+        "operationId": "listDataConflicts",
+        "summary": "List pinned cross-source data conflicts",
+        "parameters": [
+          {
+            "name": "factionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "blocking",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated source conflicts"
+          }
+        }
+      }
+    },
+    "/api/v1/new-recruit-capability": {
+      "get": {
+        "operationId": "getNewRecruitCapability",
+        "summary": "Get New Recruit export coverage for a faction",
+        "parameters": [
+          {
+            "name": "factionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Catalogue mapping and conflict coverage"
+          }
+        }
+      }
+    },
     "/api/v1/factions": {
       "get": {
         "operationId": "searchFactions",
@@ -241,7 +320,7 @@
       "post": {
         "operationId": "prepareNewRecruitHandoff",
         "summary": "Prepare validated New Recruit handoff artifacts",
-        "description": "Requires a faction with complete New Recruit catalogue mappings; currently Adeptus Custodes.",
+        "description": "Requires every selected configuration, unit, model, and wargear reference to be mapped and conflict-free in the pinned BSData catalogue.",
         "requestBody": {
           "required": true,
           "content": {

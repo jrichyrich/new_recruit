@@ -29,6 +29,8 @@ Useful commands:
 
 ```bash
 npm run rosterpilot -- status
+npm run rosterpilot -- freshness
+npm run rosterpilot -- conflicts --faction adeptus-custodes --blocking true
 npm run rosterpilot -- search custodes
 npm run rosterpilot -- search praetors --faction adeptus-custodes
 npm run rosterpilot -- build --prompt "Build a 1,000 point fast Custodes army with no named characters" --out roster.json
@@ -38,11 +40,19 @@ npm run rosterpilot -- export --file roster.json --format rosz --out roster.rosz
 npm run mcp
 npm run data:check
 npm run data:check-latest
+npm run data:sync-check
 ```
 
 File writes stay within the current directory unless `--allow-outside-root` is supplied. Existing files are never replaced unless `--overwrite` is supplied.
 
 ## Local MCP setup
+
+This repository is the authoritative source for the RosterPilot engine, MCP
+server, skill, data manifests, and generated catalogue overlay. On this
+development machine the authoritative checkout is
+`/Users/jasricha/Documents/Github_Personal/new_recruit`. The personal plugin
+wrapper under `~/plugins/rosterpilot` is an installed adapter: its skill must
+match `skills/rosterpilot`, and its MCP entry must point to this checkout.
 
 Use the absolute path to this checkout in client configuration.
 
@@ -75,7 +85,14 @@ Claude Desktop configuration:
 
 The server exposes:
 
-`get_data_status`, `search_factions`, `compare_factions`, `search_units`, `build_roster`, `modify_roster`, `validate_roster`, `explain_roster`, `export_roster`, and `prepare_new_recruit_handoff`.
+`get_data_status`, `check_data_freshness`, `list_data_conflicts`,
+`get_new_recruit_capability`, `search_factions`, `compare_factions`,
+`search_units`, `build_roster`, `modify_roster`, `validate_roster`,
+`explain_roster`, `export_roster`, and `prepare_new_recruit_handoff`.
+
+Every MCP build consults a 15-minute live freshness cache. The result warns
+when npm, BSData, or the official points app moved, but the roster remains
+pinned to its recorded release so repeated builds stay reproducible.
 
 The repository-contained Codex skill is in `skills/rosterpilot`. To make it globally discoverable, copy that folder to `~/.codex/skills/rosterpilot`, or keep it version-controlled and invoke it from this repository.
 
@@ -94,18 +111,21 @@ Clients send `Authorization: Bearer <token>`. Non-browser MCP clients may omit `
 - OpenAPI document: `/openapi.json`
 - REST base: `/api/v1`
 
-REST routes include faction/unit search and roster build, modify, validate,
-explain, export, and New Recruit handoff. Remote exports are always returned
-inline; remote agents cannot write server files.
+REST routes include data status, freshness, conflict and New Recruit coverage,
+faction/unit search, and roster build, modify, validate, explain, export, and
+New Recruit handoff. Remote exports are always returned inline; remote agents
+cannot write server files.
 
 ## New Recruit handoff
 
 Every validated faction can export New Recruit-shaped JSON, canonical roster
-JSON, text, and print-ready HTML. Custodes additionally has complete BSData
-catalogue mappings for `.ros/.rosz` import at
-[New Recruit](https://www.newrecruit.eu/app/MyLists). Other factions fail
-closed with `NEW_RECRUIT_MAPPING_UNAVAILABLE` instead of emitting an invalid
-import file.
+JSON, text, and print-ready HTML. `.ros/.rosz` import at
+[New Recruit](https://www.newrecruit.eu/app/MyLists) uses mappings generated
+from the exact pinned `BSData/wh40k-11e` commit. Export is enabled per roster
+when every selected configuration, unit, model, and wargear reference is
+mapped and conflict-free. Unmapped factions fail with
+`NEW_RECRUIT_MAPPING_UNAVAILABLE`; selected source disagreements fail with
+`NEW_RECRUIT_DATA_CONFLICT`.
 
 For a mapped faction, `prepare_new_recruit_handoff` returns the editable
 `.rosz` and, by default, a printable HTML companion in one validated response.
@@ -181,10 +201,18 @@ ROSTERPILOT_BROWSER_TESTS=1 \
 
 ## Data and verification
 
-`npm run data:check` verifies the cross-faction build matrix, provisional point
-coverage, a legal natural-language acceptance roster, universal exports, and
-the mapped Custodes `.ros/.rosz` exports. `npm run data:check-latest`
-additionally checks the npm registry but does not update anything
-automatically.
+`data/sources.json` records the release ID, exact rules package, exact
+`BSData/wh40k-11e` commit, and official MFM version/content hash. Generated
+catalogue mappings and structured conflicts live in
+`data/generated/new-recruit-catalogues.json`.
+
+`npm run data:check` verifies the cross-faction build matrix, manifest
+consistency, provisional point coverage, legal acceptance rosters, and both
+Custodes and cross-faction `.rosz` export. `npm run data:check-latest` checks
+all three live source classes without mutating the release.
+`npm run data:sync-check` regenerates from the pinned BSData commit and fails
+if the checked-in overlay differs. The daily `Roster data freshness` workflow
+uses `npm run data:prepare-update` to open a reviewable update pull request; it
+never auto-merges.
 
 Community data is pinned for reproducibility. Confirm event-specific rulings before play. Public deployments must display the included “Powered by 40kdc-data” attribution.

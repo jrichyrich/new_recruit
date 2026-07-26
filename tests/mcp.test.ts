@@ -8,6 +8,7 @@ import { createRosterPilotMcpServer } from "../mcp/server";
 
 test("MCP exposes the planned tool contract and matches the engine", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  let freshnessChecks = 0;
   let handoffWrite:
     | {
         formats: string[];
@@ -16,6 +17,37 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
       }
     | undefined;
   const server = createRosterPilotMcpServer({
+    freshnessChecker: async () => {
+      freshnessChecks += 1;
+      return {
+        ok: true,
+        data: {
+          checkedAt: "2026-07-26T18:00:00.000Z",
+          state: "current",
+          rules: {
+            pinnedVersion: "1.2.0",
+            latestVersion: "1.2.0",
+            updateAvailable: false,
+          },
+          newRecruit: {
+            pinnedCommit: "fa5138e6a503b1f7818af4c72305d5901326a87d",
+            latestCommit: "fa5138e6a503b1f7818af4c72305d5901326a87d",
+            updateAvailable: false,
+          },
+          official: {
+            pinnedVersion: "1.1",
+            latestVersion: "1.1",
+            pinnedContentSha256:
+              "b9ff34a767377e46b285b9e66d481840fda204d39328e80d2c75e7dbbe0f6211",
+            latestContentSha256:
+              "b9ff34a767377e46b285b9e66d481840fda204d39328e80d2c75e7dbbe0f6211",
+            updateAvailable: false,
+          },
+        },
+        violations: [],
+        warnings: [],
+      };
+    },
     handoffWriter: async (artifacts, outputDirectory, overwrite) => {
       handoffWrite = {
         formats: artifacts.map((artifact) => artifact.format),
@@ -84,12 +116,15 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
       listed.tools.map((tool) => tool.name).sort(),
       [
         "build_roster",
+        "check_data_freshness",
         "compare_factions",
         "deliver_roster_to_new_recruit",
         "explain_roster",
         "export_roster",
         "get_data_status",
+        "get_new_recruit_capability",
         "get_new_recruit_connection_status",
+        "list_data_conflicts",
         "modify_roster",
         "prepare_new_recruit_handoff",
         "search_factions",
@@ -112,6 +147,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     assert.equal(structured.ok, true);
     assert.equal(structured.data.factionId, "adeptus-custodes");
     assert.equal(structured.data.totalPoints, 990);
+    assert.equal(freshnessChecks, 1);
 
     const aeldariResponse = await client.callTool({
       name: "build_roster",
@@ -131,6 +167,30 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     assert.equal(aeldari.ok, true);
     assert.equal(aeldari.data.factionId, "aeldari");
     assert.equal(aeldari.data.totalPoints, 1000);
+    assert.equal(freshnessChecks, 1, "builds should reuse the freshness TTL");
+
+    const forcedFreshness = await client.callTool({
+      name: "check_data_freshness",
+      arguments: { force: true },
+    });
+    assert.equal(forcedFreshness.isError, false);
+    assert.equal(freshnessChecks, 2);
+
+    const capability = await client.callTool({
+      name: "get_new_recruit_capability",
+      arguments: { factionId: "adeptus-custodes" },
+    });
+    assert.equal(capability.isError, false);
+
+    const conflicts = await client.callTool({
+      name: "list_data_conflicts",
+      arguments: {
+        factionId: "adeptus-custodes",
+        blocking: true,
+        limit: 10,
+      },
+    });
+    assert.equal(conflicts.isError, false);
 
     const handoff = await client.callTool({
       name: "prepare_new_recruit_handoff",
@@ -195,12 +255,17 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
       arguments: { roster: { schemaVersion: 1, units: [] } },
     });
     assert.equal(malformed.isError, true);
-    const malformedEnvelope = malformed.structuredContent as {
-      ok: boolean;
-      violations: Array<{ code: string }>;
-    };
-    assert.equal(malformedEnvelope.ok, false);
-    assert.equal(malformedEnvelope.violations[0]?.code, "MALFORMED_ROSTER");
+    const malformedContent = malformed.content as Array<{
+      type: string;
+      text?: string;
+    }>;
+    assert.match(
+      malformedContent
+        .filter((item) => item.type === "text")
+        .map((item) => item.text ?? "")
+        .join(" "),
+      /invalid|schema|required/i,
+    );
   } finally {
     await client.close();
     await server.close();

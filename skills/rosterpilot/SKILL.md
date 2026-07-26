@@ -9,17 +9,23 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 
 ## Workflow
 
-1. Call `get_data_status` before substantial roster work. State the pinned data version when freshness matters.
+1. Call `get_data_status` before substantial roster work. Call
+   `check_data_freshness` when the user asks whether data is current; every
+   `build_roster` response already includes the cached freshness warning state.
+   State the pinned release ID and live-check result separately.
 2. Use `search_factions`, `compare_factions`, or `search_units` to answer research questions. Clearly distinguish browsable factions from build-supported factions.
 3. Call `build_roster` with the user’s prompt and explicit constraints. Include point limit, named-character preference, Legends preference, collection ids, detachment, or disposition when provided.
 4. Use `modify_roster` for changes. Never edit stored totals, ordinals, or legality fields by hand.
 5. Call `validate_roster` after every build or modification.
 6. Call `explain_roster` only after validation so the explanation includes current cautions.
 7. Call `export_roster` only for a validated roster.
-8. When the user asks for New Recruit delivery, call
+8. Before `.ros/.rosz` export, call `get_new_recruit_capability` for the
+   roster faction. Use `list_data_conflicts` when the capability is partial or
+   the build reports `DATA_SOURCE_CONFLICT`.
+9. When the user asks for New Recruit delivery, call
    `prepare_new_recruit_handoff` after validation. Prefer its `.rosz` artifact
    for editing and its HTML artifact for local printing.
-9. Call `deliver_roster_to_new_recruit` only when the user explicitly asks to
+10. Call `deliver_roster_to_new_recruit` only when the user explicitly asks to
    upload, import, or send the roster to New Recruit. Use
    `get_new_recruit_connection_status` first. If local automation is
    unavailable, fall back to `prepare_new_recruit_handoff`.
@@ -30,16 +36,24 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - Treat `warnings` as visible caveats, not as hidden failures.
 - If the tool returns `UNSUPPORTED_FACTION`, explain which priced-unit or
   matched-play-detachment coverage requirement is missing.
-- Preserve the roster’s `sourceData` version. Rebuild or revalidate when `DATA_VERSION_CHANGED` appears.
+- Preserve the roster’s complete `sourceData` provenance. Rebuild or
+  revalidate when `DATA_VERSION_CHANGED`, `DATA_RELEASE_CHANGED`, or
+  `CATALOGUE_VERSION_CHANGED` appears.
+- Distinguish `DATA_UPDATE_AVAILABLE` from a build failure: the current roster
+  is reproducible from its pin, but a newer release awaits review.
+- Do not hide `DATA_SOURCE_CONFLICT`, `PROVISIONAL_POINTS`,
+  `OFFICIAL_UPDATE_PENDING`, or `DATA_FRESHNESS_UNKNOWN` warnings.
 - Treat community data as a planning source; remind users to confirm event-specific rulings.
 
 ## Export safety
 
-- Prefer `html` for universal printing. Use `.rosz` for New Recruit only when
-  the faction has a complete catalogue mapping; currently that mapping is
-  available for Adeptus Custodes.
+- Prefer `html` for universal printing. Use `.rosz` only when the selected
+  configuration, units, models, and wargear are all mapped and conflict-free.
+  Capability is evaluated per roster; do not infer it from the faction name.
 - Treat `NEW_RECRUIT_MAPPING_UNAVAILABLE` as a capability boundary, not a
   roster-legality failure. Offer printable HTML or roster JSON.
+- Treat `NEW_RECRUIT_DATA_CONFLICT` as a fail-closed export result. Report the
+  named conflicts and offer printable HTML or canonical roster JSON.
 - Omit `outputPath` when the user only wants content returned to the chat.
 - Supply `outputPath` only when the user asked to create a file.
 - Do not set `overwrite: true` unless the user explicitly approved replacing that exact file.
