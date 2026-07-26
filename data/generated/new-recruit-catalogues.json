@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026-07-26.1",
-  "generatedAt": "2026-07-26T10:56:13-04:00",
+  "releaseId": "2026-07-26.2",
+  "generatedAt": "2026-07-26T20:35:08+01:00",
   "sources": {
     "rules": {
       "package": "@alpaca-software/40kdc-data",
@@ -12,7 +12,7 @@
     "newRecruit": {
       "repository": "BSData/wh40k-11e",
       "branch": "main",
-      "commit": "fa5138e6a503b1f7818af4c72305d5901326a87d"
+      "commit": "63444239d253716c13a9e3fdd8673192d0b4d61b"
     },
     "official": {
       "downloadsUrl": "https://www.warhammer-community.com/en-gb/downloads/warhammer-40000/",
@@ -20,7 +20,7 @@
       "mfmVersion": "1.1",
       "updatedAt": "2026-07-22",
       "contentSha256": "b9ff34a767377e46b285b9e66d481840fda204d39328e80d2c75e7dbbe0f6211",
-      "checkedAt": "2026-07-26T17:03:23Z"
+      "checkedAt": "2026-07-26T19:48:53.744Z"
     }
   },
   "gameSystem": {
@@ -41,7 +41,7 @@
       "catalogue": {
         "id": "b39e-4401-8f3e-fdf7",
         "name": "Imperium - Adepta Sororitas",
-        "revision": 7
+        "revision": 8
       },
       "configuration": {
         "category": {
@@ -33693,7 +33693,7 @@
       "catalogue": {
         "id": "b00-cd86-4b4c-97ba",
         "name": "Imperium - Agents of the Imperium",
-        "revision": 4
+        "revision": 6
       },
       "configuration": {
         "category": {
@@ -33760,7 +33760,7 @@
               "entryId": "1e97-f3c4-2174-6ff4::e203-73dc-18d9-f390",
               "entryGroupId": "1e97-f3c4-2174-6ff4::bd35-3b86-9066-a78e",
               "group": "Detachment",
-              "detachmentPoints": 2
+              "detachmentPoints": 1
             },
             "ordo-xenos-alien-hunters": {
               "name": "Ordo Xenos, Alien Hunters",
@@ -34255,7 +34255,7 @@
           "models": [],
           "enhancements": {},
           "pointsByModelCount": {
-            "40": 40,
+            "15": 15,
             "100": 100
           }
         },
@@ -34436,7 +34436,7 @@
           "models": [],
           "enhancements": {},
           "pointsByModelCount": {
-            "40": 40,
+            "10": 10,
             "85": 85
           }
         },
@@ -34858,7 +34858,7 @@
           "enhancements": {},
           "pointsByModelCount": {
             "10": 10,
-            "35": 35,
+            "15": 15,
             "100": 100
           }
         },
@@ -38179,7 +38179,7 @@
           "enhancements": {},
           "pointsByModelCount": {
             "15": 15,
-            "45": 45,
+            "20": 20,
             "110": 110
           }
         },
@@ -88890,7 +88890,7 @@
       "catalogue": {
         "id": "c8da-e875-58f7-f6d6",
         "name": "Chaos - Chaos Space Marines",
-        "revision": 4
+        "revision": 5
       },
       "configuration": {
         "category": {
@@ -269780,7 +269780,7 @@
       "catalogue": {
         "id": "df9a-59b2-f464-59ad",
         "name": "Chaos - World Eaters",
-        "revision": 5
+        "revision": 6
       },
       "configuration": {
         "category": {
@@ -270772,7 +270772,7 @@
             "0": 0,
             "10": 10,
             "15": 15,
-            "25": 25,
+            "20": 20,
             "165": 165,
             "330": 330
           }
