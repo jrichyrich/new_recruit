@@ -18,16 +18,27 @@ from an LLM.
 
 ## Run locally
 
-Requires Node.js 22.13 or newer.
+Requires Node.js 22.13 or newer. The repository includes `.nvmrc` for the
+Node 22.13 baseline used by automation.
 
 ```bash
-npm install
+nvm use
+npm ci
 npm run dev
+```
+
+For a guided first-time setup that installs the locked dependencies, verifies
+the pinned roster data, checks live freshness, and optionally configures local
+MCP or New Recruit automation, run:
+
+```bash
+npm run setup
 ```
 
 Useful commands:
 
 ```bash
+npm run doctor -- --profile core --refresh skip
 npm run rosterpilot -- status
 npm run rosterpilot -- freshness
 npm run rosterpilot -- conflicts --faction adeptus-custodes --blocking true
@@ -45,43 +56,67 @@ npm run data:sync-check
 
 File writes stay within the current directory unless `--allow-outside-root` is supplied. Existing files are never replaced unless `--overwrite` is supplied.
 
+## New computer setup
+
+A fresh clone already contains the reviewed source manifest and generated
+catalogue data for its pinned release. First-time setup verifies that release;
+it does not silently advance the repository to newer upstream data.
+
+```bash
+git clone <repository-url>
+cd new_recruit
+nvm use
+npm run setup
+```
+
+The interactive setup offers cumulative profiles:
+
+- `core` installs dependencies and verifies the engine and pinned data;
+- `mcp` also creates a machine-local Codex MCP configuration;
+- `new-recruit` also builds and optionally configures the macOS delivery
+  companion.
+
+Repeatable noninteractive examples:
+
+```bash
+npm run setup -- --profile core --non-interactive --refresh check
+npm run setup -- --profile mcp --non-interactive --refresh skip
+npm run setup -- --profile new-recruit --non-interactive --refresh skip
+```
+
+`--refresh check` checks live sources and reports newer data without changing
+the release in a noninteractive run. `--refresh apply` is the explicit
+maintainer path: it requires a clean tracked worktree, prepares the update,
+regenerates the catalogue overlay, and validates the result. It never commits
+or pushes.
+
+Use Doctor after setup to diagnose the selected profile without installing
+dependencies, rebuilding the companion, opening credential dialogs, or
+applying updates:
+
+```bash
+npm run doctor -- --profile core --refresh skip
+npm run doctor -- --profile mcp --refresh check
+```
+
+Setup and Doctor detect missing prerequisites and explain what to install, but
+never invoke Homebrew, `nvm`, or another system package manager.
+
 ## Local MCP setup
 
 This repository is the authoritative source for the RosterPilot engine, MCP
-server, skill, data manifests, and generated catalogue overlay. On this
-development machine the authoritative checkout is
-`/Users/jasricha/Documents/Github_Personal/new_recruit`. The personal plugin
-wrapper under `~/plugins/rosterpilot` is an installed adapter: its skill must
-match `skills/rosterpilot`, and its MCP entry must point to this checkout.
+server, skill, data manifests, and generated catalogue overlay. Run the MCP
+profile to generate configuration using the active Node executable and the
+absolute path of the current checkout:
 
-Use the absolute path to this checkout in client configuration.
-
-Codex project `.codex/config.toml`:
-
-```toml
-[mcp_servers.rosterpilot]
-command = "/opt/homebrew/bin/node"
-args = ["--import", "/Users/jasricha/Documents/Github_Personal/new_recruit/node_modules/tsx/dist/loader.mjs", "/Users/jasricha/Documents/Github_Personal/new_recruit/mcp/stdio.ts"]
-cwd = "/Users/jasricha/Documents/Github_Personal/new_recruit"
+```bash
+npm run setup -- --profile mcp
 ```
 
-Claude Desktop configuration:
-
-```json
-{
-  "mcpServers": {
-    "rosterpilot": {
-      "command": "/opt/homebrew/bin/node",
-      "args": [
-        "--import",
-        "/Users/jasricha/Documents/Github_Personal/new_recruit/node_modules/tsx/dist/loader.mjs",
-        "/Users/jasricha/Documents/Github_Personal/new_recruit/mcp/stdio.ts"
-      ],
-      "cwd": "/Users/jasricha/Documents/Github_Personal/new_recruit"
-    }
-  }
-}
-```
+If `.codex/config.toml` does not exist, setup creates it as an ignored,
+machine-local file. It never overwrites an existing Codex configuration.
+Setup also prints a ready-to-copy Claude Desktop JSON block but does not edit
+Claude's global configuration.
 
 The server exposes:
 

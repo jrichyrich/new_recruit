@@ -42,6 +42,7 @@ next-env.d.ts
 /outputs/
 /work/
 /native/.build/
+/.codex/config.toml
 
 # local roster exports
 /exports/
