@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026-07-26.3",
-  "generatedAt": "2026-07-26T20:35:08+01:00",
+  "releaseId": "2026-07-27.1",
+  "generatedAt": "2026-07-27T12:28:54+01:00",
   "sources": {
     "rules": {
       "package": "@alpaca-software/40kdc-data",
@@ -12,7 +12,7 @@
     "newRecruit": {
       "repository": "BSData/wh40k-11e",
       "branch": "main",
-      "commit": "63444239d253716c13a9e3fdd8673192d0b4d61b"
+      "commit": "4ef50612a974a6d971e574f516d11dc1e373ab4e"
     },
     "official": {
       "downloadsUrl": "https://www.warhammer-community.com/en-gb/downloads/warhammer-40000/",
@@ -20,7 +20,7 @@
       "mfmVersion": "1.1",
       "updatedAt": "2026-07-22",
       "contentSha256": "b9ff34a767377e46b285b9e66d481840fda204d39328e80d2c75e7dbbe0f6211",
-      "checkedAt": "2026-07-26T19:48:53.744Z"
+      "checkedAt": "2026-07-27T13:49:45.973Z"
     }
   },
   "gameSystem": {
@@ -14792,32 +14792,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -14932,6 +14907,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -59614,32 +59633,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -59754,6 +59748,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -72219,32 +72257,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -72359,6 +72372,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -112631,32 +112688,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -112771,6 +112803,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -125393,32 +125469,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -125533,6 +125584,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -143803,32 +143898,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -143943,6 +144013,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -166635,32 +166749,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -166775,6 +166864,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -180504,32 +180637,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -180644,6 +180752,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -207741,32 +207893,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -207881,6 +208008,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -218803,32 +218974,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -218943,6 +219089,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -231007,32 +231197,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -231147,6 +231312,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -246844,7 +247053,7 @@
               "name": "Rupture cannon",
               "normalizedName": "rupture cannon",
               "type": "upgrade",
-              "entryId": "7548-d2b3-b0e0-595b::d262-4214-141c-9a25::e4bc-cc82-fb71-3b6d"
+              "entryId": "7548-d2b3-b0e0-595b::e4bc-cc82-fb71-3b6d"
             },
             {
               "name": "Stinger salvoes",
@@ -257224,32 +257433,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -257364,6 +257548,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
@@ -268621,32 +268849,7 @@
               "primary": false
             }
           ],
-          "directEquipment": [
-            {
-              "name": "Heavy Bolt Pistol",
-              "normalizedName": "heavy bolt pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Master-crafted Power Weapon",
-              "normalizedName": "master crafted power weapon",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
-            },
-            {
-              "name": "Plasma pistol",
-              "normalizedName": "plasma pistol",
-              "type": "upgrade",
-              "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
-            }
-          ],
+          "directEquipment": [],
           "models": [
             {
               "name": "Vanguard Veterans with Jump Packs",
@@ -268761,6 +268964,50 @@
                   "normalizedName": "vanguard veteran weapon",
                   "type": "upgrade",
                   "entryId": "3f75-2c71-6fdb-6fc3::500d-0a3d-5f98-e883::d466-dd6c-f7bd-6fea"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Master-crafted Power Weapon",
+              "normalizedName": "vanguard veteran w/master crafted power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::6b2e-a790-5023-32df",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Heavy Bolt Pistol",
+                  "normalizedName": "heavy bolt pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4fac-92b5-4669-7321::83a1-feb8-d495-aa28"
+                },
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::4dc3-9621-a7e1-decf::6854-cb18-b20b-42f4"
+                }
+              ]
+            },
+            {
+              "name": "Vanguard Veteran w/Plasma Pistol & Master-crafter Power Weapon",
+              "normalizedName": "vanguard veteran w/plasma pistol & master crafter power weapon",
+              "type": "model",
+              "entryId": "3f75-2c71-6fdb-6fc3::2949-3e7a-e4a5-199b",
+              "entryGroupId": "3f75-2c71-6fdb-6fc3::8a7f-b578-d274-9769",
+              "group": "Vanguard Veterans with Jump Packs",
+              "equipment": [
+                {
+                  "name": "Master-crafted Power Weapon",
+                  "normalizedName": "master crafted power weapon",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::a3c7-2b66-b2d4-b832::6854-cb18-b20b-42f4"
+                },
+                {
+                  "name": "Plasma pistol",
+                  "normalizedName": "plasma pistol",
+                  "type": "upgrade",
+                  "entryId": "3f75-2c71-6fdb-6fc3::0af0-28d4-1e94-9b48::25c2-104f-fa0c-809e"
                 }
               ]
             }
