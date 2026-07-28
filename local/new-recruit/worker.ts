@@ -59,6 +59,7 @@ function failure(error: unknown): WorkerResult {
     imported: false,
     sessionReused: false,
     listUrl: null,
+    enrichedRoszPath: null,
     prettyHtmlPath: null,
     verification: null,
   };

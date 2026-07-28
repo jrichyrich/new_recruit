@@ -175,24 +175,37 @@ import a validated roster and download New Recruit's Pretty HTML. These tools
 are intentionally absent from hosted MCP, REST, OpenAPI, and the public
 website.
 
-Build the native broker and configure the credential through its secure macOS
-dialog:
+Install the per-user local agent, then configure the credential through its
+secure macOS dialog:
 
 ```bash
 npm run companion:build
+npm run rosterpilot -- agent install
 npm run rosterpilot -- new-recruit configure
 npm run rosterpilot -- new-recruit status
 ```
+
+The LaunchAgent starts when the user signs in and exposes a user-only local
+socket. Restricted workspaces that cannot connect to local sockets use an
+atomic `0700` file queue under `/private/tmp` instead. CLI, stdio MCP, New
+Recruit delivery, and Tessera preparation send high-level roster jobs through
+the agent; neither transport can request or return the saved password. Use
+`npm run rosterpilot -- agent status` for sanitized diagnostics, or `agent
+restart` and `agent uninstall` to manage it. Uninstalling preserves the
+Keychain item and dedicated Chrome profile.
 
 Then deliver a canonical RosterPilot JSON draft:
 
 ```bash
 npm run rosterpilot -- new-recruit deliver \
   --file roster.json \
+  --enriched \
   --out-dir exports/new-recruit
 ```
 
-Use `--no-pretty` to import without downloading HTML. Existing files are never
+`--enriched` additionally downloads and verifies New Recruit's profile-rich
+`.rosz`; this is the preferred Tessera handoff. Use `--no-pretty` to import
+without downloading HTML. Existing files are never
 replaced unless `--overwrite` is supplied. Use
 `npm run rosterpilot -- new-recruit forget` to delete the dedicated credential.
 
@@ -203,6 +216,11 @@ always creates a new New Recruit list and never replaces or deletes one.
 
 The companion:
 
+- installs its native Keychain broker under
+  `~/Library/Application Support/RosterPilot/bin/` instead of trusting a
+  checkout-specific build path;
+- serializes browser jobs through a per-user LaunchAgent, using a `0600`
+  socket or a `0700` atomic file queue when a workspace sandbox blocks sockets;
 - uses a visible, isolated Chrome profile under
   `~/Library/Application Support/RosterPilot/NewRecruitChrome`;
 - reuses the signed-in session and reads the credential only when login is
@@ -213,7 +231,111 @@ The companion:
 - returns paths, list URLs, and verification results—not credentials, cookies,
   browser storage, or access tokens;
 - validates the imported name, faction, points, and unit counts before
-  downloading Pretty HTML.
+  downloading Pretty HTML or an enriched `.rosz`;
+- verifies the enriched archive's generator, roster metadata, exact model
+  multiset, and embedded model/weapon profiles.
+
+Automatic credential access is available only while the user is signed in and
+the macOS login Keychain is unlocked. Credential configuration and removal
+remain manual terminal operations and are never exposed as MCP tools.
+
+### Tessera matchup handoff
+
+RosterPilot's local MCP and CLI can prepare New Recruit-enriched `.rosz` files
+for [Tessera](https://playtessera.gg/) and generate deterministic opponent
+proxies. This remains inside the RosterPilot plugin:
+
+```bash
+npm run rosterpilot -- tessera status
+npm run rosterpilot -- tessera configure
+npm run rosterpilot -- tessera prepare \
+  --file roster.json \
+  --out-dir exports/tessera
+npm run rosterpilot -- tessera analyze \
+  --file roster.json \
+  --opponent-faction necrons \
+  --experimental \
+  --out-dir exports/tessera
+```
+
+Use `--opponent-file enemy.rosz` for an exported list or
+`--opponent-roster enemy.json` for another canonical RosterPilot draft.
+Faction archetypes are deterministic balanced, ranged-pressure, and
+assault-pressure proxies—not claims about the current tournament meta.
+
+The default `full` analysis runs 16 raw Tessera scenarios per opponent: Shooting
+and Fight, four metrics (wipe probability, half-wipe probability, mean kills,
+and mean damage), and both attack directions. RosterPilot consolidates those
+matrices by phase and direction, calculates mean damage per 100 attacker
+points, and preserves the visible iteration count and simulator settings.
+For a faster smoke test, quick mode runs Shooting wipe probability in both
+directions:
+
+```bash
+npm run rosterpilot -- tessera analyze \
+  --file roster.json \
+  --opponent-file enemy.rosz \
+  --analysis-mode quick \
+  --experimental \
+  --out-dir exports/tessera-quick
+```
+
+`--phases` and `--metrics` can select an explicit subset. `--experimental`
+opts into local Tessera UI automation; without it, analysis returns verified
+handoff files and a partial report.
+
+Player and opponent totals must differ by no more than 5% of the player's
+points limit. Exact rosters outside that inclusive tolerance fail with
+`TESSERA_POINTS_MISMATCH`; generated faction proxies outside it are omitted.
+`--allow-point-mismatch` permits an intentionally mismatched directional run,
+but the report is labeled `unmatched` and RosterPilot suppresses roster-change
+candidates.
+
+Schema-v2 reports use stable unit-instance labels and evidence-backed findings
+for reliable coverage, enemy threats, coverage gaps, inefficient attacks,
+overqualified trades, and phase role gaps. When the comparison is matched and
+scenarios were captured, RosterPilot may propose up to three legal
+single-operation changes: add a unit, resize a unit, or replace a unit. Each
+candidate is validated, fingerprinted, and linked to its evidence. Candidates
+are suggestions only; RosterPilot never changes, imports, or simulates a
+revised roster without explicit approval. Use `--no-change-candidates` to omit
+them. Tessera import warnings are attributed to the player or opponent;
+alternate-profile warnings mark that side's attacking cells as ambiguous and
+exclude them from confident findings and change-candidate evidence.
+
+After approving and saving a revised canonical roster, rerun the baseline
+opponents and settings and produce a before/after delta report:
+
+```bash
+npm run rosterpilot -- tessera compare-revision \
+  --baseline-report exports/tessera/roster-matchup.json \
+  --revised-roster revised-roster.json \
+  --experimental \
+  --out-dir exports/tessera-revision
+```
+
+Revision comparison requires a schema-v2 baseline with captured scenarios and
+a valid revised roster from the same faction. It fails before delivery if the
+baseline is partial or local browser analysis was not explicitly enabled. It
+reuses the baseline's
+validated opponent `.rosz` files and simulator configuration, then classifies
+each comparable cell as improved, worsened, unchanged, or ambiguous.
+
+The local MCP exposes `get_tessera_connection_status`,
+`prepare_roster_for_tessera`, `analyze_roster_matchup`, and
+`compare_roster_revision`. Hosted MCP, REST, OpenAPI, and the website omit
+them. Tessera runs use temporary browser profiles and never inspect or return
+the premium key. `tessera configure` collects the key in a native secure dialog
+and stores it as a dedicated login-Keychain item; only the short-lived Tessera
+worker can retrieve it, and only to fill Tessera's Licence key field on the
+exact `https://playtessera.gg` origin. Use `tessera forget` to remove it.
+
+If Tessera is disabled, unavailable, or its UI changes after the enriched
+rosters are prepared, RosterPilot preserves those verified handoff artifacts
+and emits a `partial` report with warnings instead of inventing missing cells.
+Reports are directional combat math, not game win probability; movement,
+terrain geometry, missions, scoring, deployment, sequencing, player decisions,
+and unmodeled stratagems are excluded.
 
 ROS/ROSZ exports use versioned BSData catalogue references for configuration,
 units, models, and wargear. If a selected item has no catalogue mapping,

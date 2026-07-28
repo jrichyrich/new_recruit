@@ -1,11 +1,12 @@
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   prepareNewRecruitHandoff,
+  inspectEnrichedRosz,
+  validateEnrichedRosz,
   validateRoster,
   type ExportArtifact,
   type NewRecruitConnectionStatus,
@@ -15,28 +16,38 @@ import {
 } from "../../lib/rosterpilot";
 import {
   resolveExportArtifactTargets,
+  writeExportArtifact,
   writeExportArtifacts,
   type WriteOptions,
 } from "../../lib/rosterpilot/io";
-import type { WorkerRequest, WorkerResult } from "./contracts";
+import {
+  deliverThroughLocalAgent,
+  getLocalAgentStatus,
+  LocalAgentError,
+} from "../agent/client";
+import {
+  installedBrokerPath,
+  newRecruitProfileDirectory,
+  stagedBrokerPath,
+} from "../agent/paths";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const defaultBrokerPath = path.join(
-  projectRoot,
-  "native",
-  ".build",
-  "rosterpilot-keychain",
-);
-const workerPath = path.join(projectRoot, "local", "new-recruit", "worker.ts");
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 export type NewRecruitDeliveryOptions = WriteOptions & {
+  downloadEnrichedRosz?: boolean;
   downloadPrettyHtml?: boolean;
   outputDirectory?: string;
+};
+
+export type NewRecruitCompanionDependencies = {
+  platform?: NodeJS.Platform;
+  browserAvailable?: boolean;
+  agentDeliver?: typeof deliverThroughLocalAgent;
 };
 
 type BrokerResponse = {
@@ -47,20 +58,11 @@ type BrokerResponse = {
 };
 
 function brokerPath(): string {
-  return process.env.ROSTERPILOT_KEYCHAIN_BROKER ?? defaultBrokerPath;
+  return process.env.ROSTERPILOT_KEYCHAIN_BROKER ?? installedBrokerPath();
 }
 
 function profileDirectory(): string {
-  return (
-    process.env.ROSTERPILOT_NEW_RECRUIT_PROFILE ??
-    path.join(
-      os.homedir(),
-      "Library",
-      "Application Support",
-      "RosterPilot",
-      "NewRecruitChrome",
-    )
-  );
+  return newRecruitProfileDirectory();
 }
 
 async function exists(filename: string): Promise<boolean> {
@@ -105,20 +107,31 @@ async function ensureBroker(): Promise<string> {
   }
   const configured = brokerPath();
   if (await exists(configured)) return configured;
-  if (configured !== defaultBrokerPath) {
+  if (process.env.ROSTERPILOT_KEYCHAIN_BROKER) {
     throw new Error(`The configured Keychain broker does not exist: ${configured}`);
   }
+  const staged = stagedBrokerPath();
+  if (await exists(staged)) return staged;
   const built = await runProcess(process.execPath, [
     path.join(projectRoot, "scripts", "build-new-recruit-companion.mjs"),
   ]);
-  if (built.code !== 0 || !(await exists(defaultBrokerPath))) {
+  if (built.code !== 0 || !(await exists(staged))) {
     throw new Error(built.stderr || "The Keychain broker could not be built.");
   }
-  return defaultBrokerPath;
+  return staged;
 }
 
-async function runBroker(command: "configure" | "status" | "forget") {
-  const executable = command === "status" ? brokerPath() : await ensureBroker();
+export type KeychainProvider = "new-recruit" | "tessera";
+
+async function runBroker(
+  command: "configure" | "status" | "forget",
+  provider: KeychainProvider,
+) {
+  const configured = brokerPath();
+  const executable =
+    command === "status" && (await exists(configured))
+      ? configured
+      : await ensureBroker();
   if (!(await exists(executable))) {
     return {
       ok: false,
@@ -127,7 +140,7 @@ async function runBroker(command: "configure" | "status" | "forget") {
       message: "The Keychain broker has not been built.",
     } satisfies BrokerResponse;
   }
-  const result = await runProcess(executable, [command]);
+  const result = await runProcess(executable, [command, provider]);
   try {
     return JSON.parse(result.stdout) as BrokerResponse;
   } catch {
@@ -143,18 +156,36 @@ export async function getNewRecruitConnectionStatus(): Promise<
   ResultEnvelope<NewRecruitConnectionStatus>
 > {
   const browserAvailable = await exists(chromePath);
-  const brokerAvailable = await exists(brokerPath());
-  const status = brokerAvailable ? await runBroker("status") : null;
+  const brokerAvailable =
+    (await exists(brokerPath())) || (await exists(stagedBrokerPath()));
+  let agentStatus: Awaited<ReturnType<typeof getLocalAgentStatus>> | null = null;
+  let agentError: LocalAgentError | null = null;
+  try {
+    agentStatus = await getLocalAgentStatus({ timeoutMs: 2_000 });
+  } catch (error) {
+    agentError =
+      error instanceof LocalAgentError
+        ? error
+        : new LocalAgentError(
+            "LOCAL_AGENT_UNAVAILABLE",
+            error instanceof Error
+              ? error.message
+              : "The RosterPilot local agent is unavailable.",
+          );
+  }
+  const newRecruitProvider = agentStatus?.providers.find(
+    (provider) => provider.providerId === "new-recruit",
+  );
   const available =
     process.platform === "darwin" &&
-    browserAvailable &&
-    brokerAvailable &&
-    status?.ok === true;
-  const statusWarning =
-    status && !status.ok
+    agentStatus?.available === true &&
+    agentStatus.protocolCompatible &&
+    agentStatus.browserAvailable &&
+    agentStatus.brokerAvailable;
+  const statusWarning = agentError
       ? {
-          code: status.code ?? "COMPANION_UNAVAILABLE",
-          message: status.message ?? "The Keychain broker is unavailable.",
+          code: agentError.code,
+          message: agentError.message,
           severity: "warn" as const,
         }
       : null;
@@ -165,8 +196,16 @@ export async function getNewRecruitConnectionStatus(): Promise<
       platform: process.platform,
       browserAvailable,
       brokerAvailable,
-      credentialsConfigured: status?.ok === true && status.configured === true,
+      credentialsConfigured:
+        newRecruitProvider?.credentialState === "ready",
       profileDirectory: process.platform === "darwin" ? profileDirectory() : null,
+      agentAvailable: agentStatus?.available === true,
+      agentVersion: agentStatus?.version ?? null,
+      protocolCompatible: agentStatus?.protocolCompatible === true,
+      credentialState:
+        newRecruitProvider?.credentialState ??
+        (brokerAvailable ? "unavailable" : "not-configured"),
+      browserState: browserAvailable ? "ready" : "unavailable",
     },
     violations: [],
     warnings: statusWarning
@@ -175,9 +214,9 @@ export async function getNewRecruitConnectionStatus(): Promise<
         ? []
         : [
           {
-            code: "COMPANION_UNAVAILABLE",
+            code: "LOCAL_AGENT_UNAVAILABLE",
             message:
-              "Build the macOS companion and install Google Chrome before using automated delivery.",
+              "Install the RosterPilot local agent and Google Chrome before using automated delivery.",
             severity: "warn",
           },
         ],
@@ -185,42 +224,37 @@ export async function getNewRecruitConnectionStatus(): Promise<
 }
 
 export async function configureNewRecruitCredentials(): Promise<BrokerResponse> {
-  return runBroker("configure");
+  return runBroker("configure", "new-recruit");
 }
 
 export async function forgetNewRecruitCredentials(): Promise<BrokerResponse> {
-  return runBroker("forget");
+  return runBroker("forget", "new-recruit");
 }
 
-async function runWorker(input: WorkerRequest): Promise<WorkerResult> {
-  const result = await runProcess(
-    process.execPath,
-    ["--import", "tsx", workerPath],
-    JSON.stringify(input),
-  );
-  try {
-    return JSON.parse(result.stdout) as WorkerResult;
-  } catch {
-    return {
-      ok: false,
-      code: "COMPANION_FAILED",
-      message: result.stderr || "The New Recruit worker returned an invalid response.",
-      imported: false,
-      sessionReused: false,
-      listUrl: null,
-      prettyHtmlPath: null,
-      verification: null,
-    };
-  }
+export async function configureKeychainProvider(
+  provider: KeychainProvider,
+): Promise<BrokerResponse> {
+  return runBroker("configure", provider);
+}
+
+export async function forgetKeychainProvider(
+  provider: KeychainProvider,
+): Promise<BrokerResponse> {
+  return runBroker("forget", provider);
 }
 
 function htmlFilename(roszFilename: string): string {
   return roszFilename.replace(/\.rosz$/i, "-new-recruit.html");
 }
 
+function enrichedFilename(roszFilename: string): string {
+  return roszFilename.replace(/\.rosz$/i, "-new-recruit-enriched.rosz");
+}
+
 export async function deliverRosterToNewRecruit(
   draft: RosterDraftV1,
   options: NewRecruitDeliveryOptions = {},
+  dependencies: NewRecruitCompanionDependencies = {},
 ): Promise<ResultEnvelope<NewRecruitDelivery>> {
   const validation = validateRoster(draft);
   if (!validation.ok) {
@@ -231,7 +265,8 @@ export async function deliverRosterToNewRecruit(
       warnings: validation.warnings,
     };
   }
-  if (process.platform !== "darwin") {
+  const platform = dependencies.platform ?? process.platform;
+  if (platform !== "darwin") {
     return {
       ok: false,
       data: null,
@@ -245,7 +280,9 @@ export async function deliverRosterToNewRecruit(
       warnings: validation.warnings,
     };
   }
-  if (!(await exists(chromePath))) {
+  const browserAvailable =
+    dependencies.browserAvailable ?? (await exists(chromePath));
+  if (!browserAvailable) {
     return {
       ok: false,
       data: null,
@@ -253,55 +290,6 @@ export async function deliverRosterToNewRecruit(
         {
           code: "COMPANION_UNAVAILABLE",
           message: "Google Chrome is not installed in /Applications.",
-          severity: "error",
-        },
-      ],
-      warnings: validation.warnings,
-    };
-  }
-
-  let executable: string;
-  try {
-    executable = await ensureBroker();
-  } catch (error) {
-    return {
-      ok: false,
-      data: null,
-      violations: [
-        {
-          code: "COMPANION_UNAVAILABLE",
-          message: error instanceof Error ? error.message : "Companion unavailable.",
-          severity: "error",
-        },
-      ],
-      warnings: validation.warnings,
-    };
-  }
-  const credentialStatus = await runBroker("status");
-  if (!credentialStatus.ok) {
-    return {
-      ok: false,
-      data: null,
-      violations: [
-        {
-          code: credentialStatus.code ?? "COMPANION_UNAVAILABLE",
-          message:
-            credentialStatus.message ?? "The Keychain broker is unavailable.",
-          severity: "error",
-        },
-      ],
-      warnings: validation.warnings,
-    };
-  }
-  if (!credentialStatus.configured) {
-    return {
-      ok: false,
-      data: null,
-      violations: [
-        {
-          code: "CREDENTIALS_NOT_CONFIGURED",
-          message:
-            "Run `rosterpilot new-recruit configure` before automated delivery.",
           severity: "error",
         },
       ],
@@ -320,9 +308,21 @@ export async function deliverRosterToNewRecruit(
     };
   }
   const includePretty = options.downloadPrettyHtml !== false;
+  const includeEnriched = options.downloadEnrichedRosz === true;
   const outputDirectory = options.outputDirectory ?? "exports/new-recruit";
   const planned: ExportArtifact[] = [
     rosz,
+    ...(includeEnriched
+      ? [
+          {
+            format: "rosz" as const,
+            filename: enrichedFilename(rosz.filename),
+            mimeType: "application/zip",
+            encoding: "binary" as const,
+            content: new Uint8Array(),
+          },
+        ]
+      : []),
     ...(includePretty
       ? [
           {
@@ -352,21 +352,39 @@ export async function deliverRosterToNewRecruit(
     };
   }
 
-  const temporary = await mkdtemp(
-    path.join(os.tmpdir(), "rosterpilot-new-recruit-"),
-  );
+  const delivery: NewRecruitDelivery = {
+    rosterId: draft.id,
+    rosterName: draft.name,
+    listUrl: null,
+    imported: false,
+    sessionReused: false,
+    verification: null,
+    enrichedSummary: null,
+    artifacts: [],
+  };
+  const publishSource = async () => {
+    const [written] = await writeExportArtifacts(
+      [rosz],
+      outputDirectory,
+      options,
+    );
+    delivery.artifacts = [
+      {
+        format: "rosterpilot-source-rosz",
+        filename: rosz.filename,
+        mimeType: rosz.mimeType,
+        written,
+      },
+    ];
+  };
   try {
-    const roszPath = path.join(temporary, rosz.filename);
-    const prettyPath = includePretty
-      ? path.join(temporary, htmlFilename(rosz.filename))
-      : null;
-    await writeFile(roszPath, rosz.content, { flag: "wx" });
-    const worker = await runWorker({
-      action: "deliver",
-      brokerPath: executable,
-      profileDirectory: profileDirectory(),
-      roszPath,
-      prettyHtmlPath: prettyPath,
+    const agent = await (
+      dependencies.agentDeliver ?? deliverThroughLocalAgent
+    )({
+      sourceFilename: rosz.filename,
+      sourceRoszBase64: Buffer.from(rosz.content).toString("base64"),
+      downloadEnrichedRosz: includeEnriched,
+      downloadPrettyHtml: includePretty,
       expected: {
         name: draft.name,
         factionName: draft.factionName,
@@ -377,16 +395,13 @@ export async function deliverRosterToNewRecruit(
         })),
       },
     });
-    const delivery: NewRecruitDelivery = {
-      rosterId: draft.id,
-      rosterName: draft.name,
-      listUrl: worker.listUrl,
-      imported: worker.imported,
-      sessionReused: worker.sessionReused,
-      verification: worker.verification,
-      artifacts: [],
-    };
+    const worker = agent.worker;
+    delivery.listUrl = worker.listUrl;
+    delivery.imported = worker.imported;
+    delivery.sessionReused = worker.sessionReused;
+    delivery.verification = worker.verification;
     if (!worker.ok) {
+      await publishSource();
       return {
         ok: false,
         data: delivery,
@@ -402,13 +417,60 @@ export async function deliverRosterToNewRecruit(
     }
 
     const artifacts: ExportArtifact[] = [rosz];
-    if (includePretty && prettyPath) {
+    if (includeEnriched) {
+      if (!agent.enrichedRoszBase64) {
+        throw new Error(
+          "The local agent did not return the requested enriched .rosz.",
+        );
+      }
+      const enrichedContent = Buffer.from(agent.enrichedRoszBase64, "base64");
+      try {
+        delivery.enrichedSummary = validateEnrichedRosz(enrichedContent, {
+          name: draft.name,
+          factionName: draft.factionName,
+          totalPoints: draft.totalPoints,
+          units: draft.units.map((unit) => ({
+            name: unit.name,
+            modelCount: unit.modelCount,
+          })),
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          data: delivery,
+          violations: [
+            {
+              code: "ENRICHED_ROSZ_VERIFICATION_FAILED",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "The New Recruit enriched export failed verification.",
+              severity: "error",
+            },
+          ],
+          warnings: validation.warnings,
+        };
+      }
+      artifacts.push({
+        format: "rosz",
+        filename: enrichedFilename(rosz.filename),
+        mimeType: "application/zip",
+        encoding: "binary",
+        content: enrichedContent,
+      });
+    }
+    if (includePretty) {
+      if (!agent.prettyHtmlBase64) {
+        throw new Error(
+          "The local agent did not return the requested Pretty HTML.",
+        );
+      }
       artifacts.push({
         format: "html",
         filename: htmlFilename(rosz.filename),
         mimeType: "text/html; charset=utf-8",
         encoding: "binary",
-        content: await readFile(prettyPath),
+        content: Buffer.from(agent.prettyHtmlBase64, "base64"),
       });
     }
     const written = await writeExportArtifacts(
@@ -418,7 +480,11 @@ export async function deliverRosterToNewRecruit(
     );
     delivery.artifacts = artifacts.map((artifact, index) => ({
       format:
-        artifact.format === "rosz" ? "rosz" : "new-recruit-pretty-html",
+        index === 0
+          ? "rosz"
+          : includeEnriched && index === 1
+            ? "new-recruit-enriched-rosz"
+            : "new-recruit-pretty-html",
       filename: artifact.filename,
       mimeType: artifact.mimeType,
       written: written[index],
@@ -430,19 +496,168 @@ export async function deliverRosterToNewRecruit(
       warnings: validation.warnings,
     };
   } catch (error) {
+    let fallbackWarning = null;
+    if (!delivery.artifacts.length) {
+      try {
+        await publishSource();
+      } catch (writeError) {
+        fallbackWarning = {
+          code: "MANUAL_HANDOFF_WRITE_FAILED",
+          message:
+            writeError instanceof Error
+              ? writeError.message
+              : "The manual .rosz fallback could not be written.",
+          severity: "warn" as const,
+        };
+      }
+    }
+    return {
+      ok: false,
+      data: delivery,
+      violations: [
+        {
+          code:
+            error instanceof LocalAgentError
+              ? error.code
+              : "COMPANION_FAILED",
+          message: error instanceof Error ? error.message : "Delivery failed.",
+          severity: "error",
+        },
+      ],
+      warnings: fallbackWarning
+        ? [...validation.warnings, fallbackWarning]
+        : validation.warnings,
+    };
+  }
+}
+
+export async function enrichRoszThroughNewRecruit(
+  sourcePath: string,
+  options: NewRecruitDeliveryOptions = {},
+): Promise<
+  ResultEnvelope<{
+    listUrl: string | null;
+    enrichedRoszPath: string;
+    summary: ReturnType<typeof inspectEnrichedRosz>;
+  }>
+> {
+  if (process.platform !== "darwin" || !(await exists(chromePath))) {
     return {
       ok: false,
       data: null,
       violations: [
         {
-          code: "COMPANION_FAILED",
-          message: error instanceof Error ? error.message : "Delivery failed.",
+          code: "COMPANION_UNAVAILABLE",
+          message: "New Recruit roster enrichment requires macOS and Google Chrome.",
           severity: "error",
         },
       ],
-      warnings: validation.warnings,
+      warnings: [],
     };
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
+  }
+  const source = await readFile(sourcePath);
+  let expected: ReturnType<typeof inspectEnrichedRosz>;
+  try {
+    expected = inspectEnrichedRosz(source);
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "INVALID_ROSZ",
+          message: error instanceof Error ? error.message : "Invalid .rosz file.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
+  const outputDirectory = options.outputDirectory ?? "exports/tessera";
+  const basename = path
+    .basename(sourcePath)
+    .replace(/\.rosz$/i, "")
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-");
+  const filename = `${basename}-new-recruit-enriched.rosz`;
+  try {
+    const agent = await deliverThroughLocalAgent({
+      sourceFilename: path.basename(sourcePath),
+      sourceRoszBase64: source.toString("base64"),
+      downloadEnrichedRosz: true,
+      downloadPrettyHtml: false,
+      expected: {
+        name: expected.rosterName,
+        factionName: expected.factionName,
+        totalPoints: expected.totalPoints,
+        units: expected.units,
+      },
+    });
+    const worker = agent.worker;
+    if (!worker.ok) {
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: worker.code ?? "COMPANION_FAILED",
+            message: worker.message ?? "New Recruit enrichment failed.",
+            severity: "error",
+          },
+        ],
+        warnings: [],
+      };
+    }
+    if (!agent.enrichedRoszBase64) {
+      throw new Error(
+        "The local agent did not return the requested enriched .rosz.",
+      );
+    }
+    const content = Buffer.from(agent.enrichedRoszBase64, "base64");
+    const summary = validateEnrichedRosz(content, {
+      name: expected.rosterName,
+      factionName: expected.factionName,
+      totalPoints: expected.totalPoints,
+      units: expected.units,
+    });
+    const written = await writeExportArtifact(
+      {
+        format: "rosz",
+        filename,
+        mimeType: "application/zip",
+        encoding: "binary",
+        content,
+      },
+      path.join(outputDirectory, filename),
+      options,
+    );
+    return {
+      ok: true,
+      data: {
+        listUrl: worker.listUrl,
+        enrichedRoszPath: written,
+        summary,
+      },
+      violations: [],
+      warnings: [],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code:
+            error instanceof LocalAgentError
+              ? error.code
+              : "ENRICHED_ROSZ_VERIFICATION_FAILED",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The enriched .rosz could not be verified.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
   }
 }

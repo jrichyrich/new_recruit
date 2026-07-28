@@ -237,6 +237,16 @@ export type NewRecruitConnectionStatus = {
   brokerAvailable: boolean;
   credentialsConfigured: boolean;
   profileDirectory: string | null;
+  agentAvailable: boolean;
+  agentVersion: string | null;
+  protocolCompatible: boolean;
+  credentialState:
+    | "ready"
+    | "not-configured"
+    | "keychain-locked"
+    | "authorization-required"
+    | "unavailable";
+  browserState: "ready" | "unavailable";
 };
 
 export type NewRecruitVerification = {
@@ -258,10 +268,265 @@ export type NewRecruitDelivery = {
   imported: boolean;
   sessionReused: boolean;
   verification: NewRecruitVerification | null;
+  enrichedSummary?: EnrichedRoszSummary | null;
   artifacts: Array<{
-    format: "rosz" | "new-recruit-pretty-html";
+    format:
+      | "rosz"
+      | "rosterpilot-source-rosz"
+      | "new-recruit-enriched-rosz"
+      | "new-recruit-pretty-html";
     filename: string;
     mimeType: string;
+    written: string;
+  }>;
+};
+
+export type EnrichedRoszSummary = {
+  rosterName: string;
+  factionName: string;
+  totalPoints: number;
+  generatedBy: string;
+  profileCount: number;
+  weaponProfileCount: number;
+  units: Array<{
+    selectionId?: string;
+    name: string;
+    modelCount: number;
+    ordinal?: number;
+    points?: number;
+  }>;
+};
+
+export type TesseraArchetype =
+  | "balanced-control"
+  | "ranged-pressure"
+  | "assault-pressure";
+
+export type TesseraPhase = "shooting" | "fight";
+
+export type TesseraMetric =
+  | "wipe-probability"
+  | "half-wipe-probability"
+  | "mean-kills"
+  | "mean-damage";
+
+export type TesseraDirection =
+  | "player-to-opponent"
+  | "opponent-to-player";
+
+export type TesseraConfidence = "high" | "review" | "ambiguous";
+
+export type TesseraUnitInstance = {
+  instanceId: string;
+  selectionId: string | null;
+  side: "player" | "opponent";
+  name: string;
+  label: string;
+  ordinal: number;
+  modelCount: number;
+  points: number | null;
+  tags: PreferenceTag[];
+};
+
+export type TesseraMetricValues = {
+  wipeProbability: number | null;
+  halfWipeProbability: number | null;
+  meanKills: number | null;
+  meanDamage: number | null;
+  damagePer100Points: number | null;
+};
+
+export type TesseraScenarioCell = {
+  attacker: TesseraUnitInstance;
+  target: TesseraUnitInstance;
+  values: TesseraMetricValues;
+  confidence: TesseraConfidence;
+  warningRefs: string[];
+};
+
+export type TesseraScenarioResult = {
+  scenarioId: string;
+  opponentName: string;
+  phase: TesseraPhase;
+  direction: TesseraDirection;
+  metrics: TesseraMetric[];
+  iterations: number | null;
+  settings: Record<string, string>;
+  cells: TesseraScenarioCell[];
+  status: "complete" | "partial";
+  warnings: string[];
+};
+
+export type TesseraFindingEvidence = {
+  scenarioId: string;
+  attackerInstanceId: string;
+  targetInstanceId: string;
+  phase: TesseraPhase;
+  direction: TesseraDirection;
+  values: TesseraMetricValues;
+};
+
+export type TesseraFinding = {
+  findingId: string;
+  kind:
+    | "reliable-coverage"
+    | "enemy-threat"
+    | "coverage-gap"
+    | "poor-efficiency"
+    | "overqualified-trade"
+    | "vulnerable-unit"
+    | "role-gap";
+  severity: "info" | "warn";
+  confidence: TesseraConfidence;
+  summary: string;
+  unitInstanceIds: string[];
+  evidence: TesseraFindingEvidence[];
+};
+
+export type TesseraChangeCandidate = {
+  candidateId: string;
+  title: string;
+  rationale: string;
+  operation: ModifyRosterOperation;
+  beforePoints: number;
+  afterPoints: number;
+  rosterFingerprint: string;
+  evidenceFindingIds: string[];
+};
+
+export type TesseraAnalysisConfiguration = {
+  analysisMode: "quick" | "full";
+  phases: TesseraPhase[];
+  metrics: TesseraMetric[];
+  directions: TesseraDirection[];
+  pointsTolerancePercent: number;
+  allowPointMismatch: boolean;
+  includeChangeCandidates: boolean;
+};
+
+export type TesseraPointsComparison = {
+  playerPoints: number;
+  opponentPoints: number;
+  pointsLimit: number;
+  difference: number;
+  differencePercent: number;
+  tolerancePercent: number;
+  matched: boolean;
+  classification: "matched" | "unmatched";
+};
+
+export type TesseraConnectionStatus = {
+  available: boolean;
+  platform: NodeJS.Platform;
+  browserAvailable: boolean;
+  brokerAvailable: boolean;
+  credentialsConfigured: boolean;
+  agentAvailable: boolean;
+  agentVersion: string | null;
+  protocolCompatible: boolean;
+  credentialState:
+    | "ready"
+    | "not-configured"
+    | "keychain-locked"
+    | "authorization-required"
+    | "unavailable";
+  experimental: true;
+  url: "https://playtessera.gg/";
+};
+
+export type TesseraPreparedRoster = {
+  rosterId: string;
+  rosterName: string;
+  factionId?: string;
+  listUrl: string | null;
+  sourceRoszPath: string;
+  enrichedRoszPath: string;
+  summary: EnrichedRoszSummary;
+  fingerprint?: string;
+  units?: TesseraUnitInstance[];
+};
+
+export type TesseraMatchupReport = {
+  schemaVersion?: 2;
+  runId: string;
+  generatedAt: string;
+  source: "tessera-ui" | "handoff-only";
+  status: "complete" | "partial";
+  comparisonClass?: "matched" | "unmatched";
+  configuration?: TesseraAnalysisConfiguration;
+  pointsComparisons?: TesseraPointsComparison[];
+  player: TesseraPreparedRoster;
+  opponents: Array<{
+    kind: "roster" | "rosz" | "faction-archetype";
+    archetype?: TesseraArchetype;
+    rosterName: string;
+    enrichedRoszPath: string;
+    summary: EnrichedRoszSummary;
+    fingerprint?: string;
+    units?: TesseraUnitInstance[];
+  }>;
+  simulation: {
+    requested: boolean;
+    experimental: boolean;
+    settings: Record<string, string>;
+    scenarios?: TesseraScenarioResult[];
+    matrices: Array<{
+      opponentName: string;
+      cells: Array<{
+        attacker: string;
+        target: string;
+        direction?: "player-to-opponent" | "opponent-to-player";
+        killProbability: number | null;
+        expectedDamage: number | null;
+        damagePer100Points: number | null;
+      }>;
+    }>;
+  };
+  strengths: string[];
+  weaknesses: string[];
+  suggestions: string[];
+  findings?: TesseraFinding[];
+  changeCandidates?: TesseraChangeCandidate[];
+  limitations: string[];
+  warnings: string[];
+  artifacts: Array<{
+    format: "matchup-json" | "matchup-html";
+    written: string;
+  }>;
+};
+
+export type TesseraRevisionDelta = {
+  opponentName: string;
+  phase: TesseraPhase;
+  metric: TesseraMetric;
+  direction: TesseraDirection;
+  attackerInstanceId: string;
+  targetInstanceId: string;
+  before: number | null;
+  after: number | null;
+  change: number | null;
+  classification: "improved" | "worsened" | "unchanged" | "ambiguous";
+};
+
+export type TesseraRevisionComparisonReport = {
+  schemaVersion: 2;
+  runId: string;
+  generatedAt: string;
+  baselineReportPath: string;
+  baselineRunId: string;
+  revisedRosterFingerprint: string;
+  revisedReports: TesseraMatchupReport[];
+  deltas: TesseraRevisionDelta[];
+  summary: {
+    improved: number;
+    worsened: number;
+    unchanged: number;
+    ambiguous: number;
+  };
+  limitations: string[];
+  warnings: string[];
+  artifacts: Array<{
+    format: "revision-json" | "revision-html";
     written: string;
   }>;
 };

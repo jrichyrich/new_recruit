@@ -15,7 +15,8 @@ capabilities:
 | Search, build, modify, validate, explain | All 35 embedded faction entries | Pinned `40kdc-data` units, detachments, pricing, loadouts, and army checks |
 | Printable HTML, text, roster JSON, New Recruit-shaped JSON | Every validated roster | RosterPilot serializers |
 | `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
-| New Recruit import and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
+| New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
+| Tessera handoff and experimental matchup matrix | Verified New Recruit-enriched rosters | Local temporary browser adapter |
 
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation
@@ -57,6 +58,48 @@ and loadouts. A disagreement becomes a structured conflict:
 
 Each V2 roster stores the complete release provenance. V1 roster JSON is
 migrated on read and marked with incomplete historical provenance.
+
+### Tessera boundary
+
+Tessera is not a rules authority or roster validator. RosterPilot imports and
+verifies the canonical roster in New Recruit, downloads New Recruit's
+profile-rich `.rosz`, and treats that archive as the stable handoff contract.
+The optional Tessera adapter runs only through local stdio MCP or CLI in a
+temporary Chrome profile. It does not call private APIs or read browser
+storage. The orchestrator never handles premium keys: only the short-lived
+worker may retrieve the dedicated Keychain item, and it enters that key only
+after verifying the exact Tessera origin and locating its visible Licence key
+field.
+
+The default full analysis captures 16 raw scenarios per opponent: two phases,
+four metrics, and both directions. Quick mode captures Shooting wipe
+probability in both directions. The adapter confirms each visible phase and
+metric selection, records the iteration count and settings, maps repeated unit
+names to stable roster instances, and consolidates metric matrices into
+phase/direction scenarios.
+
+Matchups at or below a 5% difference relative to the player's points limit are
+classified as matched. Exact opponents outside that inclusive tolerance fail
+closed unless `allowPointMismatch` is explicit; an overridden report is
+classified as unmatched and cannot produce roster-change candidates.
+Out-of-tolerance generated archetypes are omitted.
+
+Schema-v2 reports retain visible Tessera settings, import warnings, structured
+findings with cell-level evidence, and up to three validated single-operation
+change candidates for matched comparisons. Candidates never mutate a roster.
+Alternate-profile warnings are attributed to the imported side; that side's
+attacking cells are marked ambiguous and cannot support confident findings or
+candidate evidence.
+After explicit approval, `compare_roster_revision` validates a same-faction
+revision, reuses the baseline opponents and configuration, and records
+improved, worsened, unchanged, or ambiguous cell deltas.
+
+If UI automation is disabled or an individual Tessera run fails, verified
+enriched artifacts remain usable and the report is `partial`, with missing
+scenarios and warnings kept visible. Reports describe modeled damage
+efficiency and unit threats, never a whole-game win probability. Hosted MCP,
+REST, OpenAPI, and the public website do not register any browser-backed
+Tessera tools.
 
 ### Freshness policy
 
@@ -104,6 +147,7 @@ flowchart LR
 
     subgraph local["Local macOS boundary"]
         companion["New Recruit companion orchestrator"]
+        agent["Per-user RosterPilot LaunchAgent"]
         worker["Isolated Playwright worker"]
         broker["Native Swift Keychain broker"]
         keychain[("macOS login Keychain")]
@@ -136,11 +180,13 @@ flowchart LR
     localMcp -. "local-only MCP tool" .-> companion
     companion --> validator
     companion --> exporter
-    companion --> worker
+    companion -->|"roster bytes over 0600 socket or 0700 file queue"| agent
+    agent --> worker
     worker --> broker
     broker --> keychain
     worker --> profile
     worker --> newRecruit
+    agent -->|"sanitized artifact bytes"| companion
     companion --> files
 
     hostedStop["Credential-backed delivery unavailable"]
@@ -149,8 +195,10 @@ flowchart LR
 ```
 
 The hosted website and HTTP transports never receive New Recruit credentials
-and cannot invoke the local browser worker. Only the terminal CLI and local
-stdio MCP can reach the macOS companion.
+and cannot invoke the local browser worker. Terminal CLI and local stdio MCP
+send high-level jobs to the per-user agent. Sandboxed clients fall back to an
+atomic, per-user file queue under `/private/tmp`; neither transport has a
+credential-retrieval operation.
 
 ## Roster delivery workflow
 
@@ -263,6 +311,7 @@ flowchart TB
     end
 
     subgraph secretBoundary["Credential boundary"]
+        agent2["Per-user local agent"]
         worker2["Short-lived isolated worker"]
         broker2["Native Keychain broker"]
         keychain2[("Dedicated Keychain item")]
@@ -270,18 +319,22 @@ flowchart TB
 
     chrome2["Dedicated visible Chrome profile"]
     nr2["Exact https://www.newrecruit.eu origin"]
+    tessera2["Exact https://playtessera.gg origin"]
 
     hostedUi --> hostedApi
     cli2 --> orchestrator
     mcp2 --> orchestrator
-    orchestrator -->|"roster and sanitized options"| worker2
+    orchestrator -->|"roster bytes and sanitized options"| agent2
+    agent2 --> worker2
     worker2 -->|"retrieve only when login is required"| broker2
     broker2 --> keychain2
     keychain2 -->|"credential"| broker2
     broker2 -->|"credential over child stdout"| worker2
     worker2 -->|"username and password only at verified origin"| nr2
+    worker2 -->|"premium key only in visible Licence field"| tessera2
     worker2 --> chrome2
-    worker2 -->|"sanitized status, URLs, and paths"| orchestrator
+    worker2 -->|"sanitized result and artifact bytes"| agent2
+    agent2 -->|"no credential fields"| orchestrator
 
     hostedStop2["Credential-backed delivery unavailable"]
     secretStop["Credential is never returned to the orchestrator"]
@@ -295,7 +348,11 @@ Security invariants:
 - Credentials never appear in CLI arguments, environment variables, MCP
   payloads, logs, screenshots, diagnostics, or exported files.
 - Only the isolated worker invokes the broker's credential retrieval command.
-- The worker enters credentials only after exact-origin verification.
+- The local-agent protocol accepts roster jobs and status checks, never a raw
+  credential retrieval request.
+- The New Recruit worker enters credentials only after exact-origin
+  verification. The Tessera worker similarly enters the premium key only into
+  Tessera's visible Licence key field on the exact Tessera origin.
 - The automation does not inspect cookies or browser storage and does not call
   private New Recruit APIs.
 - Login pages are never captured in screenshots.
@@ -311,8 +368,11 @@ Security invariants:
 | Local CLI | Terminal commands and local file operations | `cli/rosterpilot.ts` |
 | MCP server | Shared roster tools plus conditionally registered local tools | `mcp/server.ts` |
 | Local stdio MCP | Injects local file writers and macOS companion | `mcp/stdio.ts` |
-| Companion orchestrator | Validation, temp ROSZ, collisions, worker lifecycle, artifacts | `local/new-recruit/companion.ts` |
+| Per-user local agent | Cross-process queue, provider status, and secret-free roster job transport | `local/agent/server.ts` |
+| Companion orchestrator | Validation, collisions, local-agent requests, and artifact publication | `local/new-recruit/companion.ts` |
 | Browser adapter | Authentication, import, verification, Pretty export | `local/new-recruit/browser.ts` |
+| Tessera orchestrator | Matched-points policy, scenario consolidation, findings, candidates, and revision deltas | `local/tessera/companion.ts` |
+| Tessera UI and reports | Visible simulator control/extraction plus interactive HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts` |
 | Isolated worker | Holds credentials in memory and returns sanitized results | `local/new-recruit/worker.ts` |
 | Keychain broker | Native secure configuration and restricted credential access | `native/NewRecruitKeychainBroker.swift` |
 | Hosted API | Credential-free REST and remote handoff | `app/api/v1/[...path]/route.ts` |
@@ -326,6 +386,12 @@ The companion fails closed:
 - missing companion, browser, or credential stops before import;
 - unverified authentication stops before import;
 - changed selectors or import failures return explicit error codes;
+- exact Tessera opponents outside the 5% points tolerance stop unless the
+  caller explicitly allows an unmatched directional analysis;
+- incomplete Tessera phases, metrics, directions, or cells remain visible as
+  partial scenarios and never become inferred values;
+- revision comparison rejects invalid, wrong-faction, or incompatible
+  baselines before importing the revised roster;
 - verification mismatches preserve the newly created list and its URL;
 - download failures preserve the verified imported list;
 - file collisions never overwrite existing artifacts unless explicitly

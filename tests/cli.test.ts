@@ -52,10 +52,17 @@ test("CLI reports sanitized local New Recruit companion status", async () => {
       platform: string;
       credentialsConfigured: boolean;
       profileDirectory: string | null;
+      agentAvailable: boolean;
+      credentialState: string;
     };
   };
   assert.equal(result.ok, true);
   assert.equal(result.data.platform, process.platform);
   assert.equal(typeof result.data.credentialsConfigured, "boolean");
+  assert.equal(typeof result.data.agentAvailable, "boolean");
+  assert.match(
+    result.data.credentialState,
+    /^(ready|not-configured|keychain-locked|authorization-required|unavailable)$/,
+  );
   assert.doesNotMatch(stdout, /password|cookie|access.?token/i);
 });

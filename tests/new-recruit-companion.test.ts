@@ -3,8 +3,12 @@ import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { strToU8, zipSync } from "fflate";
 
+import { buildRoster } from "../lib/rosterpilot";
+import { LocalAgentError } from "../local/agent/client";
 import { runNewRecruitBrowserDelivery } from "../local/new-recruit/browser";
+import { deliverRosterToNewRecruit } from "../local/new-recruit/companion";
 
 const chrome =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -28,6 +32,10 @@ function fixturePage(requestUrl: string): string {
   const noDownload = url.searchParams.get("nodownload") === "1";
   const delayedRow = url.searchParams.get("delayedrow") === "1";
   const stuckRow = url.searchParams.get("stuckrow") === "1";
+  const enrichedXml = `<?xml version="1.0"?><roster name="Custodes Mobile Strike Force" generatedBy="https://newrecruit.eu"><cost name="pts" value="990"/><forces><force name="Imperium - Adeptus Custodes" catalogueName="Imperium - Adeptus Custodes"><selections><selection name="Blade Champion" number="1" type="model"/><selection name="Allarus Custodians" number="1" type="unit"><selections><selection name="Allarus Custodian" number="6" type="model"/></selections></selection></selections></force></forces><profiles><profile name="Blade Champion" typeName="Unit"/><profile name="Vaultswords" typeName="Melee Weapons"/></profiles></roster>`;
+  const enrichedBase64 = Buffer.from(
+    zipSync({ "fixture.ros": strToU8(enrichedXml) }),
+  ).toString("base64");
   return `<!doctype html>
 <html>
 <body></body>
@@ -45,11 +53,11 @@ function roster() {
     <p>\${mismatch ? "980" : "990"}pts</p>
     <p>1x Blade Champion</p>
     <p>(6) Allarus Custodians</p>
-    <p>(6) Agamatus Custodians</p>
+    <p>6 Agamatus Custodians</p>
     <p>1x Pallas Grav-attack</p>
     <button id="export">Export</button>\`;
   document.querySelector("#export").onclick = () => {
-    document.body.insertAdjacentHTML("beforeend", '<button id="pretty">Pretty</button>');
+    document.body.insertAdjacentHTML("beforeend", '<a id="rosz" download="fixture.rosz" href="data:application/zip;base64,${enrichedBase64}">.rosz</a><button id="pretty">Pretty</button>');
     document.querySelector("#pretty").onclick = () => {
       document.body.innerHTML = noDownload
         ? '<h1>Pretty roster</h1><button>Save as HTML</button>'
@@ -116,6 +124,54 @@ const expected = {
   ],
 };
 
+test("delivery publishes the validated source ROSZ when the local agent is unavailable", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    preferences: ["mobility"],
+  });
+  assert.equal(built.ok, true);
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-agent-fallback-"),
+  );
+  try {
+    const result = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        agentDeliver: async () => {
+          throw new LocalAgentError(
+            "LOCAL_AGENT_UNAVAILABLE",
+            "Fixture local agent unavailable.",
+          );
+        },
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.data?.imported, false);
+    assert.equal(result.data?.artifacts.length, 1);
+    assert.equal(
+      result.data?.artifacts[0].format,
+      "rosterpilot-source-rosz",
+    );
+    await access(result.data!.artifacts[0].written);
+    assert.equal(
+      result.violations[0]?.code,
+      "LOCAL_AGENT_UNAVAILABLE",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test(
   "browser companion logs in, imports, verifies, and downloads without leaking credentials",
   { skip: !runBrowserTests },
@@ -125,6 +181,7 @@ test(
     );
     try {
       const roszPath = path.join(directory, "roster.rosz");
+      const enrichedRoszPath = path.join(directory, "enriched.rosz");
       const prettyHtmlPath = path.join(directory, "pretty.html");
       await writeFile(roszPath, "fixture");
       const secret = "fixture-secret-never-return";
@@ -134,6 +191,7 @@ test(
           brokerPath: "/not-used",
           profileDirectory: path.join(directory, "profile"),
           roszPath,
+          enrichedRoszPath,
           prettyHtmlPath,
           expected,
         },
@@ -151,6 +209,7 @@ test(
       assert.equal(result.imported, true);
       assert.equal(result.sessionReused, false);
       assert.deepEqual(result.verification?.mismatches, []);
+      assert.ok((await readFile(enrichedRoszPath)).length > 0);
       assert.match(await readFile(prettyHtmlPath, "utf8"), /Custodes/);
       assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
     } finally {

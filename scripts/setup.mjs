@@ -405,6 +405,26 @@ async function configureNewRecruit(
   if (!doctor) {
     const build = runNpmScript("companion:build", [], dependencies);
     assertCommand("New Recruit companion build", build);
+    const installed = parseJsonCommand(
+      "RosterPilot local-agent installation",
+      runRosterPilot(["agent", "install"], dependencies),
+    );
+    if (!installed.ok || !installed.running) {
+      throw new SetupError(
+        installed.message ?? "The RosterPilot local agent did not start.",
+      );
+    }
+  } else {
+    const agent = parseJsonCommand(
+      "RosterPilot local-agent status",
+      runRosterPilot(["agent", "status"], dependencies),
+    );
+    if (!agent.ok || !agent.running) {
+      throw new SetupError(
+        agent.message ??
+          "The RosterPilot local agent is not installed or running.",
+      );
+    }
   }
 
   let status = parseJsonCommand(
@@ -422,7 +442,7 @@ async function configureNewRecruit(
       results,
       "New Recruit",
       "ready",
-      "companion and Keychain credential are configured",
+      "local agent and Keychain credential are configured",
     );
     return;
   }
@@ -443,7 +463,7 @@ async function configureNewRecruit(
       results,
       "New Recruit",
       "warning",
-      "companion built; run npm run rosterpilot -- new-recruit configure to add the Keychain credential",
+      "local agent installed; run npm run rosterpilot -- new-recruit configure to add the Keychain credential",
     );
     return;
   }
@@ -470,7 +490,7 @@ async function configureNewRecruit(
     results,
     "New Recruit",
     "ready",
-    "companion and Keychain credential are configured",
+    "local agent and Keychain credential are configured",
   );
 }
 

@@ -358,6 +358,7 @@ async function verifyRoster(page: Page, expected: WorkerRequest["expected"]) {
       body.includes(`(${unit.modelCount}) ${unitName}`) ||
       body.includes(`${unit.modelCount}x ${unitName}`) ||
       body.includes(`${unit.modelCount} x ${unitName}`) ||
+      body.includes(`${unit.modelCount} ${unitName}`) ||
       (unit.modelCount === 1 && body.includes(unitName));
     return { ...unit, matched };
   });
@@ -383,8 +384,10 @@ async function downloadPrettyHtml(
     .getByRole("button", { name: /^export( list)?$/i })
     .first();
   const exportLink = page.getByRole("link", { name: /^export( list)?$/i }).first();
+  const exportText = page.getByText(/^export( list)?$/i, { exact: true }).first();
   if (await exportButton.isVisible().catch(() => false)) await exportButton.click();
   else if (await exportLink.isVisible().catch(() => false)) await exportLink.click();
+  else if (await exportText.isVisible().catch(() => false)) await exportText.click();
   else {
     throw new NewRecruitAutomationError(
       "NEW_RECRUIT_UI_CHANGED",
@@ -432,6 +435,51 @@ async function downloadPrettyHtml(
     throw new NewRecruitAutomationError(
       "DOWNLOAD_FAILED",
       "The downloaded New Recruit HTML file was empty.",
+    );
+  }
+}
+
+async function downloadEnrichedRosz(
+  page: Page,
+  outputPath: string,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const exportControl = page
+    .getByRole("button", { name: /^export( list)?$/i })
+    .or(page.getByRole("link", { name: /^export( list)?$/i }))
+    .or(page.getByText(/^export( list)?$/i, { exact: true }))
+    .first();
+  if (!(await exportControl.isVisible().catch(() => false))) {
+    throw new NewRecruitAutomationError(
+      "NEW_RECRUIT_UI_CHANGED",
+      "The New Recruit Export control could not be located.",
+    );
+  }
+  await exportControl.click();
+  const rosz = page
+    .getByRole("button", { name: /^\.rosz$/i })
+    .or(page.getByRole("link", { name: /^\.rosz$/i }))
+    .or(page.getByText(/^\.rosz$/i, { exact: true }))
+    .first();
+  if (!(await rosz.isVisible().catch(() => false))) {
+    throw new NewRecruitAutomationError(
+      "NEW_RECRUIT_UI_CHANGED",
+      "The New Recruit .rosz export control could not be located.",
+    );
+  }
+  const downloadPromise = page.waitForEvent("download", { timeout: timeoutMs });
+  await rosz.click();
+  const download = await downloadPromise.catch(() => {
+    throw new NewRecruitAutomationError(
+      "DOWNLOAD_FAILED",
+      "New Recruit did not start an enriched .rosz download.",
+    );
+  });
+  await download.saveAs(outputPath);
+  if ((await stat(outputPath)).size === 0) {
+    throw new NewRecruitAutomationError(
+      "DOWNLOAD_FAILED",
+      "The downloaded New Recruit .rosz file was empty.",
     );
   }
 }
@@ -492,9 +540,17 @@ export async function runNewRecruitBrowserDelivery(
         imported,
         sessionReused,
         listUrl,
+        enrichedRoszPath: null,
         prettyHtmlPath: null,
         verification,
       };
+    }
+    if (input.enrichedRoszPath) {
+      await downloadEnrichedRosz(
+        page,
+        input.enrichedRoszPath,
+        dependencies.timeoutMs,
+      );
     }
     if (input.prettyHtmlPath) {
       await downloadPrettyHtml(
@@ -509,6 +565,7 @@ export async function runNewRecruitBrowserDelivery(
       imported,
       sessionReused,
       listUrl,
+      enrichedRoszPath: input.enrichedRoszPath ?? null,
       prettyHtmlPath: input.prettyHtmlPath,
       verification,
     };
@@ -523,6 +580,7 @@ export async function runNewRecruitBrowserDelivery(
       imported,
       sessionReused,
       listUrl,
+      enrichedRoszPath: null,
       prettyHtmlPath: null,
       verification,
     };

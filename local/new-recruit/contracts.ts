@@ -13,6 +13,7 @@ export type WorkerRequest = {
   brokerPath: string;
   profileDirectory: string;
   roszPath: string;
+  enrichedRoszPath?: string | null;
   prettyHtmlPath: string | null;
   expected: WorkerRosterExpectation;
 };
@@ -24,6 +25,7 @@ export type WorkerResult = {
   imported: boolean;
   sessionReused: boolean;
   listUrl: string | null;
+  enrichedRoszPath: string | null;
   prettyHtmlPath: string | null;
   verification: {
     name: boolean;

@@ -72,6 +72,17 @@ function setupHarness(options: {
     }
     if (args.some((entry) => entry.endsWith("cli/rosterpilot.ts"))) {
       const action = args.at(-1);
+      if (args.includes("agent")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            ok: true,
+            installed: true,
+            running: true,
+          }),
+          stderr: "",
+        };
+      }
       if (args.includes("new-recruit") && action === "status") {
         return {
           code: 0,
@@ -392,13 +403,18 @@ test("New Recruit setup asks before opening the secure credential dialog", async
   assert.ok(
     declined.calls.some((call) => call.args.includes("companion:build")),
   );
+  assert.ok(
+    declined.calls.some(
+      (call) => call.args.includes("agent") && call.args.at(-1) === "install",
+    ),
+  );
   assert.equal(
     declined.calls.some((call) => call.args.at(-1) === "configure"),
     false,
   );
   assert.match(
     declined.stdout.chunks.join(""),
-    /companion built; run npm run rosterpilot/,
+    /local agent installed; run npm run rosterpilot/,
   );
 
   const configured = setupHarness();
@@ -453,5 +469,34 @@ test("New Recruit setup asks before opening the secure credential dialog", async
   assert.match(
     configured.stdout.chunks.join(""),
     /Keychain credential are configured/,
+  );
+});
+
+test("New Recruit doctor checks the installed agent without reinstalling it", async () => {
+  const harness = setupHarness({ credentialsConfigured: true });
+  await runSetup(
+    {
+      doctor: true,
+      help: false,
+      nonInteractive: true,
+      profile: "new-recruit",
+      refresh: "skip",
+    },
+    harness.dependencies,
+  );
+  assert.ok(
+    harness.calls.some(
+      (call) => call.args.includes("agent") && call.args.at(-1) === "status",
+    ),
+  );
+  assert.equal(
+    harness.calls.some(
+      (call) => call.args.includes("agent") && call.args.at(-1) === "install",
+    ),
+    false,
+  );
+  assert.equal(
+    harness.calls.some((call) => call.args.includes("companion:build")),
+    false,
   );
 });

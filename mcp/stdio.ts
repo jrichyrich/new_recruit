@@ -8,6 +8,12 @@ import {
   deliverRosterToNewRecruit,
   getNewRecruitConnectionStatus,
 } from "../local/new-recruit/companion";
+import {
+  analyzeRosterMatchup,
+  compareRosterRevision,
+  getTesseraConnectionStatus,
+  prepareRosterForTessera,
+} from "../local/tessera/companion";
 import { createRosterPilotMcpServer } from "./server";
 
 const server = createRosterPilotMcpServer({
@@ -19,6 +25,15 @@ const server = createRosterPilotMcpServer({
     status: getNewRecruitConnectionStatus,
     deliver: (roster, options) =>
       deliverRosterToNewRecruit(roster, options),
+  },
+  tesseraCompanion: {
+    status: getTesseraConnectionStatus,
+    prepare: (roster, options) =>
+      prepareRosterForTessera(roster, options),
+    analyze: (playerRoster, opponent, options) =>
+      analyzeRosterMatchup(playerRoster, opponent, options),
+    compare: (baselineReportPath, revisedRoster, options) =>
+      compareRosterRevision(baselineReportPath, revisedRoster, options),
   },
 });
 

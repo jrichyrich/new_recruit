@@ -68,6 +68,11 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
           brokerAvailable: true,
           credentialsConfigured: true,
           profileDirectory: "/fixture/profile",
+          agentAvailable: true,
+          agentVersion: "1.0.0",
+          protocolCompatible: true,
+          credentialState: "ready",
+          browserState: "ready",
         },
         violations: [],
         warnings: [],
@@ -91,6 +96,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
             })),
             mismatches: [],
           },
+          enrichedSummary: null,
           artifacts: [
             {
               format: "new-recruit-pretty-html",
@@ -101,6 +107,50 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
           ],
         },
         violations: [],
+        warnings: [],
+      }),
+    },
+    tesseraCompanion: {
+      status: async () => ({
+        ok: true,
+        data: {
+          available: true,
+          platform: "darwin",
+          browserAvailable: true,
+          brokerAvailable: true,
+          credentialsConfigured: true,
+          agentAvailable: true,
+          agentVersion: "1.2.0",
+          protocolCompatible: true,
+          credentialState: "ready",
+          experimental: true,
+          url: "https://playtessera.gg/",
+        },
+        violations: [],
+        warnings: [],
+      }),
+      prepare: async () => ({
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: "NOT_INVOKED",
+            message: "Fixture prepare was not invoked.",
+            severity: "error",
+          },
+        ],
+        warnings: [],
+      }),
+      analyze: async () => ({
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: "NOT_INVOKED",
+            message: "Fixture analysis was not invoked.",
+            severity: "error",
+          },
+        ],
         warnings: [],
       }),
     },
@@ -115,6 +165,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     assert.deepEqual(
       listed.tools.map((tool) => tool.name).sort(),
       [
+        "analyze_roster_matchup",
         "build_roster",
         "check_data_freshness",
         "compare_factions",
@@ -124,9 +175,11 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "get_data_status",
         "get_new_recruit_capability",
         "get_new_recruit_connection_status",
+        "get_tessera_connection_status",
         "list_data_conflicts",
         "modify_roster",
         "prepare_new_recruit_handoff",
+        "prepare_roster_for_tessera",
         "search_factions",
         "search_units",
         "validate_roster",
@@ -285,6 +338,9 @@ test("hosted MCP omits local credential-backed New Recruit tools", async () => {
     const names = listed.tools.map((tool) => tool.name);
     assert.ok(!names.includes("get_new_recruit_connection_status"));
     assert.ok(!names.includes("deliver_roster_to_new_recruit"));
+    assert.ok(!names.includes("get_tessera_connection_status"));
+    assert.ok(!names.includes("prepare_roster_for_tessera"));
+    assert.ok(!names.includes("analyze_roster_matchup"));
   } finally {
     await client.close();
     await server.close();

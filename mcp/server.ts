@@ -29,6 +29,13 @@ import {
   type PreferenceTag,
   type ResultEnvelope,
   type RosterDraftV1,
+  type TesseraArchetype,
+  type TesseraConnectionStatus,
+  type TesseraMatchupReport,
+  type TesseraMetric,
+  type TesseraPhase,
+  type TesseraPreparedRoster,
+  type TesseraRevisionComparisonReport,
 } from "../lib/rosterpilot/index";
 
 type ArtifactWriter = (
@@ -56,6 +63,46 @@ type ServerOptions = {
         overwrite: boolean;
       },
     ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
+  };
+  tesseraCompanion?: {
+    status: () => Promise<ResultEnvelope<TesseraConnectionStatus>>;
+    prepare: (
+      roster: RosterDraftV1,
+      options: {
+        outputDirectory: string;
+        overwrite: boolean;
+      },
+    ) => Promise<ResultEnvelope<TesseraPreparedRoster>>;
+    analyze: (
+      playerRoster: RosterDraftV1,
+      opponent:
+        | { kind: "roster"; roster: RosterDraftV1 }
+        | { kind: "rosz"; path: string }
+        | {
+            kind: "faction-archetypes";
+            factionId: string;
+            archetypes?: TesseraArchetype[];
+          },
+      options: {
+        outputDirectory: string;
+        overwrite: boolean;
+        experimental: boolean;
+        analysisMode: "quick" | "full";
+        phases?: TesseraPhase[];
+        metrics?: TesseraMetric[];
+        allowPointMismatch: boolean;
+        includeChangeCandidates: boolean;
+      },
+    ) => Promise<ResultEnvelope<TesseraMatchupReport>>;
+    compare?: (
+      baselineReportPath: string,
+      revisedRoster: RosterDraftV1,
+      options: {
+        outputDirectory: string;
+        overwrite: boolean;
+        experimental: boolean;
+      },
+    ) => Promise<ResultEnvelope<TesseraRevisionComparisonReport>>;
   };
   freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
   freshnessCacheMs?: number;
@@ -579,6 +626,177 @@ export function createRosterPilotMcpServer(
           ),
         ),
     );
+  }
+
+  if (options.tesseraCompanion) {
+    server.registerTool(
+      "get_tessera_connection_status",
+      {
+        title: "Get local Tessera connection status",
+        description:
+          "Check whether the experimental local Tessera browser adapter is available. Never reads premium keys, browser storage, or credentials.",
+        inputSchema: {},
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async () => resultContent(await options.tesseraCompanion!.status()),
+    );
+
+    server.registerTool(
+      "prepare_roster_for_tessera",
+      {
+        title: "Prepare a roster for Tessera",
+        description:
+          "After an explicit user request, import a validated roster into New Recruit, verify it, and download New Recruit's profile-rich .rosz for Tessera.",
+        inputSchema: {
+          roster: RosterDraftSchema,
+          outputDirectory: z.string().default("exports/tessera"),
+          overwrite: z.boolean().default(false),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({ roster, outputDirectory, overwrite }) =>
+        resultContent(
+          await options.tesseraCompanion!.prepare(
+            roster as RosterDraftV1,
+            { outputDirectory, overwrite },
+          ),
+        ),
+    );
+
+    const archetypeSchema = z.enum([
+      "balanced-control",
+      "ranged-pressure",
+      "assault-pressure",
+    ]);
+    const tesseraPhaseSchema = z.enum(["shooting", "fight"]);
+    const tesseraMetricSchema = z.enum([
+      "wipe-probability",
+      "half-wipe-probability",
+      "mean-kills",
+      "mean-damage",
+    ]);
+    server.registerTool(
+      "analyze_roster_matchup",
+      {
+        title: "Prepare or analyze a roster matchup",
+        description:
+          "Prepare New Recruit-enriched player and opponent rosters and optionally run Tessera's experimental Army vs Army UI. Results are directional combat math, not game win probability.",
+        inputSchema: {
+          playerRoster: RosterDraftSchema,
+          opponent: z.union([
+            z.object({
+              kind: z.literal("roster"),
+              roster: RosterDraftSchema,
+            }),
+            z.object({
+              kind: z.literal("rosz"),
+              path: z.string().min(1),
+            }),
+            z.object({
+              kind: z.literal("faction-archetypes"),
+              factionId: z.string().min(1),
+              archetypes: z.array(archetypeSchema).max(3).optional(),
+            }),
+          ]),
+          outputDirectory: z.string().default("exports/tessera"),
+          overwrite: z.boolean().default(false),
+          experimental: z.boolean().default(false),
+          analysisMode: z.enum(["quick", "full"]).default("full"),
+          phases: z.array(tesseraPhaseSchema).min(1).max(2).optional(),
+          metrics: z.array(tesseraMetricSchema).min(1).max(4).optional(),
+          allowPointMismatch: z.boolean().default(false),
+          includeChangeCandidates: z.boolean().default(true),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({
+        playerRoster,
+        opponent,
+        outputDirectory,
+        overwrite,
+        experimental,
+        analysisMode,
+        phases,
+        metrics,
+        allowPointMismatch,
+        includeChangeCandidates,
+      }) =>
+        resultContent(
+          await options.tesseraCompanion!.analyze(
+            playerRoster as RosterDraftV1,
+            opponent as
+              | { kind: "roster"; roster: RosterDraftV1 }
+              | { kind: "rosz"; path: string }
+              | {
+                  kind: "faction-archetypes";
+                  factionId: string;
+                  archetypes?: TesseraArchetype[];
+                },
+            {
+              outputDirectory,
+              overwrite,
+              experimental,
+              analysisMode,
+              phases,
+              metrics,
+              allowPointMismatch,
+              includeChangeCandidates,
+            },
+          ),
+        ),
+    );
+
+    if (options.tesseraCompanion.compare) {
+      server.registerTool(
+        "compare_roster_revision",
+        {
+          title: "Compare an approved roster revision",
+          description:
+            "After explicit user approval, validate a revised roster, reuse the baseline opponent and Tessera settings, and produce a directional before-and-after comparison. This is not a game win probability.",
+          inputSchema: {
+            baselineReportPath: z.string().min(1),
+            revisedRoster: RosterDraftSchema,
+            outputDirectory: z.string().default("exports/tessera"),
+            overwrite: z.boolean().default(false),
+            experimental: z.boolean().default(false),
+          },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: true,
+          },
+        },
+        async ({
+          baselineReportPath,
+          revisedRoster,
+          outputDirectory,
+          overwrite,
+          experimental,
+        }) =>
+          resultContent(
+            await options.tesseraCompanion!.compare!(
+              baselineReportPath,
+              revisedRoster as RosterDraftV1,
+              { outputDirectory, overwrite, experimental },
+            ),
+          ),
+      );
+    }
   }
 
   return server;
