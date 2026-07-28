@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026-07-27.1",
-  "generatedAt": "2026-07-27T12:28:54+01:00",
+  "releaseId": "2026-07-28.1",
+  "generatedAt": "2026-07-27T20:03:58+01:00",
   "sources": {
     "rules": {
       "package": "@alpaca-software/40kdc-data",
@@ -12,7 +12,7 @@
     "newRecruit": {
       "repository": "BSData/wh40k-11e",
       "branch": "main",
-      "commit": "4ef50612a974a6d971e574f516d11dc1e373ab4e"
+      "commit": "2ce1f8bbc80b6c33145fafd610642587420bad52"
     },
     "official": {
       "downloadsUrl": "https://www.warhammer-community.com/en-gb/downloads/warhammer-40000/",
@@ -20,7 +20,7 @@
       "mfmVersion": "1.1",
       "updatedAt": "2026-07-22",
       "contentSha256": "b9ff34a767377e46b285b9e66d481840fda204d39328e80d2c75e7dbbe0f6211",
-      "checkedAt": "2026-07-27T13:49:45.973Z"
+      "checkedAt": "2026-07-28T02:45:30.869Z"
     }
   },
   "gameSystem": {
@@ -41,7 +41,7 @@
       "catalogue": {
         "id": "b39e-4401-8f3e-fdf7",
         "name": "Imperium - Adepta Sororitas",
-        "revision": 8
+        "revision": 9
       },
       "coverage": {
         "engineUnits": 37,
@@ -19515,7 +19515,7 @@
       "catalogue": {
         "id": "1069-10ff-3ba9-873b",
         "name": "Chaos - Thousand Sons",
-        "revision": 7
+        "revision": 8
       },
       "coverage": {
         "engineUnits": 32,
