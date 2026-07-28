@@ -343,6 +343,84 @@ nav {
   line-height: 1.7;
 }
 
+.workflow-map {
+  margin-top: 28px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(20, 23, 18, 0.72);
+}
+
+.workflow-map-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 13px;
+}
+
+.workflow-map-heading h2 {
+  margin: 5px 0 0;
+  font-size: 17px;
+  letter-spacing: -0.035em;
+}
+
+.workflow-map-heading > span {
+  color: #777970;
+  font-family: var(--font-geist-mono);
+  font-size: 8px;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.workflow-grid article {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: #151812;
+}
+
+.workflow-number {
+  color: #74672f;
+  font-family: var(--font-geist-mono);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.workflow-grid strong {
+  margin-top: 7px;
+  font-size: 11px;
+}
+
+.workflow-grid p {
+  flex: 1;
+  margin: 6px 0 11px;
+  color: #7d7f77;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.workflow-grid a,
+.workflow-surface {
+  color: #b7a45f;
+  font-size: 9px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.workflow-grid a:hover {
+  color: var(--accent-soft);
+}
+
 .agent-card {
   margin-top: 31px;
   overflow: hidden;
@@ -1135,6 +1213,10 @@ kbd {
     padding: 38px 18px 60px;
   }
 
+  .workflow-grid {
+    grid-template-columns: 1fr;
+  }
+
   .agent-actions {
     align-items: stretch;
     flex-direction: column;
@@ -1167,6 +1249,15 @@ kbd {
 
   .hero-copy h1 {
     font-size: 42px;
+  }
+
+  .workflow-map-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .workflow-map-heading > span {
+    text-align: left;
   }
 
   .agent-response {

@@ -69,6 +69,8 @@ test("local agent reports providers through a user-only transport", async () => 
     const status = await getLocalAgentStatus({ spoolDirectory });
     assert.equal(status.available, true);
     assert.equal(status.protocolVersion, LOCAL_AGENT_PROTOCOL_VERSION);
+    assert.equal(typeof status.projectDirectory, "string");
+    assert.equal(typeof status.nodeExecutable, "string");
     assert.equal(status.brokerAvailable, false);
     assert.equal(status.brokerStatusCode, "BROKER_PROBE_FAILED");
     assert.deepEqual(

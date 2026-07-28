@@ -35,6 +35,8 @@ test("server-renders the RosterPilot product", async () => {
   assert.match(html, /Adeptus Custodes/);
   assert.match(html, /Powered by 40kdc-data/);
   assert.match(html, /New Recruit/);
+  assert.match(html, /One roster, three independent paths/);
+  assert.match(html, /Compare in Tessera/);
   assert.doesNotMatch(html, /Your site is taking shape|Building your site/);
   assert.doesNotMatch(html, /codex-preview/);
 });

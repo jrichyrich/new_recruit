@@ -3,7 +3,8 @@
 RosterPilot is a deterministic Warhammer 40,000 roster engine exposed through
 web, CLI, MCP, and REST surfaces. The roster engine and pinned data remain the
 source of truth. New Recruit is an optional local delivery and Pretty HTML
-backend, not the canonical validator.
+backend, not the canonical validator. The task-oriented entry points and
+commands are documented in the [workflow guide](workflows.md).
 
 ## Capability model
 
@@ -17,6 +18,38 @@ capabilities:
 | `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
 | New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
 | Tessera handoff and experimental matchup matrix | Verified New Recruit-enriched rosters | Local temporary browser adapter |
+
+### Workflow composition
+
+Capabilities compose, but user workflows never continue implicitly. A legal
+canonical roster can be the final result, an input to a file export, an input
+to an explicitly requested New Recruit delivery, or the player side of an
+explicitly requested Tessera comparison.
+
+```mermaid
+flowchart LR
+    build["Build or import canonical roster"]
+    validate["Deterministic validation"]
+    finish["Finish: JSON, text, or printable HTML"]
+    handoff["Prepare mapped ROSZ"]
+    deliver["Explicit New Recruit delivery"]
+    enrich["Verified profile-rich ROSZ"]
+    compare["Explicit Tessera comparison"]
+    report["JSON and interactive HTML report"]
+
+    build --> validate
+    validate --> finish
+    validate -. "optional file handoff" .-> handoff
+    handoff -. "optional upload request" .-> deliver
+    deliver --> enrich
+    enrich -. "optional simulation request" .-> compare
+    compare --> report
+```
+
+The dotted edges are explicit choices, not automatic transitions. Tessera has
+a technical dependency on New Recruit enrichment, but creating or exporting a
+roster does not trigger that dependency. Comparison suggestions never mutate a
+canonical roster.
 
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation
@@ -148,14 +181,19 @@ flowchart LR
     subgraph local["Local macOS boundary"]
         companion["New Recruit companion orchestrator"]
         agent["Per-user RosterPilot LaunchAgent"]
-        worker["Isolated Playwright worker"]
+        worker["Isolated New Recruit worker"]
+        tesseraCompanion["Tessera orchestrator"]
+        tesseraWorker["Isolated Tessera worker"]
         broker["Native Swift Keychain broker"]
         keychain[("macOS login Keychain")]
         profile[("Dedicated Chrome profile")]
+        tempProfile[("Temporary Tessera profile")]
         files[("Local export directory")]
+        reports[("Matchup reports")]
     end
 
     newRecruit["newrecruit.eu"]
+    tessera["playtessera.gg"]
 
     user --> web
     user --> cli
@@ -178,16 +216,26 @@ flowchart LR
 
     cli -. "explicit deliver request" .-> companion
     localMcp -. "local-only MCP tool" .-> companion
+    cli -. "explicit comparison request" .-> tesseraCompanion
+    localMcp -. "local-only MCP tool" .-> tesseraCompanion
+    tesseraCompanion --> companion
     companion --> validator
     companion --> exporter
     companion -->|"roster bytes over 0600 socket or 0700 file queue"| agent
-    agent --> worker
+    tesseraCompanion -->|"enriched roster bytes and scenario settings"| agent
+    agent -->|"New Recruit job"| worker
+    agent -->|"Tessera job"| tesseraWorker
     worker --> broker
+    tesseraWorker --> broker
     broker --> keychain
     worker --> profile
+    tesseraWorker --> tempProfile
     worker --> newRecruit
+    tesseraWorker --> tessera
     agent -->|"sanitized artifact bytes"| companion
+    agent -->|"sanitized scenario matrices"| tesseraCompanion
     companion --> files
+    tesseraCompanion --> reports
 
     hostedStop["Credential-backed delivery unavailable"]
     remote -. "tool is not registered" .-> hostedStop
@@ -368,7 +416,7 @@ Security invariants:
 | Local CLI | Terminal commands and local file operations | `cli/rosterpilot.ts` |
 | MCP server | Shared roster tools plus conditionally registered local tools | `mcp/server.ts` |
 | Local stdio MCP | Injects local file writers and macOS companion | `mcp/stdio.ts` |
-| Per-user local agent | Cross-process queue, provider status, and secret-free roster job transport | `local/agent/server.ts` |
+| Per-user local agent | Cross-process queue, provider status, checkout identity, and secret-free roster job transport | `local/agent/server.ts` |
 | Companion orchestrator | Validation, collisions, local-agent requests, and artifact publication | `local/new-recruit/companion.ts` |
 | Browser adapter | Authentication, import, verification, Pretty export | `local/new-recruit/browser.ts` |
 | Tessera orchestrator | Matched-points policy, scenario consolidation, findings, candidates, and revision deltas | `local/tessera/companion.ts` |
@@ -378,11 +426,33 @@ Security invariants:
 | Hosted API | Credential-free REST and remote handoff | `app/api/v1/[...path]/route.ts` |
 | Browser UI | Local draft history and credential-free exports | `app/page.tsx` |
 
+## Installation and deployment boundaries
+
+| Surface | Installation unit | Portability and durability rule |
+| --- | --- | --- |
+| Core engine, CLI, and stdio MCP | Complete Git checkout plus locked Node dependencies | Supported on macOS, Linux, and Windows; direct dependencies and package scripts must remain platform-neutral |
+| Hosted website, REST, and HTTP MCP | Validated Cloudflare-compatible build | Uses only credential-free core capabilities and never imports local automation modules into a hosted tool contract |
+| New Recruit and Tessera automation | Per-user macOS LaunchAgent, installed broker, and one complete checkout | Setup records the exact checkout and Node executable; status rejects a running agent from another checkout or protocol version |
+| Roster and report artifacts | Caller-selected directory | Writes stay inside the current directory by default and never overwrite without explicit approval |
+
+The LaunchAgent intentionally runs reviewed worker code from the checkout that
+installed it, while the native broker is copied into per-user application
+support. Moving the repository or changing the Node installation requires
+rerunning the selected setup profile. Protocol and checkout identity checks
+turn that condition into an actionable failure instead of allowing a newer CLI
+to call stale background code.
+
+The repository CI verifies the locked install on macOS, Linux, and Windows and
+runs lint, tests, a production build, rendered-output checks, and deterministic
+catalogue regeneration before changes are considered ready.
+
 ## Failure behavior
 
 The companion fails closed:
 
 - invalid rosters stop before Chrome opens;
+- a local agent installed from another checkout or protocol version is rejected
+  with a reinstall instruction;
 - missing companion, browser, or credential stops before import;
 - unverified authentication stops before import;
 - changed selectors or import failures return explicit error codes;

@@ -9,8 +9,8 @@ import type {
   TesseraPhase,
 } from "../tessera/browser";
 
-export const LOCAL_AGENT_PROTOCOL_VERSION = 3;
-export const LOCAL_AGENT_VERSION = "1.2.0";
+export const LOCAL_AGENT_PROTOCOL_VERSION = 4;
+export const LOCAL_AGENT_VERSION = "1.3.0";
 export const LOCAL_AGENT_MAX_FRAME_BYTES = 32 * 1024 * 1024;
 
 export type CredentialState =
@@ -33,6 +33,8 @@ export type LocalAgentStatus = {
   protocolVersion: number;
   protocolCompatible: boolean;
   platform: string;
+  projectDirectory: string;
+  nodeExecutable: string;
   browserAvailable: boolean;
   brokerAvailable: boolean;
   brokerStatusCode?: string | null;

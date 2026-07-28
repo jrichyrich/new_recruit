@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -36,6 +37,7 @@ function setupHarness(options: {
   credentialsConfigured?: boolean;
   freshnessState?: string;
   platform?: string;
+  tesseraCredentialsConfigured?: boolean;
   trackedChanges?: string;
 } = {}) {
   const projectRoot = "/tmp/Roster Pilot \"fixture\"";
@@ -91,6 +93,24 @@ function setupHarness(options: {
             data: {
               available: true,
               credentialsConfigured: options.credentialsConfigured ?? false,
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("tessera") && action === "status") {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              available: options.tesseraCredentialsConfigured ?? false,
+              agentAvailable: true,
+              browserAvailable: true,
+              brokerAvailable: true,
+              protocolCompatible: true,
+              credentialsConfigured:
+                options.tesseraCredentialsConfigured ?? false,
             },
           }),
           stderr: "",
@@ -195,6 +215,24 @@ test("Node validation enforces the minimum and warns away from the baseline", ()
     { aligned: false, supported: true },
   );
   assert.equal(validateNodeVersion("v22.13.1").aligned, false);
+});
+
+test("package scripts and direct dependencies remain cross-platform", () => {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as {
+    devDependencies: Record<string, string>;
+    scripts: Record<string, string>;
+  };
+  assert.equal(
+    Object.keys(packageJson.devDependencies).some((name) =>
+      /-(?:darwin|linux|windows)(?:-|$)/.test(name),
+    ),
+    false,
+  );
+  for (const script of ["dev", "build", "start"]) {
+    assert.doesNotMatch(packageJson.scripts[script], /^[A-Z0-9_]+=/);
+  }
 });
 
 test("MCP renderers use the active executable and safely quote checkout paths", () => {
@@ -376,7 +414,7 @@ test("New Recruit profile is rejected on unsupported platforms", async () => {
       },
       harness.dependencies,
     ),
-    /requires macOS/,
+    /require macOS/,
   );
   assert.equal(
     harness.calls.some((call) => call.args[0] === "ci"),
@@ -498,5 +536,47 @@ test("New Recruit doctor checks the installed agent without reinstalling it", as
   assert.equal(
     harness.calls.some((call) => call.args.includes("companion:build")),
     false,
+  );
+});
+
+test("Tessera setup is cumulative but leaves both external workflows opt-in", async () => {
+  const harness = setupHarness();
+  await runSetup(
+    {
+      doctor: false,
+      help: false,
+      nonInteractive: true,
+      profile: "tessera",
+      refresh: "skip",
+    },
+    harness.dependencies,
+  );
+
+  assert.ok(
+    harness.calls.some((call) => call.args.includes("companion:build")),
+  );
+  assert.ok(
+    harness.calls.some(
+      (call) => call.args.includes("agent") && call.args.at(-1) === "install",
+    ),
+  );
+  assert.ok(
+    harness.calls.some(
+      (call) =>
+        call.args.includes("new-recruit") && call.args.at(-1) === "status",
+    ),
+  );
+  assert.ok(
+    harness.calls.some(
+      (call) => call.args.includes("tessera") && call.args.at(-1) === "status",
+    ),
+  );
+  assert.equal(
+    harness.calls.some((call) => call.args.at(-1) === "configure"),
+    false,
+  );
+  assert.match(
+    harness.stdout.chunks.join(""),
+    /tessera configure to add the licence key/i,
   );
 });

@@ -1,6 +1,6 @@
 ---
 name: rosterpilot
-description: Build, inspect, modify, validate, explain, and export Warhammer 40,000 army rosters for any build-supported faction through the RosterPilot MCP server. Use for faction or unit research, natural-language roster requests, collection-constrained army planning, legality checks, printable HTML, and mapped New Recruit .ros/.rosz handoffs.
+description: Build, inspect, modify, validate, explain, export, and optionally compare Warhammer 40,000 army rosters through the RosterPilot MCP server. Use for faction or unit research, natural-language roster requests, collection-constrained army planning, legality checks, printable HTML, mapped New Recruit .ros/.rosz handoffs, and explicitly requested local Tessera matchups.
 ---
 
 # RosterPilot
@@ -29,6 +29,15 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
    upload, import, or send the roster to New Recruit. Use
    `get_new_recruit_connection_status` first. If local automation is
    unavailable, fall back to `prepare_new_recruit_handoff`.
+11. Treat Tessera as a separate, optional workflow. Call
+    `get_tessera_connection_status` before local comparison work. Use
+    `prepare_roster_for_tessera` only for an explicit Tessera handoff, and
+    `analyze_roster_matchup` only when the user asks to compare or simulate two
+    armies. Explain that preparation creates verified New Recruit list copies
+    to obtain profile-rich `.rosz` files.
+12. Do not apply a Tessera change candidate automatically. After explicit
+    approval, modify and validate a new canonical roster, then call
+    `compare_roster_revision` only when the user asks for the before/after run.
 
 ## Validation rules
 
@@ -73,6 +82,10 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - Never include a login page in diagnostics or screenshots.
 - Imports must create a new list copy. Do not replace, delete, or mutate an
   existing New Recruit list without a separate explicit request.
+- A completed build or export must not trigger New Recruit delivery or Tessera
+  analysis. Each external action requires its own explicit request.
+- Tessera results are directional combat math, not game win probability.
+  Preserve partial scenarios and visible warnings; never infer missing cells.
 
 ## Example requests
 
@@ -83,3 +96,5 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - “Export the validated list as `.rosz` and printable HTML.”
 - “Prepare this roster for New Recruit and give me both files.”
 - “Upload this validated roster to New Recruit and download Pretty HTML.”
+- “Compare these two validated armies in Tessera and return the HTML report.”
+- “Run a quick Tessera smoke comparison against a Necron proxy.”

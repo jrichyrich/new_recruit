@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const setupFile = fileURLToPath(import.meta.url);
 const defaultProjectRoot = path.resolve(path.dirname(setupFile), "..");
-const supportedProfiles = new Set(["core", "mcp", "new-recruit"]);
+const supportedProfiles = new Set(["core", "mcp", "new-recruit", "tessera"]);
 const supportedRefreshModes = new Set(["skip", "check", "apply"]);
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -43,7 +43,7 @@ export function parseSetupArgs(argv) {
         : argv[++index];
       if (!profile || !supportedProfiles.has(profile)) {
         throw new SetupError(
-          `Invalid profile "${profile ?? ""}". Expected core, mcp, or new-recruit.`,
+          `Invalid profile "${profile ?? ""}". Expected core, mcp, new-recruit, or tessera.`,
         );
       }
       options.profile = profile;
@@ -160,10 +160,11 @@ function usage(doctor = false) {
 
 Usage:
   ${command}
-  ${command} -- --profile core|mcp|new-recruit
+  ${command} -- --profile core|mcp|new-recruit|tessera
   ${command} -- --profile core --non-interactive --refresh skip|check${doctor ? "" : "|apply"}
 
-Profiles are cumulative: mcp includes core; new-recruit includes core and mcp.
+Profiles are cumulative: mcp includes core; new-recruit includes core and mcp;
+tessera includes New Recruit preparation plus Tessera comparison readiness.
 The default profile is core and the default refresh mode is check.
 `;
 }
@@ -231,7 +232,11 @@ function parseJsonCommand(label, result) {
 }
 
 function profileIncludesMcp(profile) {
-  return profile === "mcp" || profile === "new-recruit";
+  return (
+    profile === "mcp" ||
+    profile === "new-recruit" ||
+    profile === "tessera"
+  );
 }
 
 async function askChoice(question, choices, fallback, dependencies) {
@@ -321,7 +326,7 @@ function ensureProjectFiles(dependencies) {
 function ensureNewRecruitPrerequisites(dependencies) {
   if (dependencies.platform !== "darwin") {
     throw new SetupError(
-      "The new-recruit profile requires macOS. Use --profile mcp or --profile core on this platform.",
+      "The new-recruit and tessera profiles require macOS. Use --profile mcp or --profile core on this platform.",
     );
   }
   if (!dependencies.fs.isExecutable("/usr/bin/swiftc")) {
@@ -494,6 +499,81 @@ async function configureNewRecruit(
   );
 }
 
+async function configureTessera(
+  { doctor, interactive, results },
+  dependencies,
+) {
+  let status = parseJsonCommand(
+    "Tessera status",
+    runRosterPilot(["tessera", "status"], dependencies),
+  );
+  if (
+    !status.data?.agentAvailable ||
+    !status.data?.browserAvailable ||
+    !status.data?.brokerAvailable ||
+    !status.data?.protocolCompatible
+  ) {
+    throw new SetupError(
+      "The Tessera companion is unavailable after local automation setup.",
+    );
+  }
+  if (status.data.credentialsConfigured) {
+    addResult(
+      results,
+      "Tessera",
+      "ready",
+      "local agent and Tessera licence key are configured",
+    );
+    return;
+  }
+  if (doctor) {
+    throw new SetupError(
+      "The Tessera companion is installed, but its licence key is not configured.",
+    );
+  }
+
+  const configure = interactive
+    ? await askYesNo(
+        "Open the secure macOS Tessera licence-key dialog now? [y/N] ",
+        dependencies,
+      )
+    : false;
+  if (!configure) {
+    addResult(
+      results,
+      "Tessera",
+      "warning",
+      "local agent installed; run npm run rosterpilot -- tessera configure to add the licence key",
+    );
+    return;
+  }
+
+  const configured = parseJsonCommand(
+    "Tessera licence-key configuration",
+    runRosterPilot(["tessera", "configure"], dependencies),
+  );
+  if (!configured.ok) {
+    throw new SetupError(
+      configured.message ?? "Tessera licence-key configuration failed.",
+    );
+  }
+  status = parseJsonCommand(
+    "Tessera status",
+    runRosterPilot(["tessera", "status"], dependencies),
+  );
+  if (!status.data?.credentialsConfigured) {
+    throw new SetupError(
+      "The secure dialog completed, but the Tessera licence key is not configured.",
+    );
+  }
+  addResult(
+    results,
+    "Tessera",
+    "ready",
+    "local agent and Tessera licence key are configured",
+  );
+}
+
 async function handleFreshness(
   { doctor, interactive, refresh, results },
   dependencies,
@@ -602,7 +682,7 @@ export async function runSetup(rawOptions, overrides = {}) {
     }
   }
   options.refresh ??= "check";
-  if (options.profile === "new-recruit") {
+  if (options.profile === "new-recruit" || options.profile === "tessera") {
     ensureNewRecruitPrerequisites(dependencies);
   }
 
@@ -661,8 +741,14 @@ export async function runSetup(rawOptions, overrides = {}) {
   if (profileIncludesMcp(options.profile)) {
     configureMcp({ doctor: options.doctor, results }, dependencies);
   }
-  if (options.profile === "new-recruit") {
+  if (options.profile === "new-recruit" || options.profile === "tessera") {
     await configureNewRecruit(
+      { doctor: options.doctor, interactive, results },
+      dependencies,
+    );
+  }
+  if (options.profile === "tessera") {
+    await configureTessera(
       { doctor: options.doctor, interactive, results },
       dependencies,
     );

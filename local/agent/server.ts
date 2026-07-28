@@ -237,6 +237,8 @@ export async function startLocalAgent(
       protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
       protocolCompatible: true,
       platform: process.platform,
+      projectDirectory: projectRoot,
+      nodeExecutable: options.nodeExecutable ?? process.execPath,
       browserAvailable,
       brokerAvailable,
       brokerStatusCode:

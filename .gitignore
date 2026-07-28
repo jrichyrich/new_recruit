@@ -49,3 +49,6 @@ next-env.d.ts
 /*.ros
 /*.rosz
 /custodes-*.json
+/*-vs-*.html
+/*-matchup.html
+/*-matchup.json

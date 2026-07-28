@@ -425,8 +425,8 @@ export default function Home() {
           <a className="nav-link active" href="#builder">
             Builder
           </a>
-          <a className="nav-link" href="#factions">
-            Factions
+          <a className="nav-link" href="#workflows">
+            Workflows
           </a>
           <a className="nav-link" href="#exports">
             Exports
@@ -513,9 +513,53 @@ export default function Home() {
             <p>
               Describe the feel, faction, and point limit. The shared engine turns
               it into an editable roster, calculates every point, validates the
-              construction rules, and creates a real New Recruit handoff.
+              construction rules, and can optionally prepare a New Recruit
+              handoff.
             </p>
           </div>
+
+          <section
+            className="workflow-map"
+            id="workflows"
+            aria-labelledby="workflow-title"
+          >
+            <div className="workflow-map-heading">
+              <div>
+                <span className="eyebrow">Choose your finish line</span>
+                <h2 id="workflow-title">One roster, three independent paths</h2>
+              </div>
+              <span>Nothing continues automatically</span>
+            </div>
+            <div className="workflow-grid">
+              <article>
+                <span className="workflow-number">01</span>
+                <strong>Build and keep</strong>
+                <p>
+                  Validate, print, or save RosterPilot JSON. No account or
+                  external service is required.
+                </p>
+                <a href="#roster-title">Build a roster</a>
+              </article>
+              <article>
+                <span className="workflow-number">02</span>
+                <strong>Send to New Recruit</strong>
+                <p>
+                  Download a mapped `.rosz` here, or use the optional local
+                  macOS companion for a verified upload.
+                </p>
+                <a href="#exports">Prepare a handoff</a>
+              </article>
+              <article>
+                <span className="workflow-number">03</span>
+                <strong>Compare in Tessera</strong>
+                <p>
+                  Use two armies through the local CLI or MCP to capture
+                  directional simulations and an interactive report.
+                </p>
+                <span className="workflow-surface">Local CLI or MCP</span>
+              </article>
+            </div>
+          </section>
 
           <div className="agent-card">
             <div className="agent-label">

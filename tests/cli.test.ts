@@ -5,6 +5,49 @@ import test from "node:test";
 
 const run = promisify(execFile);
 
+test("CLI standard help flag describes independent workflows", async () => {
+  const { stdout } = await run(
+    process.execPath,
+    ["--import", "tsx", "cli/rosterpilot.ts", "--help"],
+    { cwd: process.cwd() },
+  );
+  assert.match(stdout, /rosterpilot workflows/);
+  assert.match(
+    stdout,
+    /none runs automatically after another/i,
+  );
+});
+
+test("CLI reports workflow readiness without starting an external action", async () => {
+  const { stdout } = await run(
+    process.execPath,
+    ["--import", "tsx", "cli/rosterpilot.ts", "workflows"],
+    { cwd: process.cwd() },
+  );
+  const result = JSON.parse(stdout) as {
+    ok: boolean;
+    data: {
+      principle: string;
+      workflows: Array<{
+        id: string;
+        available: boolean;
+        setupProfile: string;
+      }>;
+    };
+  };
+  assert.equal(result.ok, true);
+  assert.match(result.data.principle, /opt-in/i);
+  assert.deepEqual(
+    result.data.workflows.map((workflow) => workflow.id),
+    ["build", "new-recruit", "tessera"],
+  );
+  assert.equal(result.data.workflows[0].available, true);
+  assert.deepEqual(
+    result.data.workflows.map((workflow) => workflow.setupProfile),
+    ["core", "new-recruit", "tessera"],
+  );
+});
+
 test("CLI preserves natural-language build preferences and constraints", async () => {
   const { stdout } = await run(
     process.execPath,

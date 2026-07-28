@@ -37,6 +37,7 @@ type LifecycleResult = {
   running: boolean;
   brokerChanged?: boolean;
   credentialReauthorizationRequired?: boolean;
+  installationCurrent?: boolean;
   launchAgentPath: string;
   brokerPath: string;
   socketPath: string;
@@ -232,6 +233,7 @@ export async function installLocalAgent(): Promise<LifecycleResult> {
       ok: true,
       installed: true,
       running: true,
+      installationCurrent: status.projectDirectory === projectRoot,
       brokerChanged,
       credentialReauthorizationRequired: brokerChanged && !credentialReady,
       launchAgentPath: plist,
@@ -266,14 +268,22 @@ export async function getLocalAgentLifecycleStatus(): Promise<LifecycleResult> {
     (await exists(launchAgentPath())) && (await exists(installedBrokerPath()));
   try {
     const status = await getLocalAgentStatus({ timeoutMs: 2_000 });
+    const installationCurrent = status.projectDirectory === projectRoot;
     return {
-      ok: true,
+      ok: installationCurrent,
       installed,
       running: true,
+      installationCurrent,
       launchAgentPath: launchAgentPath(),
       brokerPath: installedBrokerPath(),
       socketPath: localAgentSocketPath(),
       status,
+      code: installationCurrent
+        ? undefined
+        : "LOCAL_AGENT_CHECKOUT_MISMATCH",
+      message: installationCurrent
+        ? undefined
+        : 'The running local agent belongs to another checkout. Run "rosterpilot agent install" from this checkout.',
     };
   } catch (error) {
     return {

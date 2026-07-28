@@ -176,10 +176,13 @@ export async function getNewRecruitConnectionStatus(): Promise<
   const newRecruitProvider = agentStatus?.providers.find(
     (provider) => provider.providerId === "new-recruit",
   );
+  const installationCurrent =
+    agentStatus?.projectDirectory === projectRoot;
   const available =
     process.platform === "darwin" &&
     agentStatus?.available === true &&
     agentStatus.protocolCompatible &&
+    installationCurrent &&
     agentStatus.browserAvailable &&
     agentStatus.brokerAvailable;
   const statusWarning = agentError
@@ -202,6 +205,7 @@ export async function getNewRecruitConnectionStatus(): Promise<
       agentAvailable: agentStatus?.available === true,
       agentVersion: agentStatus?.version ?? null,
       protocolCompatible: agentStatus?.protocolCompatible === true,
+      installationCurrent,
       credentialState:
         newRecruitProvider?.credentialState ??
         (brokerAvailable ? "unavailable" : "not-configured"),
@@ -210,6 +214,15 @@ export async function getNewRecruitConnectionStatus(): Promise<
     violations: [],
     warnings: statusWarning
       ? [statusWarning]
+      : !installationCurrent && agentStatus?.available
+        ? [
+          {
+            code: "LOCAL_AGENT_CHECKOUT_MISMATCH",
+            message:
+              'The running local agent belongs to another checkout. Run "rosterpilot agent install" from this checkout before automated delivery.',
+            severity: "warn",
+          },
+        ]
       : available
         ? []
         : [

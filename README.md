@@ -8,13 +8,33 @@ RosterPilot is a deterministic Warhammer 40,000 roster engine with four surfaces
 - authenticated REST/OpenAPI and Streamable HTTP MCP endpoints for remote agents.
 
 See [Architecture](docs/architecture.md) for system boundaries, delivery
-workflow, authentication state, and credential flow diagrams.
+workflow, authentication state, and credential flow diagrams. See the
+[Workflow guide](docs/workflows.md) for a task-oriented setup and command
+reference.
 
 All 35 embedded Warhammer 40,000 11th Edition faction entries are searchable
 and buildable, including Space Marine chapter entries that inherit their parent
 datasheet pool. Points and legality come from pinned
 [`@alpaca-software/40kdc-data`](https://github.com/wn-mitch/40kdc-data), not
 from an LLM.
+
+## Choose your workflow
+
+RosterPilot does not force a pipeline. Building and validating a roster is a
+complete workflow; New Recruit delivery and Tessera comparison are separate,
+explicit branches.
+
+| What you want to do | Setup | Platforms |
+| --- | --- | --- |
+| Build, validate, print, save JSON, or export `.rosz` | `npm run setup -- --profile core` | macOS, Linux, Windows |
+| Use the local MCP server | `npm run setup -- --profile mcp` | macOS, Linux, Windows |
+| Upload and verify a New Recruit list | `npm run setup -- --profile new-recruit` | macOS |
+| Compare two armies in Tessera | `npm run setup -- --profile tessera` | macOS |
+
+Run `npm run rosterpilot -- workflows` at any time for machine-specific
+readiness and the next command for each path. The macOS restriction applies
+only to credential-backed browser automation; the engine and file handoffs are
+portable.
 
 ## Run locally
 
@@ -75,6 +95,8 @@ The interactive setup offers cumulative profiles:
 - `mcp` also creates a machine-local Codex MCP configuration;
 - `new-recruit` also builds and optionally configures the macOS delivery
   companion.
+- `tessera` also prepares the New Recruit enrichment dependency and optionally
+  configures the Tessera licence key.
 
 Repeatable noninteractive examples:
 
@@ -82,6 +104,7 @@ Repeatable noninteractive examples:
 npm run setup -- --profile core --non-interactive --refresh check
 npm run setup -- --profile mcp --non-interactive --refresh skip
 npm run setup -- --profile new-recruit --non-interactive --refresh skip
+npm run setup -- --profile tessera --non-interactive --refresh skip
 ```
 
 `--refresh check` checks live sources and reports newer data without changing
@@ -101,6 +124,10 @@ npm run doctor -- --profile mcp --refresh check
 
 Setup and Doctor detect missing prerequisites and explain what to install, but
 never invoke Homebrew, `nvm`, or another system package manager.
+
+If the checkout or active Node installation moves, rerun the selected setup
+profile. Credential-backed status fails closed when the running local agent
+belongs to another checkout, instead of using stale worker code.
 
 ## Local MCP setup
 
@@ -243,7 +270,9 @@ remain manual terminal operations and are never exposed as MCP tools.
 
 RosterPilot's local MCP and CLI can prepare New Recruit-enriched `.rosz` files
 for [Tessera](https://playtessera.gg/) and generate deterministic opponent
-proxies. This remains inside the RosterPilot plugin:
+proxies. This is independent from ordinary roster building and New Recruit
+export: it runs only after an explicit `tessera prepare`, `tessera analyze`, or
+MCP request. This remains inside the RosterPilot plugin:
 
 ```bash
 npm run rosterpilot -- tessera status

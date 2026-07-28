@@ -49,6 +49,7 @@ import {
   LocalAgentError,
   runTesseraThroughLocalAgent,
 } from "../agent/client";
+import { projectRoot } from "../agent/paths";
 import {
   runTesseraBrowserMatchup,
   TESSERA_URL,
@@ -128,11 +129,14 @@ export async function getTesseraConnectionStatus(): Promise<
     (item) => item.providerId === "tessera",
   );
   const brokerAvailable = agentStatus?.brokerAvailable === true;
+  const installationCurrent =
+    agentStatus?.projectDirectory === projectRoot;
   const available =
     process.platform === "darwin" &&
     browserAvailable &&
     agentStatus?.available === true &&
     agentStatus.protocolCompatible &&
+    installationCurrent &&
     provider?.credentialState === "ready";
   return {
     ok: true,
@@ -145,6 +149,7 @@ export async function getTesseraConnectionStatus(): Promise<
       agentAvailable: agentStatus?.available === true,
       agentVersion: agentStatus?.version ?? null,
       protocolCompatible: agentStatus?.protocolCompatible === true,
+      installationCurrent,
       credentialState:
         provider?.credentialState ??
         (brokerAvailable ? "unavailable" : "not-configured"),
@@ -157,6 +162,15 @@ export async function getTesseraConnectionStatus(): Promise<
           {
             code: agentError.code,
             message: agentError.message,
+            severity: "warn",
+          },
+        ]
+      : !installationCurrent && agentStatus?.available
+        ? [
+          {
+            code: "LOCAL_AGENT_CHECKOUT_MISMATCH",
+            message:
+              'The running local agent belongs to another checkout. Run "rosterpilot agent install" from this checkout before Tessera analysis.',
             severity: "warn",
           },
         ]

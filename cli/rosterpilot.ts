@@ -90,7 +90,11 @@ function print(payload: unknown): void {
 function help(): void {
   process.stdout.write(`RosterPilot deterministic army builder
 
+Choose only the workflow you need. Building, exporting, New Recruit delivery,
+and Tessera analysis are separate actions; none runs automatically after another.
+
 Usage:
+  rosterpilot workflows
   rosterpilot status
   rosterpilot freshness
   rosterpilot conflicts [--faction adeptus-custodes] [--blocking true]
@@ -124,13 +128,96 @@ Existing files are never replaced unless --overwrite is supplied.
 }
 
 async function main(): Promise<void> {
-  const { command, positionals, args } = parseArgs(process.argv.slice(2));
-  if (command === "help" || flag(args, "help")) {
+  const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    help();
+    return;
+  }
+  const { command, positionals, args } = parseArgs(argv);
+  if (command === "help") {
     help();
     return;
   }
   if (command === "mcp") {
     await import("../mcp/stdio");
+    return;
+  }
+  if (command === "workflows") {
+    const [newRecruit, tessera] = await Promise.all([
+      getNewRecruitConnectionStatus(),
+      getTesseraConnectionStatus(),
+    ]);
+    const workflowWarnings = [
+      ...newRecruit.warnings,
+      ...tessera.warnings,
+    ].filter(
+      (warning, index, warnings) =>
+        warnings.findIndex(
+          (candidate) =>
+            candidate.code === warning.code &&
+            candidate.message === warning.message,
+        ) === index,
+    );
+    print({
+      ok: true,
+      data: {
+        principle:
+          "Each workflow is opt-in. A validated roster is a complete result and no later workflow runs automatically.",
+        workflows: [
+          {
+            id: "build",
+            label: "Build and export",
+            available: true,
+            setupProfile: "core",
+            requires: ["Node.js 22.13 or newer"],
+            accepts: ["natural-language prompt", "structured constraints"],
+            produces: [
+              "validated RosterPilot JSON",
+              "printable HTML",
+              "plain text",
+            ],
+            nextCommand:
+              'rosterpilot build --prompt "Build a 1,000 point army" --out roster.json',
+          },
+          {
+            id: "new-recruit",
+            label: "Deliver to New Recruit",
+            available: newRecruit.data?.available ?? false,
+            setupProfile: "new-recruit",
+            requires: [
+              "validated roster",
+              "conflict-free catalogue mapping",
+              "macOS local automation for direct upload",
+            ],
+            fallback:
+              "Export .rosz on any supported core platform and import it manually.",
+            nextCommand:
+              "rosterpilot new-recruit deliver --file roster.json --enriched",
+          },
+          {
+            id: "tessera",
+            label: "Compare armies in Tessera",
+            available: tessera.data?.available ?? false,
+            setupProfile: "tessera",
+            requires: [
+              "validated player roster",
+              "one opponent roster, .rosz, or faction proxy",
+              "New Recruit-enriched profiles",
+              "macOS local automation and a Tessera licence key",
+            ],
+            produces: [
+              "directional scenario matrices",
+              "interactive HTML report",
+              "machine-readable JSON report",
+            ],
+            nextCommand:
+              "rosterpilot tessera analyze --file roster.json --opponent-roster enemy.json --experimental",
+          },
+        ],
+      },
+      violations: [],
+      warnings: workflowWarnings,
+    });
     return;
   }
   if (command === "agent") {
@@ -441,6 +528,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  const fileCommands = new Set(["validate", "explain", "modify", "export"]);
+  if (!fileCommands.has(command)) {
+    throw new Error(`Unknown command "${command}". Run "rosterpilot --help".`);
+  }
   const file = value(args, "file");
   if (!file) throw new Error(`The ${command} command requires --file.`);
   const draft = await readRosterDraft(path.resolve(file));

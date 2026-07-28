@@ -240,6 +240,7 @@ export type NewRecruitConnectionStatus = {
   agentAvailable: boolean;
   agentVersion: string | null;
   protocolCompatible: boolean;
+  installationCurrent: boolean;
   credentialState:
     | "ready"
     | "not-configured"
@@ -424,6 +425,7 @@ export type TesseraConnectionStatus = {
   agentAvailable: boolean;
   agentVersion: string | null;
   protocolCompatible: boolean;
+  installationCurrent: boolean;
   credentialState:
     | "ready"
     | "not-configured"
