@@ -10,6 +10,7 @@ import {
   getDataStatus,
   listDataConflicts,
   modifyRoster,
+  previewFactionStressPortfolio,
   searchFactions,
   searchUnits,
   validateRoster,
@@ -43,6 +44,13 @@ import {
   prepareRosterForTessera,
   type TesseraOpponentInput,
 } from "../local/tessera/companion";
+import {
+  compareRosterStressRevision,
+  runRosterStressTest,
+} from "../local/tessera/stress";
+import {
+  buildAndStressRosterAgainstFaction,
+} from "../local/tessera/full-loop";
 
 type Args = Record<string, string | boolean | string[]>;
 
@@ -87,6 +95,99 @@ function print(payload: unknown): void {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+function progress(message: string): void {
+  process.stderr.write(`[RosterPilot] ${message}\n`);
+}
+
+function compactStressOutput(
+  result: Awaited<ReturnType<typeof runRosterStressTest>>,
+  outputDirectory: string,
+): Record<string, unknown> {
+  if (!result.data) {
+    return {
+      ok: result.ok,
+      data: null,
+      violations: result.violations,
+      warnings: result.warnings.slice(0, 20),
+    };
+  }
+  const reportArtifact = result.data.artifacts.find(
+    (artifact) => artifact.format === "stress-json",
+  )?.written;
+  return {
+    ok: result.ok,
+    data: {
+      schemaVersion: result.data.schemaVersion,
+      reportKind: result.data.reportKind,
+      runId: result.data.runId,
+      status: result.data.status,
+      player: {
+        name: result.data.player.rosterName,
+        points: result.data.player.summary.totalPoints,
+      },
+      opponentFactionId: result.data.opponentFactionId,
+      suite: result.data.suite,
+      proxies: {
+        ready: result.data.portfolio.coverage.ready,
+        unique:
+          result.data.portfolio.coverage.uniqueSimulationPayloads,
+        confident:
+          result.data.robustness?.samples.filter(
+            (sample) => sample.status === "confident",
+          ).length ?? 0,
+      },
+      representatives: result.data.representatives,
+      reportPath: reportArtifact
+        ? path.resolve(outputDirectory, reportArtifact)
+        : null,
+      artifacts: result.data.artifacts,
+    },
+    violations: result.violations,
+    warnings: result.warnings.slice(0, 20),
+  };
+}
+
+function compactPortfolioPreview(
+  result: Awaited<ReturnType<typeof previewFactionStressPortfolio>>,
+): Record<string, unknown> {
+  if (!result.data) {
+    return {
+      ok: result.ok,
+      data: null,
+      violations: result.violations,
+      warnings: result.warnings.slice(0, 20),
+    };
+  }
+  return {
+    ok: result.ok,
+    data: {
+      schemaVersion: result.data.schemaVersion,
+      previewKind: result.data.previewKind,
+      generatedAt: result.data.generatedAt,
+      faction: {
+        id: result.data.portfolio.factionId,
+        name: result.data.portfolio.factionName,
+        pointsLimit: result.data.portfolio.pointsLimit,
+      },
+      suite: result.data.portfolio.suite,
+      gates: result.data.gates,
+      items: result.data.items.map((item) => ({
+        templateId: item.templateId,
+        structuralFingerprint: item.structuralFingerprint,
+        simulationFingerprint: item.simulationFingerprint,
+        minimumPairwiseDiversity: item.minimumPairwiseDiversity,
+        compositionEvidence: item.compositionEvidence,
+        profileRequirements: item.profileRequirements,
+        containsNamedCharacter: item.containsNamedCharacter,
+        exportable: item.exportable,
+        exportError: item.exportError,
+      })),
+    },
+    violations: result.violations,
+    warnings: result.warnings.slice(0, 20),
+  };
+}
+
 function help(): void {
   process.stdout.write(`RosterPilot deterministic army builder
 
@@ -119,11 +220,18 @@ Usage:
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera]
   rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz | --opponent-roster enemy.json | --opponent-faction necrons) [--archetypes balanced-control,ranged-pressure,assault-pressure] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates] [--experimental]
+  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--analysis staged|full-all] [--profile-policy profiles.json] [--resume [manifest.json]] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite] [--experimental]
+  rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
+  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --against-faction aeldari [--suite diverse-9] [--analysis staged] [--profile-policy profiles.json] [--allow-readiness-warnings] [--full-json] [--experimental]
   rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite] [--experimental]
+  rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite] [--experimental]
   rosterpilot mcp
 
 Writes are restricted to the current directory unless --allow-outside-root is supplied.
 Existing files are never replaced unless --overwrite is supplied.
+For stress tests, bare --resume reads <out-dir>/stress-manifest.json.
+Stress tests default to the diverse-9 suite and staged analysis; results are
+directional robustness ranges, not game win probabilities.
 `);
 }
 
@@ -196,7 +304,7 @@ async function main(): Promise<void> {
           },
           {
             id: "tessera",
-            label: "Compare armies in Tessera",
+            label: "Compare known armies in Tessera",
             available: tessera.data?.available ?? false,
             setupProfile: "tessera",
             requires: [
@@ -212,6 +320,27 @@ async function main(): Promise<void> {
             ],
             nextCommand:
               "rosterpilot tessera analyze --file roster.json --opponent-roster enemy.json --experimental",
+          },
+          {
+            id: "faction-stress",
+            label:
+              "Stress-test against an unknown list from a known faction",
+            available: tessera.data?.available ?? false,
+            setupProfile: "tessera",
+            requires: [
+              "validated player roster",
+              "known opponent faction",
+              "New Recruit-enriched profiles",
+              "macOS local automation and a Tessera licence key",
+            ],
+            produces: [
+              "deterministic frozen opponent portfolio",
+              "directional robustness ranges and findings",
+              "mission-readiness guardrail",
+              "interactive HTML and machine-readable JSON reports",
+            ],
+            nextCommand:
+              "rosterpilot tessera stress-test --file roster.json --against-faction necrons --experimental",
           },
         ],
       },
@@ -305,6 +434,125 @@ async function main(): Promise<void> {
       if (!result.ok) process.exitCode = 2;
       return;
     }
+    if (action === "preview-portfolio") {
+      const againstFaction =
+        value(args, "against-faction") ??
+        value(args, "opponent-faction");
+      if (!againstFaction) {
+        throw new Error(
+          "Tessera preview-portfolio requires --against-faction.",
+        );
+      }
+      const suite = value(args, "suite") ?? "diverse-9";
+      if (suite !== "core-3" && suite !== "diverse-9") {
+        throw new Error(`Unknown Tessera portfolio suite "${suite}".`);
+      }
+      progress("Building a local-only opponent portfolio preview.");
+      const result = await previewFactionStressPortfolio({
+        faction: againstFaction,
+        pointsLimit: Number(value(args, "points") ?? 1000),
+        suite,
+        pointsTolerancePercent: 5,
+        allowLegends: false,
+      });
+      print(
+        flag(args, "full-json")
+          ? result
+          : compactPortfolioPreview(result),
+      );
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "build-and-stress") {
+      const prompt = value(args, "prompt") ?? "";
+      const againstFaction =
+        value(args, "against-faction") ??
+        value(args, "opponent-faction");
+      if (!prompt || !againstFaction) {
+        throw new Error(
+          "Tessera build-and-stress requires --prompt and --against-faction.",
+        );
+      }
+      const suite = value(args, "suite") ?? "diverse-9";
+      if (suite !== "core-3" && suite !== "diverse-9") {
+        throw new Error(`Unknown Tessera portfolio suite "${suite}".`);
+      }
+      const analysisStrategy = value(args, "analysis") ?? "staged";
+      if (
+        analysisStrategy !== "staged" &&
+        analysisStrategy !== "full-all"
+      ) {
+        throw new Error(
+          `Unknown Tessera analysis strategy "${analysisStrategy}".`,
+        );
+      }
+      const outputDirectory =
+        value(args, "out-dir") ?? "exports/tessera";
+      const resumeManifest = value(args, "resume");
+      const resumeManifestPath =
+        args.resume === true
+          ? path.resolve(outputDirectory, "stress-manifest.json")
+          : resumeManifest
+            ? path.resolve(resumeManifest)
+            : undefined;
+      progress("Building and deterministically repairing the roster.");
+      progress(
+        "Previewing unique opponent payloads before any external activity.",
+      );
+      const result = await buildAndStressRosterAgainstFaction(
+        {
+          prompt,
+          againstFaction,
+          pointsLimit: value(args, "points")
+            ? Number(value(args, "points"))
+            : undefined,
+          suite,
+          analysisStrategy,
+          profilePolicyPath: value(args, "profile-policy"),
+          outputDirectory,
+          resumeManifestPath,
+          allowReadinessWarnings: flag(
+            args,
+            "allow-readiness-warnings",
+          ),
+          forceRetry: flag(args, "force-retry"),
+          experimental: flag(args, "experimental"),
+        },
+        {
+          overwrite: flag(args, "overwrite"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+        },
+      );
+      if (flag(args, "full-json") || !result.data) {
+        print(result);
+      } else {
+        print({
+          ...compactStressOutput(
+            {
+              ok: result.ok,
+              data: result.data.stressReport,
+              violations: result.violations,
+              warnings: result.warnings,
+            },
+            outputDirectory,
+          ),
+          build: {
+            repaired: result.data.rosterRepair.repaired,
+            candidatesEvaluated:
+              result.data.rosterRepair.candidatesEvaluated,
+            points:
+              result.data.rosterRepair.roster.totalPoints,
+            pointsLimit:
+              result.data.rosterRepair.roster.pointsLimit,
+            missionReadiness:
+              result.data.rosterRepair.missionReadiness.overallBand,
+          },
+          automaticRevisionApplied: false,
+        });
+      }
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
     if (action === "compare-revision") {
       const baselineReport = value(args, "baseline-report");
       const revisedRosterFile = value(args, "revised-roster");
@@ -317,6 +565,31 @@ async function main(): Promise<void> {
         path.resolve(revisedRosterFile),
       );
       const result = await compareRosterRevision(
+        path.resolve(baselineReport),
+        revisedRoster,
+        {
+          outputDirectory: value(args, "out-dir") ?? "exports/tessera",
+          overwrite: flag(args, "overwrite"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+          experimental: flag(args, "experimental"),
+        },
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "compare-stress-revision") {
+      const baselineReport = value(args, "baseline-report");
+      const revisedRosterFile = value(args, "revised-roster");
+      if (!baselineReport || !revisedRosterFile) {
+        throw new Error(
+          "Tessera compare-stress-revision requires --baseline-report and --revised-roster.",
+        );
+      }
+      const revisedRoster = await readRosterDraft(
+        path.resolve(revisedRosterFile),
+      );
+      const result = await compareRosterStressRevision(
         path.resolve(baselineReport),
         revisedRoster,
         {
@@ -343,6 +616,66 @@ async function main(): Promise<void> {
         allowOutsideRoot: flag(args, "allow-outside-root"),
       });
       print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "stress-test") {
+      const againstFaction = value(args, "against-faction");
+      const opponentFactionAlias = value(args, "opponent-faction");
+      if (
+        againstFaction &&
+        opponentFactionAlias &&
+        againstFaction !== opponentFactionAlias
+      ) {
+        throw new Error(
+          "Tessera stress-test received conflicting --against-faction and --opponent-faction values.",
+        );
+      }
+      const opponentFaction = againstFaction ?? opponentFactionAlias;
+      if (!opponentFaction) {
+        throw new Error(
+          "Tessera stress-test requires --against-faction.",
+        );
+      }
+      const suite = value(args, "suite") ?? "diverse-9";
+      if (suite !== "core-3" && suite !== "diverse-9") {
+        throw new Error(
+          `Unknown Tessera stress-test suite "${suite}". Expected core-3 or diverse-9.`,
+        );
+      }
+      const analysisStrategy = value(args, "analysis") ?? "staged";
+      if (analysisStrategy !== "staged" && analysisStrategy !== "full-all") {
+        throw new Error(
+          `Unknown Tessera stress-test analysis strategy "${analysisStrategy}". Expected staged or full-all.`,
+        );
+      }
+      const resumeManifest = value(args, "resume");
+      const resumeManifestPath =
+        args.resume === true
+          ? path.resolve(outputDirectory, "stress-manifest.json")
+          : resumeManifest
+            ? path.resolve(resumeManifest)
+            : undefined;
+      const result = await runRosterStressTest(
+        roster,
+        { kind: "faction", factionId: opponentFaction },
+        {
+          suite,
+          analysisStrategy,
+          resumeManifestPath,
+          profilePolicyPath: value(args, "profile-policy"),
+          forceRetry: flag(args, "force-retry"),
+          outputDirectory,
+          overwrite: flag(args, "overwrite"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+          experimental: flag(args, "experimental"),
+        },
+      );
+      print(
+        flag(args, "full-json")
+          ? result
+          : compactStressOutput(result, outputDirectory),
+      );
       if (!result.ok) process.exitCode = 2;
       return;
     }

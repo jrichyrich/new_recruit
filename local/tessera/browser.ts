@@ -4,6 +4,7 @@ import {
   type Locator,
   type Page,
 } from "playwright-core";
+import type { ProfilePolicyV1 } from "../../lib/rosterpilot";
 
 export const TESSERA_URL = "https://playtessera.gg/" as const;
 
@@ -67,11 +68,23 @@ export type TesseraImportWarnings = {
   opponent: string[];
 };
 
+export type TesseraImportIssue = {
+  code: "alternate-profile" | "unverified-import" | "import-warning";
+  side: "player" | "opponent";
+  unit: string | null;
+  weaponGroup: string | null;
+  availableProfiles: string[];
+  phase: TesseraPhase | null;
+  message: string;
+  resolvedByPolicy: boolean;
+};
+
 export type TesseraBrowserResult = {
   settings: Record<string, string>;
   cells: TesseraMatrixCell[];
   scenarios: TesseraScenario[];
   importWarnings: TesseraImportWarnings;
+  importIssues?: TesseraImportIssue[];
   warnings: string[];
 };
 
@@ -85,6 +98,8 @@ export type TesseraBrowserInput = {
   analysisMode?: TesseraAnalysisMode;
   phases?: readonly TesseraPhase[];
   metrics?: readonly TesseraMetric[];
+  profilePolicy?: ProfilePolicyV1 | null;
+  sessionId?: string;
 };
 
 export type TesseraBrowserDependencies = {
@@ -146,7 +161,138 @@ export function parseTesseraMatrixTable(
   return cells;
 }
 
-async function importRosz(page: Page, filename: string): Promise<string[]> {
+function structuredImportIssues(
+  side: TesseraImportIssue["side"],
+  warnings: string[],
+): TesseraImportIssue[] {
+  return warnings.map((message) => {
+    const alternate = /alternate profile|multiple profiles|choose.*profile/i.test(
+      message,
+    );
+    const quoted = [...message.matchAll(/["“]([^"”]+)["”]/g)].map(
+      (match) => match[1],
+    );
+    const unit =
+      message.match(/(?:for|on|unit)\s+["“]?([^"”,:;]+)["”]?/i)?.[1]?.trim() ??
+      null;
+    const availableText =
+      message.match(/(?:profiles?|choose)\s*[:=]\s*([^.;]+)/i)?.[1] ?? "";
+    const availableProfiles = availableText
+      .split(/\s*(?:,|\bor\b|\|)\s*/i)
+      .map((value) => value.replace(/^["“]|["”]$/g, "").trim())
+      .filter(Boolean);
+    return {
+      code: alternate
+        ? "alternate-profile"
+        : /unverified/i.test(message)
+          ? "unverified-import"
+          : "import-warning",
+      side,
+      unit,
+      weaponGroup: quoted[0] ?? null,
+      availableProfiles,
+      phase: /melee|fight/i.test(message)
+        ? "fight"
+        : /ranged|shoot/i.test(message)
+          ? "shooting"
+          : null,
+      message,
+      resolvedByPolicy: false,
+    };
+  });
+}
+
+function normalized(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
+async function applyProfilePolicy(
+  page: Page,
+  issues: TesseraImportIssue[],
+  policy: ProfilePolicyV1 | null | undefined,
+): Promise<void> {
+  const alternateIssues = issues.filter(
+    (issue) => issue.code === "alternate-profile",
+  );
+  if (alternateIssues.length === 0) return;
+  if (!policy) {
+    throw new TesseraAutomationError(
+      "TESSERA_PROFILE_POLICY_REQUIRED",
+      "Tessera reported alternate weapon profiles that are not covered by an explicit profile policy.",
+    );
+  }
+  const selects = page.locator("main select");
+  for (const issue of alternateIssues) {
+    const candidates = policy.entries.filter((entry) => {
+      if (
+        issue.weaponGroup &&
+        normalized(entry.weaponGroup) !== normalized(issue.weaponGroup)
+      ) return false;
+      if (
+        issue.unit &&
+        !normalized(issue.unit).includes(normalized(entry.unit)) &&
+        !normalized(entry.unit).includes(normalized(issue.unit))
+      ) return false;
+      if (issue.phase && entry.phase !== issue.phase) return false;
+      return true;
+    });
+    if (candidates.length !== 1) {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_POLICY_REQUIRED",
+        `The import issue "${issue.message}" did not resolve to exactly one frozen profile-policy entry.`,
+      );
+    }
+    const entry = candidates[0];
+    const matchingControls: Array<{ index: number; score: number }> = [];
+    for (let index = 0; index < (await selects.count()); index += 1) {
+      const control = selects.nth(index);
+      const options = await control
+        .locator("option")
+        .allTextContents()
+        .catch(() => []);
+      if (
+        !options.some(
+          (option) =>
+            normalized(option) === normalized(entry.selectedProfile),
+        )
+      ) continue;
+      const context = await control
+        .locator("xpath=..")
+        .innerText()
+        .catch(() => "");
+      const score =
+        (normalized(context).includes(normalized(entry.weaponGroup)) ? 2 : 0) +
+        (normalized(context).includes(normalized(entry.unit)) ? 1 : 0);
+      matchingControls.push({ index, score });
+    }
+    matchingControls.sort(
+      (left, right) => right.score - left.score || left.index - right.index,
+    );
+    if (
+      matchingControls.length === 0 ||
+      (
+        matchingControls.length > 1 &&
+        matchingControls[0].score === matchingControls[1].score
+      )
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_POLICY_APPLICATION_FAILED",
+        `Tessera did not expose a unique ${entry.weaponGroup} control for profile "${entry.selectedProfile}".`,
+      );
+    }
+    await selects
+      .nth(matchingControls[0].index)
+      .selectOption({ label: entry.selectedProfile });
+    issue.resolvedByPolicy = true;
+  }
+}
+
+async function importRosz(
+  page: Page,
+  filename: string,
+  side: TesseraImportIssue["side"],
+  policy: ProfilePolicyV1 | null | undefined,
+): Promise<{ warnings: string[]; issues: TesseraImportIssue[] }> {
   const importButton = page
     .getByRole("button", { name: /import \.rosz/i })
     .first();
@@ -176,6 +322,8 @@ async function importRosz(page: Page, filename: string): Promise<string[]> {
     .map((line) => line.trim())
     .filter((line) => /warning|alternate profile|unverified/i.test(line))
     .slice(0, 20);
+  const issues = structuredImportIssues(side, warnings);
+  await applyProfilePolicy(page, issues, policy);
   const add = page.getByRole("button", { name: /^add \d+$/i }).first();
   if (!(await add.isVisible().catch(() => false))) {
     throw new TesseraAutomationError(
@@ -187,7 +335,7 @@ async function importRosz(page: Page, filename: string): Promise<string[]> {
   await page
     .getByRole("heading", { name: "Roster", exact: true })
     .waitFor({ state: "visible", timeout: 10_000 });
-  return warnings;
+  return { warnings, issues };
 }
 
 async function unlockPremium(
@@ -211,12 +359,45 @@ async function unlockPremium(
     .first();
   if (!(await unlock.isEnabled().catch(() => false))) {
     throw new TesseraAutomationError(
-      "TESSERA_PREMIUM_REJECTED",
+      "TESSERA_PREMIUM_KEY_REJECTED",
       "Tessera did not enable its premium unlock control.",
     );
   }
   await unlock.click();
-  await page.waitForTimeout(750);
+  const deadline = Date.now() + 10_000;
+  let unlocked = false;
+  while (Date.now() < deadline) {
+    const body = await page.locator("body").innerText().catch(() => "");
+    if (/invalid|rejected|not valid|could not unlock/i.test(body)) {
+      throw new TesseraAutomationError(
+        "TESSERA_PREMIUM_KEY_REJECTED",
+        "Tessera rejected the configured premium key.",
+      );
+    }
+    const matrix = page
+      .getByRole("button", {
+        name: /army (?:vs|versus) army|threat matrix/i,
+      })
+      .first();
+    if (await matrix.isVisible().catch(() => false)) {
+      const label = await matrix.innerText().catch(() => "");
+      if (!/🔒|locked|premium/i.test(label)) {
+        unlocked = true;
+        break;
+      }
+    }
+    if (!(await keyField.isVisible().catch(() => false))) {
+      unlocked = true;
+      break;
+    }
+    await page.waitForTimeout(100);
+  }
+  if (!unlocked) {
+    throw new TesseraAutomationError(
+      "TESSERA_PREMIUM_UNLOCK_TIMEOUT",
+      "Tessera did not confirm the premium unlock within ten seconds.",
+    );
+  }
   const done = page.getByRole("button", { name: /^done$/i }).first();
   if (await done.isVisible().catch(() => false)) await done.click();
   const tactica = page
@@ -229,6 +410,7 @@ async function openArmyMatrix(
   page: Page,
   licenseKey?: string,
   allowedOrigin = new URL(TESSERA_URL).origin,
+  unlockAttempted = false,
 ): Promise<void> {
   const direct = page
     .getByRole("button", { name: /army (?:vs|versus) army|threat matrix/i })
@@ -238,13 +420,19 @@ async function openArmyMatrix(
     if (/🔒|locked|premium/i.test(label)) {
       if (!licenseKey) {
         throw new TesseraAutomationError(
-          "TESSERA_PREMIUM_REQUIRED",
+          "TESSERA_PREMIUM_KEY_ABSENT",
           "Tessera Army vs Army requires a configured premium key.",
+        );
+      }
+      if (unlockAttempted) {
+        throw new TesseraAutomationError(
+          "TESSERA_PREMIUM_STILL_LOCKED",
+          "Tessera still reports Army vs Army as locked after a confirmed unlock.",
         );
       }
       await direct.click();
       await unlockPremium(page, licenseKey, allowedOrigin);
-      return openArmyMatrix(page, undefined, allowedOrigin);
+      return openArmyMatrix(page, licenseKey, allowedOrigin, true);
     }
     await direct.click();
     return;
@@ -257,7 +445,7 @@ async function openArmyMatrix(
     .first();
   if (!(await matrix.isVisible().catch(() => false))) {
     throw new TesseraAutomationError(
-      "TESSERA_UI_CHANGED",
+      "TESSERA_MATRIX_MISSING",
       "The Tessera Army vs Army threat matrix could not be located.",
     );
   }
@@ -265,13 +453,19 @@ async function openArmyMatrix(
   if (/🔒|locked|premium/i.test(label)) {
     if (!licenseKey) {
       throw new TesseraAutomationError(
-        "TESSERA_PREMIUM_REQUIRED",
+        "TESSERA_PREMIUM_KEY_ABSENT",
         "Tessera Army vs Army requires a configured premium key.",
+      );
+    }
+    if (unlockAttempted) {
+      throw new TesseraAutomationError(
+        "TESSERA_PREMIUM_STILL_LOCKED",
+        "Tessera still reports Army vs Army as locked after a confirmed unlock.",
       );
     }
     await matrix.click();
     await unlockPremium(page, licenseKey, allowedOrigin);
-    return openArmyMatrix(page, undefined, allowedOrigin);
+    return openArmyMatrix(page, licenseKey, allowedOrigin, true);
   }
   await matrix.click();
 }
@@ -793,7 +987,11 @@ function scenarioFailure(
 ): string {
   const message =
     error instanceof Error ? error.message : "unknown Tessera browser failure";
-  return `Scenario ${scenarioId(selection)} was not captured: ${message}`;
+  const code =
+    error instanceof TesseraAutomationError
+      ? error.code
+      : "TESSERA_SCENARIO_FAILED";
+  return `[${code}] Scenario ${scenarioId(selection)} was not captured: ${message}`;
 }
 
 export async function runTesseraBrowserMatchup(
@@ -833,13 +1031,21 @@ export async function runTesseraBrowserMatchup(
       await muster.click();
     }
     await rosterHeading.waitFor({ state: "visible", timeout });
+    const playerImport = await importRosz(
+      page,
+      input.playerRoszPath,
+      "player",
+      input.profilePolicy,
+    );
+    const opponentImport = await importRosz(
+      page,
+      input.opponentRoszPath,
+      "opponent",
+      input.profilePolicy,
+    );
     const importWarnings: TesseraImportWarnings = {
-      player: [
-        ...new Set(await importRosz(page, input.playerRoszPath)),
-      ],
-      opponent: [
-        ...new Set(await importRosz(page, input.opponentRoszPath)),
-      ],
+      player: [...new Set(playerImport.warnings)],
+      opponent: [...new Set(opponentImport.warnings)],
     };
     const warnings = [
       ...importWarnings.player,
@@ -950,6 +1156,10 @@ export async function runTesseraBrowserMatchup(
       cells,
       scenarios,
       importWarnings,
+      importIssues: [
+        ...playerImport.issues,
+        ...opponentImport.issues,
+      ],
       warnings: [...new Set(warnings)],
     };
   } finally {

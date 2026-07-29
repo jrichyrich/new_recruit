@@ -39,12 +39,12 @@ test("CLI reports workflow readiness without starting an external action", async
   assert.match(result.data.principle, /opt-in/i);
   assert.deepEqual(
     result.data.workflows.map((workflow) => workflow.id),
-    ["build", "new-recruit", "tessera"],
+    ["build", "new-recruit", "tessera", "faction-stress"],
   );
   assert.equal(result.data.workflows[0].available, true);
   assert.deepEqual(
     result.data.workflows.map((workflow) => workflow.setupProfile),
-    ["core", "new-recruit", "tessera"],
+    ["core", "new-recruit", "tessera", "tessera"],
   );
 });
 

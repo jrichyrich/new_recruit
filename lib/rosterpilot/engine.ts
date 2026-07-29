@@ -38,6 +38,7 @@ import {
   type ResultEnvelope,
   type RosterDraftV1,
   type RosterIssue,
+  type TesseraProfileRequirement,
   type UnitSummary,
 } from "./types";
 import {
@@ -67,11 +68,42 @@ const FACTION_ALIASES: Record<string, string> = {
 };
 
 const PREFERENCE_ALIASES: Record<PreferenceTag, string[]> = {
-  mobility: ["fast", "mobile", "speed", "rapid", "flank", "jetbike"],
-  durability: ["durable", "tough", "resilient", "forgiving", "tank", "survive"],
+  mobility: [
+    "mobility",
+    "fast",
+    "mobile",
+    "speed",
+    "rapid",
+    "flank",
+    "jetbike",
+  ],
+  durability: [
+    "durability",
+    "durable",
+    "tough",
+    "resilient",
+    "forgiving",
+    "tank",
+    "survive",
+  ],
   objective: ["objective", "scoring", "board control", "hold", "mission"],
-  shooting: ["shooting", "ranged", "firepower", "guns"],
-  melee: ["melee", "combat", "fight", "aggressive", "charge"],
+  shooting: [
+    "shooting",
+    "ranged",
+    "firepower",
+    "guns",
+    "mixed threat",
+    "mixed-threat",
+  ],
+  melee: [
+    "melee",
+    "combat",
+    "fight",
+    "aggressive",
+    "charge",
+    "mixed threat",
+    "mixed-threat",
+  ],
   elite: ["elite", "compact", "few models"],
   horde: ["horde", "many models", "swarm"],
 };
@@ -150,6 +182,69 @@ function isNamedCharacter(unit: UnitView): boolean {
     keywords.includes("epic hero") ||
     keywords.includes("named character")
   );
+}
+
+export function rosterHasNamedCharacter(
+  roster: RosterDraftV1,
+): boolean {
+  return roster.units.some((selection) => {
+    const unit = resolveUnit(selection.unitId, roster.factionId);
+    return unit ? isNamedCharacter(unit) : false;
+  });
+}
+
+export function factionHasLegalNamedAnchor(
+  factionId: string,
+  pointsLimit: number,
+  excludedUnitIds: ReadonlySet<string> = new Set(),
+): boolean {
+  return factionUnits(factionId).some(
+    (unit) =>
+      !excludedUnitIds.has(unit.id) &&
+      isNamedCharacter(unit) &&
+      unit.raw.attachment_role !== "support" &&
+      availableModelCounts(unit, 1).some((modelCount) => {
+        const equipment = getEquipment(unit, modelCount);
+        return (
+          equipmentLoadoutIsLegal(unit, modelCount, equipment) &&
+          selectionPoints(unit, modelCount, 1, equipment, null) <=
+            pointsLimit
+        );
+      }),
+  );
+}
+
+export function namedAnchorCollectionVariants(
+  factionId: string,
+  pointsLimit: number,
+): string[][] {
+  const pool = factionUnits(factionId).filter(
+    (unit) =>
+      unit.raw.attachment_role !== "support" &&
+      availableModelCounts(unit, 1).length > 0,
+  );
+  const nonCharacters = pool
+    .filter((unit) => !isCharacterUnit(unit))
+    .map((unit) => unit.id);
+  return pool
+    .filter(isNamedCharacter)
+    .filter((unit) =>
+      availableModelCounts(unit, 1).some((modelCount) => {
+        const equipment = getEquipment(unit, modelCount);
+        return (
+          equipmentLoadoutIsLegal(unit, modelCount, equipment) &&
+          selectionPoints(unit, modelCount, 1, equipment, null) <=
+            pointsLimit
+        );
+      }),
+    )
+    .sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) ||
+        left.id.localeCompare(right.id),
+    )
+    .slice(0, 4)
+    .map((anchor) => [anchor.id, ...nonCharacters].sort());
 }
 
 function factionAncestry(factionId: string): string[] {
@@ -456,6 +551,63 @@ function resolveUnit(unitId: string, factionId?: string): UnitView | undefined {
   return units.getAny(unitId) ?? units.find(unitId);
 }
 
+/**
+ * Returns only weapon groups that require an explicit same-phase profile
+ * choice. A weapon with one shooting and one melee profile is not ambiguous.
+ */
+export function rosterProfileRequirements(
+  roster: RosterDraftV1,
+): TesseraProfileRequirement[] {
+  const requirements: TesseraProfileRequirement[] = [];
+  for (const selection of roster.units) {
+    const unit = resolveUnit(selection.unitId, roster.factionId);
+    if (!unit) continue;
+    for (const equipment of selection.equipment) {
+      if (equipment.count <= 0) continue;
+      const weapon =
+        unit.weapons.find((candidate) => candidate.id === equipment.itemId) ??
+        dataset.weapons.all.find(
+          (candidate) =>
+            candidate.id === equipment.itemId &&
+            candidate.raw.faction_id === unit.raw.faction_id,
+        );
+      if (!weapon) continue;
+      const profilesByPhase = new Map<
+        "shooting" | "fight",
+        string[]
+      >();
+      for (const profile of weapon.raw.profiles) {
+        const phase = profile.range === "Melee" ? "fight" : "shooting";
+        const names = profilesByPhase.get(phase) ?? [];
+        names.push(profile.name);
+        profilesByPhase.set(phase, names);
+      }
+      for (const [phase, profileNames] of profilesByPhase) {
+        const availableProfiles = [...new Set(profileNames)].sort();
+        if (availableProfiles.length < 2) continue;
+        requirements.push({
+          faction: roster.factionId,
+          unit: selection.name,
+          selectionId: selection.selectionId,
+          weaponGroup: equipment.name,
+          phase,
+          availableProfiles,
+          activeCount: equipment.count,
+          selectedProfile: null,
+        });
+      }
+    }
+  }
+  return requirements.sort(
+    (left, right) =>
+      left.faction.localeCompare(right.faction) ||
+      left.unit.localeCompare(right.unit) ||
+      left.weaponGroup.localeCompare(right.weaponGroup) ||
+      left.phase.localeCompare(right.phase) ||
+      (left.selectionId ?? "").localeCompare(right.selectionId ?? ""),
+  );
+}
+
 function dispositionName(dispositionId: string): string {
   return forceDispositions.get(dispositionId)?.name ?? dispositionId;
 }
@@ -730,9 +882,16 @@ function mergeBuildInput(input: BuildRosterInput): Required<
     name: input.name ?? "RosterPilot Draft",
     preferences: [
       ...new Set<PreferenceTag>(
-        input.preferences ??
-          parsed.preferences ??
-          (["objective", "durability"] satisfies PreferenceTag[]),
+        [
+          ...(
+            input.preferences ??
+            parsed.preferences ??
+            (["objective", "durability"] satisfies PreferenceTag[])
+          ),
+          ...(input.mixedThreatIntent
+            ? (["shooting", "melee"] satisfies PreferenceTag[])
+            : []),
+        ],
       ),
     ],
     allowNamedCharacters:

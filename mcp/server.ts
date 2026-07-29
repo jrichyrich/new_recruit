@@ -36,7 +36,16 @@ import {
   type TesseraPhase,
   type TesseraPreparedRoster,
   type TesseraRevisionComparisonReport,
+  type TesseraStressAnalysisStrategy,
+  type TesseraStressPortfolioPreview,
+  type TesseraStressRevisionReport,
+  type TesseraStressSuite,
+  type TesseraStressTestReport,
 } from "../lib/rosterpilot/index";
+import type {
+  BuildAndStressRosterInput,
+  BuildAndStressRosterResult,
+} from "../local/tessera/full-loop";
 
 type ArtifactWriter = (
   artifact: ExportArtifact,
@@ -103,6 +112,46 @@ type ServerOptions = {
         experimental: boolean;
       },
     ) => Promise<ResultEnvelope<TesseraRevisionComparisonReport>>;
+    stressTest?: (
+      playerRoster: RosterDraftV1,
+      opponent: {
+        kind: "faction";
+        factionId: string;
+      },
+      options: {
+        suite: TesseraStressSuite;
+        analysisStrategy: TesseraStressAnalysisStrategy;
+        resumeManifestPath?: string;
+        profilePolicyPath?: string;
+        forceRetry?: boolean;
+        outputDirectory: string;
+        overwrite: boolean;
+        experimental: boolean;
+      },
+    ) => Promise<ResultEnvelope<TesseraStressTestReport>>;
+    previewPortfolio?: (input: {
+      faction: string;
+      pointsLimit: number;
+      suite: TesseraStressSuite;
+      pointsTolerancePercent: number;
+      allowLegends: boolean;
+    }) => Promise<ResultEnvelope<TesseraStressPortfolioPreview>>;
+    buildAndStress?: (
+      input: BuildAndStressRosterInput,
+      options: {
+        outputDirectory?: string;
+        overwrite: boolean;
+      },
+    ) => Promise<ResultEnvelope<BuildAndStressRosterResult>>;
+    compareStressRevision?: (
+      baselineReportPath: string,
+      revisedRoster: RosterDraftV1,
+      options: {
+        outputDirectory: string;
+        overwrite: boolean;
+        experimental: boolean;
+      },
+    ) => Promise<ResultEnvelope<TesseraStressRevisionReport>>;
   };
   freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
   freshnessCacheMs?: number;
@@ -790,6 +839,200 @@ export function createRosterPilotMcpServer(
         }) =>
           resultContent(
             await options.tesseraCompanion!.compare!(
+              baselineReportPath,
+              revisedRoster as RosterDraftV1,
+              { outputDirectory, overwrite, experimental },
+            ),
+          ),
+      );
+    }
+
+    if (options.tesseraCompanion.previewPortfolio) {
+      server.registerTool(
+        "preview_faction_stress_portfolio",
+        {
+          title: "Preview an unknown-faction stress portfolio",
+          description:
+            "Build and validate a local-only opponent portfolio preview with simulation fingerprints, pairwise diversity, composition evidence, profile requirements, named-character coverage, and New Recruit exportability. This performs no external mutation.",
+          inputSchema: {
+            factionId: z.string().min(1),
+            pointsLimit: z.number().int().min(100).max(5000).default(1000),
+            suite: z.enum(["core-3", "diverse-9"]).default("diverse-9"),
+          },
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async ({ factionId, pointsLimit, suite }) =>
+          resultContent(
+            await options.tesseraCompanion!.previewPortfolio!({
+              faction: factionId,
+              pointsLimit,
+              suite,
+              pointsTolerancePercent: 5,
+              allowLegends: false,
+            }),
+          ),
+      );
+    }
+
+    if (options.tesseraCompanion.buildAndStress) {
+      server.registerTool(
+        "build_and_stress_roster_against_faction",
+        {
+          title: "Build and stress-test against an unknown faction list",
+          description:
+            "Build and deterministically repair a roster, enforce mission-readiness and portfolio gates, prepare verified artifacts, then run the staged Tessera stress workflow. It never applies post-simulation roster changes.",
+          inputSchema: {
+            prompt: z.string().min(1),
+            againstFaction: z.string().min(1),
+            pointsLimit: z.number().int().min(100).max(5000).optional(),
+            suite: z.enum(["core-3", "diverse-9"]).default("diverse-9"),
+            analysisStrategy: z
+              .enum(["staged", "full-all"])
+              .default("staged"),
+            profilePolicyPath: z.string().min(1).optional(),
+            resumeManifestPath: z.string().min(1).optional(),
+            outputDirectory: z.string().default("exports/tessera"),
+            allowReadinessWarnings: z.boolean().default(false),
+            forceRetry: z.boolean().default(false),
+            overwrite: z.boolean().default(false),
+            experimental: z.boolean().default(false),
+          },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: true,
+          },
+        },
+        async ({
+          prompt,
+          againstFaction,
+          pointsLimit,
+          suite,
+          analysisStrategy,
+          profilePolicyPath,
+          resumeManifestPath,
+          outputDirectory,
+          allowReadinessWarnings,
+          forceRetry,
+          overwrite,
+          experimental,
+        }) =>
+          resultContent(
+            await options.tesseraCompanion!.buildAndStress!(
+              {
+                prompt,
+                againstFaction,
+                pointsLimit,
+                suite,
+                analysisStrategy,
+                profilePolicyPath,
+                resumeManifestPath,
+                outputDirectory,
+                allowReadinessWarnings,
+                forceRetry,
+                experimental,
+              },
+              { outputDirectory, overwrite },
+            ),
+          ),
+      );
+    }
+
+    if (options.tesseraCompanion.stressTest) {
+      server.registerTool(
+        "stress_test_roster_against_faction",
+        {
+          title: "Stress-test a roster against an opponent faction",
+          description:
+            "After an explicit user request, generate a deterministic faction portfolio, prepare it through New Recruit, and measure the roster's directional combat robustness in Tessera. This is not a game win probability.",
+          inputSchema: {
+            playerRoster: RosterDraftSchema,
+            factionId: z.string().min(1),
+            suite: z.enum(["core-3", "diverse-9"]).default("diverse-9"),
+            analysisStrategy: z
+              .enum(["staged", "full-all"])
+              .default("staged"),
+            resumeManifestPath: z.string().min(1).optional(),
+            profilePolicyPath: z.string().min(1).optional(),
+            forceRetry: z.boolean().default(false),
+            outputDirectory: z.string().default("exports/tessera"),
+            overwrite: z.boolean().default(false),
+            experimental: z.boolean().default(false),
+          },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: true,
+          },
+        },
+        async ({
+          playerRoster,
+          factionId,
+          suite,
+          analysisStrategy,
+          resumeManifestPath,
+          profilePolicyPath,
+          forceRetry,
+          outputDirectory,
+          overwrite,
+          experimental,
+        }) =>
+          resultContent(
+            await options.tesseraCompanion!.stressTest!(
+              playerRoster as RosterDraftV1,
+              { kind: "faction", factionId },
+              {
+                suite,
+                analysisStrategy,
+                resumeManifestPath,
+                profilePolicyPath,
+                forceRetry,
+                outputDirectory,
+                overwrite,
+                experimental,
+              },
+            ),
+          ),
+      );
+    }
+
+    if (options.tesseraCompanion.compareStressRevision) {
+      server.registerTool(
+        "compare_stress_test_revision",
+        {
+          title: "Compare a roster revision against a stress-test portfolio",
+          description:
+            "After explicit user approval, validate a revised roster and compare it against the exact frozen opponents and settings from a baseline faction stress test. This is not a game win probability.",
+          inputSchema: {
+            baselineReportPath: z.string().min(1),
+            revisedRoster: RosterDraftSchema,
+            outputDirectory: z.string().default("exports/tessera"),
+            overwrite: z.boolean().default(false),
+            experimental: z.boolean().default(false),
+          },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: true,
+          },
+        },
+        async ({
+          baselineReportPath,
+          revisedRoster,
+          outputDirectory,
+          overwrite,
+          experimental,
+        }) =>
+          resultContent(
+            await options.tesseraCompanion!.compareStressRevision!(
               baselineReportPath,
               revisedRoster as RosterDraftV1,
               { outputDirectory, overwrite, experimental },

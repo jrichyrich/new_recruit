@@ -20,7 +20,12 @@ const runBrowserTests =
     () => false,
   ));
 
-function fixturePage(staleMeanKills: boolean): string {
+function fixturePage(
+  staleMeanKills: boolean,
+  delayedPremium = false,
+  alternateProfile = false,
+  rejectPremium = false,
+): string {
   return `<!doctype html><html><body><main>
 <h1>Roster</h1>
 <button id="import">Import .rosz</button>
@@ -30,21 +35,43 @@ function fixturePage(staleMeanKills: boolean): string {
 <script>
 let imports = 0;
 const staleMeanKills = ${JSON.stringify(staleMeanKills)};
+const delayedPremium = ${JSON.stringify(delayedPremium)};
+const alternateProfile = ${JSON.stringify(alternateProfile)};
+const rejectPremium = ${JSON.stringify(rejectPremium)};
+let premiumUnlocked = !delayedPremium;
 function showRoster() {
   document.querySelector("main").innerHTML =
     '<h1>Roster</h1><button id="import">Import .rosz</button><input id="file" hidden type="file"><button id="tactica">Tactica</button>';
   document.querySelector("#import").onclick = () => document.querySelector("#file").click();
   document.querySelector("#file").onchange = showReview;
   document.querySelector("#tactica").onclick = () => {
-    document.querySelector("main").insertAdjacentHTML("beforeend", '<button id="matrix">Army vs Army</button>');
-    document.querySelector("#matrix").onclick = showArmySelection;
+    document.querySelector("main").insertAdjacentHTML("beforeend", '<button id="matrix">' + (premiumUnlocked ? 'Army vs Army' : '🔒 Army vs Army premium') + '</button>');
+    document.querySelector("#matrix").onclick = premiumUnlocked ? showArmySelection : showUnlock;
+  };
+}
+function showUnlock() {
+  document.querySelector("main").innerHTML =
+    '<label>License key<input aria-label="License key"></label><button id="unlock">Unlock</button>';
+  document.querySelector("#unlock").onclick = () => {
+    if (rejectPremium) {
+      document.querySelector("main").innerHTML = "<p>Invalid license key</p>";
+      return;
+    }
+    setTimeout(() => {
+      premiumUnlocked = true;
+      showRoster();
+    }, 1200);
   };
 }
 function showReview() {
   const side = imports === 0 ? "Player" : "Opponent";
+  const warning =
+    alternateProfile && side === "Player"
+      ? '<p>Warning: alternate profile "Vaultswords"; unit Blade Champion; profiles: Behemor, Hurricanis; melee</p>' +
+        '<label>Blade Champion Vaultswords<select><option>Behemor</option><option>Hurricanis</option></select></label>'
+      : '<p>Warning: ' + side + ' import metadata is unverified</p>';
   document.querySelector("main").innerHTML =
-    '<h1>Review import</h1><p>Warning: ' + side +
-    ' alternate profile is unverified</p><button id="add">Add 2</button>';
+    '<h1>Review import</h1>' + warning + '<button id="add">Add 2</button>';
   document.querySelector("#add").onclick = () => {
     imports += 1;
     showRoster();
@@ -137,7 +164,12 @@ showRoster();
 </script></body></html>`;
 }
 
-async function runFixture(staleMeanKills: boolean) {
+async function runFixture(
+  staleMeanKills: boolean,
+  delayedPremium = false,
+  alternateProfile = false,
+  rejectPremium = false,
+) {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "tessera-browser-v2-"),
   );
@@ -154,6 +186,23 @@ async function runFixture(staleMeanKills: boolean) {
         opponentRoszPath: opponent,
         opponentName: "Opponent",
         analysisMode: "full",
+        licenseKey: delayedPremium ? "fixture-premium-key" : undefined,
+        profilePolicy: alternateProfile
+          ? {
+              schemaVersion: 1,
+              policyKind: "tessera-profile-policy",
+              entries: [
+                {
+                  faction: "adeptus-custodes",
+                  unit: "Blade Champion",
+                  weaponGroup: "Vaultswords",
+                  phase: "fight",
+                  selectedProfile: "Hurricanis",
+                  activeCount: 1,
+                },
+              ],
+            }
+          : undefined,
       },
       {
         baseUrl: "https://tessera-v2.test/",
@@ -163,7 +212,12 @@ async function runFixture(staleMeanKills: boolean) {
           await context.route("https://tessera-v2.test/**", async (route) => {
             await route.fulfill({
               contentType: "text/html; charset=utf-8",
-              body: fixturePage(staleMeanKills),
+              body: fixturePage(
+                staleMeanKills,
+                delayedPremium,
+                alternateProfile,
+                rejectPremium,
+              ),
             });
           });
         },
@@ -222,13 +276,58 @@ test(
     assert.equal(result.settings.phase, "Shooting");
     assert.equal(result.settings.metric, "P(wiped)");
     assert.deepEqual(result.importWarnings, {
-      player: ["Warning: Player alternate profile is unverified"],
-      opponent: ["Warning: Opponent alternate profile is unverified"],
+      player: ["Warning: Player import metadata is unverified"],
+      opponent: ["Warning: Opponent import metadata is unverified"],
     });
     assert.deepEqual(result.warnings, [
-      "Warning: Player alternate profile is unverified",
-      "Warning: Opponent alternate profile is unverified",
+      "Warning: Player import metadata is unverified",
+      "Warning: Opponent import metadata is unverified",
     ]);
+  },
+);
+
+test(
+  "waits for a delayed positive premium unlock state",
+  { skip: !runBrowserTests },
+  async () => {
+    const startedAt = Date.now();
+    const result = await runFixture(false, true);
+    assert.equal(result.scenarios.length, 16);
+    assert.ok(Date.now() - startedAt >= 1_000);
+  },
+);
+
+test(
+  "returns a distinct error when Tessera rejects the premium key",
+  { skip: !runBrowserTests },
+  async () => {
+    await assert.rejects(
+      () => runFixture(false, true, false, true),
+      (error: unknown) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "TESSERA_PREMIUM_KEY_REJECTED",
+    );
+  },
+);
+
+test(
+  "applies a frozen profile policy and returns structured import issues",
+  { skip: !runBrowserTests },
+  async () => {
+    const result = await runFixture(false, false, true);
+    const playerIssue = result.importIssues?.find(
+      (issue) => issue.side === "player",
+    );
+    assert.equal(playerIssue?.code, "alternate-profile");
+    assert.equal(playerIssue?.unit, "Blade Champion");
+    assert.equal(playerIssue?.weaponGroup, "Vaultswords");
+    assert.equal(playerIssue?.phase, "fight");
+    assert.deepEqual(playerIssue?.availableProfiles, [
+      "Behemor",
+      "Hurricanis",
+    ]);
+    assert.equal(playerIssue?.resolvedByPolicy, true);
   },
 );
 
@@ -248,8 +347,8 @@ test(
     );
     assert.equal(result.cells.length, 8);
     assert.deepEqual(result.importWarnings, {
-      player: ["Warning: Player alternate profile is unverified"],
-      opponent: ["Warning: Opponent alternate profile is unverified"],
+      player: ["Warning: Player import metadata is unverified"],
+      opponent: ["Warning: Opponent import metadata is unverified"],
     });
     assert.match(result.warnings.join("\n"), /stale|did not refresh/i);
     assert.match(result.warnings.join("\n"), /mean-kills/i);

@@ -1,4 +1,7 @@
 import type {
+  ProfilePolicyV1,
+} from "../../lib/rosterpilot";
+import type {
   WorkerRosterExpectation,
   WorkerResult,
 } from "../new-recruit/contracts";
@@ -9,8 +12,8 @@ import type {
   TesseraPhase,
 } from "../tessera/browser";
 
-export const LOCAL_AGENT_PROTOCOL_VERSION = 4;
-export const LOCAL_AGENT_VERSION = "1.3.0";
+export const LOCAL_AGENT_PROTOCOL_VERSION = 5;
+export const LOCAL_AGENT_VERSION = "1.4.0";
 export const LOCAL_AGENT_MAX_FRAME_BYTES = 32 * 1024 * 1024;
 
 export type CredentialState =
@@ -72,9 +75,14 @@ export type LocalAgentTesseraPayload = {
   analysisMode?: TesseraAnalysisMode;
   phases?: TesseraPhase[];
   metrics?: TesseraMetric[];
+  profilePolicy?: ProfilePolicyV1 | null;
+  sessionId?: string;
 };
 
 export type LocalAgentTesseraResult = TesseraBrowserResult;
+export type LocalAgentTesseraSessionCloseResult = {
+  closed: boolean;
+};
 
 export type LocalAgentRequest =
   | {
@@ -93,6 +101,12 @@ export type LocalAgentRequest =
       protocolVersion: number;
       operation: "tessera.analyze";
       payload: LocalAgentTesseraPayload;
+    }
+  | {
+      id: string;
+      protocolVersion: number;
+      operation: "tessera.session.close";
+      payload: { sessionId: string };
     };
 
 export type LocalAgentResponse =
@@ -103,7 +117,8 @@ export type LocalAgentResponse =
       data:
         | LocalAgentStatus
         | LocalAgentDeliveryResult
-        | LocalAgentTesseraResult;
+        | LocalAgentTesseraResult
+        | LocalAgentTesseraSessionCloseResult;
     }
   | {
       id: string;

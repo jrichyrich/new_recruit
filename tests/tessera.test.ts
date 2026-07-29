@@ -283,7 +283,7 @@ function roster() {
 }
 function review() {
   document.querySelector("main").innerHTML =
-    '<h1>Review import</h1><p>1 warning</p><p>alternate profiles are unverified</p><button id="add">Add 1</button>';
+    '<h1>Review import</h1><p>1 warning</p><p>import metadata is unverified</p><button id="add">Add 1</button>';
   document.querySelector("#add").onclick = () => { imports += 1; roster(); };
 }
 function tactica() {
@@ -307,7 +307,7 @@ document.querySelector("#welcome").onclick = tactica;
       assert.equal(result.cells[1].direction, "opponent-to-player");
       assert.equal(result.settings.phase, "Shooting");
       assert.equal(result.settings.metric, "P(wiped)");
-      assert.match(result.warnings.join(" "), /alternate profiles/i);
+      assert.match(result.warnings.join(" "), /import metadata/i);
       assert.doesNotMatch(
         JSON.stringify(result),
         /fixture-tessera-key-never-return/,

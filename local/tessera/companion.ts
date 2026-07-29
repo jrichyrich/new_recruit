@@ -11,6 +11,7 @@ import {
   validateRoster,
   type EnrichedRoszSummary,
   type ModifyRosterOperation,
+  type ProfilePolicyV1,
   type ResultEnvelope,
   type RosterDraftV1,
   type TesseraArchetype,
@@ -87,11 +88,13 @@ export type TesseraAnalysisOptions = WriteOptions & {
   analysisMode?: "quick" | "full";
   phases?: TesseraPhase[];
   metrics?: TesseraMetric[];
+  profilePolicy?: ProfilePolicyV1 | null;
+  sessionId?: string;
   allowPointMismatch?: boolean;
   includeChangeCandidates?: boolean;
 };
 
-type TesseraDependencies = {
+export type TesseraDependencies = {
   deliver?: typeof deliverRosterToNewRecruit;
   enrich?: typeof enrichRoszThroughNewRecruit;
   runBrowser?: typeof runTesseraBrowserMatchup;
@@ -212,6 +215,8 @@ async function runTesseraViaAgent(
     analysisMode: input.analysisMode,
     phases: input.phases ? [...input.phases] : undefined,
     metrics: input.metrics ? [...input.metrics] : undefined,
+    profilePolicy: input.profilePolicy,
+    sessionId: input.sessionId,
   });
 }
 
@@ -587,8 +592,43 @@ function metricField(metric: TesseraMetric): keyof TesseraMetricValues {
   return "meanDamage";
 }
 
-function warningConfidence(warnings: string[]): TesseraConfidence {
-  if (warnings.some((warning) => /alternate profile|ambiguous/i.test(warning))) {
+function unitMatchesIssue(
+  unit: TesseraUnitInstance,
+  issueUnit: string | null,
+): boolean {
+  if (!issueUnit) return false;
+  const normalizedIssue = issueUnit
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+  return [unit.name, unit.label].some((value) => {
+    const normalizedUnit = value
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLocaleLowerCase();
+    return (
+      normalizedUnit.includes(normalizedIssue) ||
+      normalizedIssue.includes(normalizedUnit)
+    );
+  });
+}
+
+function warningConfidence(
+  warnings: string[],
+  result: TesseraBrowserResult,
+  attacker: TesseraUnitInstance,
+  phase: TesseraPhase,
+): TesseraConfidence {
+  if (
+    (result.importIssues ?? []).some(
+      (entry) =>
+        entry.side === attacker.side &&
+        entry.code === "alternate-profile" &&
+        !entry.resolvedByPolicy &&
+        (entry.phase === null || entry.phase === phase) &&
+        unitMatchesIssue(attacker, entry.unit),
+    )
+  ) {
     return "ambiguous";
   }
   return warnings.length > 0 ? "review" : "high";
@@ -608,6 +648,11 @@ function consolidateBrowserScenarios(
       phase: TesseraPhase;
       direction: TesseraDirection;
       metrics: Set<TesseraMetric>;
+      metricRuns: Array<{
+        metric: TesseraMetric;
+        iterations: number | null;
+        settings: Record<string, string>;
+      }>;
       iterations: number | null;
       settings: Record<string, string>;
       values: Map<string, TesseraScenarioCell>;
@@ -625,12 +670,18 @@ function consolidateBrowserScenarios(
         phase,
         direction,
         metrics: new Set<TesseraMetric>(),
+        metricRuns: [],
         iterations: raw.iterations ?? null,
-        settings: raw.settings ?? {},
+        settings: { ...(raw.settings ?? {}) },
         values: new Map<string, TesseraScenarioCell>(),
         warnings: [],
       };
     group.metrics.add(metric);
+    group.metricRuns.push({
+      metric,
+      iterations: raw.iterations ?? null,
+      settings: { ...(raw.settings ?? {}) },
+    });
     group.iterations ??= raw.iterations ?? null;
     Object.assign(group.settings, raw.settings ?? {});
     const attackers =
@@ -645,13 +696,6 @@ function consolidateBrowserScenarios(
       direction === "player-to-opponent"
         ? (result.importWarnings?.opponent ?? [])
         : (result.importWarnings?.player ?? []);
-    const confidence = warningConfidence(attackerImportWarnings);
-    const warningRefs = [
-      ...attackerImportWarnings.map(
-        (warning) => `Attacker import: ${warning}`,
-      ),
-      ...targetImportWarnings.map((warning) => `Target import: ${warning}`),
-    ];
     for (const rawCell of raw.cells) {
       const attacker = attackers[rawCell.attackerIndex];
       const target = targets[rawCell.targetIndex];
@@ -661,6 +705,32 @@ function consolidateBrowserScenarios(
         );
         continue;
       }
+      const confidence = warningConfidence(
+        attackerImportWarnings,
+        result,
+        attacker,
+        phase,
+      );
+      const relevantIssues = (result.importIssues ?? []).filter(
+        (entry) =>
+          (entry.side === attacker.side &&
+            (entry.unit === null || unitMatchesIssue(attacker, entry.unit))) ||
+          (entry.side === target.side &&
+            (entry.unit === null || unitMatchesIssue(target, entry.unit))),
+      );
+      const warningRefs = relevantIssues.length > 0
+        ? relevantIssues.map(
+            (entry) =>
+              `${entry.side === attacker.side ? "Attacker" : "Target"} import: ${entry.message}`,
+          )
+        : [
+            ...attackerImportWarnings.map(
+              (warning) => `Attacker import: ${warning}`,
+            ),
+            ...targetImportWarnings.map(
+              (warning) => `Target import: ${warning}`,
+            ),
+          ];
       const cellKey = `${attacker.instanceId}:${target.instanceId}`;
       const cell =
         group.values.get(cellKey) ??
@@ -712,6 +782,9 @@ function consolidateBrowserScenarios(
       phase: group.phase,
       direction: group.direction,
       metrics: [...group.metrics],
+      metricRuns: group.metricRuns.sort((left, right) =>
+        left.metric.localeCompare(right.metric),
+      ),
       iterations: group.iterations,
       settings: group.settings,
       cells: [...group.values.values()],
@@ -1377,6 +1450,8 @@ export async function analyzeRosterMatchup(
           analysisMode: configuration.analysisMode,
           phases: configuration.phases,
           metrics: configuration.metrics,
+          profilePolicy: options.profilePolicy,
+          sessionId: options.sessionId,
         });
         Object.assign(settings, result.settings);
         warnings.push(...result.warnings);
@@ -1395,8 +1470,15 @@ export async function analyzeRosterMatchup(
           ),
         );
       } catch (error) {
+        const errorCode =
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          typeof error.code === "string"
+            ? error.code
+            : "TESSERA_COMPANION_FAILED";
         warnings.push(
-          `Experimental Tessera analysis failed for ${prepared.rosterName}: ${
+          `[${errorCode}] Experimental Tessera analysis failed for ${prepared.rosterName}: ${
             error instanceof Error ? error.message : "unknown browser failure"
           }`,
         );

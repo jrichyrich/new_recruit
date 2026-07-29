@@ -463,6 +463,18 @@ test("keeps alternate-profile warnings visible and out of confident findings", a
           result.importWarnings.player = [
             '"Vaultswords" has alternate profiles.',
           ];
+          result.importIssues = [
+            {
+              code: "alternate-profile",
+              side: "player",
+              unit: player.units[0].name,
+              weaponGroup: "Vaultswords",
+              availableProfiles: ["Behemor", "Hurricanis"],
+              phase: "fight",
+              message: '"Vaultswords" has alternate profiles.',
+              resolvedByPolicy: false,
+            },
+          ];
           result.warnings = [...result.importWarnings.player];
           return result;
         },
@@ -478,14 +490,30 @@ test("keeps alternate-profile warnings visible and out of confident findings", a
           (scenario) =>
             scenario.direction === "player-to-opponent",
         )
+        .filter((scenario) => scenario.phase === "fight")
         .every((scenario) =>
-          scenario.cells.every(
-            (cell) =>
-              cell.confidence === "ambiguous" &&
-              cell.warningRefs.some((warning) =>
-                /alternate profiles/i.test(warning),
-              ),
-          ),
+          scenario.cells
+            .filter((cell) => cell.attacker.name === player.units[0].name)
+            .every(
+              (cell) =>
+                cell.confidence === "ambiguous" &&
+                cell.warningRefs.some((warning) =>
+                  /alternate profiles/i.test(warning),
+                ),
+            ),
+        ),
+    );
+    assert.ok(
+      scenarios
+        .filter(
+          (scenario) =>
+            scenario.direction === "player-to-opponent" &&
+            scenario.phase === "fight",
+        )
+        .every((scenario) =>
+          scenario.cells
+            .filter((cell) => cell.attacker.name !== player.units[0].name)
+            .every((cell) => cell.confidence !== "ambiguous"),
         ),
     );
     assert.ok(
@@ -500,7 +528,14 @@ test("keeps alternate-profile warnings visible and out of confident findings", a
     );
     assert.equal(
       analyzed.data.findings?.some(
-        (finding) => finding.kind === "reliable-coverage",
+        (finding) =>
+          finding.kind === "reliable-coverage" &&
+          finding.evidence.some(
+            (entry) =>
+              entry.phase === "fight" &&
+              entry.attackerInstanceId ===
+                analyzed.data?.player.units?.[0].instanceId,
+          ),
       ),
       false,
     );

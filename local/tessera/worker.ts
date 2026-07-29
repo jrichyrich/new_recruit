@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 
+import type { ProfilePolicyV1 } from "../../lib/rosterpilot";
 import {
   runTesseraBrowserMatchup,
   TesseraAutomationError,
@@ -19,6 +20,7 @@ type WorkerRequest = {
   analysisMode?: TesseraAnalysisMode;
   phases?: TesseraPhase[];
   metrics?: TesseraMetric[];
+  profilePolicy?: ProfilePolicyV1 | null;
 };
 
 type WorkerResult =
@@ -54,8 +56,15 @@ async function retrieveLicenseKey(brokerPath: string): Promise<string> {
     message?: string;
   };
   if (!parsed.ok || !parsed.licenseKey) {
+    const absent = [
+      "NOT_CONFIGURED",
+      "KEY_NOT_CONFIGURED",
+      "CREDENTIAL_NOT_CONFIGURED",
+    ].includes(parsed.code ?? "");
     throw new TesseraAutomationError(
-      parsed.code ?? "KEYCHAIN_READ_FAILED",
+      absent
+        ? "TESSERA_PREMIUM_KEY_ABSENT"
+        : parsed.code ?? "KEYCHAIN_READ_FAILED",
       parsed.message ?? "The Keychain broker did not return a Tessera key.",
     );
   }
@@ -87,6 +96,7 @@ try {
     analysisMode: input.analysisMode,
     phases: input.phases,
     metrics: input.metrics,
+    profilePolicy: input.profilePolicy,
   });
   process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
 } catch (error) {

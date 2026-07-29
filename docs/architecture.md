@@ -18,13 +18,14 @@ capabilities:
 | `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
 | New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
 | Tessera handoff and experimental matchup matrix | Verified New Recruit-enriched rosters | Local temporary browser adapter |
+| Known-faction stress testing | A validated player roster plus deterministic legal, exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, local New Recruit enrichment, and local Tessera adapter |
 
 ### Workflow composition
 
 Capabilities compose, but user workflows never continue implicitly. A legal
 canonical roster can be the final result, an input to a file export, an input
-to an explicitly requested New Recruit delivery, or the player side of an
-explicitly requested Tessera comparison.
+to an explicitly requested New Recruit delivery, the player side of an exact
+Tessera comparison, or the player side of a known-faction stress test.
 
 ```mermaid
 flowchart LR
@@ -35,7 +36,9 @@ flowchart LR
     deliver["Explicit New Recruit delivery"]
     enrich["Verified profile-rich ROSZ"]
     compare["Explicit Tessera comparison"]
-    report["JSON and interactive HTML report"]
+    stress["Explicit known-faction stress test"]
+    portfolio["Frozen deterministic proxy portfolio"]
+    report["JSON and interactive HTML reports"]
 
     build --> validate
     validate --> finish
@@ -44,12 +47,16 @@ flowchart LR
     deliver --> enrich
     enrich -. "optional simulation request" .-> compare
     compare --> report
+    validate -. "optional stress-test request" .-> stress
+    stress --> portfolio
+    portfolio -->|"verified enrichment and simulation"| report
 ```
 
 The dotted edges are explicit choices, not automatic transitions. Tessera has
 a technical dependency on New Recruit enrichment, but creating or exporting a
-roster does not trigger that dependency. Comparison suggestions never mutate a
-canonical roster.
+roster does not trigger that dependency. Exact comparison and faction stress
+testing are also separate explicit choices. Comparison suggestions never
+mutate a canonical roster.
 
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation
@@ -104,12 +111,70 @@ worker may retrieve the dedicated Keychain item, and it enters that key only
 after verifying the exact Tessera origin and locating its visible Licence key
 field.
 
-The default full analysis captures 16 raw scenarios per opponent: two phases,
+An exact-list full analysis captures 16 raw scenarios per opponent: two phases,
 four metrics, and both directions. Quick mode captures Shooting wipe
 probability in both directions. The adapter confirms each visible phase and
 metric selection, records the iteration count and settings, maps repeated unit
 names to stable roster instances, and consolidates metric matrices into
 phase/direction scenarios.
+
+A known-faction stress test freezes a deterministic proxy portfolio before any
+browser work. `core-3` attempts balanced-control, ranged-pressure, and
+assault-pressure lists with mixed composition. `diverse-9` crosses those three
+postures with mixed, mass, and elite-heavy compositions. Proxies must be legal,
+New Recruit-exportable, within the same 5% points tolerance, and distinct by a
+simulation-payload fingerprint over units, models, equipment, enhancements, and
+only modeled rules. Detachment-only differences do not count. `core-3` requires
+three unique proxies and all postures. `diverse-9` targets nine but may proceed
+with six to eight unique proxies only when all postures remain represented;
+weights are renormalized and the status is capped at `degraded`. Mixed, mass,
+and elite-heavy compositions have explicit role, body-share, elite-share, and
+model-count bounds. Named anchors are deliberately evaluated where legal.
+Available proxies have equal analytical weight; they are coverage cases, not an
+empirical distribution of tournament lists.
+
+The explicit full-loop adapter first builds with structured opponent context
+and mixed-threat intent, runs a bounded deterministic repair, then stops unless
+the roster uses at least 98% of its points and has no red overall mission
+readiness result. The escape hatch is explicit. It assigns a stable descriptive
+name and never applies post-simulation changes.
+
+Stress preflight validates the player, locally verifies `.rosz` export for all
+available proxies, reserves report and manifest paths, and scans known
+multi-profile equipment before starting an external action. Unresolved choices
+produce a policy scaffold and `TESSERA_PROFILE_POLICY_REQUIRED`; no list is
+delivered. A `ProfilePolicyV1` entry binds faction, unit, weapon group, phase,
+selected profile, and active count. The enriched archives are checked against
+the complete inventory and the policy's canonical SHA-256 is frozen into the
+execution fingerprint, manifest, report provenance, and paired revision.
+
+The default staged strategy screens every available proxy with half-wipe
+probability for both phases and directions, then selects three frozen
+representatives—stress, central, and contrast—for the other three metrics. A
+complete `diverse-9` staged run captures 72 raw scenarios. `full-all` applies
+all four metrics to every proxy, producing 144 raw scenarios for a complete
+suite. Tessera simulation still requires an explicit `experimental` option;
+without it, the orchestrator returns prepared handoffs and a partial report
+without inferred cells.
+
+Stress report and manifest schema v2 record the player fingerprint and data
+pin, profile-policy hash, opponent faction, frozen portfolio, configuration,
+prepared-artifact hashes, representative selection, and every stage's status,
+attempt count, timestamps, structured error, retryability, next action, report
+path, and content hash. Resume revalidates identity, requested cells, exact
+profile policy, and hashes. V1 manifests are migrated in memory and rewritten
+as v2 only on resume. V1 paired baselines without exact profile provenance are
+rejected. Transient entries receive at most three automatic attempts with
+one- and three-second backoff and five lifetime attempts through explicit
+resume; terminal errors require an explicit forced retry.
+
+Before any New Recruit delivery, the manifest persists an in-progress marker.
+The verified receipt and enriched-file hash replace it after delivery. If the
+process stops in that narrow interval, resume reports an unknown external
+outcome and fails closed instead of risking a duplicate list. Resume also
+rejects a changed fingerprint, data pin, faction, suite, strategy, or
+simulation setting. This prevents a resumed result from silently mixing
+incomparable runs.
 
 Matchups at or below a 5% difference relative to the player's points limit are
 classified as matched. Exact opponents outside that inclusive tolerance fail
@@ -120,19 +185,52 @@ Out-of-tolerance generated archetypes are omitted.
 Schema-v2 reports retain visible Tessera settings, import warnings, structured
 findings with cell-level evidence, and up to three validated single-operation
 change candidates for matched comparisons. Candidates never mutate a roster.
-Alternate-profile warnings are attributed to the imported side; that side's
-attacking cells are marked ambiguous and cannot support confident findings or
-candidate evidence.
+Import issues carry side, unit, weapon group, phase, and profile choices; only
+the affected attacking unit's cells are ambiguous.
 After explicit approval, `compare_roster_revision` validates a same-faction
 revision, reuses the baseline opponents and configuration, and records
 improved, worsened, unchanged, or ambiguous cell deltas.
+
+Faction stress reports are schema v2. `partial` means required preparation or
+simulation work is missing and takes precedence over confidence problems.
+`inconclusive` means capture completed but confidence or posture coverage is
+insufficient. `degraded` requires at least six confident unique `diverse-9`
+proxies across all postures and three complete deep dives. `complete` requires
+all nine; `core-3` requires its three. Missing estimates are `null`, while
+below-threshold observations live in a separate `provisional` structure with
+explicit point coverage. Reports summarize directional combat robustness,
+never whole-game win probability. Mission readiness remains separate.
+
+After explicit approval, `compare_stress_test_revision` requires the same
+player faction, points limit, and pinned data release. It reuses the exact
+baseline enriched proxy files, portfolio, analysis strategy, simulator
+configuration, and representative selections; it never regenerates or
+reselects the opposing suite. Before revised-player delivery it verifies every
+proxy's execution fingerprint and SHA-256 content hash. After the rerun it
+requires identical recorded settings and iteration counts for each exact
+phase/metric/direction scenario, not merely matching stage-level totals. Margin
+changes smaller than one percentage point are classified as unchanged. The
+paired conclusion uses the screening half-wipe robustness deltas; deep-dive
+wipe, kill, and damage results remain supporting evidence. The conclusion is
+suppressed if the mission-readiness guardrail detects a regression.
 
 If UI automation is disabled or an individual Tessera run fails, verified
 enriched artifacts remain usable and the report is `partial`, with missing
 scenarios and warnings kept visible. Reports describe modeled damage
 efficiency and unit threats, never a whole-game win probability. Hosted MCP,
-REST, OpenAPI, and the public website do not register any browser-backed
-Tessera tools.
+REST, OpenAPI, and the public website do not register exact-matchup or
+stress-test browser tools. Faction stress testing is available only through
+the terminal CLI and local stdio MCP; there is no public stress-test UI.
+
+Verified New Recruit artifacts are stored in a local content-addressed cache
+keyed by execution fingerprint and pinned source data. Reuse requires both the
+file hash and exact enriched summary to match. Remote list URLs are retained in
+a local run inventory and are never deleted automatically. A stress run also
+reuses one isolated Tessera browser-session state across its proxy requests;
+the local agent removes it at completion or after a 30-minute expiry. Premium
+unlock retains the key through a bounded positive-state poll, and absence,
+rejection, timeout, still-locked UI, missing/stale matrix, and incomplete
+scenario failures have distinct codes.
 
 ### Freshness policy
 
@@ -169,6 +267,7 @@ flowchart LR
         freshness["Cached live freshness check"]
         engine["Search, build, and modify"]
         validator["Roster validation"]
+        stressCore["Stress portfolio and mission readiness"]
         exporter["ROSZ, ROS, JSON, text, and HTML exporters"]
         handoff["Credential-free New Recruit handoff"]
     end
@@ -189,7 +288,7 @@ flowchart LR
         profile[("Dedicated Chrome profile")]
         tempProfile[("Temporary Tessera profile")]
         files[("Local export directory")]
-        reports[("Matchup reports")]
+        reports[("Exact-matchup and faction-stress reports")]
     end
 
     newRecruit["newrecruit.eu"]
@@ -211,13 +310,15 @@ flowchart LR
     catalogue --> engine
     freshness -. "warnings only" .-> engine
     engine --> validator
+    engine --> stressCore
     validator --> exporter
     exporter --> handoff
 
     cli -. "explicit deliver request" .-> companion
     localMcp -. "local-only MCP tool" .-> companion
-    cli -. "explicit comparison request" .-> tesseraCompanion
+    cli -. "explicit comparison or stress request" .-> tesseraCompanion
     localMcp -. "local-only MCP tool" .-> tesseraCompanion
+    stressCore --> tesseraCompanion
     tesseraCompanion --> companion
     companion --> validator
     companion --> exporter
@@ -413,14 +514,16 @@ Security invariants:
 | Roster engine | Search, build, modify, validate, explain, export | `lib/rosterpilot/` |
 | Catalogue generator | Pin and reconcile BSData identifiers, coverage, and conflicts | `scripts/sync-bsdata.ts` |
 | Freshness monitor | Compare pins with npm, BSData, and the official MFM app | `lib/rosterpilot/freshness.ts` |
+| Stress-test core | Generate deterministic faction portfolios, structural fingerprints, and mission-readiness guardrails | `lib/rosterpilot/stress-portfolio.ts`, `lib/rosterpilot/mission-readiness.ts` |
 | Local CLI | Terminal commands and local file operations | `cli/rosterpilot.ts` |
 | MCP server | Shared roster tools plus conditionally registered local tools | `mcp/server.ts` |
 | Local stdio MCP | Injects local file writers and macOS companion | `mcp/stdio.ts` |
 | Per-user local agent | Cross-process queue, provider status, checkout identity, and secret-free roster job transport | `local/agent/server.ts` |
 | Companion orchestrator | Validation, collisions, local-agent requests, and artifact publication | `local/new-recruit/companion.ts` |
 | Browser adapter | Authentication, import, verification, Pretty export | `local/new-recruit/browser.ts` |
-| Tessera orchestrator | Matched-points policy, scenario consolidation, findings, candidates, and revision deltas | `local/tessera/companion.ts` |
-| Tessera UI and reports | Visible simulator control/extraction plus interactive HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts` |
+| Tessera orchestrator | Exact matchups, matched-points policy, scenario consolidation, findings, candidates, and exact-list revision deltas | `local/tessera/companion.ts` |
+| Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
+| Tessera UI and reports | Visible simulator control/extraction plus exact-matchup and faction-stress HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts`, `local/tessera/stress-report.ts` |
 | Isolated worker | Holds credentials in memory and returns sanitized results | `local/new-recruit/worker.ts` |
 | Keychain broker | Native secure configuration and restricted credential access | `native/NewRecruitKeychainBroker.swift` |
 | Hosted API | Credential-free REST and remote handoff | `app/api/v1/[...path]/route.ts` |
@@ -458,10 +561,24 @@ The companion fails closed:
 - changed selectors or import failures return explicit error codes;
 - exact Tessera opponents outside the 5% points tolerance stop unless the
   caller explicitly allows an unmatched directional analysis;
+- stress testing completes local validation, mapping preflight, and output-path
+  reservation before browser activity; fewer than three unique `core-3` or six
+  unique `diverse-9` payloads stops the run;
+- unavailable faction templates and failed scenario stages remain explicit
+  instead of being replaced or inferred;
+- resume rejects a changed player fingerprint, data pin, faction, suite,
+  strategy, or simulation setting and reuses only schema-, identity-, cell-,
+  and hash-validated reports;
+- an uncertain post-delivery crash fails closed instead of repeating the New
+  Recruit mutation;
 - incomplete Tessera phases, metrics, directions, or cells remain visible as
   partial scenarios and never become inferred values;
 - revision comparison rejects invalid, wrong-faction, or incompatible
   baselines before importing the revised roster;
+- stress revision comparison also verifies every frozen proxy execution
+  fingerprint and content hash, verifies each phase/metric/direction scenario's
+  settings and iterations, and never regenerates or reselects the baseline
+  portfolio;
 - verification mismatches preserve the newly created list and its URL;
 - download failures preserve the verified imported list;
 - file collisions never overwrite existing artifacts unless explicitly

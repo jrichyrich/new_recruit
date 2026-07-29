@@ -10,6 +10,7 @@ import {
   type LocalAgentDeliveryResult,
   type LocalAgentTesseraPayload,
   type LocalAgentTesseraResult,
+  type LocalAgentTesseraSessionCloseResult,
   type LocalAgentRequest,
   type LocalAgentResponse,
   type LocalAgentStatus,
@@ -253,5 +254,20 @@ export function runTesseraThroughLocalAgent(
       payload,
     },
     options,
+  );
+}
+
+export function closeTesseraLocalAgentSession(
+  sessionId: string,
+  options?: LocalAgentClientOptions,
+): Promise<LocalAgentTesseraSessionCloseResult> {
+  return request<LocalAgentTesseraSessionCloseResult>(
+    {
+      id: randomUUID(),
+      protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
+      operation: "tessera.session.close",
+      payload: { sessionId },
+    },
+    { ...options, timeoutMs: options?.timeoutMs ?? 10_000 },
   );
 }

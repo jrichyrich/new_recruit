@@ -162,6 +162,10 @@ export async function startLocalAgent(
     options.spoolDirectory ?? localAgentSpoolDirectory();
   const requestsDirectory = path.join(spoolDirectory, "requests");
   const responsesDirectory = path.join(spoolDirectory, "responses");
+  const tesseraSessionsDirectory = path.join(
+    spoolDirectory,
+    "tessera-sessions",
+  );
   const brokerPath = options.brokerPath ?? installedBrokerPath();
   const profileDirectory =
     options.profileDirectory ?? newRecruitProfileDirectory();
@@ -172,6 +176,77 @@ export async function startLocalAgent(
   let activeJob = false;
   let queuedJobs = 0;
   let queue = Promise.resolve();
+  const tesseraSessionTtlMs = 30 * 60_000;
+  const tesseraSessions = new Map<
+    string,
+    { directory: string; lastUsedAt: number }
+  >();
+
+  function validatedSessionId(sessionId: string): string {
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(sessionId)) {
+      throw Object.assign(
+        new Error("The Tessera session id is invalid."),
+        { code: "LOCAL_AGENT_PROTOCOL_ERROR" },
+      );
+    }
+    return sessionId;
+  }
+
+  async function cleanupExpiredTesseraSessions(): Promise<void> {
+    const cutoff = Date.now() - tesseraSessionTtlMs;
+    for (const [sessionId, session] of tesseraSessions) {
+      if (session.lastUsedAt >= cutoff) continue;
+      tesseraSessions.delete(sessionId);
+      await rm(session.directory, { recursive: true, force: true });
+    }
+    const directories = await readdir(tesseraSessionsDirectory).catch(
+      () => [],
+    );
+    await Promise.all(
+      directories.map(async (directory) => {
+        if (tesseraSessions.has(directory)) return;
+        const target = path.join(tesseraSessionsDirectory, directory);
+        const metadata = await stat(target).catch(() => null);
+        if (metadata?.isDirectory() && metadata.mtimeMs < cutoff) {
+          await rm(target, { recursive: true, force: true });
+        }
+      }),
+    );
+  }
+
+  async function tesseraProfileDirectory(
+    sessionId: string | undefined,
+    fallbackRoot: string,
+  ): Promise<string> {
+    if (!sessionId) return path.join(fallbackRoot, "profile");
+    const id = validatedSessionId(sessionId);
+    await cleanupExpiredTesseraSessions();
+    const existing = tesseraSessions.get(id);
+    if (existing) {
+      existing.lastUsedAt = Date.now();
+      return existing.directory;
+    }
+    const directory = path.join(tesseraSessionsDirectory, id);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    tesseraSessions.set(id, {
+      directory,
+      lastUsedAt: Date.now(),
+    });
+    return directory;
+  }
+
+  async function closeTesseraSession(
+    sessionId: string,
+  ): Promise<{ closed: boolean }> {
+    const id = validatedSessionId(sessionId);
+    const session = tesseraSessions.get(id);
+    tesseraSessions.delete(id);
+    const directory =
+      session?.directory ?? path.join(tesseraSessionsDirectory, id);
+    const present = await exists(directory);
+    await rm(directory, { recursive: true, force: true });
+    return { closed: present };
+  }
 
   async function brokerStatus(provider: "new-recruit" | "tessera"): Promise<{
     available: boolean;
@@ -353,7 +428,10 @@ export async function startLocalAgent(
         temporary,
         safeFilename(payload.opponentFilename),
       );
-      const profilePath = path.join(temporary, "profile");
+      const profilePath = await tesseraProfileDirectory(
+        payload.sessionId,
+        temporary,
+      );
       await Promise.all([
         writeFile(
           playerPath,
@@ -379,6 +457,7 @@ export async function startLocalAgent(
           analysisMode: payload.analysisMode,
           phases: payload.phases,
           metrics: payload.metrics,
+          profilePolicy: payload.profilePolicy,
         }),
       );
       const worker = JSON.parse(result.stdout) as
@@ -465,7 +544,9 @@ export async function startLocalAgent(
           ? await status()
           : request.operation === "new-recruit.deliver"
             ? await queuedDelivery(request.payload)
-            : await queuedTessera(request.payload);
+            : request.operation === "tessera.analyze"
+              ? await queuedTessera(request.payload)
+              : await closeTesseraSession(request.payload.sessionId);
       return {
         id: request.id,
         ok: true,
@@ -494,10 +575,12 @@ export async function startLocalAgent(
 
   await mkdir(requestsDirectory, { recursive: true, mode: 0o700 });
   await mkdir(responsesDirectory, { recursive: true, mode: 0o700 });
+  await mkdir(tesseraSessionsDirectory, { recursive: true, mode: 0o700 });
   await Promise.all([
     chmod(spoolDirectory, 0o700),
     chmod(requestsDirectory, 0o700),
     chmod(responsesDirectory, 0o700),
+    chmod(tesseraSessionsDirectory, 0o700),
   ]);
   async function cleanStaleSpool() {
     const cutoff = Date.now() - 60 * 60_000;
@@ -614,7 +697,10 @@ export async function startLocalAgent(
     void scanSpool();
   }, 100);
   const spoolCleanupTimer = setInterval(() => {
-    void cleanStaleSpool();
+    void Promise.all([
+      cleanStaleSpool(),
+      cleanupExpiredTesseraSessions(),
+    ]);
   }, 10 * 60_000);
   await scanSpool();
 
@@ -652,6 +738,12 @@ export async function startLocalAgent(
       spoolClosed = true;
       clearInterval(spoolTimer);
       clearInterval(spoolCleanupTimer);
+      await Promise.all(
+        [...tesseraSessions.values()].map((session) =>
+          rm(session.directory, { recursive: true, force: true }),
+        ),
+      );
+      tesseraSessions.clear();
       throw error;
     } finally {
       process.umask(previousUmask);

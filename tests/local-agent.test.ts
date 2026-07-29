@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  access,
   chmod,
   mkdtemp,
   readFile,
@@ -17,6 +18,7 @@ import {
   type LocalAgentResponse,
 } from "../local/agent/contracts";
 import {
+  closeTesseraLocalAgentSession,
   deliverThroughLocalAgent,
   getLocalAgentStatus,
   LocalAgentError,
@@ -290,6 +292,76 @@ process.stdout.write(JSON.stringify({
       JSON.stringify(result),
       /license|credential|rosterpilot-agent-tessera-/i,
     );
+  } finally {
+    await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("local agent reuses and explicitly removes an isolated Tessera session", async () => {
+  const directory = await mkdtemp(
+    path.join("/private/tmp", "rosterpilot-agent-session-"),
+  );
+  const brokerPath = path.join(directory, "broker");
+  const workerPath = path.join(directory, "tessera-worker.mjs");
+  const profileLog = path.join(directory, "profiles.log");
+  await writeFile(
+    brokerPath,
+    '#!/bin/sh\nprintf \'{"ok":true,"configured":true}\\n\'\n',
+  );
+  await chmod(brokerPath, 0o700);
+  await writeFile(
+    workerPath,
+    `import { appendFileSync } from "node:fs";
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+appendFileSync(${JSON.stringify(profileLog)}, input.profileDirectory + "\\n");
+process.stdout.write(JSON.stringify({
+  ok: true,
+  data: {
+    settings: {},
+    warnings: [],
+    cells: [],
+    scenarios: [],
+    importWarnings: { player: [], opponent: [] },
+    importIssues: []
+  }
+}));
+`,
+  );
+  const spoolDirectory = path.join(directory, "spool");
+  const running = await startLocalAgent({
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath,
+    tesseraWorkerPath: workerPath,
+  });
+  const payload = {
+    playerFilename: "player.rosz",
+    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerName: "Player",
+    opponentFilename: "opponent.rosz",
+    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentName: "Opponent",
+    sessionId: "stress-run-fixture",
+  };
+  try {
+    await runTesseraThroughLocalAgent(payload, { spoolDirectory });
+    await runTesseraThroughLocalAgent(payload, { spoolDirectory });
+    const profiles = (await readFile(profileLog, "utf8"))
+      .trim()
+      .split("\n");
+    assert.equal(profiles.length, 2);
+    assert.equal(profiles[0], profiles[1]);
+    await access(profiles[0]);
+    const closed = await closeTesseraLocalAgentSession(
+      payload.sessionId,
+      { spoolDirectory },
+    );
+    assert.equal(closed.closed, true);
+    await assert.rejects(access(profiles[0]));
   } finally {
     await running.close();
     await rm(directory, { recursive: true, force: true });
