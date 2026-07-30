@@ -1,0 +1,96 @@
+{
+  "legacyCoupled": {
+    "id": "fixture-legacy",
+    "name": "Legacy capability fixture",
+    "newRecruitExport": "required",
+    "tesseraPreparation": "complete",
+    "expectedBlockingConflicts": 0,
+    "expectedLimitations": [],
+    "detachmentIds": [
+      "fixture-detachment"
+    ],
+    "representativeRosters": [
+      {
+        "id": "core-1000",
+        "pointsLimit": 1000,
+        "capabilities": [
+          "roster-correctness",
+          "new-recruit-export",
+          "new-recruit-delivery",
+          "tessera-preparation",
+          "tessera-simulation"
+        ],
+        "minimumPointsUtilization": 0.98
+      }
+    ],
+    "expertReview": {
+      "status": "pending",
+      "assertions": []
+    }
+  },
+  "deliveryUnsupported": {
+    "id": "fixture-delivery-unsupported",
+    "name": "Delivery unsupported fixture",
+    "rosterCorrectness": "required",
+    "newRecruitExport": "required",
+    "newRecruitDelivery": "unsupported",
+    "tesseraPreparation": "complete",
+    "trustedTesseraSimulation": "required",
+    "expectedBlockingConflicts": 0,
+    "expectedLimitations": [
+      "Canonical export is supported, but credential-backed delivery is outside this fixture's declared boundary."
+    ],
+    "detachmentIds": [
+      "fixture-detachment"
+    ],
+    "representativeRosters": [
+      {
+        "id": "core-1000",
+        "pointsLimit": 1000,
+        "capabilities": [
+          "roster-correctness",
+          "new-recruit-export",
+          "new-recruit-delivery"
+        ],
+        "minimumPointsUtilization": 0.98
+      }
+    ],
+    "expertReview": {
+      "status": "pending",
+      "assertions": []
+    }
+  },
+  "simulationUnsupported": {
+    "id": "fixture-simulation-unsupported",
+    "name": "Simulation unsupported fixture",
+    "rosterCorrectness": "required",
+    "newRecruitExport": "required",
+    "newRecruitDelivery": "required",
+    "tesseraPreparation": "complete",
+    "trustedTesseraSimulation": "unsupported",
+    "expectedBlockingConflicts": 0,
+    "expectedLimitations": [
+      "Preparation is supported, but this fixture declares no trusted Tessera simulation capability."
+    ],
+    "detachmentIds": [
+      "fixture-detachment"
+    ],
+    "representativeRosters": [
+      {
+        "id": "core-1000",
+        "pointsLimit": 1000,
+        "capabilities": [
+          "roster-correctness",
+          "new-recruit-export",
+          "tessera-preparation",
+          "tessera-simulation"
+        ],
+        "minimumPointsUtilization": 0.98
+      }
+    ],
+    "expertReview": {
+      "status": "pending",
+      "assertions": []
+    }
+  }
+}

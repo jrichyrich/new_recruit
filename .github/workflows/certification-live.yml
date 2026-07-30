@@ -1,0 +1,223 @@
+name: Live connector certification
+
+on:
+  schedule:
+    - cron: "31 10 * * *"
+    - cron: "43 9 * * 0"
+  workflow_dispatch:
+    inputs:
+      cadence:
+        description: Certification cadence
+        required: true
+        default: daily
+        type: choice
+        options:
+          - daily
+          - weekly
+          - release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rosterpilot-live-certification
+  cancel-in-progress: false
+
+jobs:
+  daily-canary:
+    if: >-
+      ${{
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        (
+          (github.event_name == 'schedule' && github.event.schedule == '31 10 * * *') ||
+          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'daily')
+        )
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        faction:
+          - adeptus-custodes
+          - aeldari
+    runs-on:
+      - self-hosted
+      - macOS
+      - rosterpilot-live
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run rosterpilot -- agent restart
+      - name: Run live canary
+        env:
+          ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
+        run: |
+          args=(--tier live --faction "${{ matrix.faction }}" --out-dir ".certification/live/${{ matrix.faction }}")
+          if [[ -n "${PROFILE_POLICY_PATH}" ]]; then
+            args+=(--profile-policy "${PROFILE_POLICY_PATH}")
+          fi
+          npm run certify -- "${args[@]}"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-canary-${{ matrix.faction }}
+          path: .certification/live/${{ matrix.faction }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  weekly-rotation:
+    if: >-
+      ${{
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        (
+          (github.event_name == 'schedule' && github.event.schedule == '43 9 * * 0') ||
+          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'weekly')
+        )
+      }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard:
+          - 1/7
+          - 2/7
+          - 3/7
+          - 4/7
+          - 5/7
+          - 6/7
+          - 7/7
+    runs-on:
+      - self-hosted
+      - macOS
+      - rosterpilot-live
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run rosterpilot -- agent restart
+      - name: Run faction rotation
+        env:
+          ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
+        run: |
+          args=(--tier live --shard "${{ matrix.shard }}" --opponent-matrix --out-dir ".certification/live/${{ strategy.job-index }}")
+          if [[ -n "${PROFILE_POLICY_PATH}" ]]; then
+            args+=(--profile-policy "${PROFILE_POLICY_PATH}")
+          fi
+          npm run certify -- "${args[@]}"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-live-certification-${{ strategy.job-index }}
+          path: .certification/live/${{ strategy.job-index }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 45
+
+  weekly-trend:
+    if: >-
+      ${{
+        always() &&
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        (
+          (github.event_name == 'schedule' && github.event.schedule == '43 9 * * 0') ||
+          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'weekly')
+        )
+      }}
+    needs:
+      - weekly-rotation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: weekly-live-certification-*
+          path: .certification/trend-inputs
+
+      - name: Build weekly certification trend
+        run: npm run certify:trend -- --input .certification/trend-inputs --out .certification/weekly-certification-trend.md
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-certification-trend
+          path: |
+            .certification/weekly-certification-trend.md
+            .certification/trend-inputs/**/certification-report-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 90
+
+  release-certification:
+    if: >-
+      ${{
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        github.event_name == 'workflow_dispatch' &&
+        inputs.cadence == 'release'
+      }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard:
+          - 1/7
+          - 2/7
+          - 3/7
+          - 4/7
+          - 5/7
+          - 6/7
+          - 7/7
+    runs-on:
+      - self-hosted
+      - macOS
+      - rosterpilot-live
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run rosterpilot -- agent restart
+      - name: Run release matrix and live certification
+        env:
+          ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
+        run: |
+          args=(--tier live --shard "${{ matrix.shard }}" --opponent-matrix --require-status pass --out-dir ".certification/release/${{ strategy.job-index }}")
+          if [[ -n "${PROFILE_POLICY_PATH}" ]]; then
+            args+=(--profile-policy "${PROFILE_POLICY_PATH}")
+          fi
+          npm run certify -- "${args[@]}"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-certification-${{ strategy.job-index }}
+          path: .certification/release/${{ strategy.job-index }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90

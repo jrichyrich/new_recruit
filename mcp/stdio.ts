@@ -24,9 +24,11 @@ import {
 import {
   buildAndStressRosterAgainstFaction,
 } from "../local/tessera/full-loop";
+import { getRuntimeProvenance } from "../local/runtime-provenance";
 import { createRosterPilotMcpServer } from "./server";
 
 const server = createRosterPilotMcpServer({
+  runtimeProvenance: getRuntimeProvenance,
   artifactWriter: (artifact, outputPath, overwrite) =>
     writeExportArtifact(artifact, outputPath, { overwrite }),
   handoffWriter: (artifacts, outputDirectory, overwrite) =>

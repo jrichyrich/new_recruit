@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 2,
+  "fixtureKind": "rosterpilot-browser-certification-registry",
+  "fixtures": [
+    {
+      "id": "new-recruit-delayed-rendering",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion retries a created row until it can open and verify it"
+    },
+    {
+      "id": "new-recruit-changed-labels",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion fails closed when New Recruit import controls change"
+    },
+    {
+      "id": "new-recruit-duplicate-names",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion creates a new list instead of replacing an existing list with the same name"
+    },
+    {
+      "id": "new-recruit-truncated-text",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion rejects truncated New Recruit unit labels"
+    },
+    {
+      "id": "new-recruit-wrong-ordering",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion accepts reordered New Recruit unit rows"
+    },
+    {
+      "id": "new-recruit-interrupted-import",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion reports a created list when its row cannot be opened"
+    },
+    {
+      "id": "new-recruit-failed-verification",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion reports verification differences without deleting the imported list"
+    },
+    {
+      "id": "new-recruit-empty-download",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion rejects an empty enriched ROSZ download"
+    },
+    {
+      "id": "new-recruit-stale-session",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion reuses a stale authenticated session without requesting credentials"
+    },
+    {
+      "id": "new-recruit-catalogue-drift",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "New Recruit catalogue drift stops before an external mutation"
+    },
+    {
+      "id": "new-recruit-ui-identity",
+      "automatedBy": "tests/new-recruit-companion.test.ts",
+      "testName": "browser companion logs in, imports, verifies, and downloads without leaking credentials"
+    },
+    {
+      "id": "tessera-delayed-selector-hydration",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "reopens one stale matrix and waits for semantically labeled selectors to hydrate"
+    },
+    {
+      "id": "tessera-stale-matrix-reopen",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "reopens one stale matrix and waits for semantically labeled selectors to hydrate"
+    },
+    {
+      "id": "tessera-authoritative-selector-identities",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "accepts saved identities exposed only by authoritative matrix selectors"
+    },
+    {
+      "id": "tessera-saved-list-reuse",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "reuses both deterministic certification lists without importing"
+    },
+    {
+      "id": "tessera-saved-list-import-once",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "imports one missing deterministic certification list exactly once"
+    },
+    {
+      "id": "tessera-saved-list-duplicate-fail-closed",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "fails closed before import when a deterministic saved identity is duplicated"
+    },
+    {
+      "id": "tessera-saved-list-unit-count-fail-closed",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "fails closed before import when a deterministic identity has the wrong unit count"
+    },
+    {
+      "id": "tessera-duplicate-glyph-names",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "rejects duplicate, glyph-bearing, and truncated saved-list labels without using unrelated selectors"
+    },
+    {
+      "id": "tessera-wrong-selector-order",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "rejects duplicate, glyph-bearing, and truncated saved-list labels without using unrelated selectors"
+    },
+    {
+      "id": "tessera-unit-count-mismatch",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "rejects a wrong unit count in the authoritative matrix selector"
+    },
+    {
+      "id": "tessera-disabled-controls",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "distinguishes a side unit cap from a generic disabled comparison"
+    },
+    {
+      "id": "tessera-premium-unlock-failure",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "returns a distinct error when Tessera rejects the premium key"
+    },
+    {
+      "id": "tessera-non-rectangular-table",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "rejects a non-rectangular matrix"
+    },
+    {
+      "id": "tessera-repeated-unit-labels",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "captures delayed full-mode phase, metric, and direction scenarios with duplicate names"
+    },
+    {
+      "id": "tessera-dimension-change",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "rejects matrix dimension drift after retaining prior scenarios"
+    },
+    {
+      "id": "tessera-equal-values-after-refresh",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "accepts equal-valued matrix node replacements across phases and metrics"
+    },
+    {
+      "id": "tessera-control-change-without-refresh",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "does not treat control-only DOM mutations as a matrix refresh"
+    },
+    {
+      "id": "tessera-transient-scenario-retry",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "retries one transient stale scenario in the same browser session"
+    },
+    {
+      "id": "tessera-direct-adapter-roundtrip",
+      "automatedBy": "tests/tessera.test.ts",
+      "testName": "experimental Tessera browser adapter imports two rosters and extracts the matrix"
+    }
+  ]
+}

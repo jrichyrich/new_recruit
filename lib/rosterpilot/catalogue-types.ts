@@ -5,6 +5,13 @@ export type CatalogueSelectionReference = {
   entryId: string;
   entryGroupId?: string;
   group?: string;
+  /**
+   * Identifies a mutually exclusive parent loadout choice when BSData repeats
+   * the same equipment name beneath sibling choices. The resolver uses this
+   * only to keep a selected equipment set on one coherent branch; it is not
+   * serialized as a New Recruit selection attribute.
+   */
+  loadoutChoiceId?: string;
 };
 
 export type CatalogueCategoryReference = {
@@ -40,7 +47,16 @@ export type NewRecruitConfiguration = {
     reference: CatalogueSelectionReference;
     choices: Record<
       string,
-      CatalogueSelectionReference & { detachmentPoints: number }
+      CatalogueSelectionReference & {
+        detachmentPoints: number;
+        /**
+         * Detachment choices can be contributed by different imported
+         * catalogues. Older manifests used one global parent reference; v2
+         * records the exact parent for each choice so the ROS hierarchy stays
+         * on the path that was actually reconciled.
+         */
+        rootReference?: CatalogueSelectionReference;
+      }
     >;
   };
   forceDisposition: {
@@ -51,6 +67,11 @@ export type NewRecruitConfiguration = {
 
 export type DataConflict = {
   id: string;
+  /**
+   * Stable across factions when the same shared catalogue/rules mismatch is
+   * encountered more than once. Schema-v1 manifests do not contain this.
+   */
+  rootCauseKey?: string;
   factionId: string;
   entityType:
     | "catalogue"
@@ -66,11 +87,33 @@ export type DataConflict = {
     | "UNMAPPED"
     | "AMBIGUOUS"
     | "POINTS_MISMATCH"
+    | "POINTS_EVALUATION_UNSUPPORTED"
+    | "STALE_OVERRIDE"
     | "UNSUPPORTED";
   blocking: boolean;
   message: string;
   rulesValue?: string | number;
   newRecruitValue?: string | number;
+  source?: "rules" | "bsdata" | "reconciler";
+  scope?: {
+    modelCount?: number;
+    unitOrdinalMin?: number;
+    unitOrdinalMax?: number | null;
+    equipmentItemId?: string;
+    equipmentSignature?: string;
+    entryPath?: string;
+    selectionScopes?: Array<{
+      modelCount: number;
+      unitOrdinalMin?: number;
+      unitOrdinalMax?: number | null;
+      equipmentSignature?: string;
+    }>;
+  };
+  catalogue?: {
+    id: string;
+    revision: number;
+    entryPath?: string;
+  };
 };
 
 export type NewRecruitFactionCatalogue = {
@@ -96,7 +139,7 @@ export type NewRecruitFactionCatalogue = {
 };
 
 export type NewRecruitCatalogueManifest = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   releaseId: string;
   generatedAt: string;
   sources: {
@@ -140,6 +183,12 @@ export type NewRecruitCatalogueManifest = {
     mappedBaseLoadouts: number;
     conflicts: number;
     blockingConflicts: number;
+    /**
+     * Available in schema v2. Compatibility readers derive the value from
+     * conflict ids when reading schema-v1 data.
+     */
+    uniqueConflicts?: number;
+    uniqueBlockingConflicts?: number;
   };
 };
 

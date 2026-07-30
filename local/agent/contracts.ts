@@ -1,7 +1,10 @@
 import type {
   ProfilePolicyV1,
+  RuntimeProvenance,
+  TesseraFrozenScenarioContract,
 } from "../../lib/rosterpilot";
 import type {
+  WorkerProbeResult,
   WorkerRosterExpectation,
   WorkerResult,
 } from "../new-recruit/contracts";
@@ -11,9 +14,12 @@ import type {
   TesseraMetric,
   TesseraPhase,
 } from "../tessera/browser";
+import type {
+  TesseraSavedListReuse,
+} from "../tessera/saved-list-reuse";
 
-export const LOCAL_AGENT_PROTOCOL_VERSION = 5;
-export const LOCAL_AGENT_VERSION = "1.4.0";
+export const LOCAL_AGENT_PROTOCOL_VERSION = 9;
+export const LOCAL_AGENT_VERSION = "1.8.0";
 export const LOCAL_AGENT_MAX_FRAME_BYTES = 32 * 1024 * 1024;
 
 export type CredentialState =
@@ -35,6 +41,7 @@ export type LocalAgentStatus = {
   version: string;
   protocolVersion: number;
   protocolCompatible: boolean;
+  runtime?: RuntimeProvenance;
   platform: string;
   projectDirectory: string;
   nodeExecutable: string;
@@ -65,6 +72,9 @@ export type LocalAgentDeliveryResult = {
   prettyHtmlBase64?: string;
 };
 
+export type LocalAgentNewRecruitProbeResult =
+  WorkerProbeResult;
+
 export type LocalAgentTesseraPayload = {
   playerFilename: string;
   playerRoszBase64: string;
@@ -76,6 +86,8 @@ export type LocalAgentTesseraPayload = {
   phases?: TesseraPhase[];
   metrics?: TesseraMetric[];
   profilePolicy?: ProfilePolicyV1 | null;
+  frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
+  savedListReuse?: TesseraSavedListReuse | null;
   sessionId?: string;
 };
 
@@ -99,6 +111,11 @@ export type LocalAgentRequest =
   | {
       id: string;
       protocolVersion: number;
+      operation: "new-recruit.probe";
+    }
+  | {
+      id: string;
+      protocolVersion: number;
       operation: "tessera.analyze";
       payload: LocalAgentTesseraPayload;
     }
@@ -117,6 +134,7 @@ export type LocalAgentResponse =
       data:
         | LocalAgentStatus
         | LocalAgentDeliveryResult
+        | LocalAgentNewRecruitProbeResult
         | LocalAgentTesseraResult
         | LocalAgentTesseraSessionCloseResult;
     }

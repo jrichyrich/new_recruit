@@ -17,8 +17,8 @@ plan are documented in
 | Use RosterPilot through a local MCP client | `mcp` | macOS, Linux, Windows | None |
 | Export `.rosz` for manual New Recruit import | `core` | macOS, Linux, Windows | None until the player imports it |
 | Upload and verify a new New Recruit list | `new-recruit` | macOS | Creates a new list only after an explicit delivery command |
-| Compare known armies and collect Tessera simulations | `tessera` | macOS | Creates verified New Recruit list copies during profile enrichment, then runs Tessera only with `--experimental` |
-| Test a roster against an unknown list from a known faction | `tessera` | macOS | Creates one player copy plus three `core-3` or six-to-nine `diverse-9` proxy copies when the verified cache cannot satisfy them; runs Tessera only with `--experimental` |
+| Compare known armies and collect Tessera simulations | `tessera` | macOS | Creates verified New Recruit list copies during profile enrichment, then runs Tessera only with `--execution-mode simulate` (the deprecated `--experimental` alias is still accepted) |
+| Test a roster against an unknown list from a known faction | `tessera` | macOS | Creates one player copy plus the unique exportable proxy copies required by the selected suite when the verified cache cannot satisfy them; runs Tessera only with `--execution-mode simulate` |
 
 The macOS limitation belongs only to credential-backed browser automation. The
 deterministic engine, web app, CLI, local MCP, validation, and file exports are
@@ -121,7 +121,7 @@ npm run rosterpilot -- tessera analyze \
   --file aeldari.json \
   --opponent-roster enemy.json \
   --analysis-mode quick \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/tessera-quick
 ```
 
@@ -131,10 +131,12 @@ machine-readable report, and an interactive HTML report.
 
 Tessera preparation uses New Recruit to obtain verified profile-rich archives,
 so it creates new list copies as part of this explicitly requested workflow.
-Without `--experimental`, RosterPilot stops after the verified handoff and
-returns a labeled partial report. A comparison never edits the source roster;
-change candidates remain suggestions until a revised roster is explicitly
-saved and compared.
+`--execution-mode prepare-only` stops after the verified handoff and returns
+`status: prepared`. A requested simulation with no trusted matrices returns
+`ok: false` with the preparation stage retained. A comparison never edits the
+source roster; change candidates remain suggestions until a revised roster is
+explicitly saved and compared. `--experimental` remains a deprecated
+compatibility alias for simulation.
 
 ## Workflow 4: known-faction stress test
 
@@ -153,9 +155,14 @@ npm run rosterpilot -- tessera build-and-stress \
   --suite diverse-9 \
   --analysis staged \
   --profile-policy profiles.json \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/custodes-vs-aeldari
 ```
+
+`preview-portfolio` performs no external work. Use it to inspect proxy payload
+fingerprints, composition evidence, represented and missing coverage cells,
+named-character status, New Recruit exportability, and unresolved profile
+requirements before approving a run.
 
 The full-loop command builds and validates, performs a bounded deterministic
 repair, gates mission readiness and 98% points utilization, previews portfolio
@@ -171,32 +178,39 @@ npm run rosterpilot -- tessera stress-test \
   --file aeldari.json \
   --against-faction necrons \
   --profile-policy profiles.json \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/aeldari-vs-necrons-stress
 ```
 
 The defaults are `--suite diverse-9` and `--analysis staged`. The suite
 options are:
 
-- `core-3`: balanced-control, ranged-pressure, and assault-pressure postures,
-  all with mixed composition;
+- `core-3`: three distinct balanced-control, ranged-pressure, and
+  assault-pressure proxies. Composition is descriptive and is used to maximize
+  feasible diversity; it is not a required coverage dimension;
 - `diverse-9`: those three postures crossed with mixed, mass, and elite-heavy
   composition.
 
 RosterPilot builds each proxy deterministically from the pinned data release.
 Every proxy must be legal, exportable, within 5% of the points limit, and
 distinct by its modeled unit/model/equipment/enhancement payload; changing only
-the detachment is not enough. `core-3` requires all three unique postures.
-`diverse-9` targets nine and may continue with six to eight only when all three
-postures remain represented. It renormalizes equal weights and caps the result
-at `degraded`; fewer than six fails before external activity.
+the detachment is not enough. Full `core-3` coverage requires all three
+postures and three unique simulation fingerprints. Full `diverse-9` coverage
+requires every requested posture/composition cell.
+When some cells are infeasible, a degraded run may continue with at least two
+unique exportable payloads across two postures; the missing cells remain
+explicit and cap the result at `degraded`.
 
 The analysis strategies are:
 
 - `staged`: screen every available proxy with half-wipe probability in
   Shooting and Fight, in both directions, then run wipe probability, mean
   kills, and mean damage on three frozen stress, central, and contrast
-  representatives;
+  representatives; all required captures must first be complete and
+  integrity-clean. Complete portfolios require at least six confident
+  `diverse-9` screens (all three for `core-3`); degraded portfolios require
+  their executable minimum of two proxies across two postures, so deep dives
+  do not begin against a still-changing representative set;
 - `full-all`: run all four metrics, both phases, and both directions against
   every available proxy.
 
@@ -209,7 +223,7 @@ npm run rosterpilot -- tessera stress-test \
   --against-faction necrons \
   --suite core-3 \
   --analysis full-all \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/necrons-core
 ```
 
@@ -218,19 +232,35 @@ return `TESSERA_PROFILE_POLICY_REQUIRED` and a
 `tessera-profile-policy.scaffold.json`. Complete its `selectedProfile` values
 and active counts, then rerun with `--profile-policy`. RosterPilot validates
 each choice against the enriched inventory and freezes the policy hash. It
-never silently picks the first profile.
+never silently picks the first profile. If enrichment exposes a decision that
+was absent from pinned data, the command writes an updated scaffold and stops
+before Tessera. Resume the same manifest with that completed policy to reuse
+the already verified New Recruit files.
 
-The command requires `--experimental` to drive Tessera. Without it, the
-explicit stress request can still create and verify the New Recruit-enriched
-handoffs, but the result is a handoff-only partial report with no invented
-simulation values. Verified enriched files can be reused from the local
+The command requires `--execution-mode simulate` to drive Tessera.
+`prepare-only` can still create and verify the New Recruit-enriched handoffs
+and returns a successful `prepared` report with no invented simulation values.
+A requested simulation with no trusted matrices returns `ok: false` while
+retaining preparation and structured failure details. Verified enriched files
+can be reused from the local
 content-addressed cache only after their hash and exact summary match. New
 Recruit list URLs remain in a local run inventory; deletion always requires a
-separate action.
+separate action. On macOS the inventory is
+`~/Library/Application Support/RosterPilot/new-recruit-run-inventory.json`.
+Inspect its recorded URLs and remove lists through New Recruit only after a
+separate cleanup decision; the stress workflow never performs that mutation.
+
+The metadata readiness check is followed by a live probe using the first
+screening capture: it must unlock premium, select the exact imported lists, and
+return a fresh matrix. A browser, credential, unlock, or missing-matrix failure
+stops later proxies for that invocation; resume continues within the bounded
+lifetime retry budget.
 
 The output directory includes machine-readable JSON, an interactive HTML
 report, underlying per-proxy reports, verified handoffs, and
-`stress-manifest.json`. Resume an interrupted run:
+`stress-manifest.json`. Absolute paths and remote New Recruit list URLs remain
+in the local manifest/inventory; shareable JSON and HTML contain portable
+basenames instead. Resume an interrupted run:
 
 ```bash
 npm run rosterpilot -- tessera stress-test \
@@ -238,7 +268,7 @@ npm run rosterpilot -- tessera stress-test \
   --against-faction necrons \
   --suite diverse-9 \
   --analysis staged \
-  --experimental \
+  --execution-mode simulate \
   --resume \
   --out-dir exports/aeldari-vs-necrons-stress
 ```
@@ -259,6 +289,40 @@ after starting a New Recruit delivery but before persisting its verified
 receipt, resume reports the uncertain outcome instead of risking a duplicate
 list.
 
+Resume keeps the same run and lifetime attempt budget. If that budget reaches
+five attempts, create a clean run from the old manifest with a new output
+directory:
+
+```bash
+npm run rosterpilot -- tessera stress-test \
+  --file aeldari.json \
+  --against-faction necrons \
+  --suite diverse-9 \
+  --analysis staged \
+  --execution-mode simulate \
+  --restart-from exports/aeldari-vs-necrons-stress/stress-manifest.json \
+  --out-dir exports/aeldari-vs-necrons-restart
+```
+
+`--restart-from` creates a new run ID, manifest, and empty simulation stages.
+It reuses the frozen portfolio, profile policy, and verified New Recruit
+artifacts only when their identities, content hashes, and enriched summaries
+still match. The source run remains unchanged. A restart requires a different
+`--out-dir`; `--resume` and `--restart-from` cannot be combined, and
+`--force-retry` never raises the five-attempt lifetime limit. Both recovery
+modes also work with `build-and-stress`, provided its deterministic rebuilt
+player matches the manifest fingerprint.
+
+Each raw result table is fingerprinted from its headers, dimensions, and
+values. After changing a phase, metric, or direction, RosterPilot requires the
+exclusive selected control, a replacement or mutation of the matrix table, and
+three stable reads. Equal numeric matrices remain valid when that refresh is
+observed; content equality alone is not evidence of stale UI or a duplicate
+proxy. A control change without a matrix refresh is stale. Stale or missing
+fingerprints preserve diagnostic captures but make the report `inconclusive`.
+Duplicate simulation payloads are rejected separately during portfolio
+preflight.
+
 The report describes directional combat robustness: offensive coverage,
 incoming threat exposure, coverage margin, distribution tails, phase
 dependence, and unit answer breadth. It is not a win-probability model and does
@@ -268,14 +332,24 @@ report and change-suggestion guardrail; it is not folded into the robustness
 score. The v2 result statuses are `partial` for missing/failed required work,
 `inconclusive` for completed but insufficiently confident capture, `degraded`
 for six to eight confident unique `diverse-9` proxies across every posture plus
-three completed deep dives, and `complete` for all nine. Missing estimates are
-`null`; below-threshold observations remain under `provisional` with their
-point coverage.
+three completed deep dives, and `complete` for all nine (`core-3` requires all
+three). `partial` takes precedence when required work and confidence failures
+coexist. Missing estimates are `null`; below-threshold observations remain
+under `provisional` with their point coverage.
 
 Progress is written to stderr. The stdout result is a compact JSON summary
-under 50 KB with the complete report path; add `--full-json` to print the full
-nested payload. JSON and HTML use portable basenames, while the local manifest
-keeps the absolute recovery paths.
+under 50 KB with status explanation, portfolio and integrity coverage,
+recovery state, representatives, and the complete report path; add
+`--full-json` to print the full nested payload. JSON and HTML use portable
+basenames, while the local manifest keeps the absolute recovery paths.
+
+Change candidates are fail-closed suggestions. The resulting roster must be
+legal, New Recruit-exportable, use at least 98% of its points, and be no worse
+across mission-readiness guardrails. Evidence must identify the affected player
+unit or a role gap, and a reliable or portfolio-wide robust answer is not
+offered as a replacement. RosterPilot returns no candidate rather than a
+severely underfilled or contradictory roster, and never applies a candidate
+automatically.
 
 After explicitly approving and saving a revised roster, rerun it against the
 exact frozen baseline:
@@ -293,8 +367,10 @@ release. It reuses the exact enriched opponents, configuration, and three
 representatives from the baseline; it does not regenerate or reselect the
 portfolio. Missing or changed baseline artifacts, execution-fingerprint
 mismatches, insufficient simulated coverage, or changed Tessera settings and
-iteration counts stop the comparison. Margin changes below one percentage
-point are treated as unchanged. The better/worse conclusion is based on the
+iteration counts stop the comparison. The browser actively reapplies the
+frozen setting and iteration contract before capture and verifies every
+scenario afterward. Margin changes below one percentage point are treated as
+unchanged. The better/worse conclusion is based on the
 screening half-wipe robustness deltas; deep-dive metrics remain supporting
 evidence. If mission readiness regresses, RosterPilot preserves the combat
 deltas but suppresses that conclusion.
@@ -319,9 +395,14 @@ website do not expose these operations.
 - Missing local automation still preserves the source `.rosz`.
 - Tessera UI changes preserve verified handoff files and mark missing results
   as partial.
+- Stale Tessera matrices are retained for diagnosis but cannot
+  produce a confident result.
 - Resume never mixes a different roster, data pin, faction, suite, strategy,
   or simulation setting into an existing stress result; uncertain delivery
   outcomes fail closed rather than creating a duplicate list.
+- Restart requires a new output directory and copies only verified preparation
+  state into a fresh run; it never resets or rewrites the source run's attempt
+  history.
 - Paired stress revisions reuse frozen opponents and fail if their enriched
   artifacts are missing, changed, or no longer match their execution
   fingerprints. Each rerun must also preserve the baseline's exact

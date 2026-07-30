@@ -5,6 +5,9 @@ import {
   buildRoster,
   bytesToBase64,
   checkDataFreshness,
+  compactBuildAndStressResult,
+  compactStressResult,
+  compactStressRevisionResult,
   compareFactions,
   explainRoster,
   exportRoster,
@@ -12,15 +15,19 @@ import {
   getDataStatus,
   listDataConflicts,
   modifyRoster,
+  modifyRosterBatch,
   prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
+  setCachedDataFreshness,
   validateRoster,
   addFreshnessWarnings,
   ModifyRosterOperationSchema,
   RosterDraftSchema,
   type ExportArtifact,
   type ExportFormat,
+  type BuildAndStressRosterInput,
+  type BuildAndStressRosterResult,
   type LiveDataFreshness,
   type ModifyRosterOperation,
   type NewRecruitConnectionStatus,
@@ -29,6 +36,7 @@ import {
   type PreferenceTag,
   type ResultEnvelope,
   type RosterDraftV1,
+  type RuntimeProvenance,
   type TesseraArchetype,
   type TesseraConnectionStatus,
   type TesseraMatchupReport,
@@ -38,14 +46,10 @@ import {
   type TesseraRevisionComparisonReport,
   type TesseraStressAnalysisStrategy,
   type TesseraStressPortfolioPreview,
+  type TesseraStressRunReport,
   type TesseraStressRevisionReport,
   type TesseraStressSuite,
-  type TesseraStressTestReport,
 } from "../lib/rosterpilot/index";
-import type {
-  BuildAndStressRosterInput,
-  BuildAndStressRosterResult,
-} from "../local/tessera/full-loop";
 
 type ArtifactWriter = (
   artifact: ExportArtifact,
@@ -60,6 +64,7 @@ type HandoffWriter = (
 ) => Promise<string[]>;
 
 type ServerOptions = {
+  runtimeProvenance?: () => RuntimeProvenance;
   artifactWriter?: ArtifactWriter;
   handoffWriter?: HandoffWriter;
   newRecruitCompanion?: {
@@ -95,6 +100,9 @@ type ServerOptions = {
       options: {
         outputDirectory: string;
         overwrite: boolean;
+        executionMode?: "prepare-only" | "simulate";
+        fallbackMode?: "none" | "baseline-damage-v1";
+        profilePolicyPath?: string;
         experimental: boolean;
         analysisMode: "quick" | "full";
         phases?: TesseraPhase[];
@@ -122,13 +130,15 @@ type ServerOptions = {
         suite: TesseraStressSuite;
         analysisStrategy: TesseraStressAnalysisStrategy;
         resumeManifestPath?: string;
+        restartManifestPath?: string;
         profilePolicyPath?: string;
         forceRetry?: boolean;
-        outputDirectory: string;
+        executionMode?: "prepare-only" | "simulate";
+        outputDirectory?: string;
         overwrite: boolean;
         experimental: boolean;
       },
-    ) => Promise<ResultEnvelope<TesseraStressTestReport>>;
+    ) => Promise<ResultEnvelope<TesseraStressRunReport>>;
     previewPortfolio?: (input: {
       faction: string;
       pointsLimit: number;
@@ -147,7 +157,7 @@ type ServerOptions = {
       baselineReportPath: string,
       revisedRoster: RosterDraftV1,
       options: {
-        outputDirectory: string;
+        outputDirectory?: string;
         overwrite: boolean;
         experimental: boolean;
       },
@@ -165,6 +175,25 @@ function resultContent<T>(result: ResultEnvelope<T>) {
   const normalized = serializable(result) as unknown as Record<string, unknown>;
   return {
     content: [{ type: "text" as const, text: JSON.stringify(normalized, null, 2) }],
+    structuredContent: normalized,
+    isError: !result.ok,
+  };
+}
+
+function detailedResultContent<T>(
+  result: ResultEnvelope<T>,
+  responseDetail: "compact" | "full",
+  compact: (result: ResultEnvelope<T>) => Record<string, unknown>,
+) {
+  if (responseDetail === "full") return resultContent(result);
+  const normalized = serializable(compact(result));
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(normalized, null, 2),
+      },
+    ],
     structuredContent: normalized,
     isError: !result.ok,
   };
@@ -230,10 +259,12 @@ export function createRosterPilotMcpServer(
       return freshnessCache.result;
     }
     const result = await (options.freshnessChecker ?? checkDataFreshness)();
+    const cacheMs = options.freshnessCacheMs ?? 15 * 60_000;
     freshnessCache = {
-      expiresAt: Date.now() + (options.freshnessCacheMs ?? 15 * 60_000),
+      expiresAt: Date.now() + cacheMs,
       result,
     };
+    setCachedDataFreshness(result, cacheMs);
     return result;
   }
 
@@ -245,7 +276,19 @@ export function createRosterPilotMcpServer(
         "Return the pinned data version, buildable factions, coverage, and attribution.",
       inputSchema: {},
     },
-    async () => resultContent(getDataStatus()),
+    async () => {
+      const result = getDataStatus();
+      return resultContent({
+        ...result,
+        data:
+          result.data && options.runtimeProvenance
+            ? {
+                ...result.data,
+                runtime: options.runtimeProvenance(),
+              }
+            : result.data,
+      });
+    },
   );
 
   server.registerTool(
@@ -395,6 +438,7 @@ export function createRosterPilotMcpServer(
         "Build any supported faction roster from natural language and/or structured constraints. Points and legality are calculated by the engine, never by the model.",
       inputSchema: {
         prompt: z.string().optional(),
+        playerFaction: z.string().optional(),
         faction: z.string().optional(),
         pointsLimit: z.number().int().min(100).max(5000).optional(),
         name: z.string().optional(),
@@ -414,6 +458,10 @@ export function createRosterPilotMcpServer(
         allowNamedCharacters: z.boolean().optional(),
         allowLegends: z.boolean().optional(),
         collectionUnitIds: z.array(z.string()).optional(),
+        requiredUnitIds: z.array(z.string()).optional(),
+        excludedUnitIds: z.array(z.string()).optional(),
+        requiredWarlordUnitId: z.string().optional(),
+        opponentFaction: z.string().optional(),
         detachmentId: z.string().optional(),
         forceDispositionId: z.string().optional(),
       },
@@ -422,6 +470,12 @@ export function createRosterPilotMcpServer(
       const result = buildRoster({
           ...input,
           preferences: input.preferences as PreferenceTag[] | undefined,
+          opponentContext: input.opponentFaction
+            ? {
+                kind: "known-faction",
+                factionId: input.opponentFaction,
+              }
+            : undefined,
       });
       return resultContent(
         addFreshnessWarnings(result, await currentFreshness()),
@@ -445,6 +499,26 @@ export function createRosterPilotMcpServer(
         modifyRoster(
           roster as RosterDraftV1,
           operation as ModifyRosterOperation,
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "modify_roster_batch",
+    {
+      title: "Modify a roster atomically",
+      description:
+        "Apply an ordered batch of roster operations to one working draft, then validate only the final roster. Structurally invalid operations still fail closed.",
+      inputSchema: {
+        roster: RosterDraftSchema,
+        operations: z.array(ModifyRosterOperationSchema).min(1).max(32),
+      },
+    },
+    async ({ roster, operations }) =>
+      resultContent(
+        modifyRosterBatch(
+          roster as RosterDraftV1,
+          operations as ModifyRosterOperation[],
         ),
       ),
   );
@@ -758,6 +832,13 @@ export function createRosterPilotMcpServer(
           ]),
           outputDirectory: z.string().default("exports/tessera"),
           overwrite: z.boolean().default(false),
+          executionMode: z
+            .enum(["prepare-only", "simulate"])
+            .optional(),
+          fallbackMode: z
+            .enum(["none", "baseline-damage-v1"])
+            .default("none"),
+          profilePolicyPath: z.string().min(1).optional(),
           experimental: z.boolean().default(false),
           analysisMode: z.enum(["quick", "full"]).default("full"),
           phases: z.array(tesseraPhaseSchema).min(1).max(2).optional(),
@@ -777,6 +858,9 @@ export function createRosterPilotMcpServer(
         opponent,
         outputDirectory,
         overwrite,
+        executionMode,
+        fallbackMode,
+        profilePolicyPath,
         experimental,
         analysisMode,
         phases,
@@ -798,6 +882,9 @@ export function createRosterPilotMcpServer(
             {
               outputDirectory,
               overwrite,
+              executionMode,
+              fallbackMode,
+              profilePolicyPath,
               experimental,
               analysisMode,
               phases,
@@ -888,17 +975,28 @@ export function createRosterPilotMcpServer(
             "Build and deterministically repair a roster, enforce mission-readiness and portfolio gates, prepare verified artifacts, then run the staged Tessera stress workflow. It never applies post-simulation roster changes.",
           inputSchema: {
             prompt: z.string().min(1),
+            playerFaction: z.string().min(1).optional(),
             againstFaction: z.string().min(1),
             pointsLimit: z.number().int().min(100).max(5000).optional(),
+            requiredUnitIds: z.array(z.string().min(1)).optional(),
+            excludedUnitIds: z.array(z.string().min(1)).optional(),
+            requiredWarlordUnitId: z.string().min(1).optional(),
             suite: z.enum(["core-3", "diverse-9"]).default("diverse-9"),
             analysisStrategy: z
               .enum(["staged", "full-all"])
               .default("staged"),
             profilePolicyPath: z.string().min(1).optional(),
             resumeManifestPath: z.string().min(1).optional(),
-            outputDirectory: z.string().default("exports/tessera"),
+            restartManifestPath: z.string().min(1).optional(),
+            outputDirectory: z.string().min(1).optional(),
+            responseDetail: z
+              .enum(["compact", "full"])
+              .default("compact"),
             allowReadinessWarnings: z.boolean().default(false),
             forceRetry: z.boolean().default(false),
+            executionMode: z
+              .enum(["prepare-only", "simulate"])
+              .optional(),
             overwrite: z.boolean().default(false),
             experimental: z.boolean().default(false),
           },
@@ -911,36 +1009,61 @@ export function createRosterPilotMcpServer(
         },
         async ({
           prompt,
+          playerFaction,
           againstFaction,
           pointsLimit,
+          requiredUnitIds,
+          excludedUnitIds,
+          requiredWarlordUnitId,
           suite,
           analysisStrategy,
           profilePolicyPath,
           resumeManifestPath,
+          restartManifestPath,
           outputDirectory,
+          responseDetail,
           allowReadinessWarnings,
           forceRetry,
+          executionMode,
           overwrite,
           experimental,
-        }) =>
-          resultContent(
+        }) => {
+          const freshness = await currentFreshness();
+          const result = addFreshnessWarnings(
             await options.tesseraCompanion!.buildAndStress!(
               {
                 prompt,
+                playerFaction,
                 againstFaction,
                 pointsLimit,
+                requiredUnitIds,
+                excludedUnitIds,
+                requiredWarlordUnitId,
                 suite,
                 analysisStrategy,
                 profilePolicyPath,
                 resumeManifestPath,
+                restartManifestPath,
                 outputDirectory,
                 allowReadinessWarnings,
                 forceRetry,
+                executionMode,
                 experimental,
               },
               { outputDirectory, overwrite },
             ),
-          ),
+            freshness,
+          );
+          return detailedResultContent(
+            result,
+            responseDetail,
+            (value) =>
+              compactBuildAndStressResult(
+                value,
+                outputDirectory,
+              ),
+          );
+        },
       );
     }
 
@@ -959,9 +1082,16 @@ export function createRosterPilotMcpServer(
               .enum(["staged", "full-all"])
               .default("staged"),
             resumeManifestPath: z.string().min(1).optional(),
+            restartManifestPath: z.string().min(1).optional(),
             profilePolicyPath: z.string().min(1).optional(),
             forceRetry: z.boolean().default(false),
-            outputDirectory: z.string().default("exports/tessera"),
+            executionMode: z
+              .enum(["prepare-only", "simulate"])
+              .optional(),
+            outputDirectory: z.string().min(1).optional(),
+            responseDetail: z
+              .enum(["compact", "full"])
+              .default("compact"),
             overwrite: z.boolean().default(false),
             experimental: z.boolean().default(false),
           },
@@ -978,13 +1108,17 @@ export function createRosterPilotMcpServer(
           suite,
           analysisStrategy,
           resumeManifestPath,
+          restartManifestPath,
           profilePolicyPath,
           forceRetry,
+          executionMode,
           outputDirectory,
+          responseDetail,
           overwrite,
           experimental,
-        }) =>
-          resultContent(
+        }) => {
+          const freshness = await currentFreshness();
+          const result = addFreshnessWarnings(
             await options.tesseraCompanion!.stressTest!(
               playerRoster as RosterDraftV1,
               { kind: "faction", factionId },
@@ -992,14 +1126,24 @@ export function createRosterPilotMcpServer(
                 suite,
                 analysisStrategy,
                 resumeManifestPath,
+                restartManifestPath,
                 profilePolicyPath,
                 forceRetry,
+                executionMode,
                 outputDirectory,
                 overwrite,
                 experimental,
               },
             ),
-          ),
+            freshness,
+          );
+          return detailedResultContent(
+            result,
+            responseDetail,
+            (value) =>
+              compactStressResult(value, outputDirectory),
+          );
+        },
       );
     }
 
@@ -1013,7 +1157,10 @@ export function createRosterPilotMcpServer(
           inputSchema: {
             baselineReportPath: z.string().min(1),
             revisedRoster: RosterDraftSchema,
-            outputDirectory: z.string().default("exports/tessera"),
+            outputDirectory: z.string().min(1).optional(),
+            responseDetail: z
+              .enum(["compact", "full"])
+              .default("compact"),
             overwrite: z.boolean().default(false),
             experimental: z.boolean().default(false),
           },
@@ -1028,16 +1175,29 @@ export function createRosterPilotMcpServer(
           baselineReportPath,
           revisedRoster,
           outputDirectory,
+          responseDetail,
           overwrite,
           experimental,
-        }) =>
-          resultContent(
+        }) => {
+          const freshness = await currentFreshness();
+          const result = addFreshnessWarnings(
             await options.tesseraCompanion!.compareStressRevision!(
               baselineReportPath,
               revisedRoster as RosterDraftV1,
               { outputDirectory, overwrite, experimental },
             ),
-          ),
+            freshness,
+          );
+          return detailedResultContent(
+            result,
+            responseDetail,
+            (value) =>
+              compactStressRevisionResult(
+                value,
+                outputDirectory,
+              ),
+          );
+        },
       );
     }
   }

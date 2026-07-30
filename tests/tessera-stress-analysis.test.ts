@@ -9,7 +9,11 @@ import type {
   TesseraStressPortfolio,
   TesseraUnitInstance,
 } from "../lib/rosterpilot";
-import { computeStressRobustness } from "../local/tessera/stress-analysis";
+import {
+  computeStressRobustness,
+  stressFindings,
+} from "../local/tessera/stress-analysis";
+import { assessScreeningIntegrity } from "../local/tessera/stress";
 
 function unit(
   instanceId: string,
@@ -176,7 +180,7 @@ function portfolio(): TesseraStressPortfolio {
         allowNamedCharacters: false,
         traits: null,
         compositionEvidence: [],
-        containsNamedCharacter: false,
+        containsNamedCharacter: true,
         omissionReason: null,
         warnings: [],
       },
@@ -186,9 +190,22 @@ function portfolio(): TesseraStressPortfolio {
       ready: 1,
       unavailable: 0,
       representedPostures: ["balanced-control"],
+      missingPostures: [],
       representedCompositions: ["mixed"],
+      missingCompositions: [],
+      representedCells: [
+        {
+          templateId: "balanced-control:mixed",
+          posture: "balanced-control",
+          composition: "mixed",
+        },
+      ],
+      missingCells: [],
       uniqueSimulationPayloads: 1,
       namedCharacterCoverage: true,
+      namedCharacterCoverageStatus: "included",
+      namedCharacterCoverageReason: null,
+      maximumResultStatus: "complete",
     },
   };
 }
@@ -254,4 +271,306 @@ test("unknown target points remain in the expected points denominator", () => {
   assert.equal(result.samples[0].provisional?.offensiveCoverage, 0.5);
   assert.equal(result.samples[0].opponentPointCoverage, 0.5);
   assert.equal(result.samples[0].status, "ambiguous");
+});
+
+test("complete quantitative coverage retains review-grade evidence confidence", () => {
+  const playerUnits = [unit("player-1", "player", 100)];
+  const opponentUnits = [unit("opponent-1", "opponent", 100)];
+  const retainedWarning = "Imported profile requires review.";
+  const scenarios = (["shooting", "fight"] as const).flatMap(
+    (phase) =>
+      (
+        [
+          "player-to-opponent",
+          "opponent-to-player",
+        ] as const
+      ).map((direction) => {
+        const base = scenario(
+          phase,
+          direction,
+          playerUnits,
+          opponentUnits,
+        );
+        return {
+          ...base,
+          warnings: [retainedWarning, retainedWarning],
+          cells: base.cells.map((cell) => ({
+            ...cell,
+            confidence: "review" as const,
+            warningRefs: [retainedWarning, retainedWarning],
+            values: {
+              ...cell.values,
+              halfWipeProbability: 0.4,
+            },
+          })),
+        };
+      }),
+  );
+
+  const frozenPortfolio = portfolio();
+  const robustness = computeStressRobustness(
+    report(playerUnits, opponentUnits, scenarios),
+    frozenPortfolio,
+  );
+  const sample = robustness.samples[0];
+
+  assert.equal(sample.status, "confident");
+  assert.equal(sample.coverageCompleteness, "complete");
+  assert.equal(sample.evidenceConfidence, "review");
+  assert.deepEqual(sample.warningRefs, [retainedWarning]);
+  assert.equal(robustness.confidence, "complete");
+  assert.equal(robustness.coverageCompleteness, "complete");
+  assert.equal(robustness.evidenceConfidence, "review");
+  assert.equal(robustness.offense.evidenceConfidence, "review");
+  assert.equal(robustness.exposure.evidenceConfidence, "review");
+  assert.equal(robustness.margin.evidenceConfidence, "review");
+  assert.match(
+    robustness.warnings.join("\n"),
+    /aggregate evidence confidence is review/,
+  );
+
+  const universalGap = stressFindings(
+    robustness,
+    frozenPortfolio,
+  ).find((finding) => finding.kind === "universal-gap");
+  assert.equal(universalGap?.confidence, "review");
+});
+
+test("archetype risks cite only exposed templates and preserve equal-weight metadata", () => {
+  const playerUnits = [unit("player-1", "player", 100)];
+  const opponentA = [unit("opponent-a-unit", "opponent", 100)];
+  const opponentB = [unit("opponent-b-unit", "opponent", 100)];
+  const scenarioWithValue = (
+    opponentName: string,
+    phase: TesseraPhase,
+    direction: TesseraDirection,
+    opponentUnits: TesseraUnitInstance[],
+    halfWipeProbability: number,
+  ): TesseraScenarioResult => {
+    const base = scenario(
+      phase,
+      direction,
+      playerUnits,
+      opponentUnits,
+    );
+    return {
+      ...base,
+      opponentName,
+      cells: base.cells.map((cell) => ({
+        ...cell,
+        values: {
+          ...cell.values,
+          halfWipeProbability,
+        },
+      })),
+    };
+  };
+  const scenarios = (["shooting", "fight"] as const).flatMap(
+    (phase) => [
+      scenarioWithValue(
+        "Opponent A",
+        phase,
+        "player-to-opponent",
+        opponentA,
+        0.6,
+      ),
+      scenarioWithValue(
+        "Opponent A",
+        phase,
+        "opponent-to-player",
+        opponentA,
+        0.4,
+      ),
+      scenarioWithValue(
+        "Opponent B",
+        phase,
+        "player-to-opponent",
+        opponentB,
+        0.4,
+      ),
+      scenarioWithValue(
+        "Opponent B",
+        phase,
+        "opponent-to-player",
+        opponentB,
+        0.6,
+      ),
+    ],
+  );
+  const matchup = report(playerUnits, opponentA, scenarios);
+  const opponentTemplate = matchup.opponents[0];
+  matchup.opponents = [
+    {
+      ...opponentTemplate,
+      rosterName: "Opponent A",
+      fingerprint: "opponent-a",
+      units: opponentA,
+      summary: {
+        ...opponentTemplate.summary,
+        rosterName: "Opponent A",
+      },
+    },
+    {
+      ...opponentTemplate,
+      rosterName: "Opponent B",
+      fingerprint: "opponent-b",
+      units: opponentB,
+      summary: {
+        ...opponentTemplate.summary,
+        rosterName: "Opponent B",
+      },
+    },
+  ];
+  const frozenPortfolio = portfolio();
+  const itemTemplate = frozenPortfolio.items[0];
+  frozenPortfolio.items = [
+    {
+      ...itemTemplate,
+      templateId: "balanced-control:mixed",
+      roster: {
+        ...itemTemplate.roster!,
+        name: "Opponent A",
+      },
+      fingerprint: "opponent-a",
+      simulationFingerprint: "opponent-a",
+    },
+    {
+      ...itemTemplate,
+      templateId: "ranged-pressure:mixed",
+      posture: "ranged-pressure",
+      roster: {
+        ...itemTemplate.roster!,
+        name: "Opponent B",
+      },
+      fingerprint: "opponent-b",
+      simulationFingerprint: "opponent-b",
+    },
+  ];
+  frozenPortfolio.coverage.intended = 2;
+  frozenPortfolio.coverage.ready = 2;
+  frozenPortfolio.coverage.uniqueSimulationPayloads = 2;
+  frozenPortfolio.coverage.representedPostures = [
+    "balanced-control",
+    "ranged-pressure",
+  ];
+
+  const robustness = computeStressRobustness(
+    matchup,
+    frozenPortfolio,
+  );
+  const player = robustness.units[0];
+  assert.deepEqual(player.supportingTemplateIds, [
+    "balanced-control:mixed",
+  ]);
+  assert.deepEqual(player.exposedTemplateIds, [
+    "ranged-pressure:mixed",
+  ]);
+  assert.equal(robustness.samples.length, frozenPortfolio.coverage.ready);
+  assert.equal(
+    player.exposedTemplateIds.length / frozenPortfolio.coverage.ready,
+    player.exposedWeight,
+  );
+  const risk = stressFindings(robustness, frozenPortfolio).find(
+    (finding) =>
+      finding.kind === "archetype-risk" &&
+      finding.unitInstanceIds.includes(player.instanceId),
+  );
+  assert.ok(risk);
+  assert.deepEqual(risk.templateIds, ["ranged-pressure:mixed"]);
+});
+
+test("distinct proxy payloads may legitimately produce identical matrix values", () => {
+  const playerUnits = [unit("player-1", "player", 100)];
+  const opponentUnits = [unit("opponent-1", "opponent", 100)];
+  const baseScenarios = (["shooting", "fight"] as const).flatMap(
+    (phase) =>
+      (
+        [
+          "player-to-opponent",
+          "opponent-to-player",
+        ] as const
+      ).map((direction) =>
+        scenario(
+          phase,
+          direction,
+          playerUnits,
+          opponentUnits,
+        ),
+      ),
+  );
+  const withHashes = (
+    matrixSha256: string,
+  ): TesseraScenarioResult[] =>
+    baseScenarios.map((entry) => ({
+      ...entry,
+      metricRuns: [
+        {
+          metric: "half-wipe-probability",
+          iterations: 1_000,
+          settings: { iterations: "1000" },
+          matrixSha256,
+          integrity: {
+            status: "trusted",
+            issueCodes: [],
+            aliasedScenarioIds: [],
+          },
+        },
+      ],
+    }));
+  const frozenPortfolio = portfolio();
+  const first = frozenPortfolio.items[0];
+  frozenPortfolio.items.push({
+    ...first,
+    templateId: "ranged-pressure:mixed",
+    posture: "ranged-pressure",
+    fingerprint: "opponent-two",
+    simulationFingerprint: "opponent-two",
+  });
+  frozenPortfolio.coverage.ready = 2;
+  frozenPortfolio.coverage.intended = 2;
+  frozenPortfolio.coverage.uniqueSimulationPayloads = 2;
+  const integrity = assessScreeningIntegrity(
+    new Map([
+      [
+        "balanced-control:mixed",
+        report(
+          playerUnits,
+          opponentUnits,
+          withHashes("a".repeat(64)),
+        ),
+      ],
+      [
+        "ranged-pressure:mixed",
+        report(
+          playerUnits,
+          opponentUnits,
+          withHashes("b".repeat(64)),
+        ),
+      ],
+    ]),
+    frozenPortfolio,
+    true,
+  );
+
+  assert.equal(integrity.status, "verified");
+  assert.deepEqual(integrity.issues, []);
+});
+
+test("requested screening with no complete matrices is inconclusive", () => {
+  const frozenPortfolio = portfolio();
+  const integrity = assessScreeningIntegrity(
+    new Map(),
+    frozenPortfolio,
+    true,
+  );
+
+  assert.equal(integrity.status, "inconclusive");
+  assert.deepEqual(
+    integrity.issues.map((entry) => entry.code),
+    ["TESSERA_EVIDENCE_INCOMPLETE"],
+  );
+  assert.deepEqual(
+    integrity.issues[0]?.templateIds,
+    ["balanced-control:mixed"],
+  );
 });

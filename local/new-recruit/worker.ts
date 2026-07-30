@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
 
 import {
+  type WorkerProbeResult,
   type BrokerCredentials,
   type WorkerRequest,
   type WorkerResult,
 } from "./contracts";
 import {
   NewRecruitAutomationError,
+  runNewRecruitAuthenticationCheck,
   runNewRecruitBrowserDelivery,
 } from "./browser";
 
@@ -56,6 +58,7 @@ function failure(error: unknown): WorkerResult {
         ? error.code
         : "COMPANION_FAILED",
     message: error instanceof Error ? error.message : "Companion failed.",
+    uiIdentity: null,
     imported: false,
     sessionReused: false,
     listUrl: null,
@@ -65,13 +68,46 @@ function failure(error: unknown): WorkerResult {
   };
 }
 
+function probeFailure(error: unknown): WorkerProbeResult {
+  return {
+    ok: false,
+    code:
+      error instanceof NewRecruitAutomationError
+        ? error.code
+        : "COMPANION_FAILED",
+    message:
+      error instanceof Error ? error.message : "Authentication probe failed.",
+    uiIdentity: null,
+    sessionReused: false,
+    importControlVisible: false,
+  };
+}
+
+let workerAction: WorkerRequest["action"] = "deliver";
 try {
   const input = JSON.parse(await readStdin()) as WorkerRequest;
-  const result = await runNewRecruitBrowserDelivery(input, {
-    getCredentials: () => retrieveCredentials(input.brokerPath),
-  });
+  workerAction = input.action;
+  const result =
+    input.action === "probe"
+      ? await runNewRecruitAuthenticationCheck(
+          input.profileDirectory,
+          {
+            getCredentials: () =>
+              retrieveCredentials(input.brokerPath),
+          },
+        )
+      : await runNewRecruitBrowserDelivery(input, {
+          getCredentials: () =>
+            retrieveCredentials(input.brokerPath),
+        });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } catch (error) {
-  process.stdout.write(`${JSON.stringify(failure(error))}\n`);
+  process.stdout.write(
+    `${JSON.stringify(
+      workerAction === "probe"
+        ? probeFailure(error)
+        : failure(error),
+    )}\n`,
+  );
   process.exitCode = 2;
 }

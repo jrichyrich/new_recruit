@@ -8,7 +8,7 @@ export type WorkerRosterExpectation = {
   units: Array<{ name: string; modelCount: number }>;
 };
 
-export type WorkerRequest = {
+export type WorkerDeliveryRequest = {
   action: "deliver";
   brokerPath: string;
   profileDirectory: string;
@@ -18,10 +18,42 @@ export type WorkerRequest = {
   expected: WorkerRosterExpectation;
 };
 
+export type WorkerProbeRequest = {
+  action: "probe";
+  brokerPath: string;
+  profileDirectory: string;
+};
+
+export type WorkerRequest =
+  | WorkerDeliveryRequest
+  | WorkerProbeRequest;
+
+export type WorkerProbeResult = {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  /**
+   * SHA-256 of safe UI build metadata observed only after authentication.
+   */
+  uiIdentity: string | null;
+  sessionReused: boolean;
+  importControlVisible: boolean;
+};
+
 export type WorkerResult = {
   ok: boolean;
   code?: string;
   message?: string;
+  /**
+   * The worker response was lost or malformed after dispatch, so callers
+   * cannot safely conclude that no remote import occurred.
+   */
+  remoteOutcomeUnknown?: boolean;
+  /**
+   * SHA-256 of safe UI build metadata only. Raw script URLs, page content,
+   * credentials, and browser state never cross the worker boundary.
+   */
+  uiIdentity?: string | null;
   imported: boolean;
   sessionReused: boolean;
   listUrl: string | null;

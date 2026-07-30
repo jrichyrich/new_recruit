@@ -4,7 +4,22 @@ import {
   type Locator,
   type Page,
 } from "playwright-core";
-import type { ProfilePolicyV1 } from "../../lib/rosterpilot";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import type {
+  ProfilePolicyV1,
+  TesseraFrozenScenarioContract,
+} from "../../lib/rosterpilot";
+import {
+  normalizeProfileIdentity,
+} from "./profile-policy";
+import {
+  deterministicTesseraSavedListName,
+  scopedTesseraProfilePolicySha256,
+  tesseraSavedListReuseValidationError,
+  type TesseraSavedListReuse,
+  type TesseraSavedListReuseAction,
+} from "./saved-list-reuse";
 
 export const TESSERA_URL = "https://playtessera.gg/" as const;
 
@@ -36,6 +51,59 @@ export class TesseraAutomationError extends Error {
   }
 }
 
+export function classifyTesseraAutomationFailure(error: unknown): {
+  code: string;
+  message: string;
+} {
+  const message =
+    error instanceof Error ? error.message : "Tessera companion failed.";
+  if (error instanceof TesseraAutomationError) {
+    return { code: error.code, message };
+  }
+  if (!(error instanceof Error)) {
+    return { code: "TESSERA_COMPANION_FAILED", message };
+  }
+  if (
+    error.name === "TimeoutError" ||
+    /timeout\b.*(?:exceeded|waiting|after \d+)/i.test(message)
+  ) {
+    return { code: "TESSERA_BROWSER_TIMEOUT", message };
+  }
+  if (
+    /target (?:page|context|browser).*closed|target closed|browser has (?:been )?disconnected|connection closed/i.test(
+      message,
+    )
+  ) {
+    return { code: "TESSERA_BROWSER_SESSION_CLOSED", message };
+  }
+  if (
+    /executable doesn't exist|failed to launch|cannot find (?:chrome|chromium)|browserType\.launchPersistentContext/i.test(
+      message,
+    )
+  ) {
+    return { code: "TESSERA_BROWSER_UNAVAILABLE", message };
+  }
+  if (/enoent|no such file|does not exist/i.test(message)) {
+    return { code: "TESSERA_ROSTER_FILE_MISSING", message };
+  }
+  if (
+    /page\.goto|net::err_|navigation failed|cannot navigate/i.test(message)
+  ) {
+    return { code: "TESSERA_BROWSER_NAVIGATION_FAILED", message };
+  }
+  return { code: "TESSERA_COMPANION_FAILED", message };
+}
+
+export function invalidatesCachedTesseraLicenseKey(code: string): boolean {
+  return (
+    code === "TESSERA_PREMIUM_KEY_REJECTED" ||
+    code === "TESSERA_PREMIUM_KEY_ABSENT" ||
+    code === "AUTHENTICATION_CANCELLED" ||
+    code.startsWith("KEYCHAIN_") ||
+    code.startsWith("CREDENTIAL_")
+  );
+}
+
 export type TesseraMatrixCell = {
   attacker: string;
   target: string;
@@ -61,6 +129,33 @@ export type TesseraScenario = {
   settings: Record<string, string>;
   iterations: number | null;
   cells: TesseraScenarioCell[];
+  matrixSha256?: string;
+  integrity?: {
+    status: "trusted" | "aliased";
+    issueCodes: TesseraMatrixIntegrityCode[];
+    aliasedScenarioIds: string[];
+  };
+};
+
+export type TesseraMatrixIntegrityCode =
+  | "TESSERA_PHASE_MATRIX_ALIAS"
+  | "TESSERA_METRIC_MATRIX_ALIAS";
+
+export type TesseraMatrixIntegrityIssue = {
+  code: TesseraMatrixIntegrityCode;
+  scenarioIds: string[];
+  matrixSha256: string;
+  message: string;
+};
+
+export type TesseraScenarioCaptureAttempt = {
+  scenarioId: string;
+  attempt: number;
+  status: "success" | "failed";
+  code: string | null;
+  message: string | null;
+  retryable: boolean;
+  willRetry: boolean;
 };
 
 export type TesseraImportWarnings = {
@@ -77,16 +172,60 @@ export type TesseraImportIssue = {
   phase: TesseraPhase | null;
   message: string;
   resolvedByPolicy: boolean;
+  selectedProfile?: string | null;
 };
 
 export type TesseraBrowserResult = {
+  uiIdentity?: string | null;
+  legacyProjection?: {
+    status: "derived" | "unavailable";
+    phase: TesseraPhase | null;
+    metric: TesseraMetric | null;
+    scenarioIds: string[];
+  };
   settings: Record<string, string>;
   cells: TesseraMatrixCell[];
   scenarios: TesseraScenario[];
   importWarnings: TesseraImportWarnings;
   importIssues?: TesseraImportIssue[];
+  integrityIssues?: TesseraMatrixIntegrityIssue[];
+  scenarioAttempts?: TesseraScenarioCaptureAttempt[];
+  savedListReuse?: {
+    mode: "deterministic";
+    player: TesseraSavedListReuseAction;
+    opponent: TesseraSavedListReuseAction;
+  };
   warnings: string[];
 };
+
+async function tesseraUiIdentity(page: Page): Promise<string | null> {
+  try {
+    const scripts = await page
+      .locator("script[src]")
+      .evaluateAll((elements) =>
+        elements
+          .map((element) => element.getAttribute("src") ?? "")
+          .filter(Boolean)
+          .sort(),
+      );
+    const declaredVersion = await page
+      .locator('meta[name="version"], meta[name="app-version"]')
+      .first()
+      .getAttribute("content")
+      .catch(() => null);
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          origin: new URL(page.url()).origin,
+          declaredVersion,
+          scripts,
+        }),
+      )
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
 
 export type TesseraBrowserInput = {
   profileDirectory: string;
@@ -99,6 +238,8 @@ export type TesseraBrowserInput = {
   phases?: readonly TesseraPhase[];
   metrics?: readonly TesseraMetric[];
   profilePolicy?: ProfilePolicyV1 | null;
+  frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
+  savedListReuse?: TesseraSavedListReuse | null;
   sessionId?: string;
 };
 
@@ -107,7 +248,106 @@ export type TesseraBrowserDependencies = {
   headless?: boolean;
   prepareContext?: (context: BrowserContext) => Promise<void>;
   timeoutMs?: number;
+  context?: BrowserContext;
+  keepContextOpen?: boolean;
+  onContext?: (context: BrowserContext) => void;
 };
+
+type PreparedSavedListReuse = {
+  player: {
+    name: string;
+    expectedUnitCount: number;
+    contentSha256: string;
+  };
+  opponent: {
+    name: string;
+    expectedUnitCount: number;
+    contentSha256: string;
+  };
+};
+
+async function prepareSavedListReuse(
+  input: TesseraBrowserInput,
+): Promise<PreparedSavedListReuse | null> {
+  const reuse = input.savedListReuse;
+  if (!reuse) return null;
+  if (reuse.schemaVersion !== 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_SAVED_LIST_REUSE_INVALID",
+      "The Tessera saved-list reuse contract has an unsupported schema version.",
+    );
+  }
+  for (const [side, identity, filename] of [
+    ["player", reuse.player, input.playerRoszPath],
+    ["opponent", reuse.opponent, input.opponentRoszPath],
+  ] as const) {
+    const validationError =
+      tesseraSavedListReuseValidationError(identity);
+    if (validationError) {
+      throw new TesseraAutomationError(
+        "TESSERA_SAVED_LIST_REUSE_INVALID",
+        `The ${side} Tessera saved-list reuse identity is invalid: ${validationError}.`,
+      );
+    }
+    let content: Buffer;
+    try {
+      content = await readFile(filename);
+    } catch {
+      throw new TesseraAutomationError(
+        "TESSERA_ROSTER_FILE_MISSING",
+        `The ${side} roster archive could not be read before saved-list reuse preflight.`,
+      );
+    }
+    const observedSha256 = createHash("sha256")
+      .update(content)
+      .digest("hex");
+    if (
+      observedSha256 !==
+      identity.enrichedRoszSha256.toLocaleLowerCase()
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_SAVED_LIST_REUSE_INVALID",
+        `The ${side} roster archive does not match its saved-list reuse content hash.`,
+      );
+    }
+  }
+  const observedPolicySha256 =
+    scopedTesseraProfilePolicySha256(input.profilePolicy);
+  for (const [side, identity] of [
+    ["player", reuse.player],
+    ["opponent", reuse.opponent],
+  ] as const) {
+    if (
+      observedPolicySha256 !==
+      identity.scopedProfilePolicySha256.toLocaleLowerCase()
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_SAVED_LIST_REUSE_INVALID",
+        `The ${side} saved-list identity does not match the scoped Tessera profile policy.`,
+      );
+    }
+  }
+  return {
+    player: {
+      name: deterministicTesseraSavedListName(
+        "player",
+        reuse.player,
+      ),
+      expectedUnitCount: reuse.player.expectedUnitCount,
+      contentSha256:
+        reuse.player.enrichedRoszSha256.toLocaleLowerCase(),
+    },
+    opponent: {
+      name: deterministicTesseraSavedListName(
+        "opponent",
+        reuse.opponent,
+      ),
+      expectedUnitCount: reuse.opponent.expectedUnitCount,
+      contentSha256:
+        reuse.opponent.enrichedRoszSha256.toLocaleLowerCase(),
+    },
+  };
+}
 
 function numberFrom(
   value: string,
@@ -173,7 +413,7 @@ function structuredImportIssues(
       (match) => match[1],
     );
     const unit =
-      message.match(/(?:for|on|unit)\s+["“]?([^"”,:;]+)["”]?/i)?.[1]?.trim() ??
+      message.match(/\b(?:for|on|unit)\b\s+["“]?([^"”,:;]+)["”]?/i)?.[1]?.trim() ??
       null;
     const availableText =
       message.match(/(?:profiles?|choose)\s*[:=]\s*([^.;]+)/i)?.[1] ?? "";
@@ -198,12 +438,293 @@ function structuredImportIssues(
           : null,
       message,
       resolvedByPolicy: false,
+      selectedProfile: null,
     };
   });
 }
 
 function normalized(value: string): string {
-  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  return normalizeProfileIdentity(value);
+}
+
+function importedWeaponGroupMatches(
+  importedWeaponGroup: string,
+  policyWeaponGroup: string,
+): boolean {
+  const imported = normalized(importedWeaponGroup);
+  const policy = normalized(policyWeaponGroup);
+  return (
+    imported === policy ||
+    imported.startsWith(`${policy} - `) ||
+    imported.startsWith(`${policy} – `) ||
+    imported.startsWith(`${policy} — `) ||
+    imported.startsWith(`${policy}: `)
+  );
+}
+
+function importedWeaponProfile(
+  importedWeaponGroup: string,
+  policyWeaponGroup: string,
+): string | null {
+  if (!importedWeaponGroupMatches(importedWeaponGroup, policyWeaponGroup)) {
+    return null;
+  }
+  const delimiter = importedWeaponGroup.match(/\s+(?:-|–|—|:)\s+/);
+  if (!delimiter?.index) return null;
+  const base = importedWeaponGroup.slice(0, delimiter.index);
+  if (normalized(base) !== normalized(policyWeaponGroup)) return null;
+  return importedWeaponGroup
+    .slice(delimiter.index + delimiter[0].length)
+    .trim();
+}
+
+async function profileCountControl(weaponName: Locator): Promise<Locator | null> {
+  let container = weaponName.locator("xpath=..");
+  for (let depth = 0; depth < 4; depth += 1) {
+    const controls = container.locator(
+      'input[aria-label="Count" i], input[name="count" i], input[type="number"]',
+    );
+    if ((await controls.count()) === 1) return controls.first();
+    container = container.locator("xpath=..");
+  }
+  return null;
+}
+
+function importedUnitModelCount(text: string): number | null {
+  for (const pattern of [
+    /\b(\d+)\s*(?:models?|miniatures?)\b/i,
+    /\b(?:model count|unit size)\s*:?\s*(\d+)\b/i,
+    /(?:×|x)\s*(\d+)\b/i,
+  ]) {
+    const value = Number(text.match(pattern)?.[1]);
+    if (Number.isSafeInteger(value) && value > 0) return value;
+  }
+  return null;
+}
+
+async function importedUnitRows(
+  page: Page,
+  unit: string,
+): Promise<Array<{
+  checkbox: Locator;
+  row: Locator;
+  modelCount: number | null;
+}>> {
+  const checkboxes = page.locator(
+    'main input[type="checkbox"][aria-label]',
+  );
+  const rows: Array<{
+    checkbox: Locator;
+    row: Locator;
+    modelCount: number | null;
+  }> = [];
+  for (let index = 0; index < (await checkboxes.count()); index += 1) {
+    const checkbox = checkboxes.nth(index);
+    const label =
+      (await checkbox.getAttribute("aria-label").catch(() => null)) ?? "";
+    const includedUnit = label.replace(/^include\s+/i, "").trim();
+    const includedUnitName = includedUnit
+      .replace(
+        /\s*(?:[,;:()\-–—]\s*)?\d+\s*(?:models?|miniatures?)\b.*$/i,
+        "",
+      )
+      .trim();
+    if (normalized(includedUnitName) !== normalized(unit)) continue;
+    const row = checkbox.locator(
+      "xpath=ancestor::*[.//button[normalize-space()='Edit']][1]",
+    );
+    if ((await row.count()) !== 1) continue;
+    const text = await row.innerText().catch(() => "");
+    rows.push({
+      checkbox,
+      row,
+      modelCount: importedUnitModelCount(`${label} ${text}`),
+    });
+  }
+  return rows;
+}
+
+async function importedUnitRowForEntry(
+  page: Page,
+  entry: ProfilePolicyV1["entries"][number],
+): Promise<Locator | null> {
+  const rows = await importedUnitRows(page, entry.unit);
+  if (rows.length === 0) return null;
+  let candidates = rows;
+  if (entry.modelCount !== undefined) {
+    const exposedModelCounts = rows.some(
+      (row) => row.modelCount !== null,
+    );
+    if (exposedModelCounts) {
+      candidates = rows.filter(
+        (row) => row.modelCount === entry.modelCount,
+      );
+      if (candidates.length === 0) return null;
+    } else if (rows.length > 1) {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_EDITOR_MISMATCH",
+        `Tessera did not expose model counts for duplicate imported unit "${entry.unit}", so RosterPilot could not safely apply its frozen profile policy.`,
+      );
+    }
+  }
+  const occurrence = entry.unitOccurrence ?? 1;
+  if (
+    entry.unitOccurrence === undefined &&
+    candidates.length > 1
+  ) {
+    throw new TesseraAutomationError(
+      "TESSERA_PROFILE_POLICY_REQUIRED",
+      `The legacy profile-policy entry for "${entry.unit}" is ambiguous across duplicate imported units. Regenerate the scaffold with modelCount and unitOccurrence.`,
+    );
+  }
+  return candidates[occurrence - 1]?.row ?? null;
+}
+
+async function applyProfilePolicyInImportedUnitEditor(
+  page: Page,
+  entries: ProfilePolicyV1["entries"],
+): Promise<number> {
+  let applied = 0;
+  for (const entry of entries) {
+    const row = await importedUnitRowForEntry(page, entry);
+    if (!row) continue;
+    const editButton = row.getByRole("button", { name: "Edit", exact: true });
+    if ((await editButton.count()) !== 1) {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_EDITOR_MISMATCH",
+        `Tessera did not expose one Edit control for imported unit "${entry.unit}".`,
+      );
+    }
+    await editButton.click();
+    const editorHeading = page.getByText("Edit imported unit", { exact: true });
+    try {
+      await editorHeading.waitFor({ state: "visible", timeout: 10_000 });
+    } catch {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_EDITOR_MISMATCH",
+        `Tessera did not open its imported-unit editor for "${entry.unit}".`,
+      );
+    }
+
+    const weaponNames = page.locator('main input[placeholder="Weapon name"]');
+    const matchingWeapons: Array<{
+      selected: boolean;
+      profile: string;
+      count: Locator;
+      currentCount: number;
+    }> = [];
+    for (let index = 0; index < (await weaponNames.count()); index += 1) {
+      const weaponNameControl = weaponNames.nth(index);
+      const weaponName = await weaponNameControl.inputValue();
+      const profile = importedWeaponProfile(weaponName, entry.weaponGroup);
+      if (profile === null) continue;
+      const count = await profileCountControl(weaponNameControl);
+      if (!count) {
+        throw new TesseraAutomationError(
+          "TESSERA_PROFILE_EDITOR_MISMATCH",
+          `Tessera did not expose one Count control for "${weaponName}".`,
+        );
+      }
+      matchingWeapons.push({
+        selected: normalized(profile) === normalized(entry.selectedProfile),
+        profile,
+        count,
+        currentCount: Number(await count.inputValue()),
+      });
+    }
+    const weaponsByProfile = new Map<
+      string,
+      typeof matchingWeapons
+    >();
+    for (const weapon of matchingWeapons) {
+      const key = normalized(weapon.profile);
+      const profileWeapons = weaponsByProfile.get(key) ?? [];
+      profileWeapons.push(weapon);
+      weaponsByProfile.set(key, profileWeapons);
+    }
+    const profileOccurrences = [...weaponsByProfile.values()];
+    const groupCount = profileOccurrences[0]?.length ?? 0;
+    const completeGroups =
+      weaponsByProfile.size >= 2 &&
+      groupCount > 0 &&
+      profileOccurrences.every(
+        (profileWeapons) => profileWeapons.length === groupCount,
+      );
+    const groups = completeGroups
+      ? Array.from({ length: groupCount }, (_unused, index) =>
+        profileOccurrences.map((profileWeapons) => profileWeapons[index])
+      )
+      : [];
+    const groupActiveCounts = groups.map((group) =>
+      group
+        .map((weapon) => weapon.currentCount)
+        .filter((count) => Number.isSafeInteger(count) && count > 0)
+    );
+    const activeTotal = groupActiveCounts.reduce(
+      (sum, counts) => sum + (counts[0] ?? 0),
+      0,
+    );
+    if (
+      !completeGroups ||
+      groups.some(
+        (group, index) =>
+          group.filter((weapon) => weapon.selected).length !== 1 ||
+          groupActiveCounts[index].length !== 1,
+      ) ||
+      activeTotal !== entry.activeCount
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_EDITOR_MISMATCH",
+        `Tessera's imported-unit editor did not expose complete "${entry.weaponGroup}" profile groups totaling ${entry.activeCount} active weapon(s) for selected profile "${entry.selectedProfile}" (rows=${matchingWeapons.length}, groups=${groups.length}, activeTotal=${activeTotal}).`,
+      );
+    }
+
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const activeCount = groupActiveCounts[groupIndex][0];
+      for (const weapon of groups[groupIndex]) {
+        const expectedCount = weapon.selected
+          ? String(activeCount)
+          : "0";
+        await weapon.count.fill(expectedCount);
+        if ((await weapon.count.inputValue()) !== expectedCount) {
+          throw new TesseraAutomationError(
+            "TESSERA_PROFILE_EDITOR_MISMATCH",
+            `Tessera did not retain count ${expectedCount} for "${entry.weaponGroup} - ${weapon.profile}" subgroup ${groupIndex + 1}.`,
+          );
+        }
+      }
+    }
+
+    const saveButton = page.getByRole("button", {
+      name: "Save",
+      exact: true,
+    });
+    if ((await saveButton.count()) !== 1) {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_EDITOR_MISMATCH",
+        `Tessera did not expose one Save control for imported unit "${entry.unit}".`,
+      );
+    }
+    if (!(await saveButton.isEnabled().catch(() => false))) {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_EDITOR_MISMATCH",
+        `Tessera rejected the frozen profile counts for imported unit "${entry.unit}".`,
+      );
+    }
+    await saveButton.click();
+    try {
+      await page
+        .getByText("Review import", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+    } catch {
+      throw new TesseraAutomationError(
+        "TESSERA_PROFILE_EDITOR_MISMATCH",
+        `Tessera did not return to import review after applying "${entry.selectedProfile}" to "${entry.unit}".`,
+      );
+    }
+    applied += 1;
+  }
+  return applied;
 }
 
 async function applyProfilePolicy(
@@ -226,7 +747,7 @@ async function applyProfilePolicy(
     const candidates = policy.entries.filter((entry) => {
       if (
         issue.weaponGroup &&
-        normalized(entry.weaponGroup) !== normalized(issue.weaponGroup)
+        !importedWeaponGroupMatches(issue.weaponGroup, entry.weaponGroup)
       ) return false;
       if (
         issue.unit &&
@@ -236,10 +757,10 @@ async function applyProfilePolicy(
       if (issue.phase && entry.phase !== issue.phase) return false;
       return true;
     });
-    if (candidates.length !== 1) {
+    if (candidates.length === 0) {
       throw new TesseraAutomationError(
         "TESSERA_PROFILE_POLICY_REQUIRED",
-        `The import issue "${issue.message}" did not resolve to exactly one frozen profile-policy entry.`,
+        `The import issue "${issue.message}" did not resolve to a frozen profile-policy entry.`,
       );
     }
     const entry = candidates[0];
@@ -268,6 +789,57 @@ async function applyProfilePolicy(
     matchingControls.sort(
       (left, right) => right.score - left.score || left.index - right.index,
     );
+    const hasUniqueSelect =
+      matchingControls.length > 0 &&
+      (
+        matchingControls.length === 1 ||
+        matchingControls[0].score !== matchingControls[1].score
+      );
+    if (hasUniqueSelect && candidates.length === 1) {
+      await selects
+        .nth(matchingControls[0].index)
+        .selectOption({ label: entry.selectedProfile });
+      issue.resolvedByPolicy = true;
+      issue.selectedProfile = entry.selectedProfile;
+      continue;
+    }
+    const applied = await applyProfilePolicyInImportedUnitEditor(
+      page,
+      candidates,
+    );
+    if (applied > 0) {
+      if (applied !== candidates.length) {
+        const currentRows = await importedUnitRows(page, entry.unit);
+        const visibleModelCounts = new Set(
+          currentRows
+            .map((row) => row.modelCount)
+            .filter((value): value is number => value !== null),
+        );
+        const applicableCandidates = candidates.filter(
+          (candidate) =>
+            candidate.modelCount === undefined ||
+            visibleModelCounts.size === 0 ||
+            visibleModelCounts.has(candidate.modelCount),
+        );
+        if (applied !== applicableCandidates.length) {
+          throw new TesseraAutomationError(
+            "TESSERA_PROFILE_POLICY_APPLICATION_FAILED",
+            `Tessera applied ${applied} of ${applicableCandidates.length} occurrence-specific ${entry.weaponGroup} profile decisions for "${entry.unit}".`,
+          );
+        }
+      }
+      issue.resolvedByPolicy = true;
+      issue.selectedProfile =
+        candidates.length === 1
+          ? entry.selectedProfile
+          : candidates
+            .map(
+              (candidate) =>
+                `${candidate.modelCount ?? "legacy"} models #${candidate.unitOccurrence ?? "legacy"}: ${candidate.selectedProfile}`,
+            )
+            .join("; ");
+      continue;
+    }
     if (
       matchingControls.length === 0 ||
       (
@@ -280,11 +852,29 @@ async function applyProfilePolicy(
         `Tessera did not expose a unique ${entry.weaponGroup} control for profile "${entry.selectedProfile}".`,
       );
     }
-    await selects
-      .nth(matchingControls[0].index)
-      .selectOption({ label: entry.selectedProfile });
-    issue.resolvedByPolicy = true;
   }
+}
+
+function savedListUnitCount(label: string): number | null {
+  const units = label.match(/(?:^|\D)(\d+)\s*units?\b/i);
+  const trailing = label.match(/\((\d+)\)\s*$/);
+  const parsed = Number(units?.[1] ?? trailing?.[1]);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function savedListName(label: string): string {
+  return label
+    .replace(/^\s*☰\s*/u, "")
+    .replace(/\s*\(\d+\)\s*$/, "")
+    .replace(/\s*(?:[·\-–—]\s*)?\d+\s+units?\s*$/i, "")
+    .trim();
+}
+
+function importSideMessage(
+  side: TesseraImportIssue["side"],
+  message: string,
+): string {
+  return `[TESSERA_IMPORT_SIDE=${side}] ${message}`;
 }
 
 async function importRosz(
@@ -292,7 +882,13 @@ async function importRosz(
   filename: string,
   side: TesseraImportIssue["side"],
   policy: ProfilePolicyV1 | null | undefined,
-): Promise<{ warnings: string[]; issues: TesseraImportIssue[] }> {
+  browserListName: string,
+  expectedUnitCount?: number,
+): Promise<{
+  warnings: string[];
+  issues: TesseraImportIssue[];
+  unitCount: number;
+}> {
   const importButton = page
     .getByRole("button", { name: /import \.rosz/i })
     .first();
@@ -305,17 +901,53 @@ async function importRosz(
       );
     }
     throw new TesseraAutomationError(
-      "TESSERA_UI_CHANGED",
+      "TESSERA_ROSTER_INPUT_UNAVAILABLE",
       "The Tessera .rosz import control could not be located.",
     );
   }
-  const chooserPromise = page.waitForEvent("filechooser", { timeout: 10_000 });
-  await importButton.click();
-  const chooser = await chooserPromise;
-  await chooser.setFiles(filename);
-  await page
-    .getByText("Review import", { exact: true })
-    .waitFor({ state: "visible", timeout: 10_000 });
+  const fileInputs = page.locator(
+    'input[type="file"][accept*=".rosz" i]',
+  );
+  if ((await fileInputs.count()) !== 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_ROSTER_INPUT_UNAVAILABLE",
+      "Tessera did not expose exactly one file input that explicitly accepts .rosz files.",
+    );
+  }
+  try {
+    await fileInputs.first().setInputFiles(filename);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /enoent|no such file|does not exist/i.test(error.message)
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_ROSTER_FILE_MISSING",
+        `The roster archive "${filename}" could not be read.`,
+      );
+    }
+    throw error;
+  }
+  try {
+    await page
+      .getByText("Review import", { exact: true })
+      .waitFor({ state: "visible", timeout: 10_000 });
+  } catch {
+    throw new TesseraAutomationError(
+      "TESSERA_IMPORT_REVIEW_MISSING",
+      "Tessera accepted the roster file but did not open its import review.",
+    );
+  }
+  const listName = page.getByRole("textbox", {
+    name: "Save to list (army name)",
+    exact: true,
+  });
+  if ((await listName.count()) !== 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_IMPORT_REVIEW_MISSING",
+      "Tessera did not expose the imported army name control.",
+    );
+  }
   const reviewText = await page.locator("main").innerText();
   const warnings = reviewText
     .split("\n")
@@ -323,19 +955,82 @@ async function importRosz(
     .filter((line) => /warning|alternate profile|unverified/i.test(line))
     .slice(0, 20);
   const issues = structuredImportIssues(side, warnings);
-  await applyProfilePolicy(page, issues, policy);
+  try {
+    await applyProfilePolicy(page, issues, policy);
+  } catch (error) {
+    if (
+      error instanceof TesseraAutomationError &&
+      error.code.startsWith("TESSERA_PROFILE_")
+    ) {
+      throw new TesseraAutomationError(
+        error.code,
+        importSideMessage(side, error.message),
+      );
+    }
+    throw error;
+  }
+  const currentListName = page.getByRole("textbox", {
+    name: "Save to list (army name)",
+    exact: true,
+  });
+  if ((await currentListName.count()) !== 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_IMPORT_REVIEW_MISSING",
+      "Tessera did not retain the imported army name control after profile review.",
+    );
+  }
+  await currentListName.fill(browserListName);
+  if (
+    normalized(await currentListName.inputValue()) !==
+    normalized(browserListName)
+  ) {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      importSideMessage(
+        side,
+        "Tessera did not retain the exact run-scoped army name before saving the import.",
+      ),
+    );
+  }
   const add = page.getByRole("button", { name: /^add \d+$/i }).first();
   if (!(await add.isVisible().catch(() => false))) {
     throw new TesseraAutomationError(
-      "TESSERA_UI_CHANGED",
+      "TESSERA_IMPORT_REVIEW_MISSING",
       "Tessera parsed the roster but did not expose its Add control.",
     );
   }
+  const addLabel = await add.innerText();
+  const unitCount = Number(addLabel.match(/^add\s+(\d+)$/i)?.[1]);
+  if (!Number.isSafeInteger(unitCount) || unitCount <= 0) {
+    throw new TesseraAutomationError(
+      "TESSERA_IMPORT_REVIEW_MISSING",
+      "Tessera's import review did not report a valid positive unit count.",
+    );
+  }
+  if (
+    expectedUnitCount !== undefined &&
+    unitCount !== expectedUnitCount
+  ) {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      importSideMessage(
+        side,
+        `Tessera parsed ${unitCount} units from the roster archive, but the deterministic saved-list contract requires ${expectedUnitCount}. The import was not saved.`,
+      ),
+    );
+  }
   await add.click();
-  await page
-    .getByRole("heading", { name: "Roster", exact: true })
-    .waitFor({ state: "visible", timeout: 10_000 });
-  return { warnings, issues };
+  try {
+    await page
+      .getByRole("heading", { name: "Roster", exact: true })
+      .waitFor({ state: "visible", timeout: 10_000 });
+  } catch {
+    throw new TesseraAutomationError(
+      "TESSERA_IMPORT_REVIEW_MISSING",
+      `Tessera did not save imported list "${browserListName}".`,
+    );
+  }
+  return { warnings, issues, unitCount };
 }
 
 async function unlockPremium(
@@ -406,6 +1101,41 @@ async function unlockPremium(
   if (await tactica.isVisible().catch(() => false)) await tactica.click();
 }
 
+async function ensureRosterPage(
+  page: Page,
+  timeoutMs: number,
+): Promise<void> {
+  const rosterHeading = page.getByRole("heading", {
+    name: "Roster",
+    exact: true,
+  });
+  const onboarding = page
+    .getByRole("button", { name: /^got it$/i })
+    .first();
+  if (!(await rosterHeading.isVisible().catch(() => false))) {
+    await onboarding
+      .waitFor({
+        state: "visible",
+        timeout: Math.min(timeoutMs, 5_000),
+      })
+      .catch(() => undefined);
+    if (await onboarding.isVisible().catch(() => false)) {
+      await onboarding.click();
+    }
+  }
+  if (!(await rosterHeading.isVisible().catch(() => false))) {
+    const muster = page
+      .getByRole("button", { name: /^muster$/i })
+      .first();
+    await muster.waitFor({ state: "visible", timeout: timeoutMs });
+    await muster.click();
+  }
+  await rosterHeading.waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+}
+
 async function openArmyMatrix(
   page: Page,
   licenseKey?: string,
@@ -470,41 +1200,262 @@ async function openArmyMatrix(
   await matrix.click();
 }
 
-async function selectArmies(
+type SemanticArmySelectors = {
+  player: Locator;
+  opponent: Locator;
+};
+
+type SavedListOption = {
+  label: string;
+  value: string;
+};
+
+async function semanticArmySelectors(
   page: Page,
-  playerName: string,
-  opponentName: string,
-): Promise<void> {
-  const selects = page.locator("select");
-  if ((await selects.count()) < 2) {
+): Promise<SemanticArmySelectors> {
+  const playerLabel =
+    /^(?:list\s*a|lista|army\s*a|player army)(?:\s+(?:group|list|selector))?$/i;
+  const opponentLabel =
+    /^(?:list\s*b|listb|army\s*b|opponent army)(?:\s+(?:group|list|selector))?$/i;
+  const labeledPlayer = page
+    .getByLabel(playerLabel)
+    .or(page.getByRole("combobox", { name: playerLabel }));
+  const labeledOpponent = page
+    .getByLabel(opponentLabel)
+    .or(page.getByRole("combobox", { name: opponentLabel }));
+  const allComboboxes = page.getByRole("combobox");
+  const playerSelectorCount = await labeledPlayer.count();
+  const opponentSelectorCount = await labeledOpponent.count();
+  if (playerSelectorCount !== 1 || opponentSelectorCount !== 1) {
     throw new TesseraAutomationError(
-      "TESSERA_UI_CHANGED",
-      "Tessera did not expose both army selectors.",
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      `Tessera army selectors are ambiguous (comboboxes=${await allComboboxes.count()}, player=${playerSelectorCount}, opponent=${opponentSelectorCount}).`,
     );
   }
+  const player = labeledPlayer.first();
+  const opponent = labeledOpponent.first();
+  if (
+    !(await player.isVisible().catch(() => false)) ||
+    !(await opponent.isVisible().catch(() => false))
+  ) {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      "Tessera did not expose both semantically labeled army selectors.",
+    );
+  }
+  return { player, opponent };
+}
 
-  const selectArmy = async (index: number, rosterName: string) => {
-    const select = selects.nth(index);
-    const options = await select.locator("option").evaluateAll((elements) =>
+async function savedListOptions(
+  select: Locator,
+): Promise<SavedListOption[]> {
+  return select
+    .locator("option")
+    .evaluateAll((elements) =>
       elements.map((element) => ({
-        label: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+        label: (element.textContent ?? "")
+          .replace(/\s+/g, " ")
+          .trim(),
         value: (element as HTMLOptionElement).value,
       })),
     );
-    const option = options.find((candidate) =>
-      candidate.label.includes(rosterName),
+}
+
+type SavedListReuseInspection = {
+  action: "reused" | "missing";
+};
+
+async function inspectSavedListReuseSide(
+  page: Page,
+  select: Locator,
+  expected: { name: string; expectedUnitCount: number },
+  side: TesseraImportIssue["side"],
+  timeoutMs: number,
+): Promise<SavedListReuseInspection> {
+  const expectedName = normalized(expected.name);
+  const expectedValue = `list:${expected.name}`;
+  const deadline = Date.now() + Math.min(timeoutMs, 1_500);
+  let options: SavedListOption[] = [];
+  let sameName: SavedListOption[] = [];
+  do {
+    options = await savedListOptions(select);
+    sameName = options.filter(
+      (candidate) =>
+        normalized(savedListName(candidate.label)) === expectedName,
     );
-    if (!option) {
+    const truncatedMatches = options.filter((candidate) => {
+      const candidateName = savedListName(candidate.label);
+      if (!/(?:…|\.\.\.)\s*$/.test(candidateName)) return false;
+      const visiblePrefix = normalized(
+        candidateName.replace(/(?:…|\.\.\.)\s*$/, ""),
+      );
+      return (
+        visiblePrefix.length > 0 &&
+        expectedName.startsWith(visiblePrefix)
+      );
+    });
+    if (truncatedMatches.length > 0) {
       throw new TesseraAutomationError(
-        "TESSERA_UI_CHANGED",
-        `Tessera did not list the imported army "${rosterName}".`,
+        "TESSERA_LIST_SELECTION_MISMATCH",
+        importSideMessage(
+          side,
+          "Tessera truncated a saved entry that could be the deterministic certification identity. RosterPilot refused to import or guess.",
+        ),
+      );
+    }
+    if (sameName.length > 0) break;
+    await select.focus().catch(() => undefined);
+    await page.waitForTimeout(100);
+  } while (Date.now() < deadline);
+
+  if (sameName.length === 0) return { action: "missing" };
+  if (sameName.length !== 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      importSideMessage(
+        side,
+        `Tessera exposed ${sameName.length} saved entries for one deterministic certification identity. RosterPilot refused to import or choose between duplicates.`,
+      ),
+    );
+  }
+  const [candidate] = sameName;
+  const observedUnitCount = savedListUnitCount(candidate.label);
+  if (observedUnitCount !== expected.expectedUnitCount) {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      importSideMessage(
+        side,
+        `The deterministic saved entry reports ${observedUnitCount ?? "an unknown number of"} units; expected ${expected.expectedUnitCount}. RosterPilot refused to import over the mismatched identity.`,
+      ),
+    );
+  }
+  if (candidate.value !== expectedValue) {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      importSideMessage(
+        side,
+        "The deterministic saved entry did not retain its stable selector value. RosterPilot refused to reuse or replace it.",
+      ),
+    );
+  }
+  return { action: "reused" };
+}
+
+async function inspectSavedListReuse(
+  page: Page,
+  expected: PreparedSavedListReuse,
+  timeoutMs: number,
+): Promise<{
+  player: SavedListReuseInspection;
+  opponent: SavedListReuseInspection;
+}> {
+  const selectors = await semanticArmySelectors(page);
+  const [player, opponent] = await Promise.all([
+    inspectSavedListReuseSide(
+      page,
+      selectors.player,
+      expected.player,
+      "player",
+      timeoutMs,
+    ),
+    inspectSavedListReuseSide(
+      page,
+      selectors.opponent,
+      expected.opponent,
+      "opponent",
+      timeoutMs,
+    ),
+  ]);
+  return { player, opponent };
+}
+
+async function selectArmies(
+  page: Page,
+  player: { name: string; unitCount: number },
+  opponent: { name: string; unitCount: number },
+): Promise<void> {
+  const selectors = await semanticArmySelectors(page);
+  const playerSelect = selectors.player;
+  const opponentSelect = selectors.opponent;
+
+  const selectArmy = async (
+    select: Locator,
+    roster: { name: string; unitCount: number },
+    side: TesseraImportIssue["side"],
+  ) => {
+    const expectedName = normalized(roster.name);
+    const expectedValue = `list:${roster.name}`;
+    let options: Array<{ label: string; value: string }> = [];
+    let matching: Array<{ label: string; value: string }> = [];
+    const hydrationDeadline = Date.now() + 10_000;
+    while (Date.now() < hydrationDeadline) {
+      options = await savedListOptions(select);
+      matching = options.filter((candidate) => {
+        return (
+          candidate.value === expectedValue &&
+          normalized(savedListName(candidate.label)) === expectedName &&
+          savedListUnitCount(candidate.label) === roster.unitCount
+        );
+      });
+      if (matching.length > 0) break;
+      await select.focus().catch(() => undefined);
+      await page.waitForTimeout(100);
+    }
+    if (matching.length !== 1) {
+      const optionHashes = options.slice(0, 20).map((candidate) =>
+        createHash("sha256")
+          .update(normalized(candidate.label))
+          .digest("hex")
+          .slice(0, 10),
+      );
+      const expectedNameHash = createHash("sha256")
+        .update(expectedName)
+        .digest("hex")
+        .slice(0, 10);
+      throw new TesseraAutomationError(
+        "TESSERA_LIST_SELECTION_MISMATCH",
+        importSideMessage(
+          side,
+          `Tessera exposed ${matching.length} exact entries for the imported army, expected one (options=${options.length}, expectedUnits=${roster.unitCount}, expectedNameHash=${expectedNameHash}, optionLabelHashes=${optionHashes.join(",") || "none"}).`,
+        ),
+      );
+    }
+    const option = matching[0];
+    const listedUnitCount = savedListUnitCount(option.label);
+    if (listedUnitCount !== roster.unitCount) {
+      throw new TesseraAutomationError(
+        "TESSERA_LIST_SELECTION_MISMATCH",
+        importSideMessage(
+          side,
+          `Tessera listed "${roster.name}" with ${
+            listedUnitCount ?? "an unknown number of"
+          } units after importing ${roster.unitCount}.`,
+        ),
       );
     }
     await select.selectOption(option.value);
+    const selectedValue = await select.inputValue();
+    const selectedLabel = await select
+      .locator("option:checked")
+      .innerText()
+      .catch(() => "");
+    if (
+      selectedValue !== expectedValue ||
+      normalized(savedListName(selectedLabel)) !== expectedName ||
+      savedListUnitCount(selectedLabel) !== roster.unitCount
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_LIST_SELECTION_MISMATCH",
+        importSideMessage(
+          side,
+          `Tessera did not retain imported army "${roster.name}" in its selector.`,
+        ),
+      );
+    }
   };
 
-  await selectArmy(0, playerName);
-  await selectArmy(1, opponentName);
+  await selectArmy(playerSelect, player, "player");
+  await selectArmy(opponentSelect, opponent, "opponent");
 
   const run = page
     .getByRole("button", {
@@ -513,8 +1464,32 @@ async function selectArmies(
     .first();
   if (!(await run.isVisible().catch(() => false))) {
     throw new TesseraAutomationError(
-      "TESSERA_UI_CHANGED",
+      "TESSERA_COMPARE_CONTROL_MISSING",
       "Tessera did not expose its army comparison control.",
+    );
+  }
+  const enableDeadline = Date.now() + 3_000;
+  while (
+    Date.now() < enableDeadline &&
+    !(await run.isEnabled().catch(() => false))
+  ) {
+    await page.waitForTimeout(50);
+  }
+  if (!(await run.isEnabled().catch(() => false))) {
+    const body = await page.locator("main").innerText().catch(() => "");
+    if (
+      /too many units|unit limit|maximum\s+(?:of\s+)?\d+\s+units|max(?:imum)?\s+units|up to\s+\d+\s+units/i.test(
+        body,
+      )
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_SIDE_UNIT_LIMIT",
+        "Tessera disabled comparison because one selected army exceeds its unit limit.",
+      );
+    }
+    throw new TesseraAutomationError(
+      "TESSERA_COMPARE_DISABLED",
+      "Tessera did not enable comparison after both imported armies were selected.",
     );
   }
   await run.click();
@@ -604,63 +1579,195 @@ async function extractMatrixRows(page: Page): Promise<string[][]> {
   return candidates[0] ?? [];
 }
 
-async function matrixFingerprint(page: Page): Promise<string> {
-  const rows = await extractMatrixRows(page);
-  return rows.length > 0 ? JSON.stringify(rows) : "";
+function matrixSha256(rows: string[][]): string {
+  return createHash("sha256")
+    .update(JSON.stringify(rows))
+    .digest("hex");
 }
 
-async function matrixMutationRevision(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    type MatrixObserverState = {
-      revision: number;
-      observer: MutationObserver;
-      target: Element;
-    };
-    const scopedWindow = window as Window & {
-      __rosterPilotMatrixObserver?: MatrixObserverState;
-    };
-    const target = document.querySelector("main") ?? document.body;
-    const current = scopedWindow.__rosterPilotMatrixObserver;
-    if (current?.target === target) return current.revision;
-    current?.observer.disconnect();
-    const state: MatrixObserverState = {
-      revision: 0,
-      observer: new MutationObserver(() => {
-        state.revision += 1;
-      }),
-      target,
-    };
-    state.observer.observe(target, {
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
-    scopedWindow.__rosterPilotMatrixObserver = state;
-    return state.revision;
-  });
-}
+type MatrixRefreshWatch = {
+  token: string;
+};
 
-async function waitForMatrixFingerprintChange(
+type MatrixRefreshState = {
+  fingerprint: string;
+  refreshed: boolean;
+  revision: number;
+};
+
+async function beginMatrixRefreshWatch(
   page: Page,
-  previous: string,
-  previousRevision: number,
+): Promise<MatrixRefreshWatch> {
+  const token = randomUUID();
+  const armed = await page.locator("table").evaluateAll(
+    (elements, watchToken) => {
+      type BrowserWatch = {
+        token: string;
+        table: HTMLTableElement;
+        revision: number;
+        observer: MutationObserver;
+      };
+      const browserWindow = window as typeof window & {
+        __rosterpilotMatrixRefreshWatch?: BrowserWatch;
+      };
+      browserWindow.__rosterpilotMatrixRefreshWatch?.observer.disconnect();
+      const candidate = elements
+        .filter((element): element is HTMLTableElement =>
+          element instanceof HTMLTableElement
+        )
+        .map((table) => {
+          const rows = table.querySelectorAll("tr");
+          const columns = rows[0]?.querySelectorAll("th,td").length ?? 0;
+          return {
+            area:
+              rows.length < 2 || columns < 2
+                ? 0
+                : (rows.length - 1) * (columns - 1),
+            table,
+          };
+        })
+        .sort((left, right) => right.area - left.area)[0];
+      if (!candidate || candidate.area === 0) return false;
+      const table = candidate.table;
+
+      const state: BrowserWatch = {
+        token: watchToken,
+        table,
+        revision: 0,
+        observer: undefined as unknown as MutationObserver,
+      };
+      state.observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          const target = mutation.target;
+          const mutatesOriginal =
+            target === table ||
+            (target instanceof Node && table.contains(target));
+          const removesOriginal =
+            mutation.type === "childList" &&
+            [...mutation.removedNodes].some(
+              (node) =>
+                node === table ||
+                (node instanceof Element && node.contains(table)),
+            );
+          if (mutatesOriginal || removesOriginal) {
+            state.revision += 1;
+          }
+        }
+      });
+      state.observer.observe(document.body, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      browserWindow.__rosterpilotMatrixRefreshWatch = state;
+      return true;
+    },
+    token,
+  );
+  if (!armed) {
+    throw new TesseraAutomationError(
+      "TESSERA_MATRIX_MISSING",
+      "Tessera did not expose a result matrix to monitor for freshness.",
+    );
+  }
+  return { token };
+}
+
+async function readMatrixRefreshState(
+  page: Page,
+  watch: MatrixRefreshWatch,
+): Promise<MatrixRefreshState> {
+  return page.locator("table").evaluateAll(
+    (elements, watchToken) => {
+      type BrowserWatch = {
+        token: string;
+        table: HTMLTableElement;
+        revision: number;
+        observer: MutationObserver;
+      };
+      const state = (
+        window as typeof window & {
+          __rosterpilotMatrixRefreshWatch?: BrowserWatch;
+        }
+      ).__rosterpilotMatrixRefreshWatch;
+      const candidate = elements
+        .filter((element): element is HTMLTableElement =>
+          element instanceof HTMLTableElement
+        )
+        .map((table) => {
+          const rows = [...table.querySelectorAll("tr")].map((row) =>
+            [...row.querySelectorAll("th,td")].map((cell) =>
+              (cell.textContent ?? "").replace(/\s+/g, " ").trim(),
+            ),
+          );
+          return {
+            area:
+              rows.length < 2 || rows[0].length < 2
+                ? 0
+                : (rows.length - 1) * (rows[0].length - 1),
+            rows,
+            table,
+          };
+        })
+        .sort((left, right) => right.area - left.area)[0];
+      const table = candidate?.table;
+      const rows = candidate && candidate.area > 0 ? candidate.rows : [];
+      if (!state || state.token !== watchToken) {
+        return {
+          fingerprint: rows.length > 0 ? JSON.stringify(rows) : "",
+          refreshed: false,
+          revision: -1,
+        };
+      }
+      return {
+        fingerprint: rows.length > 0 ? JSON.stringify(rows) : "",
+        refreshed:
+          state.revision > 0 ||
+          !state.table.isConnected ||
+          Boolean(table && table !== state.table),
+        revision: state.revision,
+      };
+    },
+    watch.token,
+  );
+}
+
+async function endMatrixRefreshWatch(
+  page: Page,
+  watch: MatrixRefreshWatch,
+): Promise<void> {
+  await page.evaluate((watchToken) => {
+    type BrowserWatch = {
+      token: string;
+      observer: MutationObserver;
+    };
+    const browserWindow = window as typeof window & {
+      __rosterpilotMatrixRefreshWatch?: BrowserWatch;
+    };
+    const state = browserWindow.__rosterpilotMatrixRefreshWatch;
+    if (state?.token !== watchToken) return;
+    state.observer.disconnect();
+    delete browserWindow.__rosterpilotMatrixRefreshWatch;
+  }, watch.token).catch(() => undefined);
+}
+
+async function waitForMatrixRefresh(
+  page: Page,
+  watch: MatrixRefreshWatch,
   timeoutMs: number,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let changed = "";
+  let stableState = "";
   let stableReads = 0;
   while (Date.now() < deadline) {
-    const current = await matrixFingerprint(page);
-    const revision = await matrixMutationRevision(page);
-    if (
-      current &&
-      (current !== previous || revision > previousRevision)
-    ) {
-      if (current === changed) {
+    const current = await readMatrixRefreshState(page, watch);
+    if (current.refreshed && current.fingerprint) {
+      const currentState = `${current.revision}:${current.fingerprint}`;
+      if (currentState === stableState) {
         stableReads += 1;
         if (stableReads >= 3) return;
       } else {
-        changed = current;
+        stableState = currentState;
         stableReads = 1;
       }
     }
@@ -668,16 +1775,40 @@ async function waitForMatrixFingerprintChange(
   }
   throw new TesseraAutomationError(
     "TESSERA_STALE_MATRIX",
-    "Tessera confirmed the selected control but did not refresh the result matrix.",
+    "Tessera confirmed the selected control but did not mutate or replace the result matrix.",
   );
 }
 
-async function waitForPressed(
+async function waitForMatrixToSettle(
   page: Page,
+  watch: MatrixRefreshWatch,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const quietPeriodMs = Math.min(200, Math.max(100, timeoutMs / 4));
+  let stableState = "";
+  let stableSince = Date.now();
+  while (Date.now() < deadline) {
+    const current = await readMatrixRefreshState(page, watch);
+    const currentState = `${current.revision}:${current.fingerprint}`;
+    if (current.fingerprint && currentState === stableState) {
+      if (Date.now() - stableSince >= quietPeriodMs) return;
+    } else {
+      stableState = currentState;
+      stableSince = Date.now();
+    }
+    await page.waitForTimeout(50);
+  }
+  throw new TesseraAutomationError(
+    "TESSERA_STALE_MATRIX",
+    "Tessera's result matrix did not settle after the phase control changed.",
+  );
+}
+
+async function pressControl(
   control: Locator,
   description: string,
   timeoutMs: number,
-  requireMatrixChange: boolean,
 ): Promise<boolean> {
   await control
     .waitFor({ state: "visible", timeout: timeoutMs })
@@ -697,28 +1828,195 @@ async function waitForPressed(
   }
   if (pressed === "true") return false;
 
-  const before = await matrixFingerprint(page);
-  const beforeRevision = await matrixMutationRevision(page);
   await control.click();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if ((await control.getAttribute("aria-pressed").catch(() => null)) === "true") {
-      if (requireMatrixChange) {
-        await waitForMatrixFingerprintChange(
-          page,
-          before,
-          beforeRevision,
-          timeoutMs,
-        );
-      }
+    if (
+      (await control.getAttribute("aria-pressed").catch(() => null)) ===
+      "true"
+    ) {
       return true;
     }
-    await page.waitForTimeout(50);
+    await control.page().waitForTimeout(50);
   }
   throw new TesseraAutomationError(
     "TESSERA_UI_CHANGED",
     `Tessera did not confirm its ${description} selection.`,
   );
+}
+
+async function recomputePhaseMatrix(
+  page: Page,
+  timeoutMs: number,
+): Promise<void> {
+  const candidates = page.getByRole("button", {
+    name: /compare lists/i,
+  });
+  const visible: Locator[] = [];
+  for (let index = 0; index < (await candidates.count()); index += 1) {
+    const candidate = candidates.nth(index);
+    if (await candidate.isVisible().catch(() => false)) {
+      visible.push(candidate);
+    }
+  }
+  if (visible.length === 0) {
+    throw new TesseraAutomationError(
+      "TESSERA_COMPARE_CONTROL_MISSING",
+      "Tessera did not expose its Compare lists control for the selected phase.",
+    );
+  }
+  if (visible.length !== 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_UI_CHANGED",
+      `Tessera exposed ${visible.length} visible Compare lists controls; expected one.`,
+    );
+  }
+  const compare = visible[0];
+  const enableDeadline = Date.now() + Math.min(timeoutMs, 3_000);
+  while (
+    Date.now() < enableDeadline &&
+    !(await compare.isEnabled().catch(() => false))
+  ) {
+    await page.waitForTimeout(50);
+  }
+  if (!(await compare.isEnabled().catch(() => false))) {
+    throw new TesseraAutomationError(
+      "TESSERA_COMPARE_DISABLED",
+      "Tessera did not enable Compare lists for the selected phase.",
+    );
+  }
+
+  if ((await extractMatrixRows(page)).length === 0) {
+    await compare.click();
+    const deadline = Date.now() + timeoutMs;
+    let stableFingerprint = "";
+    let stableReads = 0;
+    while (Date.now() < deadline) {
+      const rows = await extractMatrixRows(page);
+      const fingerprint = rows.length > 0 ? matrixSha256(rows) : "";
+      if (fingerprint && fingerprint === stableFingerprint) {
+        stableReads += 1;
+        if (stableReads >= 3) return;
+      } else {
+        stableFingerprint = fingerprint;
+        stableReads = fingerprint ? 1 : 0;
+      }
+      await page.waitForTimeout(50);
+    }
+    throw new TesseraAutomationError(
+      "TESSERA_MATRIX_MISSING",
+      "Tessera did not restore its result matrix after Compare lists was retried.",
+    );
+  } else {
+    const watch = await beginMatrixRefreshWatch(page);
+    try {
+      await compare.click();
+      await waitForMatrixRefresh(page, watch, timeoutMs);
+    } finally {
+      await endMatrixRefreshWatch(page, watch);
+    }
+  }
+}
+
+async function selectScenarioControls(
+  page: Page,
+  selection: ScenarioSelection,
+  timeoutMs: number,
+  forcePhaseRecompute = false,
+): Promise<boolean> {
+  let changed = false;
+  if (
+    forcePhaseRecompute &&
+    (await extractMatrixRows(page)).length === 0
+  ) {
+    await recomputePhaseMatrix(page, timeoutMs);
+    changed = true;
+  }
+  const selectedPhase = phaseControl(page, selection.phase);
+  const phaseChanged =
+    (await selectedPhase.getAttribute("aria-pressed").catch(() => null)) !==
+    "true";
+
+  if (phaseChanged) {
+    // The live Tessera UI updates the selected phase without recomputing its
+    // batch. Drain any render caused by the state change, then arm a fresh
+    // matrix-scoped watch so only Compare lists can prove the new phase.
+    const settleWatch = await beginMatrixRefreshWatch(page);
+    try {
+      changed =
+        (await pressControl(
+          selectedPhase,
+          `${selection.phase} phase`,
+          timeoutMs,
+        )) || changed;
+      await confirmExclusiveGroupPressed(
+        selection.phase,
+        TESSERA_PHASES.map((phase) => [phase, phaseControl(page, phase)]),
+      );
+      await waitForMatrixToSettle(page, settleWatch, timeoutMs);
+    } finally {
+      await endMatrixRefreshWatch(page, settleWatch);
+    }
+  }
+
+  if (phaseChanged || forcePhaseRecompute) {
+    await recomputePhaseMatrix(page, timeoutMs);
+    changed = true;
+  }
+
+  const controls: Array<[Locator, string]> = [
+    [metricControl(page, selection.metric), `${selection.metric} metric`],
+    [
+      directionControl(page, selection.direction),
+      `${selection.direction} direction`,
+    ],
+  ];
+  const requiresChange = (
+    await Promise.all(
+      controls.map(([control]) =>
+        control.getAttribute("aria-pressed").catch(() => null),
+      ),
+    )
+  ).some((pressed) => pressed !== "true");
+  if (requiresChange) {
+    // Metric and direction only project the already-computed phase batch.
+    // Monitor them separately so their render cannot certify a phase change.
+    const watch = await beginMatrixRefreshWatch(page);
+    try {
+      for (const [control, description] of controls) {
+        changed =
+          (await pressControl(control, description, timeoutMs)) || changed;
+      }
+      await confirmExclusivePressed(page, selection);
+      await waitForMatrixRefresh(page, watch, timeoutMs);
+    } finally {
+      await endMatrixRefreshWatch(page, watch);
+    }
+  }
+  await confirmExclusivePressed(page, selection);
+  return changed;
+}
+
+async function confirmExclusiveGroupPressed(
+  expected: string,
+  controls: Array<[string, Locator]>,
+): Promise<void> {
+  const selected: string[] = [];
+  for (const [value, control] of controls) {
+    if (
+      (await control.isVisible().catch(() => false)) &&
+      (await control.getAttribute("aria-pressed").catch(() => null)) ===
+        "true"
+    ) {
+      selected.push(value);
+    }
+  }
+  if (selected.length !== 1 || selected[0] !== expected) {
+    throw new TesseraAutomationError(
+      "TESSERA_UI_CHANGED",
+      `Tessera did not expose an exclusive aria-pressed state for ${expected}.`,
+    );
+  }
 }
 
 async function confirmExclusivePressed(
@@ -752,22 +2050,7 @@ async function confirmExclusivePressed(
     },
   ];
   for (const group of groups) {
-    const selected: string[] = [];
-    for (const [value, control] of group.controls) {
-      if (
-        (await control.isVisible().catch(() => false)) &&
-        (await control.getAttribute("aria-pressed").catch(() => null)) ===
-          "true"
-      ) {
-        selected.push(value);
-      }
-    }
-    if (selected.length !== 1 || selected[0] !== group.expected) {
-      throw new TesseraAutomationError(
-        "TESSERA_UI_CHANGED",
-        `Tessera did not expose an exclusive aria-pressed state for ${group.expected}.`,
-      );
-    }
+    await confirmExclusiveGroupPressed(group.expected, group.controls);
   }
 }
 
@@ -796,8 +2079,15 @@ async function extractSettings(page: Page): Promise<Record<string, string>> {
     const control = selects.nth(index);
     const label =
       (await control.getAttribute("aria-label")) ??
-      (await control.getAttribute("name")) ??
-      `control-${index + 1}`;
+      (await control.getAttribute("name"));
+    if (
+      !label ||
+      /^(?:list[ab]?|army[ab]?|roster[ab]?)(?:\s|$)/i.test(
+        label.trim(),
+      )
+    ) {
+      continue;
+    }
     const value = await control.inputValue().catch(() => "");
     if (value) settings[label] = value;
   }
@@ -845,6 +2135,169 @@ async function extractIterations(page: Page): Promise<number | null> {
   return countAfterLabel
     ? Number(countAfterLabel[1].replaceAll(",", ""))
     : null;
+}
+
+function stableScenarioSettings(
+  settings: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(settings)
+      .filter(
+        ([key]) =>
+          !["phase", "metric", "direction", "iterations"].includes(
+            key.toLocaleLowerCase(),
+          ),
+      )
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function frozenScenarioFor(
+  contract: TesseraFrozenScenarioContract[] | null | undefined,
+  selection: ScenarioSelection,
+): TesseraFrozenScenarioContract | null {
+  if (!contract) return null;
+  return (
+    contract.find(
+      (entry) =>
+        entry.phase === selection.phase &&
+        entry.direction === selection.direction &&
+        entry.metric === selection.metric,
+    ) ?? null
+  );
+}
+
+async function applyFrozenSimulationControls(
+  page: Page,
+  contract: TesseraFrozenScenarioContract[] | null | undefined,
+  timeoutMs: number,
+): Promise<void> {
+  if (!contract?.length) return;
+  const iterationValues = [
+    ...new Set(
+      contract
+        .map((entry) => entry.iterations)
+        .filter((value): value is number => value !== null),
+    ),
+  ];
+  if (iterationValues.length > 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_SETTINGS_REPLAY_FAILED",
+      "The frozen stage contains inconsistent iteration counts.",
+    );
+  }
+  const expectedIterations = iterationValues[0] ?? null;
+  if (expectedIterations !== null) {
+    const actualIterations = await extractIterations(page);
+    if (actualIterations !== expectedIterations) {
+      const controls = page.locator(
+        'input[aria-label*="iteration" i], input[name*="iteration" i], select[aria-label*="iteration" i], select[name*="iteration" i], input[aria-label*="simulation" i], select[aria-label*="simulation" i]',
+      );
+      if ((await controls.count()) !== 1) {
+        throw new TesseraAutomationError(
+          "TESSERA_SETTINGS_REPLAY_FAILED",
+          `Tessera is using ${actualIterations ?? "an unknown number of"} iterations and did not expose one control for the frozen value ${expectedIterations}.`,
+        );
+      }
+      const control = controls.first();
+      const watch = await beginMatrixRefreshWatch(page);
+      try {
+        if ((await control.evaluate((element) => element.tagName)) === "SELECT") {
+          await control.selectOption(String(expectedIterations));
+        } else {
+          await control.fill(String(expectedIterations));
+          await control.press("Tab").catch(() => undefined);
+        }
+        await waitForMatrixRefresh(page, watch, timeoutMs);
+      } finally {
+        await endMatrixRefreshWatch(page, watch);
+      }
+      if ((await extractIterations(page)) !== expectedIterations) {
+        throw new TesseraAutomationError(
+          "TESSERA_SETTINGS_REPLAY_FAILED",
+          `Tessera did not retain the frozen ${expectedIterations}-iteration setting.`,
+        );
+      }
+    }
+  }
+
+  const expectedSettings = stableScenarioSettings(
+    contract[0].settings,
+  );
+  if (
+    contract.some(
+      (entry) =>
+        JSON.stringify(stableScenarioSettings(entry.settings)) !==
+        JSON.stringify(expectedSettings),
+    )
+  ) {
+    throw new TesseraAutomationError(
+      "TESSERA_SETTINGS_REPLAY_FAILED",
+      "The frozen stage contains inconsistent simulation settings.",
+    );
+  }
+  for (const [label, expectedValue] of Object.entries(
+    expectedSettings,
+  )) {
+    const current = (await extractSettings(page))[label];
+    if (current === expectedValue) continue;
+    const controls = page.locator("select").filter({
+      has: page.locator("option"),
+    });
+    const matching: Locator[] = [];
+    for (let index = 0; index < (await controls.count()); index += 1) {
+      const control = controls.nth(index);
+      const controlLabel =
+        (await control.getAttribute("aria-label")) ??
+        (await control.getAttribute("name"));
+      if (controlLabel === label) matching.push(control);
+    }
+    if (matching.length !== 1) {
+      throw new TesseraAutomationError(
+        "TESSERA_SETTINGS_REPLAY_FAILED",
+        `Tessera did not expose one "${label}" control for frozen value "${expectedValue}".`,
+      );
+    }
+    const watch = await beginMatrixRefreshWatch(page);
+    try {
+      await matching[0].selectOption(expectedValue);
+      await waitForMatrixRefresh(page, watch, timeoutMs);
+    } finally {
+      await endMatrixRefreshWatch(page, watch);
+    }
+    if ((await extractSettings(page))[label] !== expectedValue) {
+      throw new TesseraAutomationError(
+        "TESSERA_SETTINGS_REPLAY_FAILED",
+        `Tessera did not retain frozen setting ${label}=${expectedValue}.`,
+      );
+    }
+  }
+}
+
+function verifyFrozenScenario(
+  selection: ScenarioSelection,
+  settings: Record<string, string>,
+  iterations: number | null,
+  contract: TesseraFrozenScenarioContract[] | null | undefined,
+): void {
+  if (!contract) return;
+  const expected = frozenScenarioFor(contract, selection);
+  if (!expected) {
+    throw new TesseraAutomationError(
+      "TESSERA_SETTINGS_CHANGED",
+      `The frozen stage has no execution contract for ${scenarioId(selection)}.`,
+    );
+  }
+  if (
+    expected.iterations !== iterations ||
+    JSON.stringify(stableScenarioSettings(expected.settings)) !==
+      JSON.stringify(stableScenarioSettings(settings))
+  ) {
+    throw new TesseraAutomationError(
+      "TESSERA_SETTINGS_CHANGED",
+      `Tessera did not reproduce the frozen settings and iteration count for ${scenarioId(selection)}.`,
+    );
+  }
 }
 
 function metricValue(text: string, metric: TesseraMetric): number | null {
@@ -909,6 +2362,21 @@ function parseScenarioMatrix(
         throw new TesseraAutomationError(
           "TESSERA_INCOMPLETE_MATRIX",
           `Tessera exposed an unreadable ${selection.metric} value at row ${
+            attackerIndex + 1
+          }, column ${targetIndex + 1}.`,
+        );
+      }
+      const probabilityMetric =
+        selection.metric === "wipe-probability" ||
+        selection.metric === "half-wipe-probability";
+      if (
+        !Number.isFinite(value) ||
+        value < 0 ||
+        (probabilityMetric && value > 1)
+      ) {
+        throw new TesseraAutomationError(
+          "TESSERA_INVALID_MATRIX_VALUE",
+          `Tessera exposed an out-of-range ${selection.metric} value at row ${
             attackerIndex + 1
           }, column ${targetIndex + 1}.`,
         );
@@ -984,145 +2452,406 @@ function verifyDimensions(
 function scenarioFailure(
   selection: ScenarioSelection,
   error: unknown,
+  attempt: number,
 ): string {
-  const message =
-    error instanceof Error ? error.message : "unknown Tessera browser failure";
-  const code =
-    error instanceof TesseraAutomationError
-      ? error.code
-      : "TESSERA_SCENARIO_FAILED";
-  return `[${code}] Scenario ${scenarioId(selection)} was not captured: ${message}`;
+  const { code, message } = scenarioCaptureFailure(error);
+  return `[${code}] Scenario ${scenarioId(selection)} was not captured after ${attempt} attempt${attempt === 1 ? "" : "s"}: ${message}`;
+}
+
+const maximumScenarioCaptureAttempts = 2;
+
+function scenarioCaptureFailure(error: unknown): {
+  code: string;
+  message: string;
+  retryable: boolean;
+} {
+  const classified = classifyTesseraAutomationFailure(error);
+  return {
+    ...classified,
+    retryable:
+      error instanceof TesseraAutomationError &&
+      (
+        error.code === "TESSERA_STALE_MATRIX" ||
+        error.code === "TESSERA_MATRIX_MISSING"
+      ),
+  };
+}
+
+function scenarioRetryWarning(
+  selection: ScenarioSelection,
+  failure: ReturnType<typeof scenarioCaptureFailure>,
+  attempt: number,
+): string {
+  return `[TESSERA_SCENARIO_RETRY] Scenario ${scenarioId(selection)} capture attempt ${attempt}/${maximumScenarioCaptureAttempts} failed with [${failure.code}]: ${failure.message} Retrying once in the same browser session without re-importing armies.`;
 }
 
 export async function runTesseraBrowserMatchup(
   input: TesseraBrowserInput,
   dependencies: TesseraBrowserDependencies = {},
 ): Promise<TesseraBrowserResult> {
-  const context = await chromium.launchPersistentContext(input.profileDirectory, {
-    channel: "chrome",
-    headless: dependencies.headless ?? false,
-    acceptDownloads: true,
-  });
-  await dependencies.prepareContext?.(context);
+  const preparedSavedListReuse =
+    await prepareSavedListReuse(input);
+  const ownsContext = dependencies.context === undefined;
+  const context =
+    dependencies.context ??
+    (await chromium.launchPersistentContext(input.profileDirectory, {
+      channel: "chrome",
+      headless: dependencies.headless ?? false,
+      acceptDownloads: true,
+    }));
+  dependencies.onContext?.(context);
+  if (ownsContext) {
+    await dependencies.prepareContext?.(context);
+  }
   try {
     const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto(dependencies.baseUrl ?? TESSERA_URL, {
+    const baseUrl = dependencies.baseUrl ?? TESSERA_URL;
+    await page.goto(baseUrl, {
       waitUntil: "domcontentloaded",
     });
     const timeout = dependencies.timeoutMs ?? 30_000;
-    const rosterHeading = page.getByRole("heading", {
-      name: "Roster",
-      exact: true,
+    await ensureRosterPage(page, timeout);
+    const browserRunId = randomUUID().slice(0, 8);
+    const scopedListName = (
+      side: "A" | "B",
+      rosterName: string,
+    ) =>
+      `RP-${side}-${createHash("sha256")
+        .update(normalized(rosterName))
+        .digest("hex")
+        .slice(0, 8)}-${browserRunId}`;
+    const playerBrowserListName =
+      preparedSavedListReuse?.player.name ??
+      scopedListName("A", input.playerName);
+    const opponentBrowserListName =
+      preparedSavedListReuse?.opponent.name ??
+      scopedListName("B", input.opponentName);
+    type ImportedRoster = Awaited<ReturnType<typeof importRosz>>;
+    const reusedImport = (
+      unitCount: number,
+    ): ImportedRoster => ({
+      warnings: [],
+      issues: [],
+      unitCount,
     });
-    const onboarding = page.getByRole("button", { name: /^got it$/i }).first();
-    if (!(await rosterHeading.isVisible().catch(() => false))) {
-      await onboarding
-        .waitFor({ state: "visible", timeout: Math.min(timeout, 5_000) })
-        .catch(() => undefined);
-      if (await onboarding.isVisible().catch(() => false)) {
-        await onboarding.click();
+    let playerImport: ImportedRoster;
+    let opponentImport: ImportedRoster;
+    let savedListReuse:
+      | TesseraBrowserResult["savedListReuse"]
+      | undefined;
+    const matrixOrigin = new URL(baseUrl).origin;
+    if (preparedSavedListReuse) {
+      await openArmyMatrix(
+        page,
+        input.licenseKey,
+        matrixOrigin,
+      );
+      let inspection = await inspectSavedListReuse(
+        page,
+        preparedSavedListReuse,
+        timeout,
+      );
+      if (
+        inspection.player.action === "missing" ||
+        inspection.opponent.action === "missing"
+      ) {
+        // Read the saved-list inventory twice before creating anything. This
+        // absorbs one stale or delayed matrix snapshot without risking a
+        // duplicate deterministic identity.
+        await page.goto(baseUrl, {
+          waitUntil: "domcontentloaded",
+          timeout,
+        });
+        await ensureRosterPage(page, timeout);
+        await openArmyMatrix(
+          page,
+          input.licenseKey,
+          matrixOrigin,
+        );
+        const refreshed = await inspectSavedListReuse(
+          page,
+          preparedSavedListReuse,
+          timeout,
+        );
+        inspection = {
+          player:
+            inspection.player.action === "reused"
+              ? inspection.player
+              : refreshed.player,
+          opponent:
+            inspection.opponent.action === "reused"
+              ? inspection.opponent
+              : refreshed.opponent,
+        };
       }
+      if (
+        inspection.player.action === "missing" ||
+        inspection.opponent.action === "missing"
+      ) {
+        await page.goto(baseUrl, {
+          waitUntil: "domcontentloaded",
+          timeout,
+        });
+        await ensureRosterPage(page, timeout);
+        playerImport =
+          inspection.player.action === "reused"
+            ? reusedImport(
+                preparedSavedListReuse.player.expectedUnitCount,
+              )
+            : await importRosz(
+                page,
+                input.playerRoszPath,
+                "player",
+                input.profilePolicy,
+                playerBrowserListName,
+                preparedSavedListReuse.player.expectedUnitCount,
+              );
+        opponentImport =
+          inspection.opponent.action === "reused"
+            ? reusedImport(
+                preparedSavedListReuse.opponent.expectedUnitCount,
+              )
+            : await importRosz(
+                page,
+                input.opponentRoszPath,
+                "opponent",
+                input.profilePolicy,
+                opponentBrowserListName,
+                preparedSavedListReuse.opponent.expectedUnitCount,
+              );
+        await openArmyMatrix(
+          page,
+          input.licenseKey,
+          matrixOrigin,
+        );
+      } else {
+        playerImport = reusedImport(
+          preparedSavedListReuse.player.expectedUnitCount,
+        );
+        opponentImport = reusedImport(
+          preparedSavedListReuse.opponent.expectedUnitCount,
+        );
+      }
+      savedListReuse = {
+        mode: "deterministic",
+        player: {
+          name: playerBrowserListName,
+          expectedUnitCount:
+            preparedSavedListReuse.player.expectedUnitCount,
+          action:
+            inspection.player.action === "reused"
+              ? "reused"
+              : "imported",
+          contentSha256:
+            preparedSavedListReuse.player.contentSha256,
+        },
+        opponent: {
+          name: opponentBrowserListName,
+          expectedUnitCount:
+            preparedSavedListReuse.opponent.expectedUnitCount,
+          action:
+            inspection.opponent.action === "reused"
+              ? "reused"
+              : "imported",
+          contentSha256:
+            preparedSavedListReuse.opponent.contentSha256,
+        },
+      };
+    } else {
+      playerImport = await importRosz(
+        page,
+        input.playerRoszPath,
+        "player",
+        input.profilePolicy,
+        playerBrowserListName,
+      );
+      opponentImport = await importRosz(
+        page,
+        input.opponentRoszPath,
+        "opponent",
+        input.profilePolicy,
+        opponentBrowserListName,
+      );
+      await openArmyMatrix(
+        page,
+        input.licenseKey,
+        matrixOrigin,
+      );
     }
-    if (!(await rosterHeading.isVisible().catch(() => false))) {
-      const muster = page
-        .getByRole("button", { name: /^muster$/i })
-        .first();
-      await muster.waitFor({ state: "visible", timeout });
-      await muster.click();
-    }
-    await rosterHeading.waitFor({ state: "visible", timeout });
-    const playerImport = await importRosz(
-      page,
-      input.playerRoszPath,
-      "player",
-      input.profilePolicy,
-    );
-    const opponentImport = await importRosz(
-      page,
-      input.opponentRoszPath,
-      "opponent",
-      input.profilePolicy,
-    );
+    const reportedImportWarnings = (
+      imported: Awaited<ReturnType<typeof importRosz>>,
+    ) =>
+      imported.issues.map((issue) =>
+        issue.resolvedByPolicy
+          ? `[TESSERA_PROFILE_POLICY_APPLIED] ${issue.unit ?? "Imported unit"}: ${issue.weaponGroup ?? "alternate weapon"} uses ${issue.selectedProfile ?? "the frozen selected profile"}.`
+          : issue.message,
+      );
     const importWarnings: TesseraImportWarnings = {
-      player: [...new Set(playerImport.warnings)],
-      opponent: [...new Set(opponentImport.warnings)],
+      player: [...new Set(reportedImportWarnings(playerImport))],
+      opponent: [...new Set(reportedImportWarnings(opponentImport))],
     };
     const warnings = [
       ...importWarnings.player,
       ...importWarnings.opponent,
     ];
-    await openArmyMatrix(
-      page,
-      input.licenseKey,
-      new URL(dependencies.baseUrl ?? TESSERA_URL).origin,
-    );
-    await selectArmies(page, input.playerName, input.opponentName);
+    const playerSelection = {
+      name: playerBrowserListName,
+      unitCount: playerImport.unitCount,
+    };
+    const opponentSelection = {
+      name: opponentBrowserListName,
+      unitCount: opponentImport.unitCount,
+    };
+    try {
+      await selectArmies(
+        page,
+        playerSelection,
+        opponentSelection,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof TesseraAutomationError) ||
+        error.code !== "TESSERA_LIST_SELECTION_MISMATCH" ||
+        !/exposed 0 exact entries/i.test(error.message)
+      ) {
+        throw error;
+      }
+      // Tessera can reopen this view with a stale saved-list snapshot. Reload
+      // it once and retry the stable option values without importing again.
+      await page.reload({ waitUntil: "domcontentloaded", timeout });
+      await openArmyMatrix(
+        page,
+        input.licenseKey,
+        matrixOrigin,
+      );
+      await selectArmies(
+        page,
+        playerSelection,
+        opponentSelection,
+      );
+    }
     await page
       .locator("table")
       .first()
       .waitFor({ state: "visible", timeout })
       .catch(() => undefined);
+    if ((await extractMatrixRows(page)).length === 0) {
+      throw new TesseraAutomationError(
+        "TESSERA_MATRIX_MISSING",
+        "Tessera accepted both armies but did not expose a result matrix.",
+      );
+    }
+    await applyFrozenSimulationControls(
+      page,
+      input.frozenScenarioContract,
+      timeout,
+    );
     const scenarios: TesseraScenario[] = [];
+    const scenarioAttempts: TesseraScenarioCaptureAttempt[] = [];
     const expectedDimensions = new Map<TesseraDirection, MatrixDimensions>();
     let matrixTrusted = true;
     let lastError: unknown;
     for (const selection of requestedScenarios(input)) {
-      try {
-        const requireChange = scenarios.length > 0;
-        const changedPhase = await waitForPressed(
-          page,
-          phaseControl(page, selection.phase),
-          `${selection.phase} phase`,
-          timeout,
-          requireChange,
-        );
-        if (changedPhase) matrixTrusted = true;
-        const changedMetric = await waitForPressed(
-          page,
-          metricControl(page, selection.metric),
-          `${selection.metric} metric`,
-          timeout,
-          requireChange,
-        );
-        if (changedMetric) matrixTrusted = true;
-        const changedDirection = await waitForPressed(
-          page,
-          directionControl(page, selection.direction),
-          `${selection.direction} direction`,
-          timeout,
-          requireChange,
-        );
-        if (changedDirection) matrixTrusted = true;
-        await confirmExclusivePressed(page, selection);
-        if (!matrixTrusted) {
-          throw new TesseraAutomationError(
-            "TESSERA_STALE_MATRIX",
-            "Tessera's result matrix is stale after a prior control transition.",
+      for (
+        let attempt = 1;
+        attempt <= maximumScenarioCaptureAttempts;
+        attempt += 1
+      ) {
+        try {
+          const changed = await selectScenarioControls(
+            page,
+            selection,
+            timeout,
+            !matrixTrusted,
           );
+          if (changed) matrixTrusted = true;
+          await confirmExclusivePressed(page, selection);
+          if (!matrixTrusted) {
+            throw new TesseraAutomationError(
+              "TESSERA_STALE_MATRIX",
+              "Tessera's result matrix is stale after a prior control transition.",
+            );
+          }
+          const rows = await extractMatrixRows(page);
+          if (rows.length === 0) {
+            throw new TesseraAutomationError(
+              "TESSERA_MATRIX_MISSING",
+              "Tessera did not expose a result matrix for the selected scenario.",
+            );
+          }
+          const parsed = parseScenarioMatrix(rows, selection);
+          verifyDimensions(selection, parsed.dimensions, expectedDimensions);
+          const settings = await extractSettings(page);
+          const iterations = await extractIterations(page);
+          verifyFrozenScenario(
+            selection,
+            settings,
+            iterations,
+            input.frozenScenarioContract,
+          );
+          scenarios.push({
+            id: scenarioId(selection),
+            ...selection,
+            settings,
+            iterations,
+            cells: parsed.cells,
+            matrixSha256: matrixSha256(rows),
+            integrity: {
+              status: "trusted",
+              issueCodes: [],
+              aliasedScenarioIds: [],
+            },
+          });
+          scenarioAttempts.push({
+            scenarioId: scenarioId(selection),
+            attempt,
+            status: "success",
+            code: null,
+            message: null,
+            retryable: false,
+            willRetry: false,
+          });
+          break;
+        } catch (error) {
+          const failure = scenarioCaptureFailure(error);
+          const willRetry =
+            failure.retryable &&
+            attempt < maximumScenarioCaptureAttempts;
+          scenarioAttempts.push({
+            scenarioId: scenarioId(selection),
+            attempt,
+            status: "failed",
+            code: failure.code,
+            message: failure.message,
+            retryable: failure.retryable,
+            willRetry,
+          });
+          if (
+            failure.code === "TESSERA_STALE_MATRIX" ||
+            failure.code === "TESSERA_MATRIX_MISSING"
+          ) {
+            matrixTrusted = false;
+          }
+          if (willRetry) {
+            warnings.push(
+              scenarioRetryWarning(
+                selection,
+                failure,
+                attempt,
+              ),
+            );
+            continue;
+          }
+          lastError = error;
+          warnings.push(scenarioFailure(selection, error, attempt));
+          break;
         }
-        const parsed = parseScenarioMatrix(
-          await extractMatrixRows(page),
-          selection,
-        );
-        verifyDimensions(selection, parsed.dimensions, expectedDimensions);
-        scenarios.push({
-          id: scenarioId(selection),
-          ...selection,
-          settings: await extractSettings(page),
-          iterations: await extractIterations(page),
-          cells: parsed.cells,
-        });
-      } catch (error) {
-        lastError = error;
-        if (
-          error instanceof TesseraAutomationError &&
-          error.code === "TESSERA_STALE_MATRIX"
-        ) {
-          matrixTrusted = false;
-        }
-        warnings.push(scenarioFailure(selection, error));
       }
     }
+    // Equal-valued matrices are legitimate. Freshness is proven from a
+    // matrix-scoped DOM mutation or node replacement at each control change,
+    // not inferred from value inequality across captured scenarios.
+    const integrityIssues: TesseraMatrixIntegrityIssue[] = [];
     if (scenarios.length === 0) {
       if (lastError instanceof TesseraAutomationError) throw lastError;
       throw new TesseraAutomationError(
@@ -1130,11 +2859,28 @@ export async function runTesseraBrowserMatchup(
         "Tessera did not expose a readable Army vs Army result matrix.",
       );
     }
-    const legacyScenarios = scenarios.filter(
+    let legacyScenarios = scenarios.filter(
       (scenario) =>
+        scenario.integrity?.status !== "aliased" &&
         scenario.phase === "shooting" &&
         scenario.metric === "wipe-probability",
     );
+    if (legacyScenarios.length === 0) {
+      const fallback = scenarios.find(
+        (scenario) =>
+          scenario.integrity?.status !== "aliased" &&
+          (scenario.metric === "wipe-probability" ||
+            scenario.metric === "half-wipe-probability"),
+      );
+      if (fallback) {
+        legacyScenarios = scenarios.filter(
+          (scenario) =>
+            scenario.integrity?.status !== "aliased" &&
+            scenario.phase === fallback.phase &&
+            scenario.metric === fallback.metric,
+        );
+      }
+    }
     const cells: TesseraMatrixCell[] = legacyScenarios.flatMap((scenario) =>
       scenario.cells.map((cell) => ({
         attacker: cell.attacker,
@@ -1152,6 +2898,23 @@ export async function runTesseraBrowserMatchup(
       legacyScenarios[0]?.settings ??
       scenarios[0].settings;
     return {
+      uiIdentity: await tesseraUiIdentity(page),
+      legacyProjection:
+        legacyScenarios.length > 0
+          ? {
+              status: "derived",
+              phase: legacyScenarios[0].phase,
+              metric: legacyScenarios[0].metric,
+              scenarioIds: legacyScenarios.map(
+                (scenario) => scenario.id,
+              ),
+            }
+          : {
+              status: "unavailable",
+              phase: null,
+              metric: null,
+              scenarioIds: [],
+            },
       settings: legacySettings,
       cells,
       scenarios,
@@ -1160,9 +2923,14 @@ export async function runTesseraBrowserMatchup(
         ...playerImport.issues,
         ...opponentImport.issues,
       ],
+      integrityIssues,
+      scenarioAttempts,
+      ...(savedListReuse ? { savedListReuse } : {}),
       warnings: [...new Set(warnings)],
     };
   } finally {
-    await context.close();
+    if (!dependencies.keepContextOpen) {
+      await context.close();
+    }
   }
 }

@@ -1,5 +1,12 @@
 # Live-run postmortem: Custodes vs unknown Aeldari
 
+The reusable, credential-free regression evidence from this run is preserved
+in
+`tests/fixtures/tessera-v2/unknown-aeldari-live-run.sanitized.json`. It covers
+the alternate-profile decisions, premium unlock failures, duplicate payload
+signal, zero-confident evidence shape, and bounded retry state without remote
+list URLs, local paths, or credentials.
+
 Date: 2026-07-28
 Run ID: `0fdc8bd1-bf2d-4c77-ae68-8f30f769a50a`
 Pinned release: `2026-07-28.1`
@@ -21,6 +28,17 @@ Implemented as the schema-v2 reliability upgrade:
 - LR-11/13/14: compact CLI output, portable report references,
   content-addressed verified New Recruit reuse, and a non-destructive remote
   list inventory.
+- Follow-up live-run hardening: content fingerprints preserve matrix
+  provenance, while observed table replacement or matrix-subtree mutation
+  proves a control refresh. Equal numeric results remain valid; a control
+  transition with no table refresh is retained only as `inconclusive`
+  diagnostic evidence.
+- Staged orchestration now freezes representatives only after every required
+  screen is complete and confident. Five-attempt runs can be restarted into a
+  new output directory while reusing only verified preparation artifacts.
+- Change candidates now require causal evidence, legal New Recruit export,
+  at least 98% points utilization, non-regressing mission readiness, and
+  protection for units already classified as reliable or robust answers.
 
 The historical outcome below describes the original schema-v1 run and is
 retained as regression evidence. It is not the behavior of the repaired

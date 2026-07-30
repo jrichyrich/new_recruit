@@ -3,6 +3,8 @@ import path from "node:path";
 import {
   buildRoster,
   checkDataFreshness,
+  compactBuildAndStressResult,
+  compactStressResult,
   compareFactions,
   explainRoster,
   exportRoster,
@@ -99,54 +101,6 @@ function progress(message: string): void {
   process.stderr.write(`[RosterPilot] ${message}\n`);
 }
 
-function compactStressOutput(
-  result: Awaited<ReturnType<typeof runRosterStressTest>>,
-  outputDirectory: string,
-): Record<string, unknown> {
-  if (!result.data) {
-    return {
-      ok: result.ok,
-      data: null,
-      violations: result.violations,
-      warnings: result.warnings.slice(0, 20),
-    };
-  }
-  const reportArtifact = result.data.artifacts.find(
-    (artifact) => artifact.format === "stress-json",
-  )?.written;
-  return {
-    ok: result.ok,
-    data: {
-      schemaVersion: result.data.schemaVersion,
-      reportKind: result.data.reportKind,
-      runId: result.data.runId,
-      status: result.data.status,
-      player: {
-        name: result.data.player.rosterName,
-        points: result.data.player.summary.totalPoints,
-      },
-      opponentFactionId: result.data.opponentFactionId,
-      suite: result.data.suite,
-      proxies: {
-        ready: result.data.portfolio.coverage.ready,
-        unique:
-          result.data.portfolio.coverage.uniqueSimulationPayloads,
-        confident:
-          result.data.robustness?.samples.filter(
-            (sample) => sample.status === "confident",
-          ).length ?? 0,
-      },
-      representatives: result.data.representatives,
-      reportPath: reportArtifact
-        ? path.resolve(outputDirectory, reportArtifact)
-        : null,
-      artifacts: result.data.artifacts,
-    },
-    violations: result.violations,
-    warnings: result.warnings.slice(0, 20),
-  };
-}
-
 function compactPortfolioPreview(
   result: Awaited<ReturnType<typeof previewFactionStressPortfolio>>,
 ): Record<string, unknown> {
@@ -219,10 +173,10 @@ Usage:
   rosterpilot tessera configure
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera]
-  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz | --opponent-roster enemy.json | --opponent-faction necrons) [--archetypes balanced-control,ranged-pressure,assault-pressure] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates] [--experimental]
-  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--analysis staged|full-all] [--profile-policy profiles.json] [--resume [manifest.json]] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite] [--experimental]
+  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz | --opponent-roster enemy.json | --opponent-faction necrons) [--archetypes balanced-control,ranged-pressure,assault-pressure] [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates] [--experimental]
+  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite] [--experimental]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
-  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --against-faction aeldari [--suite diverse-9] [--analysis staged] [--profile-policy profiles.json] [--allow-readiness-warnings] [--full-json] [--experimental]
+  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json] [--experimental]
   rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite] [--experimental]
   rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite] [--experimental]
   rosterpilot mcp
@@ -230,6 +184,8 @@ Usage:
 Writes are restricted to the current directory unless --allow-outside-root is supplied.
 Existing files are never replaced unless --overwrite is supplied.
 For stress tests, bare --resume reads <out-dir>/stress-manifest.json.
+Use --restart-from with a different --out-dir after a five-attempt budget is
+exhausted; verified prepared artifacts are reused, but simulation stages start fresh.
 Stress tests default to the diverse-9 suite and staged analysis; results are
 directional robustness ranges, not game win probabilities.
 `);
@@ -486,6 +442,16 @@ async function main(): Promise<void> {
           `Unknown Tessera analysis strategy "${analysisStrategy}".`,
         );
       }
+      const executionMode = value(args, "execution-mode");
+      if (
+        executionMode &&
+        executionMode !== "prepare-only" &&
+        executionMode !== "simulate"
+      ) {
+        throw new Error(
+          `Unknown Tessera execution mode "${executionMode}".`,
+        );
+      }
       const outputDirectory =
         value(args, "out-dir") ?? "exports/tessera";
       const resumeManifest = value(args, "resume");
@@ -495,27 +461,56 @@ async function main(): Promise<void> {
           : resumeManifest
             ? path.resolve(resumeManifest)
             : undefined;
+      const restartManifest = value(args, "restart-from");
+      if (args["restart-from"] === true) {
+        throw new Error(
+          "Tessera build-and-stress --restart-from requires a manifest path.",
+        );
+      }
+      if (resumeManifestPath && restartManifest) {
+        throw new Error(
+          "Choose either --resume or --restart-from, not both.",
+        );
+      }
       progress("Building and deterministically repairing the roster.");
       progress(
         "Previewing unique opponent payloads before any external activity.",
       );
+      progress(
+        restartManifest
+          ? "Starting a clean stress run and reusing only verified prepared artifacts."
+          : resumeManifestPath
+            ? "Resuming incomplete simulation stages from the local manifest."
+            : "Preparing verified artifacts, then screening before selecting deep dives.",
+      );
       const result = await buildAndStressRosterAgainstFaction(
         {
           prompt,
+          playerFaction: value(args, "player-faction"),
           againstFaction,
           pointsLimit: value(args, "points")
             ? Number(value(args, "points"))
             : undefined,
+          requiredUnitIds: list(args, "required-unit"),
+          excludedUnitIds: list(args, "exclude-unit"),
+          requiredWarlordUnitId: value(args, "required-warlord"),
           suite,
           analysisStrategy,
           profilePolicyPath: value(args, "profile-policy"),
           outputDirectory,
           resumeManifestPath,
+          restartManifestPath: restartManifest
+            ? path.resolve(restartManifest)
+            : undefined,
           allowReadinessWarnings: flag(
             args,
             "allow-readiness-warnings",
           ),
           forceRetry: flag(args, "force-retry"),
+          executionMode: executionMode as
+            | "prepare-only"
+            | "simulate"
+            | undefined,
           experimental: flag(args, "experimental"),
         },
         {
@@ -526,29 +521,14 @@ async function main(): Promise<void> {
       if (flag(args, "full-json") || !result.data) {
         print(result);
       } else {
-        print({
-          ...compactStressOutput(
-            {
-              ok: result.ok,
-              data: result.data.stressReport,
-              violations: result.violations,
-              warnings: result.warnings,
-            },
-            outputDirectory,
+        print(
+          compactBuildAndStressResult(
+            result,
+            resumeManifestPath
+              ? path.dirname(resumeManifestPath)
+              : outputDirectory,
           ),
-          build: {
-            repaired: result.data.rosterRepair.repaired,
-            candidatesEvaluated:
-              result.data.rosterRepair.candidatesEvaluated,
-            points:
-              result.data.rosterRepair.roster.totalPoints,
-            pointsLimit:
-              result.data.rosterRepair.roster.pointsLimit,
-            missionReadiness:
-              result.data.rosterRepair.missionReadiness.overallBand,
-          },
-          automaticRevisionApplied: false,
-        });
+        );
       }
       if (!result.ok) process.exitCode = 2;
       return;
@@ -649,6 +629,16 @@ async function main(): Promise<void> {
           `Unknown Tessera stress-test analysis strategy "${analysisStrategy}". Expected staged or full-all.`,
         );
       }
+      const executionMode = value(args, "execution-mode");
+      if (
+        executionMode &&
+        executionMode !== "prepare-only" &&
+        executionMode !== "simulate"
+      ) {
+        throw new Error(
+          `Unknown Tessera execution mode "${executionMode}".`,
+        );
+      }
       const resumeManifest = value(args, "resume");
       const resumeManifestPath =
         args.resume === true
@@ -656,6 +646,24 @@ async function main(): Promise<void> {
           : resumeManifest
             ? path.resolve(resumeManifest)
             : undefined;
+      const restartManifest = value(args, "restart-from");
+      if (args["restart-from"] === true) {
+        throw new Error(
+          "Tessera stress-test --restart-from requires a manifest path.",
+        );
+      }
+      if (resumeManifestPath && restartManifest) {
+        throw new Error(
+          "Choose either --resume or --restart-from, not both.",
+        );
+      }
+      progress(
+        restartManifest
+          ? "Starting a clean stress run and reusing only verified prepared artifacts."
+          : resumeManifestPath
+            ? "Resuming incomplete simulation stages from the local manifest."
+            : "Validating the frozen portfolio, then screening before selecting deep dives.",
+      );
       const result = await runRosterStressTest(
         roster,
         { kind: "faction", factionId: opponentFaction },
@@ -663,18 +671,30 @@ async function main(): Promise<void> {
           suite,
           analysisStrategy,
           resumeManifestPath,
+          restartManifestPath: restartManifest
+            ? path.resolve(restartManifest)
+            : undefined,
           profilePolicyPath: value(args, "profile-policy"),
           forceRetry: flag(args, "force-retry"),
           outputDirectory,
           overwrite: flag(args, "overwrite"),
           allowOutsideRoot: flag(args, "allow-outside-root"),
+          executionMode: executionMode as
+            | "prepare-only"
+            | "simulate"
+            | undefined,
           experimental: flag(args, "experimental"),
         },
       );
       print(
         flag(args, "full-json")
           ? result
-          : compactStressOutput(result, outputDirectory),
+          : compactStressResult(
+              result,
+              resumeManifestPath
+                ? path.dirname(resumeManifestPath)
+                : outputDirectory,
+            ),
       );
       if (!result.ok) process.exitCode = 2;
       return;
@@ -735,6 +755,25 @@ async function main(): Promise<void> {
           `Unknown Tessera analysis mode "${analysisMode}". Expected quick or full.`,
         );
       }
+      const executionMode = value(args, "execution-mode");
+      if (
+        executionMode &&
+        executionMode !== "prepare-only" &&
+        executionMode !== "simulate"
+      ) {
+        throw new Error(
+          `Unknown Tessera execution mode "${executionMode}".`,
+        );
+      }
+      const fallbackMode = value(args, "fallback") ?? "none";
+      if (
+        fallbackMode !== "none" &&
+        fallbackMode !== "baseline-damage-v1"
+      ) {
+        throw new Error(
+          `Unknown Tessera fallback mode "${fallbackMode}".`,
+        );
+      }
       const allowedPhases = ["shooting", "fight"] as const;
       const phases = list(args, "phases");
       const invalidPhases = phases.filter(
@@ -766,6 +805,12 @@ async function main(): Promise<void> {
         outputDirectory,
         overwrite: flag(args, "overwrite"),
         allowOutsideRoot: flag(args, "allow-outside-root"),
+        executionMode: executionMode as
+          | "prepare-only"
+          | "simulate"
+          | undefined,
+        fallbackMode,
+        profilePolicyPath: value(args, "profile-policy"),
         experimental: flag(args, "experimental"),
         analysisMode,
         phases: phases.length

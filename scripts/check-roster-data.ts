@@ -15,7 +15,10 @@ if (status.data.packageVersion !== newRecruitCatalogue.sources.rules.version) {
 }
 if (
   status.data.factionCount !== newRecruitCatalogue.summary.factionCount ||
-  status.data.conflicts.total !== newRecruitCatalogue.summary.conflicts
+  status.data.conflicts.total !== newRecruitCatalogue.summary.conflicts ||
+  status.data.conflicts.unique !==
+    (newRecruitCatalogue.summary.uniqueConflicts ??
+      newRecruitCatalogue.summary.conflicts)
 ) {
   throw new Error("Generated catalogue summary does not match runtime status.");
 }

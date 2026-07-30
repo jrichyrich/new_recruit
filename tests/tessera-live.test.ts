@@ -4,40 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
-
 import { inspectEnrichedRosz } from "../lib/rosterpilot";
 import { runTesseraThroughLocalAgent } from "../local/agent/client";
+import {
+  deterministicRenamedMirrorRosz,
+} from "../local/certification/mirror-rosz";
 
 const enabled = process.env.ROSTERPILOT_TESSERA_LIVE_TESTS === "1";
 const playerRoszPath = process.env.ROSTERPILOT_TESSERA_PLAYER_ROSZ;
-
-function renamedMirror(
-  content: Uint8Array,
-  rosterName: string,
-): Uint8Array {
-  const entries = unzipSync(content);
-  const rosterEntries = Object.entries(entries).filter(([filename]) =>
-    filename.toLocaleLowerCase().endsWith(".ros"),
-  );
-  assert.equal(rosterEntries.length, 1);
-  const [filename, rosterContent] = rosterEntries[0];
-  const xml = strFromU8(rosterContent);
-  const escapedName = rosterName
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-  const renamed = xml.replace(
-    /(<roster\b[^>]*\bname=")[^"]*(")/,
-    `$1${escapedName}$2`,
-  );
-  assert.notEqual(renamed, xml, "The mirror roster name was not replaced.");
-  return zipSync({
-    ...entries,
-    [filename]: strToU8(renamed),
-  });
-}
 
 test(
   "live Tessera local agent captures the complete full-mode scenario set",
@@ -55,7 +29,10 @@ test(
       assert.ok(playerSummary.profileCount > 0);
       assert.ok(playerSummary.weaponProfileCount > 0);
       const opponentName = `${playerSummary.rosterName} Live Mirror`;
-      const opponent = renamedMirror(player, opponentName);
+      const opponent = deterministicRenamedMirrorRosz(
+        player,
+        opponentName,
+      );
       const opponentSummary = inspectEnrichedRosz(opponent);
       assert.equal(opponentSummary.totalPoints, playerSummary.totalPoints);
 

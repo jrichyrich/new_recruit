@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,12 +25,18 @@ import {
   deliverThroughLocalAgent,
   getLocalAgentStatus,
   LocalAgentError,
+  probeNewRecruitThroughLocalAgent,
 } from "../agent/client";
 import {
   installedBrokerPath,
   newRecruitProfileDirectory,
   stagedBrokerPath,
 } from "../agent/paths";
+import {
+  getRuntimeProvenance,
+  runtimeRestartIssue,
+} from "../runtime-provenance";
+import { safeNewRecruitUiIdentity } from "./ui-identity";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -48,6 +55,20 @@ export type NewRecruitCompanionDependencies = {
   platform?: NodeJS.Platform;
   browserAvailable?: boolean;
   agentDeliver?: typeof deliverThroughLocalAgent;
+  runtimeIssue?: typeof runtimeRestartIssue;
+};
+
+export type NewRecruitProbeDependencies = {
+  platform?: NodeJS.Platform;
+  browserAvailable?: boolean;
+  agentProbe?: typeof probeNewRecruitThroughLocalAgent;
+  runtimeIssue?: typeof runtimeRestartIssue;
+};
+
+export type NewRecruitLiveProbe = {
+  uiIdentity: string;
+  sessionReused: boolean;
+  importControlVisible: true;
 };
 
 type BrokerResponse = {
@@ -178,13 +199,20 @@ export async function getNewRecruitConnectionStatus(): Promise<
   );
   const installationCurrent =
     agentStatus?.projectDirectory === projectRoot;
+  const runtime = getRuntimeProvenance();
+  const runtimeCompatible =
+    agentStatus?.runtime?.buildId === runtime.buildId &&
+    agentStatus.runtime.stale === false &&
+    runtime.stale === false;
   const available =
     process.platform === "darwin" &&
     agentStatus?.available === true &&
     agentStatus.protocolCompatible &&
     installationCurrent &&
+    runtimeCompatible &&
     agentStatus.browserAvailable &&
-    agentStatus.brokerAvailable;
+    agentStatus.brokerAvailable &&
+    newRecruitProvider?.credentialState === "ready";
   const statusWarning = agentError
       ? {
           code: agentError.code,
@@ -206,6 +234,9 @@ export async function getNewRecruitConnectionStatus(): Promise<
       agentVersion: agentStatus?.version ?? null,
       protocolCompatible: agentStatus?.protocolCompatible === true,
       installationCurrent,
+      runtimeCompatible,
+      runtimeBuildId: runtime.buildId,
+      agentRuntimeBuildId: agentStatus?.runtime?.buildId ?? null,
       credentialState:
         newRecruitProvider?.credentialState ??
         (brokerAvailable ? "unavailable" : "not-configured"),
@@ -214,6 +245,15 @@ export async function getNewRecruitConnectionStatus(): Promise<
     violations: [],
     warnings: statusWarning
       ? [statusWarning]
+      : !runtimeCompatible && agentStatus?.available
+        ? [
+          {
+            code: "RUNTIME_RESTART_REQUIRED",
+            message:
+              "The MCP process and local agent do not share the same current source fingerprint. Restart both before New Recruit delivery.",
+            severity: "warn",
+          },
+        ]
       : !installationCurrent && agentStatus?.available
         ? [
           {
@@ -229,7 +269,7 @@ export async function getNewRecruitConnectionStatus(): Promise<
           {
             code: "LOCAL_AGENT_UNAVAILABLE",
             message:
-              "Install the RosterPilot local agent and Google Chrome before using automated delivery.",
+              "New Recruit automation requires macOS, Google Chrome, the current local agent, and configured New Recruit credentials.",
             severity: "warn",
           },
         ],
@@ -256,12 +296,184 @@ export async function forgetKeychainProvider(
   return runBroker("forget", provider);
 }
 
+export async function probeNewRecruitLiveUi(
+  dependencies: NewRecruitProbeDependencies = {},
+): Promise<ResultEnvelope<NewRecruitLiveProbe>> {
+  const restartIssue = dependencies.runtimeIssue
+    ? dependencies.runtimeIssue()
+    : dependencies.agentProbe
+      ? null
+      : runtimeRestartIssue();
+  if (restartIssue) {
+    return {
+      ok: false,
+      data: null,
+      violations: [{ ...restartIssue, severity: "error" }],
+      warnings: [],
+    };
+  }
+  if ((dependencies.platform ?? process.platform) !== "darwin") {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "UNSUPPORTED_PLATFORM",
+          message:
+            "The authenticated New Recruit UI probe requires macOS.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
+  const browserAvailable =
+    dependencies.browserAvailable ?? (await exists(chromePath));
+  if (!browserAvailable) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "COMPANION_UNAVAILABLE",
+          message:
+            "Google Chrome is unavailable for the authenticated New Recruit UI probe.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
+  try {
+    const result = await (
+      dependencies.agentProbe ??
+      probeNewRecruitThroughLocalAgent
+    )();
+    const uiIdentity = safeNewRecruitUiIdentity(
+      result.uiIdentity,
+    );
+    if (
+      !result.ok ||
+      !uiIdentity ||
+      !result.importControlVisible
+    ) {
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code:
+              result.code ??
+              (!uiIdentity
+                ? "NEW_RECRUIT_UI_IDENTITY_MISSING"
+                : "NEW_RECRUIT_UI_CHANGED"),
+            message:
+              result.message ??
+              "The authenticated New Recruit UI probe did not verify the current import surface.",
+            severity: "error",
+          },
+        ],
+        warnings: [],
+      };
+    }
+    return {
+      ok: true,
+      data: {
+        uiIdentity,
+        sessionReused: result.sessionReused,
+        importControlVisible: true,
+      },
+      violations: [],
+      warnings: [],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code:
+            error instanceof LocalAgentError
+              ? error.code
+              : "LOCAL_AGENT_FAILED",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The authenticated New Recruit UI probe failed.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
+}
+
 function htmlFilename(roszFilename: string): string {
   return roszFilename.replace(/\.rosz$/i, "-new-recruit.html");
 }
 
 function enrichedFilename(roszFilename: string): string {
   return roszFilename.replace(/\.rosz$/i, "-new-recruit-enriched.rosz");
+}
+
+async function preserveRejectedEnrichedRosz(
+  content: Uint8Array,
+  sourceFilename: string,
+  outputDirectory: string,
+  options: WriteOptions,
+): Promise<
+  NonNullable<NewRecruitDelivery["diagnosticArtifacts"]>[number]
+> {
+  const sha256 = crypto
+    .createHash("sha256")
+    .update(content)
+    .digest("hex");
+  const basename = path
+    .basename(sourceFilename)
+    .replace(/\.rosz$/i, "")
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
+    .replace(/^-+|-+$/g, "") || "roster";
+  const diagnosticDirectory = path.join(
+    outputDirectory,
+    "_diagnostics",
+  );
+  const filename =
+    `${basename}-rejected-${sha256.slice(0, 12)}.rosz`;
+  const artifact: ExportArtifact = {
+    format: "rosz",
+    filename,
+    mimeType: "application/zip",
+    encoding: "binary",
+    content,
+  };
+  const [target] = await resolveExportArtifactTargets(
+    [artifact],
+    diagnosticDirectory,
+    { ...options, overwrite: true },
+  );
+  if (await exists(target)) {
+    const existing = await readFile(target);
+    const existingSha256 = crypto
+      .createHash("sha256")
+      .update(existing)
+      .digest("hex");
+    if (existingSha256 !== sha256) {
+      throw new Error(
+        "The rejected enriched-roster diagnostic path already contains different content.",
+      );
+    }
+  } else {
+    await writeExportArtifact(
+      artifact,
+      target,
+      { ...options, overwrite: false },
+    );
+  }
+  return {
+    kind: "rejected-new-recruit-enriched-rosz",
+    path: target,
+    sha256,
+  };
 }
 
 export async function deliverRosterToNewRecruit(
@@ -275,6 +487,47 @@ export async function deliverRosterToNewRecruit(
       ok: false,
       data: null,
       violations: validation.violations,
+      warnings: validation.warnings,
+    };
+  }
+  const staleDataWarnings = validation.warnings.filter((warning) =>
+    [
+      "DATA_VERSION_CHANGED",
+      "DATA_RELEASE_CHANGED",
+      "CATALOGUE_VERSION_CHANGED",
+    ].includes(warning.code),
+  );
+  if (staleDataWarnings.length > 0) {
+    return {
+      ok: false,
+      data: null,
+      violations: staleDataWarnings.map((warning) => ({
+        ...warning,
+        severity: "error" as const,
+      })),
+      warnings: validation.warnings.filter(
+        (warning) =>
+          !staleDataWarnings.some(
+            (stale) => stale.code === warning.code,
+          ),
+      ),
+    };
+  }
+  const restartIssue = dependencies.runtimeIssue
+    ? dependencies.runtimeIssue()
+    : dependencies.agentDeliver
+      ? null
+      : runtimeRestartIssue();
+  if (restartIssue) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          ...restartIssue,
+          severity: "error",
+        },
+      ],
       warnings: validation.warnings,
     };
   }
@@ -368,13 +621,22 @@ export async function deliverRosterToNewRecruit(
   const delivery: NewRecruitDelivery = {
     rosterId: draft.id,
     rosterName: draft.name,
+    uiIdentity: null,
     listUrl: null,
     imported: false,
     sessionReused: false,
+    connectorEvents: [],
     verification: null,
     enrichedSummary: null,
+    diagnosticArtifacts: [],
     artifacts: [],
   };
+  const connectorEventId = crypto.randomUUID();
+  const connectorEventRecordedAt = new Date().toISOString();
+  const sourceRoszSha256 = crypto
+    .createHash("sha256")
+    .update(rosz.content)
+    .digest("hex");
   const publishSource = async () => {
     const [written] = await writeExportArtifacts(
       [rosz],
@@ -390,7 +652,9 @@ export async function deliverRosterToNewRecruit(
       },
     ];
   };
+  let agentDispatchStarted = false;
   try {
+    agentDispatchStarted = true;
     const agent = await (
       dependencies.agentDeliver ?? deliverThroughLocalAgent
     )({
@@ -409,11 +673,33 @@ export async function deliverRosterToNewRecruit(
       },
     });
     const worker = agent.worker;
+    delivery.uiIdentity =
+      safeNewRecruitUiIdentity(worker.uiIdentity);
     delivery.listUrl = worker.listUrl;
     delivery.imported = worker.imported;
     delivery.sessionReused = worker.sessionReused;
     delivery.verification = worker.verification;
     if (!worker.ok) {
+      const externalOutcomeUncertain =
+        worker.imported ||
+        worker.remoteOutcomeUnknown === true;
+      delivery.connectorEvents = [
+        {
+          schemaVersion: 1,
+          eventId: connectorEventId,
+          recordedAt: connectorEventRecordedAt,
+          provider: "new-recruit",
+          action: "prepare",
+          origin: externalOutcomeUncertain
+            ? "new-remote"
+            : "in-memory",
+          outcome: externalOutcomeUncertain
+            ? "uncertain"
+            : "failed",
+          remoteId: worker.listUrl,
+          contentSha256: sourceRoszSha256,
+        },
+      ];
       await publishSource();
       return {
         ok: false,
@@ -448,6 +734,41 @@ export async function deliverRosterToNewRecruit(
           })),
         });
       } catch (error) {
+        delivery.connectorEvents = [
+          {
+            schemaVersion: 1,
+            eventId: connectorEventId,
+            recordedAt: connectorEventRecordedAt,
+            provider: "new-recruit",
+            action: "prepare",
+            origin: worker.imported ? "new-remote" : "in-memory",
+            outcome: worker.imported ? "uncertain" : "failed",
+            remoteId: worker.listUrl,
+            contentSha256: sourceRoszSha256,
+          },
+        ];
+        let diagnosticWarning: {
+          code: string;
+          message: string;
+          severity: "warn";
+        } | null = null;
+        try {
+          delivery.diagnosticArtifacts = [
+            await preserveRejectedEnrichedRosz(
+              enrichedContent,
+              enrichedFilename(rosz.filename),
+              outputDirectory,
+              options,
+            ),
+          ];
+        } catch {
+          diagnosticWarning = {
+            code: "DIAGNOSTIC_ARTIFACT_WRITE_FAILED",
+            message:
+              "The rejected enriched roster could not be retained in the run diagnostics directory.",
+            severity: "warn",
+          };
+        }
         return {
           ok: false,
           data: delivery,
@@ -461,7 +782,10 @@ export async function deliverRosterToNewRecruit(
               severity: "error",
             },
           ],
-          warnings: validation.warnings,
+          warnings: [
+            ...validation.warnings,
+            ...(diagnosticWarning ? [diagnosticWarning] : []),
+          ],
         };
       }
       artifacts.push({
@@ -502,6 +826,26 @@ export async function deliverRosterToNewRecruit(
       mimeType: artifact.mimeType,
       written: written[index],
     }));
+    const verifiedContent =
+      includeEnriched && artifacts[1]
+        ? artifacts[1].content
+        : rosz.content;
+    delivery.connectorEvents = [
+      {
+        schemaVersion: 1,
+        eventId: connectorEventId,
+        recordedAt: connectorEventRecordedAt,
+        provider: "new-recruit",
+        action: "prepare",
+        origin: worker.imported ? "new-remote" : "in-memory",
+        outcome: "verified",
+        remoteId: worker.listUrl,
+        contentSha256: crypto
+          .createHash("sha256")
+          .update(verifiedContent)
+          .digest("hex"),
+      },
+    ];
     return {
       ok: true,
       data: delivery,
@@ -509,6 +853,27 @@ export async function deliverRosterToNewRecruit(
       warnings: validation.warnings,
     };
   } catch (error) {
+    if (!delivery.connectorEvents?.length) {
+      const externalOutcomeUncertain =
+        agentDispatchStarted || delivery.imported;
+      delivery.connectorEvents = [
+        {
+          schemaVersion: 1,
+          eventId: connectorEventId,
+          recordedAt: connectorEventRecordedAt,
+          provider: "new-recruit",
+          action: "prepare",
+          origin: externalOutcomeUncertain
+            ? "new-remote"
+            : "in-memory",
+          outcome: externalOutcomeUncertain
+            ? "uncertain"
+            : "failed",
+          remoteId: delivery.listUrl,
+          contentSha256: sourceRoszSha256,
+        },
+      ];
+    }
     let fallbackWarning = null;
     if (!delivery.artifacts.length) {
       try {

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  copyFile,
   mkdir,
   readFile,
   rename,
@@ -14,13 +15,17 @@ import {
   analyzeMissionReadiness,
   assessMissionReadinessRevisionGuardrail,
   exportRoster,
+  factionHasLegalNamedAnchor,
   generateFactionStressPortfolio,
-  modifyRoster,
+  getCachedDataFreshnessResult,
+  inspectEnrichedProfileRequirements,
   rosterHasNamedCharacter,
   rosterSimulationFingerprint,
   rosterExecutionFingerprint,
+  RosterConstraintsSchema,
   RosterDraftSchema,
   validateRoster,
+  type LiveDataFreshness,
   type NewRecruitDelivery,
   type ProfilePolicyV1,
   type ResultEnvelope,
@@ -28,18 +33,23 @@ import {
   type RosterIssue,
   type TesseraAnalysisConfiguration,
   type TesseraChangeCandidate,
+  type TesseraFrozenScenarioContract,
   type TesseraMatchupReport,
   type TesseraMetric,
   type TesseraMissionReadinessReport,
   type TesseraPreparedRoster,
+  type TesseraProfileRequirement,
   type TesseraStressAnalysisStrategy,
   type TesseraStressConfiguration,
   type TesseraStressFrozenOpponentArtifact,
+  type TesseraStressFinding,
   type TesseraStressPortfolio,
   type TesseraStressPortfolioItem,
   type TesseraStressRepresentative,
+  type TesseraStressPreparationFailureReport,
   type TesseraStressRevisionReport,
   type TesseraStressRobustness,
+  type TesseraStressRunReport,
   type TesseraStressRevisionSampleDelta,
   type TesseraStressStageProvenance,
   type TesseraStressSuite,
@@ -58,16 +68,23 @@ import {
 } from "../new-recruit/companion";
 import {
   loadNewRecruitCache,
+  newRecruitCacheKey,
   storeNewRecruitCache,
 } from "../new-recruit/cache";
+import {
+  getRuntimeProvenance,
+  runtimeRestartIssue,
+} from "../runtime-provenance";
 import { closeTesseraLocalAgentSession } from "../agent/client";
 import {
   analyzeRosterMatchup,
+  clearPreparedRosterDeliveryMemo,
   getTesseraConnectionStatus,
   prepareRosterForTessera,
   type TesseraDependencies,
   type TesseraOpponentInput,
 } from "./companion";
+import { qualifyRosterChangeCandidate } from "./candidate-quality";
 import {
   computeStressRobustness,
   selectStressRepresentatives,
@@ -79,8 +96,11 @@ import {
 } from "./stress-report";
 import {
   aggregateProfileRequirements,
+  normalizeProfileIdentity,
   ProfilePolicySchema,
   profilePolicyHash,
+  profilePolicyIdentityKey,
+  profilePolicyIdentityMatches,
   profilePolicyScaffold,
   validateProfilePolicy,
 } from "./profile-policy";
@@ -109,11 +129,21 @@ export type TesseraStressOptions = WriteOptions & {
   outputDirectory?: string;
   suite?: TesseraStressSuite;
   analysisStrategy?: TesseraStressAnalysisStrategy;
+  executionMode?: "prepare-only" | "simulate";
   resumeManifestPath?: string;
+  restartManifestPath?: string;
   profilePolicyPath?: string;
   forceRetry?: boolean;
   experimental?: boolean;
 };
+
+function stressSimulationRequested(
+  options: TesseraStressOptions,
+): boolean {
+  return options.executionMode
+    ? options.executionMode === "simulate"
+    : options.experimental === true;
+}
 
 export type TesseraStressDependencies = TesseraDependencies & {
   wait?: (milliseconds: number) => Promise<void>;
@@ -135,6 +165,17 @@ type ManifestStageEntry = {
     retryable: boolean;
   } | null;
   attemptCount: number;
+  attemptHistory: Array<{
+    attempt: number;
+    startedAt: string;
+    completedAt: string;
+    outcome: "complete" | "partial" | "failed";
+    error: {
+      code: string;
+      message: string;
+      retryable: boolean;
+    } | null;
+  }>;
   firstAttemptAt: string | null;
   lastAttemptAt: string | null;
   nextAction: string | null;
@@ -160,7 +201,13 @@ type TesseraStressManifest = {
   simulationRequested: boolean;
   profilePolicy: ProfilePolicyV1 | null;
   profilePolicyHash: string | null;
+  enrichedProfileRequirements: TesseraProfileRequirement[] | null;
+  stageContracts: {
+    screening: TesseraFrozenScenarioContract[] | null;
+    deepDive: TesseraFrozenScenarioContract[] | null;
+  };
   warnings: string[];
+  cachedLiveUpdateCheck: LiveDataFreshness | null;
   playerPreparationStartedAt: string | null;
   opponentPreparationStartedAt: Record<string, string>;
   preparedPlayer: TesseraPreparedRoster | null;
@@ -197,6 +244,28 @@ type StageRunResult = {
   warnings: string[];
 };
 
+type PreparationFailureContext = {
+  side: "player" | "opponent";
+  templateId: string | null;
+  rosterName: string | null;
+  partialPrepared: TesseraPreparedRoster | null;
+};
+
+type PreparedOpponentsResult =
+  | {
+      ok: true;
+      data: true;
+      violations: RosterIssue[];
+      warnings: RosterIssue[];
+    }
+  | {
+      ok: false;
+      data: null;
+      violations: RosterIssue[];
+      warnings: RosterIssue[];
+      failureContext: PreparationFailureContext;
+    };
+
 const SourceDataSchema = z.object({
   package: z.literal("@alpaca-software/40kdc-data"),
   version: z.string().min(1),
@@ -229,6 +298,72 @@ const UnitInstanceSchema = z.object({
   tags: z.array(z.string()),
 });
 
+const ConnectorEventSchema = z.object({
+  schemaVersion: z.literal(1),
+  eventId: z.string().min(1),
+  recordedAt: z.string().min(1),
+  provider: z.enum(["new-recruit", "tessera"]),
+  action: z.enum(["prepare", "simulate"]),
+  origin: z.enum([
+    "new-remote",
+    "persistent-cache",
+    "manifest-reuse",
+    "in-memory",
+  ]),
+  outcome: z.enum(["verified", "reused", "failed", "uncertain"]),
+  remoteId: z.string().nullable(),
+  contentSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+});
+
+const ObservedNewRecruitCatalogueSchema = z.object({
+  source: z.literal("new-recruit-enriched-rosz"),
+  gameSystem: z.object({
+    id: z.string().nullable(),
+    name: z.string().nullable(),
+    revision: z.number().int().nonnegative().nullable(),
+  }),
+  catalogues: z.array(z.object({
+    id: z.string().nullable(),
+    name: z.string().nullable(),
+    revision: z.number().int().nonnegative().nullable(),
+  })),
+});
+
+const CatalogueProvenanceSchema = z.object({
+  status: z.enum(["matched", "drift", "unverifiable"]),
+  pinned: z.object({
+    releaseId: z.string().min(1),
+    gameSystem: z.object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+    }),
+    catalogue: z.object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      revision: z.number().int().nonnegative().nullable(),
+    }),
+  }),
+  observed: ObservedNewRecruitCatalogueSchema.nullable(),
+  mismatches: z.array(z.object({
+    field: z.enum([
+      "game-system-id",
+      "game-system-revision",
+      "catalogue-id",
+      "catalogue-revision",
+    ]),
+    expected: z.union([z.string(), z.number()]),
+    observed: z.union([z.string(), z.number()]).nullable(),
+  })),
+  missing: z.array(z.enum([
+    "new-recruit-enriched-identity",
+    "game-system-id",
+    "game-system-revision",
+    "catalogue-id",
+    "catalogue-revision",
+  ])),
+});
+
 const PreparedRosterSchema = z.object({
   rosterId: z.string().min(1),
   rosterName: z.string().min(1),
@@ -241,6 +376,8 @@ const PreparedRosterSchema = z.object({
     factionName: z.string().min(1),
     totalPoints: z.number().nonnegative(),
     generatedBy: z.string(),
+    observedNewRecruitCatalogue:
+      ObservedNewRecruitCatalogueSchema.optional(),
     profileCount: z.number().int().nonnegative(),
     weaponProfileCount: z.number().int().nonnegative(),
     units: z.array(z.object({
@@ -253,6 +390,10 @@ const PreparedRosterSchema = z.object({
   }),
   fingerprint: z.string().optional(),
   units: z.array(UnitInstanceSchema).optional(),
+  cacheReused: z.boolean().optional(),
+  connectorEvents: z.array(ConnectorEventSchema).optional(),
+  catalogueProvenance: CatalogueProvenanceSchema.optional(),
+  constraints: RosterConstraintsSchema.optional(),
 });
 
 const StressConfigurationSchema = z.object({
@@ -283,6 +424,22 @@ const PortfolioItemSchema = z.object({
   omissionReason: z.string().nullable(),
 }).passthrough();
 
+const PortfolioPostureSchema = z.enum([
+  "balanced-control",
+  "ranged-pressure",
+  "assault-pressure",
+]);
+const PortfolioCompositionSchema = z.enum([
+  "mixed",
+  "mass",
+  "elite-heavy",
+]);
+const PortfolioCellSchema = z.object({
+  templateId: z.string().min(1),
+  posture: PortfolioPostureSchema,
+  composition: PortfolioCompositionSchema,
+});
+
 const PortfolioSchema = z.object({
   schemaVersion: z.literal(1),
   generatorVersion: z.string().min(1),
@@ -297,10 +454,31 @@ const PortfolioSchema = z.object({
     intended: z.number().int().positive(),
     ready: z.number().int().nonnegative(),
     unavailable: z.number().int().nonnegative(),
-    representedPostures: z.array(z.string()),
-    representedCompositions: z.array(z.string()),
+    representedPostures: z.array(PortfolioPostureSchema),
+    missingPostures: z.array(PortfolioPostureSchema).optional(),
+    representedCompositions: z.array(PortfolioCompositionSchema),
+    missingCompositions:
+      z.array(PortfolioCompositionSchema).optional(),
+    representedCells: z.array(PortfolioCellSchema).optional(),
+    missingCells: z.array(
+      PortfolioCellSchema.extend({
+        reason: z.string().min(1),
+      }),
+    ).optional(),
     uniqueSimulationPayloads: z.number().int().nonnegative().default(0),
     namedCharacterCoverage: z.boolean().default(false),
+    namedCharacterCoverageStatus: z.enum([
+      "included",
+      "not-applicable",
+      "unavailable-after-evaluation",
+    ]).optional(),
+    namedCharacterCoverageReason: z.string().nullable().optional(),
+    namedCharacterSpecialistStructuralFingerprint:
+      z.string().min(1).nullable().default(null),
+    namedCharacterSpecialistSimulationFingerprint:
+      z.string().min(1).nullable().default(null),
+    maximumResultStatus:
+      z.enum(["complete", "degraded"]).optional(),
   }),
 });
 
@@ -327,9 +505,49 @@ const ManifestStageEntrySchema = z.object({
     retryable: z.boolean(),
   }).nullable(),
   attemptCount: z.number().int().nonnegative(),
+  attemptHistory: z.array(z.object({
+    attempt: z.number().int().positive(),
+    startedAt: z.string().min(1),
+    completedAt: z.string().min(1),
+    outcome: z.enum(["complete", "partial", "failed"]),
+    error: z.object({
+      code: z.string().min(1),
+      message: z.string().min(1),
+      retryable: z.boolean(),
+    }).nullable(),
+  })).default([]),
   firstAttemptAt: z.string().min(1).nullable(),
   lastAttemptAt: z.string().min(1).nullable(),
   nextAction: z.string().min(1).nullable(),
+});
+
+const ProfileRequirementSchema = z.object({
+  faction: z.string().min(1),
+  unit: z.string().min(1),
+  selectionId: z.string().min(1).nullable(),
+  unitOccurrence: z.number().int().positive().optional(),
+  modelCount: z.number().int().positive().optional(),
+  weaponGroup: z.string().min(1),
+  phase: z.enum(["shooting", "fight"]),
+  availableProfiles: z.array(z.string().min(1)).min(2),
+  activeCount: z.number().int().positive(),
+  selectedProfile: z.string().min(1).nullable(),
+});
+
+const FrozenScenarioContractSchema = z.object({
+  phase: z.enum(["shooting", "fight"]),
+  direction: z.enum([
+    "player-to-opponent",
+    "opponent-to-player",
+  ]),
+  metric: z.enum([
+    "wipe-probability",
+    "half-wipe-probability",
+    "mean-kills",
+    "mean-damage",
+  ]),
+  settings: z.record(z.string()),
+  iterations: z.number().int().positive().nullable(),
 });
 
 const StressManifestSchema = z.object({
@@ -347,7 +565,14 @@ const StressManifestSchema = z.object({
   simulationRequested: z.boolean(),
   profilePolicy: ProfilePolicySchema.nullable().optional(),
   profilePolicyHash: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+  enrichedProfileRequirements:
+    z.array(ProfileRequirementSchema).nullable().optional(),
+  stageContracts: z.object({
+    screening: z.array(FrozenScenarioContractSchema).nullable(),
+    deepDive: z.array(FrozenScenarioContractSchema).nullable(),
+  }).optional(),
   warnings: z.array(z.string()),
+  cachedLiveUpdateCheck: z.unknown().nullable().optional(),
   playerPreparationStartedAt: z.string().min(1).nullable(),
   opponentPreparationStartedAt: z.record(z.string().min(1)),
   preparedPlayer: PreparedRosterSchema.nullable(),
@@ -374,6 +599,125 @@ const StressManifestSchema = z.object({
   completedAt: z.string().nullable(),
 });
 
+export const TesseraStressPreparationFailureReportSchema = z
+  .object({
+    schemaVersion: z.literal(3),
+    reportKind: z.literal(
+      "tessera-stress-preparation-failure",
+    ),
+    runId: z.string().min(1),
+    generatedAt: z.string().min(1),
+    source: z.literal("prepare-only"),
+    status: z.literal("failed"),
+    statusExplanation: z.string().min(1),
+    runtime: z.object({
+      rosterPilotVersion: z.string().min(1),
+      rulesPackageVersion: z.string().min(1),
+      stressGeneratorVersion: z.string().min(1),
+      processStartedAt: z.string().min(1),
+      gitHead: z.string().nullable(),
+      sourceFingerprintAtStart: z.string().min(1),
+      sourceFingerprintNow: z.string().min(1),
+      buildId: z.string().min(1),
+      stale: z.boolean(),
+    }),
+    tesseraUiIdentity: z.null(),
+    connectorEvents: z.array(ConnectorEventSchema),
+    preparation: z.object({
+      status: z.enum(["partial", "failed"]),
+      source: z.literal("new-recruit"),
+      failedSide: z.enum(["player", "opponent"]),
+      failedTemplateId: z.string().min(1).nullable(),
+      uniqueRosters: z.number().int().nonnegative(),
+      remoteMutations: z.number().int().nonnegative(),
+      cacheReuses: z.number().int().nonnegative(),
+      connectorEvents: z.array(ConnectorEventSchema),
+    }),
+    simulation: z.object({
+      requested: z.boolean(),
+      status: z.enum(["not-requested", "failed"]),
+      engine: z.literal("none"),
+      trustedMatrices: z.literal(0),
+    }),
+    failures: z
+      .array(
+        z.object({
+          stage: z.literal("preparation"),
+          code: z.string().min(1),
+          message: z.string().min(1),
+          opponentName: z.string().min(1).nullable(),
+          retryable: z.boolean(),
+        }),
+      )
+      .min(1),
+    profilePolicyHash: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .nullable(),
+    pinnedData: z.object({
+      player: SourceDataSchema,
+      opponents: z.array(SourceDataSchema),
+      cachedLiveUpdateCheck: z.unknown().nullable(),
+    }),
+    integrity: z.object({
+      status: z.literal("not-evaluated"),
+      issues: z.tuple([]),
+    }),
+    recovery: z.object({
+      manifest: z.string().min(1),
+      screeningAttempts: z.number().int().nonnegative(),
+      deepDiveAttempts: z.number().int().nonnegative(),
+      exhaustedTemplates: z.array(z.string()),
+      nextActions: z.array(z.string()),
+      verifiedPreparedPlayer: z.boolean(),
+      verifiedPreparedOpponents: z.number().int().nonnegative(),
+    }),
+    verifiedPreparedPlayer: PreparedRosterSchema.nullable(),
+    verifiedPreparedOpponents: z.array(
+      z.object({
+        templateId: z.string().min(1),
+        prepared: PreparedRosterSchema,
+        sha256: z.string().regex(/^[0-9a-f]{64}$/),
+      }),
+    ),
+    currentPartialPreparedReceipt: z
+      .object({
+        side: z.enum(["player", "opponent"]),
+        templateId: z.string().min(1).nullable(),
+        prepared: PreparedRosterSchema,
+        reusable: z.literal(false),
+        failureCodes: z.array(z.string().min(1)).min(1),
+      })
+      .nullable(),
+    opponentFactionId: z.string().min(1),
+    configuration: StressConfigurationSchema,
+    suite: z.enum(["core-3", "diverse-9"]),
+    portfolio: PortfolioSchema,
+    stageProvenance: z.object({
+      screening: z.null(),
+      deepDive: z.null(),
+    }),
+    limitations: z.array(z.string()),
+    warnings: z.array(z.string()),
+    artifacts: z.array(
+      z.object({
+        format: z.enum([
+          "stress-manifest",
+          "player-source-rosz",
+          "player-enriched-rosz",
+          "opponent-source-rosz",
+          "opponent-enriched-rosz",
+        ]),
+        written: z.string().min(1),
+        sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+        verification: z.enum(["verified", "unverified"]),
+        reusable: z.boolean(),
+        templateId: z.string().min(1).nullable(),
+      }),
+    ),
+  })
+  .strict();
+
 const ScenarioResultSchema = z.object({
   scenarioId: z.string().min(1),
   opponentName: z.string().min(1),
@@ -397,6 +741,12 @@ const ScenarioResultSchema = z.object({
     ]),
     iterations: z.number().int().positive().nullable(),
     settings: z.record(z.string()),
+    matrixSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    integrity: z.object({
+      status: z.enum(["trusted", "aliased"]),
+      issueCodes: z.array(z.string()),
+      aliasedScenarioIds: z.array(z.string()),
+    }).optional(),
   })).min(1),
   iterations: z.number().int().positive().nullable(),
   settings: z.record(z.string()),
@@ -418,11 +768,23 @@ const ScenarioResultSchema = z.object({
 });
 
 const MatchupReportSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.union([z.literal(2), z.literal(3)]),
   runId: z.string().min(1),
   generatedAt: z.string().min(1),
-  source: z.enum(["tessera-ui", "handoff-only"]),
-  status: z.enum(["complete", "partial"]),
+  source: z.enum([
+    "prepare-only",
+    "tessera-ui",
+    "tessera-ui-failed",
+    "handoff-only",
+  ]),
+  status: z.enum([
+    "prepared",
+    "complete",
+    "degraded",
+    "inconclusive",
+    "failed",
+    "partial",
+  ]),
   configuration: z.object({
     analysisMode: z.enum(["quick", "full"]),
     phases: z.array(z.enum(["shooting", "fight"])),
@@ -447,7 +809,14 @@ const MatchupReportSchema = z.object({
   }).passthrough()).min(1),
   simulation: z.object({
     requested: z.boolean(),
+    executionMode: z
+      .enum(["prepare-only", "simulate"])
+      .optional(),
     experimental: z.boolean(),
+    status: z
+      .enum(["not-requested", "complete", "partial", "failed"])
+      .optional(),
+    engine: z.literal("tessera-ui").optional(),
     settings: z.record(z.string()),
     matrices: z.array(z.object({
       opponentName: z.string().min(1),
@@ -490,6 +859,7 @@ const StageProvenanceSchema = z.object({
       ]),
       settings: z.record(z.string()),
       iterations: z.number().int().positive().nullable(),
+      matrixSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     })),
   })),
 });
@@ -504,6 +874,16 @@ const StressSampleSchema = z.object({
   composition: z.enum(["mixed", "mass", "elite-heavy"]),
   weight: z.number().nonnegative(),
   status: z.enum(["confident", "ambiguous", "missing"]),
+  coverageCompleteness: z.enum([
+    "complete",
+    "partial",
+    "missing",
+  ]).optional(),
+  evidenceConfidence: z.enum([
+    "high",
+    "review",
+    "ambiguous",
+  ]).optional(),
   offensiveCoverage: z.number().min(0).max(1).nullable(),
   threatExposure: z.number().min(0).max(1).nullable(),
   coverageMargin: z.number().min(-1).max(1).nullable(),
@@ -530,6 +910,11 @@ const StressSampleSchema = z.object({
 const StressAggregateSchema = z.object({
   sampleCount: z.number().int().nonnegative(),
   usableWeight: z.number().nonnegative(),
+  evidenceConfidence: z.enum([
+    "high",
+    "review",
+    "ambiguous",
+  ]).optional(),
   worst: z.number().nullable(),
   lowerTail: z.number().nullable(),
   median: z.number().nullable(),
@@ -612,12 +997,57 @@ const MissionReadinessSchema = z.object({
 });
 
 const StressBaselineSchema = z.object({
-  schemaVersion: z.union([z.literal(1), z.literal(2)]),
+  schemaVersion: z.union([
+    z.literal(1),
+    z.literal(2),
+    z.literal(3),
+  ]),
   reportKind: z.literal("tessera-stress-test"),
   runId: z.string().min(1),
   generatedAt: z.string().min(1),
-  source: z.enum(["tessera-ui", "handoff-only"]),
-  status: z.enum(["complete", "degraded", "inconclusive", "partial"]),
+  source: z.enum([
+    "prepare-only",
+    "tessera-ui",
+    "tessera-ui-failed",
+    "handoff-only",
+  ]),
+  status: z.enum([
+    "prepared",
+    "complete",
+    "degraded",
+    "inconclusive",
+    "failed",
+    "partial",
+  ]),
+  statusExplanation: z.string().default(""),
+  integrity: z.object({
+    status: z.enum(["verified", "inconclusive", "not-evaluated"]),
+    issues: z.array(z.object({
+      code: z.string().min(1),
+      message: z.string().min(1),
+      templateIds: z.array(z.string()),
+    })),
+  }).default({
+    status: "not-evaluated",
+    issues: [],
+  }),
+  recovery: z.object({
+    manifest: z.string(),
+    screeningAttempts: z.number().int().nonnegative(),
+    deepDiveAttempts: z.number().int().nonnegative(),
+    exhaustedTemplates: z.array(z.string()),
+    nextActions: z.array(z.string()),
+    verifiedPreparedPlayer: z.boolean(),
+    verifiedPreparedOpponents: z.number().int().nonnegative(),
+  }).default({
+    manifest: "",
+    screeningAttempts: 0,
+    deepDiveAttempts: 0,
+    exhaustedTemplates: [],
+    nextActions: [],
+    verifiedPreparedPlayer: false,
+    verifiedPreparedOpponents: 0,
+  }),
   player: PreparedRosterSchema,
   opponentFactionId: z.string().min(1),
   configuration: StressConfigurationSchema,
@@ -659,8 +1089,19 @@ const StressBaselineSchema = z.object({
       answerBreadth: z.number().min(0).max(1),
       exposedWeight: z.number().min(0).max(1),
       supportingTemplateIds: z.array(z.string()),
+      exposedTemplateIds: z.array(z.string()).optional().default([]),
     })),
     confidence: z.enum(["complete", "review", "insufficient"]),
+    coverageCompleteness: z.enum([
+      "complete",
+      "degraded",
+      "insufficient",
+    ]).optional(),
+    evidenceConfidence: z.enum([
+      "high",
+      "review",
+      "ambiguous",
+    ]).optional(),
     warnings: z.array(z.string()),
   }),
   missionReadiness: MissionReadinessSchema,
@@ -673,8 +1114,15 @@ const StressBaselineSchema = z.object({
       "stress-json",
       "stress-html",
       "stress-manifest",
+      "child-report",
+      "profile-policy",
+      "player-source-rosz",
+      "player-enriched-rosz",
+      "opponent-source-rosz",
+      "opponent-enriched-rosz",
     ]),
     written: z.string().min(1),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   })),
 }).passthrough();
 
@@ -707,6 +1155,25 @@ function safeName(value: string): string {
     .slice(0, 100);
 }
 
+function defaultStressOutputDirectory(
+  playerRoster: RosterDraftV1,
+  opponentFactionId: string,
+  runId: string,
+  now = new Date(),
+): string {
+  const timestamp = now
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
+  return path.join(
+    "exports",
+    "tessera",
+    `${safeName(playerRoster.factionId) || "player"}-vs-${safeName(
+      opponentFactionId,
+    ) || "opponent"}-${playerRoster.pointsLimit}-${timestamp}-${runId.slice(0, 8)}`,
+  );
+}
+
 function resolveFromWriteRoot(
   value: string,
   options: WriteOptions,
@@ -723,6 +1190,45 @@ function pathInside(root: string, candidate: string): boolean {
     relative === "" ||
     (!relative.startsWith("..") && !path.isAbsolute(relative))
   );
+}
+
+function tesseraOutputFailure(error: unknown): {
+  code: string;
+  message: string;
+} {
+  const filesystemCode =
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+      ? error.code
+      : null;
+  const message =
+    error instanceof Error ? error.message : "";
+  if (
+    filesystemCode === "EEXIST" ||
+    /refusing to overwrite existing file/i.test(message)
+  ) {
+    return {
+      code: "TESSERA_OUTPUT_ALREADY_EXISTS",
+      message:
+        "The Tessera output directory already contains protected artifacts. Choose a new directory or explicitly allow overwrite.",
+    };
+  }
+  if (
+    /outside|filesystem root/i.test(message)
+  ) {
+    return {
+      code: "TESSERA_OUTPUT_OUTSIDE_ROOT",
+      message:
+        "The Tessera output path is outside the allowed write root.",
+    };
+  }
+  return {
+    code: "TESSERA_OUTPUT_RESERVATION_FAILED",
+    message:
+      "The Tessera output artifacts could not be reserved safely.",
+  };
 }
 
 function unique(values: string[]): string[] {
@@ -747,23 +1253,58 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalValue(value));
 }
 
-function portableReportValue(value: unknown, key = ""): unknown {
+function scopedProfilePolicy(
+  policy: ProfilePolicyV1 | null,
+  rosters: RosterDraftV1[],
+): ProfilePolicyV1 | null {
+  if (!policy) return null;
+  const requirements = aggregateProfileRequirements(rosters);
+  return {
+    schemaVersion: 1,
+    policyKind: "tessera-profile-policy",
+    entries: policy.entries.filter((entry) =>
+      requirements.some((requirement) =>
+        profilePolicyIdentityMatches(entry, requirement),
+      ),
+    ),
+  };
+}
+
+function portableReportValue(
+  value: unknown,
+  key = "",
+  outputDirectory?: string,
+): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => portableReportValue(entry, key));
+    return value.map((entry) =>
+      portableReportValue(entry, key, outputDirectory)
+    );
   }
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([entryKey, entry]) => [
         entryKey,
-        portableReportValue(entry, entryKey),
+        portableReportValue(entry, entryKey, outputDirectory),
       ]),
     );
   }
+  if (typeof value === "string" && key === "listUrl") return null;
   if (
     typeof value === "string" &&
     (key.endsWith("Path") || key === "written") &&
     path.isAbsolute(value)
   ) {
+    if (outputDirectory) {
+      const relative = path.relative(outputDirectory, value);
+      if (
+        relative &&
+        relative !== ".." &&
+        !relative.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relative)
+      ) {
+        return relative;
+      }
+    }
     return path.basename(value);
   }
   return value;
@@ -771,8 +1312,90 @@ function portableReportValue(value: unknown, key = ""): unknown {
 
 function portableStressReport(
   report: TesseraStressTestReport,
+  outputDirectory: string,
 ): TesseraStressTestReport {
-  return portableReportValue(report) as TesseraStressTestReport;
+  return portableReportValue(
+    report,
+    "",
+    outputDirectory,
+  ) as TesseraStressTestReport;
+}
+
+function portableManifestValue(
+  value: unknown,
+  manifestDirectory: string,
+  key = "",
+  parentKey = "",
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) =>
+      portableManifestValue(entry, manifestDirectory, key, parentKey)
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entry]) => [
+        entryKey,
+        portableManifestValue(
+          entry,
+          manifestDirectory,
+          entryKey,
+          key,
+        ),
+      ]),
+    );
+  }
+  if (typeof value !== "string") return value;
+  if (key === "outputDirectory") return ".";
+  const isPath =
+    key.endsWith("Path") ||
+    key === "reportPath" ||
+    (parentKey === "finalArtifacts" &&
+      (key === "json" || key === "html"));
+  if (!isPath || !path.isAbsolute(value)) return value;
+  const relative = path.relative(manifestDirectory, value);
+  return relative &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+    ? relative
+    : value;
+}
+
+function resolveManifestValue(
+  value: unknown,
+  manifestDirectory: string,
+  key = "",
+  parentKey = "",
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) =>
+      resolveManifestValue(entry, manifestDirectory, key, parentKey)
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entry]) => [
+        entryKey,
+        resolveManifestValue(
+          entry,
+          manifestDirectory,
+          entryKey,
+          key,
+        ),
+      ]),
+    );
+  }
+  if (typeof value !== "string") return value;
+  const isPath =
+    key === "outputDirectory" ||
+    key.endsWith("Path") ||
+    key === "reportPath" ||
+    (parentKey === "finalArtifacts" &&
+      (key === "json" || key === "html"));
+  return isPath && !path.isAbsolute(value)
+    ? path.resolve(manifestDirectory, value)
+    : value;
 }
 
 async function fileSha256(filename: string): Promise<string> {
@@ -784,6 +1407,156 @@ async function fileSha256(filename: string): Promise<string> {
   return [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+async function fileContentSha256(content: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(content),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function artifactMaterializationError(
+  code: string,
+  message: string,
+): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
+async function materializeContentAddressedRosz(
+  sourceFilename: string,
+  outputDirectory: string,
+  expectedSha256?: string,
+): Promise<{ filename: string; sha256: string }> {
+  const resolvedSource = path.resolve(sourceFilename);
+  if (!(await pathExists(resolvedSource))) {
+    throw artifactMaterializationError(
+      "TESSERA_STRESS_BUNDLE_ARTIFACT_MISSING",
+      `The verified prepared artifact is missing: ${resolvedSource}.`,
+    );
+  }
+  const sourceSha256 = await fileSha256(resolvedSource);
+  if (
+    expectedSha256 !== undefined &&
+    sourceSha256 !== expectedSha256
+  ) {
+    throw artifactMaterializationError(
+      "TESSERA_STRESS_BUNDLE_ARTIFACT_CHANGED",
+      `The verified prepared artifact changed before it could be bundled: ${resolvedSource}.`,
+    );
+  }
+  const basename =
+    safeName(path.basename(resolvedSource)) || "artifact.rosz";
+  const destinationDirectory = path.join(
+    outputDirectory,
+    "artifacts",
+    "sha256",
+    sourceSha256,
+  );
+  const destination = path.join(destinationDirectory, basename);
+  if (path.resolve(destination) === resolvedSource) {
+    return { filename: destination, sha256: sourceSha256 };
+  }
+  await mkdir(destinationDirectory, { recursive: true });
+  if (await pathExists(destination)) {
+    if ((await fileSha256(destination)) !== sourceSha256) {
+      throw artifactMaterializationError(
+        "TESSERA_STRESS_BUNDLE_ARTIFACT_CHANGED",
+        `The content-addressed bundle artifact is corrupt: ${destination}.`,
+      );
+    }
+    return { filename: destination, sha256: sourceSha256 };
+  }
+  const temporary = path.join(
+    destinationDirectory,
+    `.${basename}.${crypto.randomUUID()}.tmp`,
+  );
+  try {
+    await copyFile(resolvedSource, temporary);
+    if ((await fileSha256(temporary)) !== sourceSha256) {
+      throw artifactMaterializationError(
+        "TESSERA_STRESS_BUNDLE_ARTIFACT_CHANGED",
+        `The prepared artifact changed while it was copied: ${resolvedSource}.`,
+      );
+    }
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+  if ((await fileSha256(destination)) !== sourceSha256) {
+    throw artifactMaterializationError(
+      "TESSERA_STRESS_BUNDLE_ARTIFACT_CHANGED",
+      `The copied bundle artifact failed hash verification: ${destination}.`,
+    );
+  }
+  return { filename: destination, sha256: sourceSha256 };
+}
+
+async function materializePreparedRoster(
+  prepared: TesseraPreparedRoster,
+  outputDirectory: string,
+  expectedEnrichedSha256: string,
+): Promise<TesseraPreparedRoster> {
+  const [source, enriched] = await Promise.all([
+    materializeContentAddressedRosz(
+      prepared.sourceRoszPath,
+      outputDirectory,
+    ),
+    materializeContentAddressedRosz(
+      prepared.enrichedRoszPath,
+      outputDirectory,
+      expectedEnrichedSha256,
+    ),
+  ]);
+  return {
+    ...prepared,
+    sourceRoszPath: source.filename,
+    enrichedRoszPath: enriched.filename,
+  };
+}
+
+async function materializeManifestPreparedArtifacts(
+  manifest: TesseraStressManifest,
+  outputDirectory: string,
+): Promise<void> {
+  if (manifest.preparedPlayer) {
+    if (!manifest.preparedPlayerSha256) {
+      throw artifactMaterializationError(
+        "TESSERA_STRESS_BUNDLE_ARTIFACT_MISSING",
+        "The prepared player receipt has no verified enriched artifact hash.",
+      );
+    }
+    manifest.preparedPlayer = await materializePreparedRoster(
+      manifest.preparedPlayer,
+      outputDirectory,
+      manifest.preparedPlayerSha256,
+    );
+  }
+  for (const receipt of Object.values(
+    manifest.preparedOpponents,
+  )) {
+    receipt.prepared = await materializePreparedRoster(
+      receipt.prepared,
+      outputDirectory,
+      receipt.sha256,
+    );
+  }
+}
+
+function materializationFailureCode(error: unknown): string {
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code.startsWith("TESSERA_STRESS_BUNDLE_")
+  ) {
+    return error.code;
+  }
+  return "TESSERA_STRESS_BUNDLE_ARTIFACT_WRITE_FAILED";
 }
 
 async function readProfilePolicy(
@@ -846,6 +1619,111 @@ async function preflightPlayerRoster(
     violations: [],
     warnings: exported.warnings,
   };
+}
+
+function normalizePortfolioCoverage(
+  portfolio: TesseraStressPortfolio,
+): TesseraStressPortfolio {
+  const readyItems = portfolio.items.filter(
+    (item) => item.status === "ready" && item.roster !== null,
+  );
+  for (const item of readyItems) {
+    item.containsNamedCharacter = rosterHasNamedCharacter(
+      item.roster!,
+    );
+  }
+  const intendedPostures = [
+    ...new Set(portfolio.items.map((item) => item.posture)),
+  ];
+  const intendedCompositions = [
+    ...new Set(portfolio.items.map((item) => item.composition)),
+  ];
+  const representedPostures = intendedPostures.filter((posture) =>
+    readyItems.some((item) => item.posture === posture),
+  );
+  const representedCompositions = intendedCompositions.filter(
+    (composition) =>
+      readyItems.some((item) => item.composition === composition),
+  );
+  const missingPostures = intendedPostures.filter(
+    (posture) => !representedPostures.includes(posture),
+  );
+  const missingCompositions = intendedCompositions.filter(
+    (composition) =>
+      !representedCompositions.includes(composition),
+  );
+  const hasReadyNamedCharacter = readyItems.some(
+    (item) => item.containsNamedCharacter === true,
+  );
+  const uniqueSimulationPayloads = new Set(
+    readyItems
+      .map((item) => item.simulationFingerprint)
+      .filter((value): value is string => Boolean(value)),
+  ).size;
+  const priorCoverage = portfolio.coverage;
+  const namedCharacterCoverageStatus =
+    priorCoverage.namedCharacterCoverageStatus ??
+    (
+      hasReadyNamedCharacter
+        ? "included"
+        : !factionHasLegalNamedAnchor(
+              portfolio.factionId,
+              portfolio.pointsLimit,
+            )
+          ? "not-applicable"
+          : "unavailable-after-evaluation"
+    );
+  const namedCharacterCoverageReason =
+    namedCharacterCoverageStatus === "included"
+      ? null
+      : priorCoverage.namedCharacterCoverageReason
+        ? priorCoverage.namedCharacterCoverageReason
+        : namedCharacterCoverageStatus === "not-applicable"
+          ? `${portfolio.factionName} has no legal named-character anchor within the ${portfolio.pointsLimit}-point limit under the pinned source data.`
+          : `${portfolio.factionName} has legal named-character anchors, but no legal, New Recruit-exportable specialist proxy was retained in the legacy portfolio evidence. This does not reduce core-3 posture coverage.`;
+  portfolio.coverage = {
+    ...priorCoverage,
+    ready: readyItems.length,
+    unavailable: portfolio.items.length - readyItems.length,
+    representedPostures,
+    missingPostures,
+    representedCompositions,
+    missingCompositions,
+    representedCells: readyItems.map((item) => ({
+      templateId: item.templateId,
+      posture: item.posture,
+      composition: item.composition,
+    })),
+    missingCells: portfolio.items
+      .filter((item) => item.status === "unavailable")
+      .map((item) => ({
+        templateId: item.templateId,
+        posture: item.posture,
+        composition: item.composition,
+        reason:
+          item.omissionReason ??
+          "The intended portfolio cell is unavailable.",
+      })),
+    uniqueSimulationPayloads,
+    namedCharacterCoverage:
+      namedCharacterCoverageStatus !==
+      "unavailable-after-evaluation",
+    namedCharacterCoverageStatus,
+    namedCharacterCoverageReason,
+    maximumResultStatus:
+      (
+        uniqueSimulationPayloads < portfolio.coverage.intended ||
+        missingPostures.length > 0 ||
+        (
+          portfolio.suite === "diverse-9" &&
+          missingCompositions.length > 0
+        ) ||
+        portfolio.items.some((item) => item.status === "unavailable")
+      )
+        ? "degraded"
+        : "complete",
+  };
+  return portfolio;
 }
 
 async function preflightPortfolio(
@@ -928,26 +1806,12 @@ async function preflightPortfolio(
   const readyItems = checked.items.filter(
     (item) => item.status === "ready" && item.roster !== null,
   );
-  checked.coverage = {
-    ...checked.coverage,
-    ready: readyItems.length,
-    unavailable: checked.items.length - readyItems.length,
-    representedPostures: [
-      ...new Set(readyItems.map((item) => item.posture)),
-    ],
-    representedCompositions: [
-      ...new Set(readyItems.map((item) => item.composition)),
-    ],
-    uniqueSimulationPayloads: seenPayloads.size,
-    namedCharacterCoverage:
-      readyItems.some((item) => item.containsNamedCharacter === true) ||
-      checked.coverage.namedCharacterCoverage,
-  };
-  const minimum = checked.suite === "diverse-9" ? 6 : 3;
+  checked.coverage.uniqueSimulationPayloads = seenPayloads.size;
+  normalizePortfolioCoverage(checked);
+  const minimum = 2;
   if (
     readyItems.length < minimum ||
-    checked.coverage.representedPostures.length < 3 ||
-    !checked.coverage.namedCharacterCoverage
+    checked.coverage.representedPostures.length < 2
   ) {
     return {
       ok: false,
@@ -955,7 +1819,7 @@ async function preflightPortfolio(
       violations: [
         issue(
           "STRESS_PORTFOLIO_PREFLIGHT_INSUFFICIENT",
-          `${checked.suite} requires at least ${minimum} unique exportable Tessera payloads covering all three postures and deliberate named-character coverage when an exportable legal anchor exists; found ${readyItems.length} across ${checked.coverage.representedPostures.length} posture(s), named coverage=${checked.coverage.namedCharacterCoverage}. No external activity was started.`,
+          `${checked.suite} requires at least ${minimum} unique exportable Tessera payloads covering two postures; found ${readyItems.length}, represented cells=${checked.coverage.representedCells.map((cell) => cell.templateId).join(", ") || "none"}, missing cells=${checked.coverage.missingCells.map((cell) => cell.templateId).join(", ") || "none"}, named-character status=${checked.coverage.namedCharacterCoverageStatus}. No external activity was started.`,
         ),
       ],
       warnings,
@@ -992,9 +1856,12 @@ function stressConfiguration(
   options: TesseraStressOptions,
   frozenProfilePolicyHash: string | null = null,
 ): TesseraStressConfiguration {
+  const suite = options.suite ?? "diverse-9";
   return {
-    suite: options.suite ?? "diverse-9",
-    analysisStrategy: options.analysisStrategy ?? "staged",
+    suite,
+    analysisStrategy:
+      options.analysisStrategy ??
+      (suite === "core-3" ? "full-all" : "staged"),
     pointsTolerancePercent: 5,
     proxyWeights: "equal",
     screeningMetric: "half-wipe-probability",
@@ -1015,6 +1882,7 @@ function newStageEntry(): ManifestStageEntry {
     reportSha256: null,
     error: null,
     attemptCount: 0,
+    attemptHistory: [],
     firstAttemptAt: null,
     lastAttemptAt: null,
     nextAction: null,
@@ -1040,13 +1908,27 @@ function stageEntryIsReusable(
 ): boolean {
   if (!entry?.reportPath || !entry.reportSha256) return false;
   return simulationRequested
-    ? entry.status === "complete"
+    ? entry.status === "complete" && entry.error === null
     : entry.status === "complete" || entry.status === "partial";
 }
 
 function manifestHasRetryableWork(
   manifest: TesseraStressManifest,
 ): boolean {
+  if (
+    manifest.simulationRequested &&
+    (
+      manifest.stageContracts.screening === null ||
+      (
+        manifest.configuration.analysisStrategy === "staged" &&
+        manifest.representatives.length ===
+          requiredStressEvidence(manifest.portfolio).representatives &&
+        manifest.stageContracts.deepDive === null
+      )
+    )
+  ) {
+    return true;
+  }
   const readyTemplateIds = manifest.portfolio.items
     .filter((item) => item.status === "ready" && item.roster !== null)
     .map((item) => item.templateId);
@@ -1082,12 +1964,14 @@ function newManifest(
   simulationRequested: boolean,
   profilePolicy: ProfilePolicyV1 | null,
   warnings: string[] = [],
+  runId = crypto.randomUUID(),
+  cachedLiveUpdateCheck: LiveDataFreshness | null = null,
 ): TesseraStressManifest {
   const now = new Date().toISOString();
   return {
     schemaVersion: 2,
     reportKind: "tessera-stress-manifest",
-    runId: crypto.randomUUID(),
+    runId,
     createdAt: now,
     updatedAt: now,
     playerFingerprint: rosterExecutionFingerprint(playerRoster),
@@ -1100,7 +1984,13 @@ function newManifest(
     profilePolicy,
     profilePolicyHash:
       profilePolicy === null ? null : profilePolicyHash(profilePolicy),
+    enrichedProfileRequirements: null,
+    stageContracts: {
+      screening: null,
+      deepDive: null,
+    },
     warnings,
+    cachedLiveUpdateCheck,
     playerPreparationStartedAt: null,
     opponentPreparationStartedAt: {},
     preparedPlayer: null,
@@ -1117,7 +2007,11 @@ function newManifest(
 async function readManifest(
   filename: string,
 ): Promise<TesseraStressManifest> {
-  const raw = JSON.parse(await readFile(filename, "utf8")) as {
+  const serialized = JSON.parse(await readFile(filename, "utf8"));
+  const raw = resolveManifestValue(
+    serialized,
+    path.dirname(path.resolve(filename)),
+  ) as {
     schemaVersion?: number;
   };
   const parsed = StressManifestSchema.safeParse(
@@ -1129,6 +2023,9 @@ async function readManifest(
     );
   }
   const data = parsed.data;
+  const normalizedPortfolio = normalizePortfolioCoverage(
+    data.portfolio as unknown as TesseraStressPortfolio,
+  );
   const migrateStage = (
     entries: typeof data.screening,
   ): Record<string, ManifestStageEntry> =>
@@ -1136,7 +2033,10 @@ async function readManifest(
       Object.entries(entries).map(([templateId, entry]) => [
         templateId,
         "attemptCount" in entry
-          ? entry
+          ? {
+              ...entry,
+              attemptHistory: entry.attemptHistory ?? [],
+            }
           : {
               status: entry.status,
               reportPath: entry.reportPath,
@@ -1151,6 +2051,7 @@ async function readManifest(
                     },
               attemptCount:
                 entry.status === "pending" ? 0 : 1,
+              attemptHistory: [],
               firstAttemptAt: null,
               lastAttemptAt: null,
               nextAction:
@@ -1170,6 +2071,18 @@ async function readManifest(
     },
     profilePolicy: data.profilePolicy ?? null,
     profilePolicyHash: data.profilePolicyHash ?? null,
+    enrichedProfileRequirements:
+      data.enrichedProfileRequirements ?? null,
+    stageContracts: data.stageContracts ?? {
+      screening: null,
+      deepDive: null,
+    },
+    cachedLiveUpdateCheck:
+      (data.cachedLiveUpdateCheck as
+        | LiveDataFreshness
+        | null
+        | undefined) ?? null,
+    portfolio: normalizedPortfolio,
     screening: migrateStage(data.screening),
     deepDive: migrateStage(data.deepDive),
   } as TesseraStressManifest;
@@ -1187,12 +2100,16 @@ async function writeManifest(
   overwrite: boolean,
 ): Promise<void> {
   manifest.updatedAt = new Date().toISOString();
+  const portableManifest = portableManifestValue(
+    manifest,
+    path.dirname(path.resolve(filename)),
+  );
   const artifact = {
     format: "roster-json" as const,
     filename: path.basename(filename),
     mimeType: "application/json",
     encoding: "utf8" as const,
-    content: `${JSON.stringify(manifest, null, 2)}\n`,
+    content: `${JSON.stringify(portableManifest, null, 2)}\n`,
   };
   if (!overwrite) {
     await writeExportArtifact(
@@ -1224,6 +2141,146 @@ function configurationMatches(
   return canonicalJson(left) === canonicalJson(right);
 }
 
+function configurationMatchesExceptProfilePolicy(
+  left: TesseraStressConfiguration,
+  right: TesseraStressConfiguration,
+): boolean {
+  return canonicalJson({
+    ...left,
+    profilePolicyHash: null,
+  }) === canonicalJson({
+    ...right,
+    profilePolicyHash: null,
+  });
+}
+
+function profileInventoryKey(
+  requirement: TesseraProfileRequirement,
+): string {
+  return profilePolicyIdentityKey(requirement);
+}
+
+function normalizedProfileName(value: string): string {
+  return normalizeProfileIdentity(value);
+}
+
+function mergeProfileInventory(
+  requirements: TesseraProfileRequirement[],
+): TesseraProfileRequirement[] {
+  const merged = new Map<string, TesseraProfileRequirement>();
+  for (const requirement of requirements) {
+    const key = profileInventoryKey(requirement);
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, {
+        ...structuredClone(requirement),
+        selectionId: null,
+        availableProfiles: [...requirement.availableProfiles],
+        selectedProfile: null,
+      });
+      continue;
+    }
+    current.activeCount = Math.max(
+      current.activeCount,
+      requirement.activeCount,
+    );
+    const profiles = new Map(
+      current.availableProfiles.map((profile) => [
+        normalizedProfileName(profile),
+        profile,
+      ]),
+    );
+    for (const profile of requirement.availableProfiles) {
+      profiles.set(normalizedProfileName(profile), profile);
+    }
+    current.availableProfiles = [...profiles.values()].sort((left, right) =>
+      normalizedProfileName(left).localeCompare(
+        normalizedProfileName(right),
+      ),
+    );
+  }
+  return [...merged.values()].sort((left, right) =>
+    profileInventoryKey(left).localeCompare(profileInventoryKey(right)),
+  );
+}
+
+function compareProfileInventories(
+  expected: TesseraProfileRequirement[],
+  actual: TesseraProfileRequirement[],
+): {
+  blocking: string[];
+  expanded: string[];
+} {
+  const expectedByKey = new Map(
+    expected.map((requirement) => [
+      profileInventoryKey(requirement),
+      requirement,
+    ]),
+  );
+  const actualByKey = new Map(
+    actual.map((requirement) => [
+      profileInventoryKey(requirement),
+      requirement,
+    ]),
+  );
+  const blocking: string[] = [];
+  const expanded: string[] = [];
+  for (const [key, requirement] of expectedByKey) {
+    const enriched = actualByKey.get(key);
+    const label =
+      `${requirement.unit} / ${requirement.weaponGroup} / ${requirement.phase}`;
+    if (!enriched) {
+      blocking.push(
+        `${label} is present in pinned roster data but missing from the enriched New Recruit profile inventory.`,
+      );
+      continue;
+    }
+    if (enriched.activeCount !== requirement.activeCount) {
+      blocking.push(
+        `${label} has activeCount ${enriched.activeCount} in the enriched archive; pinned roster data requires ${requirement.activeCount}.`,
+      );
+    }
+    const actualProfiles = new Set(
+      enriched.availableProfiles.map(normalizedProfileName),
+    );
+    const missing = requirement.availableProfiles.filter(
+      (profile) => !actualProfiles.has(normalizedProfileName(profile)),
+    );
+    if (missing.length > 0) {
+      blocking.push(
+        `${label} is missing enriched profile(s): ${missing.join(", ")}.`,
+      );
+    }
+    const expectedProfiles = new Set(
+      requirement.availableProfiles.map(normalizedProfileName),
+    );
+    const additional = enriched.availableProfiles.filter(
+      (profile) => !expectedProfiles.has(normalizedProfileName(profile)),
+    );
+    if (additional.length > 0) {
+      expanded.push(
+        `${label} exposes additional enriched profile(s): ${additional.join(", ")}.`,
+      );
+    }
+  }
+  for (const [key, requirement] of actualByKey) {
+    if (expectedByKey.has(key)) continue;
+    expanded.push(
+      `${requirement.unit} / ${requirement.weaponGroup} / ${requirement.phase} is an additional alternate-profile decision exposed by New Recruit.`,
+    );
+  }
+  return { blocking, expanded };
+}
+
+function manifestHasSimulationAttempts(
+  manifest: TesseraStressManifest,
+): boolean {
+  return [
+    ...Object.values(manifest.screening),
+    ...Object.values(manifest.deepDive),
+  ].some((entry) => entry.attemptCount > 0);
+}
+
 function preparedDelivery(
   roster: RosterDraftV1,
   prepared: TesseraPreparedRoster,
@@ -1236,6 +2293,7 @@ function preparedDelivery(
       listUrl: prepared.listUrl,
       imported: true,
       sessionReused: true,
+      cacheReused: true,
       verification: null,
       enrichedSummary: prepared.summary,
       artifacts: [
@@ -1262,7 +2320,10 @@ function createDeliveryCache(
   dependencies: TesseraStressDependencies,
 ): {
   dependencies: TesseraDependencies;
-  seed: (roster: RosterDraftV1, prepared: TesseraPreparedRoster) => void;
+  seed: (
+    roster: RosterDraftV1,
+    prepared: TesseraPreparedRoster,
+  ) => Promise<void>;
 } {
   const actual = dependencies.deliver ?? deliverRosterToNewRecruit;
   const cache = new Map<
@@ -1273,7 +2334,7 @@ function createDeliveryCache(
     roster: RosterDraftV1,
     options?: NewRecruitDeliveryOptions,
   ) => {
-    const key = `${roster.id}:${rosterExecutionFingerprint(roster)}`;
+    const key = newRecruitCacheKey(roster);
     const cached = cache.get(key);
     if (cached) return cached;
     const result = (async () => {
@@ -1292,11 +2353,17 @@ function createDeliveryCache(
   };
   return {
     dependencies: { ...dependencies, deliver },
-    seed: (roster, prepared) => {
+    seed: async (roster, prepared) => {
       cache.set(
-        `${roster.id}:${rosterExecutionFingerprint(roster)}`,
+        newRecruitCacheKey(roster),
         Promise.resolve(preparedDelivery(roster, prepared)),
       );
+      if (!dependencies.deliver) {
+        await storeNewRecruitCache(
+          roster,
+          preparedDelivery(roster, prepared),
+        );
+      }
     },
   };
 }
@@ -1568,6 +2635,7 @@ function stageProxyProvenanceMatches(
             ),
           ),
           iterations: metricRun.iterations,
+          matrixSha256: metricRun.matrixSha256,
         })),
       )
       .sort(
@@ -1618,45 +2686,82 @@ async function readMatchupReport(
   const report = parsed.data as TesseraMatchupReport;
   const configuration = report.configuration;
   const opponent = report.opponents[0];
-  if (
-    report.player.enrichedRoszPath !==
-      expected.player.enrichedRoszPath ||
-    report.player.rosterId !== expected.player.rosterId ||
-    report.player.factionId !== expected.player.factionId ||
+  const mismatches = [
+    report.player.enrichedRoszPath !== expected.player.enrichedRoszPath
+      ? "player enriched artifact path"
+      : null,
+    report.player.rosterId !== expected.player.rosterId
+      ? "player roster id"
+      : null,
+    report.player.factionId !== expected.player.factionId
+      ? "player faction"
+      : null,
     report.player.summary.totalPoints !==
-      expected.player.summary.totalPoints ||
-    report.opponents.length !== 1 ||
-    opponent.rosterName !== expected.item.roster.name ||
-    (expected.opponentEnrichedRoszPath !== undefined &&
-      opponent.enrichedRoszPath !==
-        expected.opponentEnrichedRoszPath) ||
-    opponent.summary.totalPoints !==
-      expected.item.roster.totalPoints ||
-    !configuration ||
-    configuration.analysisMode !== expected.mode ||
+    expected.player.summary.totalPoints
+      ? "player points"
+      : null,
+    report.opponents.length !== 1 ? "opponent count" : null,
+    !opponent || opponent.rosterName !== expected.item.roster.name
+      ? "opponent roster name"
+      : null,
+    opponent &&
+    expected.opponentEnrichedRoszPath !== undefined &&
+    opponent.enrichedRoszPath !== expected.opponentEnrichedRoszPath
+      ? "opponent enriched artifact path"
+      : null,
+    !opponent ||
+    opponent.summary.totalPoints !== expected.item.roster.totalPoints
+      ? "opponent points"
+      : null,
+    !configuration ? "analysis configuration" : null,
+    configuration && configuration.analysisMode !== expected.mode
+      ? "analysis mode"
+      : null,
+    configuration &&
     JSON.stringify(configuration.phases) !==
-      JSON.stringify(["shooting", "fight"]) ||
+      JSON.stringify(["shooting", "fight"])
+      ? "phases"
+      : null,
+    configuration &&
     JSON.stringify(configuration.metrics) !==
-      JSON.stringify(expected.metrics) ||
+      JSON.stringify(expected.metrics)
+      ? "metrics"
+      : null,
+    configuration &&
     JSON.stringify(configuration.directions) !==
       JSON.stringify([
         "player-to-opponent",
         "opponent-to-player",
-      ]) ||
-    configuration.pointsTolerancePercent !== 5 ||
-    configuration.allowPointMismatch ||
+      ])
+      ? "directions"
+      : null,
+    configuration?.pointsTolerancePercent !== 5
+      ? "points tolerance"
+      : null,
+    configuration?.allowPointMismatch === true
+      ? "point mismatch policy"
+      : null,
+    configuration &&
     configuration.includeChangeCandidates !==
-      expected.includeChangeCandidates ||
-    report.simulation.requested !==
-      expected.simulationRequested ||
-    !report.simulation.experimental ||
-    (expected.simulationRequested &&
-      report.status !== "complete") ||
-    (report.status === "complete" &&
-      report.source !== "tessera-ui")
-  ) {
+      expected.includeChangeCandidates
+      ? "change-candidate mode"
+      : null,
+    report.simulation.requested !== expected.simulationRequested
+      ? "simulation mode"
+      : null,
+    !report.simulation.experimental
+      ? "legacy simulation compatibility flag"
+      : null,
+    expected.simulationRequested && report.status !== "complete"
+      ? "simulation status"
+      : null,
+    report.status === "complete" && report.source !== "tessera-ui"
+      ? "simulation source"
+      : null,
+  ].filter((value): value is string => value !== null);
+  if (mismatches.length > 0) {
     throw new Error(
-      "Stored stage report does not match the frozen player, opponent, configuration, or simulation mode.",
+      `Stored stage report does not match the frozen execution: ${mismatches.join(", ")}.`,
     );
   }
   if (report.status === "complete") {
@@ -1695,6 +2800,7 @@ function combineMatchupReports(
   metrics: TesseraMetric[],
   mode: "quick" | "full",
   warnings: string[],
+  frozenProfilePolicyHash: string | null,
 ): TesseraMatchupReport {
   const values = [...reports.values()];
   const configuration =
@@ -1706,15 +2812,130 @@ function combineMatchupReports(
   const matrices = values.flatMap(
     (report) => report.simulation.matrices,
   );
+  const legacyProjections = values.flatMap((report) =>
+    report.simulation.legacyProjection
+      ? [report.simulation.legacyProjection]
+      : [],
+  );
+  const legacyProjection =
+    legacyProjections.length === values.length &&
+    legacyProjections.length > 0 &&
+    legacyProjections.every(
+      (projection) =>
+        projection.status === "derived" &&
+        projection.phase === legacyProjections[0].phase &&
+        projection.metric === legacyProjections[0].metric,
+    )
+      ? {
+          status: "derived" as const,
+          phase: legacyProjections[0].phase,
+          metric: legacyProjections[0].metric,
+          scenarioIds: [
+            ...new Set(
+              legacyProjections.flatMap(
+                (projection) => projection.scenarioIds,
+              ),
+            ),
+          ],
+        }
+      : {
+          status: "unavailable" as const,
+          phase: null,
+          metric: null,
+          scenarioIds: [],
+        };
+  const simulationRequested = values.some(
+    (report) => report.simulation.requested,
+  );
+  const preparedReceipts = [
+    ...new Map(
+      values
+        .flatMap((report) => [
+          report.player,
+          ...report.opponents.map((opponent) => ({
+            ...opponent,
+            rosterId:
+              opponent.fingerprint ??
+              `${opponent.rosterName}:${opponent.enrichedRoszPath}`,
+          })),
+        ])
+        .map((receipt) => [receipt.rosterId, receipt] as const),
+    ).values(),
+  ];
+  const cacheReuses = preparedReceipts.filter(
+    (receipt) => receipt.cacheReused === true,
+  ).length;
+  const failures = [
+    ...new Map(
+      values
+        .flatMap((report) => report.failures ?? [])
+        .map(
+          (failure) =>
+            [
+              [
+                failure.stage,
+                failure.code,
+                failure.opponentName ?? "",
+                failure.message,
+              ].join(":"),
+              failure,
+            ] as const,
+        ),
+    ).values(),
+  ];
   const complete =
     values.length === expectedCount &&
-    values.every((report) => report.status === "complete");
+    values.every((report) =>
+      simulationRequested
+        ? report.status === "complete"
+        : report.status === "prepared" ||
+          report.status === "complete",
+    );
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId: crypto.randomUUID(),
     generatedAt: new Date().toISOString(),
-    source: matrices.length > 0 ? "tessera-ui" : "handoff-only",
-    status: complete ? "complete" : "partial",
+    source: simulationRequested
+      ? matrices.length > 0
+        ? "tessera-ui"
+        : "tessera-ui-failed"
+      : "prepare-only",
+    status: complete
+      ? simulationRequested
+        ? "complete"
+        : "prepared"
+      : simulationRequested
+        ? matrices.length > 0
+          ? "inconclusive"
+          : "failed"
+        : "failed",
+    preparation: {
+      status:
+        preparedReceipts.length === 1 + values.length
+          ? "complete"
+          : "failed",
+      source: "new-recruit",
+      uniqueRosters: preparedReceipts.length,
+      remoteMutations: Math.max(
+        0,
+        preparedReceipts.length - cacheReuses,
+      ),
+      cacheReuses,
+      connectorEvents: preparedReceipts.flatMap(
+        (receipt) => receipt.connectorEvents ?? [],
+      ),
+    },
+    failures,
+    profilePolicyHash: frozenProfilePolicyHash,
+    runtime: getRuntimeProvenance(),
+    tesseraUiIdentity:
+      [...new Set(values.flatMap((report) =>
+        report.tesseraUiIdentity ? [report.tesseraUiIdentity] : [],
+      ))].sort().join("|") || null,
+    connectorEvents: values.flatMap(
+      (report) => report.connectorEvents ?? [],
+    ),
+    pinnedData: values.find((report) => report.pinnedData)?.pinnedData,
     comparisonClass: values.every(
       (report) => report.comparisonClass !== "unmatched",
     )
@@ -1727,22 +2948,47 @@ function combineMatchupReports(
     player: preparedPlayer,
     opponents: values.flatMap((report) => report.opponents),
     simulation: {
-      requested: values.some((report) => report.simulation.requested),
+      requested: simulationRequested,
+      executionMode: simulationRequested
+        ? "simulate"
+        : "prepare-only",
       experimental: true,
+      status: !simulationRequested
+        ? "not-requested"
+        : complete
+          ? "complete"
+          : matrices.length > 0
+            ? "partial"
+            : "failed",
+      engine: "tessera-ui",
       settings: Object.assign(
         {},
         ...values.map((report) => report.simulation.settings),
       ),
+      legacyProjection,
       matrices,
       scenarios,
     },
     strengths: unique(values.flatMap((report) => report.strengths)),
     weaknesses: unique(values.flatMap((report) => report.weaknesses)),
     suggestions: unique(values.flatMap((report) => report.suggestions)),
-    findings: values.flatMap((report) => report.findings ?? []),
-    changeCandidates: values.flatMap(
-      (report) => report.changeCandidates ?? [],
-    ),
+    findings: [
+      ...new Map(
+        values
+          .flatMap((report) => report.findings ?? [])
+          .map((finding) => [finding.findingId, finding] as const),
+      ).values(),
+    ],
+    changeCandidates: [
+      ...new Map(
+        values
+          .flatMap((report) => report.changeCandidates ?? [])
+          .map(
+            (candidate) =>
+              [candidate.candidateId, candidate] as const,
+          ),
+      ).values(),
+    ],
     limitations: unique(
       values.flatMap((report) => report.limitations),
     ),
@@ -1811,6 +3057,7 @@ function stageProvenance(
               direction: scenario.direction,
               settings: sortedSettings(metricRun.settings),
               iterations: metricRun.iterations,
+              matrixSha256: metricRun.matrixSha256,
             })),
           )
           .sort(
@@ -1823,6 +3070,59 @@ function stageProvenance(
   };
 }
 
+function pairedStageExecutionContract(
+  provenance: TesseraStressTestReport["stageProvenance"],
+): unknown {
+  const withoutObservedMatrixContent = (
+    stage: TesseraStressStageProvenance | null,
+  ) =>
+    stage === null
+      ? null
+      : {
+          ...stage,
+          proxyRuns: stage.proxyRuns.map((run) => ({
+            ...run,
+            scenarios: run.scenarios.map((scenario) => ({
+              phase: scenario.phase,
+              metric: scenario.metric,
+              direction: scenario.direction,
+              settings: scenario.settings,
+              iterations: scenario.iterations,
+            })),
+          })),
+        };
+  return {
+    screening: withoutObservedMatrixContent(
+      provenance.screening,
+    ),
+    deepDive: withoutObservedMatrixContent(provenance.deepDive),
+  };
+}
+
+function stressReportHasVerifiedMatrixIntegrity(
+  report: TesseraStressTestReport,
+): boolean {
+  const stages = [
+    report.stageProvenance.screening,
+    report.stageProvenance.deepDive,
+  ].filter(
+    (stage): stage is TesseraStressStageProvenance =>
+      stage !== null,
+  );
+  return (
+    report.integrity.status === "verified" &&
+    stages.every((stage) =>
+      stage.proxyRuns.every((run) =>
+        run.scenarios.every((scenario) =>
+          /^[0-9a-f]{64}$/.test(
+            scenario.matrixSha256 ?? "",
+          ),
+        ),
+      ),
+    )
+  );
+}
+
 function stageDirectoryName(templateId: string): string {
   return safeName(templateId) || "proxy";
 }
@@ -1833,7 +3133,7 @@ async function ensurePreparedOpponents(
     TesseraStressPortfolioItem & { roster: RosterDraftV1 }
   >,
   delivery: ReturnType<typeof createDeliveryCache>,
-): Promise<ResultEnvelope<true>> {
+): Promise<PreparedOpponentsResult> {
   if (input.opponentRoszPaths) {
     return {
       ok: true,
@@ -1853,24 +3153,54 @@ async function ensurePreparedOpponents(
         ? await fileSha256(receipt.prepared.enrichedRoszPath)
         : null;
       if (!present || digest !== receipt.sha256) {
-        return failure(
-          "TESSERA_STRESS_PREPARED_OPPONENT_CHANGED",
-          `The manifest-owned prepared artifact for ${item.templateId} is missing or changed. Start a new run instead of creating a duplicate external list.`,
-        );
+        delete input.manifest.preparedOpponents[
+          item.templateId
+        ];
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            issue(
+              "TESSERA_STRESS_PREPARED_OPPONENT_CHANGED",
+              `The manifest-owned prepared artifact for ${item.templateId} is missing or changed. Start a new run instead of creating a duplicate external list.`,
+            ),
+          ],
+          warnings: [],
+          failureContext: {
+            side: "opponent",
+            templateId: item.templateId,
+            rosterName: item.roster.name,
+            partialPrepared: receipt.prepared,
+          },
+        };
       }
-      delivery.seed(item.roster, receipt.prepared);
       continue;
     }
     if (
       input.manifest.opponentPreparationStartedAt[item.templateId]
     ) {
-      return failure(
-        "TESSERA_STRESS_DELIVERY_OUTCOME_UNKNOWN",
-        `A prior New Recruit delivery for ${item.templateId} started but no verified receipt was persisted. Resume will not risk creating a duplicate list; inspect the external account and start a new run when safe.`,
-      );
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          issue(
+            "TESSERA_STRESS_DELIVERY_OUTCOME_UNKNOWN",
+            `A prior New Recruit delivery for ${item.templateId} started but no verified receipt was persisted. Resume will not risk creating a duplicate list; inspect the external account and start a new run when safe.`,
+          ),
+        ],
+        warnings: [],
+        failureContext: {
+          side: "opponent",
+          templateId: item.templateId,
+          rosterName: item.roster.name,
+          partialPrepared: null,
+        },
+      };
     }
-    input.manifest.opponentPreparationStartedAt[item.templateId] =
+    const opponentPreparationStartedAt =
       new Date().toISOString();
+    input.manifest.opponentPreparationStartedAt[item.templateId] =
+      opponentPreparationStartedAt;
     try {
       await writeManifest(
         input.manifest,
@@ -1879,12 +3209,25 @@ async function ensurePreparedOpponents(
         true,
       );
     } catch (error) {
-      return failure(
-        "WRITE_FAILED",
-        error instanceof Error
-          ? error.message
-          : "The opponent delivery marker could not be persisted.",
-      );
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          issue(
+            "WRITE_FAILED",
+            error instanceof Error
+              ? error.message
+              : "The opponent delivery marker could not be persisted.",
+          ),
+        ],
+        warnings: [],
+        failureContext: {
+          side: "opponent",
+          templateId: item.templateId,
+          rosterName: item.roster.name,
+          partialPrepared: null,
+        },
+      };
     }
     const prepared = await prepareRosterForTessera(
       item.roster,
@@ -1907,6 +3250,12 @@ async function ensurePreparedOpponents(
         data: null,
         violations: prepared.violations,
         warnings: prepared.warnings,
+        failureContext: {
+          side: "opponent",
+          templateId: item.templateId,
+          rosterName: item.roster.name,
+          partialPrepared: prepared.data,
+        },
       };
     }
     try {
@@ -1921,7 +3270,6 @@ async function ensurePreparedOpponents(
       delete input.manifest.opponentPreparationStartedAt[
         item.templateId
       ];
-      delivery.seed(item.roster, prepared.data);
       await writeManifest(
         input.manifest,
         input.manifestPath,
@@ -1929,12 +3277,31 @@ async function ensurePreparedOpponents(
         true,
       );
     } catch (error) {
-      return failure(
-        "WRITE_FAILED",
-        error instanceof Error
-          ? error.message
-          : "The verified opponent delivery receipt could not be persisted.",
-      );
+      delete input.manifest.preparedOpponents[
+        item.templateId
+      ];
+      input.manifest.opponentPreparationStartedAt[
+        item.templateId
+      ] = opponentPreparationStartedAt;
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          issue(
+            "WRITE_FAILED",
+            error instanceof Error
+              ? error.message
+              : "The verified opponent delivery receipt could not be persisted.",
+          ),
+        ],
+        warnings: [],
+        failureContext: {
+          side: "opponent",
+          templateId: item.templateId,
+          rosterName: item.roster.name,
+          partialPrepared: prepared.data,
+        },
+      };
     }
   }
   return {
@@ -1977,6 +3344,9 @@ const TRANSIENT_TESSERA_CODES = new Set([
   "LOCAL_AGENT_TIMEOUT",
   "LOCAL_AGENT_UNAVAILABLE",
   "TESSERA_BROWSER_UNAVAILABLE",
+  "TESSERA_BROWSER_TIMEOUT",
+  "TESSERA_BROWSER_SESSION_CLOSED",
+  "TESSERA_BROWSER_NAVIGATION_FAILED",
   "TESSERA_PREMIUM_UNLOCK_TIMEOUT",
   "TESSERA_PREMIUM_STILL_LOCKED",
   "TESSERA_MATRIX_MISSING",
@@ -1984,7 +3354,57 @@ const TRANSIENT_TESSERA_CODES = new Set([
   "TESSERA_STALE_MATRIX",
   "TESSERA_INCOMPLETE_MATRIX",
   "TESSERA_SCENARIOS_INCOMPLETE",
+  "TESSERA_EVIDENCE_INCOMPLETE",
+  "TESSERA_PHASE_MATRIX_ALIAS",
+  "TESSERA_METRIC_MATRIX_ALIAS",
+  "TESSERA_PROXY_MATRIX_ALIAS",
+  "TESSERA_MATRIX_FINGERPRINT_MISSING",
 ]);
+
+const LIVE_READINESS_FAILURE_CODES = new Set([
+  "LOCAL_AGENT_TIMEOUT",
+  "LOCAL_AGENT_UNAVAILABLE",
+  "TESSERA_BROWSER_UNAVAILABLE",
+  "TESSERA_BROWSER_TIMEOUT",
+  "TESSERA_BROWSER_SESSION_CLOSED",
+  "TESSERA_BROWSER_NAVIGATION_FAILED",
+  "TESSERA_COMPANION_FAILED",
+  "TESSERA_COMPANION_UNAVAILABLE",
+  "TESSERA_WORKER_PROTOCOL_ERROR",
+  "TESSERA_WORKER_SESSION_MISMATCH",
+  "TESSERA_PREMIUM_KEY_ABSENT",
+  "TESSERA_PREMIUM_KEY_REJECTED",
+  "TESSERA_PREMIUM_UNLOCK_TIMEOUT",
+  "TESSERA_PREMIUM_STILL_LOCKED",
+  "TESSERA_ORIGIN_MISMATCH",
+  "TESSERA_UI_CHANGED",
+]);
+
+const GLOBAL_STAGE_FAILURE_CODES = new Set([
+  ...LIVE_READINESS_FAILURE_CODES,
+  "TESSERA_SETTINGS_CHANGED",
+  "TESSERA_SETTINGS_REPLAY_FAILED",
+  "TESSERA_SETTINGS_PROVENANCE_MISSING",
+]);
+
+const PLAYER_SCOPED_GLOBAL_FAILURE_CODES = new Set([
+  "TESSERA_PROFILE_EDITOR_MISMATCH",
+  "TESSERA_PROFILE_POLICY_APPLICATION_FAILED",
+  "TESSERA_PROFILE_POLICY_REQUIRED",
+  "TESSERA_LIST_SELECTION_MISMATCH",
+]);
+
+function isGlobalStageFailure(
+  error: NonNullable<ManifestStageEntry["error"]>,
+): boolean {
+  return (
+    GLOBAL_STAGE_FAILURE_CODES.has(error.code) ||
+    (
+      PLAYER_SCOPED_GLOBAL_FAILURE_CODES.has(error.code) &&
+      error.message.includes("[TESSERA_IMPORT_SIDE=player]")
+    )
+  );
+}
 
 function structuredStageError(
   code: string,
@@ -2001,8 +3421,139 @@ function retryLimit(input: StressExecutionInput): number {
   return input.resumed ? 5 : 3;
 }
 
+function exhaustedRetryAction(): string {
+  return "The five-attempt lifetime budget is exhausted. Inspect the attempt history, then use --restart-from to create a clean run that can reuse verified prepared artifacts.";
+}
+
+function stageNextAction(
+  entry: ManifestStageEntry,
+): string | null {
+  if (!entry.error) return null;
+  if (entry.attemptCount >= 5) return exhaustedRetryAction();
+  if (!entry.error.retryable) {
+    return "Resolve the terminal error, then explicitly resume with --force-retry.";
+  }
+  return "Resume this run to retry the incomplete proxy without repeating verified New Recruit preparation.";
+}
+
 function retryDelay(attemptWithinTurn: number): number {
   return attemptWithinTurn <= 1 ? 1_000 : 3_000;
+}
+
+function sortedScenarioContract(
+  contract: TesseraFrozenScenarioContract[],
+): TesseraFrozenScenarioContract[] {
+  return contract
+    .map((entry) => ({
+      ...entry,
+      settings: Object.fromEntries(
+        Object.entries(entry.settings).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        left.phase.localeCompare(right.phase) ||
+        left.direction.localeCompare(right.direction) ||
+        left.metric.localeCompare(right.metric),
+    );
+}
+
+function scenarioContractFromReport(
+  report: TesseraMatchupReport,
+  metrics: TesseraMetric[],
+): {
+  contract: TesseraFrozenScenarioContract[] | null;
+  error: string | null;
+} {
+  const entries = (report.simulation.scenarios ?? []).flatMap(
+    (scenario) =>
+      (scenario.metricRuns ?? []).map((metricRun) => ({
+        phase: scenario.phase,
+        direction: scenario.direction,
+        metric: metricRun.metric,
+        settings: metricRun.settings,
+        iterations: metricRun.iterations,
+      })),
+  );
+  const expectedKeys = new Set(
+    ["shooting", "fight"].flatMap((phase) =>
+      ["player-to-opponent", "opponent-to-player"].flatMap(
+        (direction) =>
+          metrics.map(
+            (metric) => `${phase}:${direction}:${metric}`,
+          ),
+      ),
+    ),
+  );
+  const actualKeys = entries.map(
+    (entry) =>
+      `${entry.phase}:${entry.direction}:${entry.metric}`,
+  );
+  if (
+    entries.length !== expectedKeys.size ||
+    new Set(actualKeys).size !== entries.length ||
+    actualKeys.some((key) => !expectedKeys.has(key)) ||
+    entries.some(
+      (entry) =>
+        entry.iterations === null ||
+        !Number.isInteger(entry.iterations) ||
+        entry.iterations <= 0,
+    )
+  ) {
+    return {
+      contract: null,
+      error:
+        "The completed stage report does not contain one exact settings and iteration contract for every requested scenario.",
+    };
+  }
+  return {
+    contract: sortedScenarioContract(entries),
+    error: null,
+  };
+}
+
+function freezeOrValidateStageContract(
+  manifest: TesseraStressManifest,
+  stage: "screening" | "deepDive",
+  report: TesseraMatchupReport,
+  metrics: TesseraMetric[],
+): {
+  changed: boolean;
+  code: string | null;
+  message: string | null;
+} {
+  if (!manifest.simulationRequested) {
+    return { changed: false, code: null, message: null };
+  }
+  const observed = scenarioContractFromReport(report, metrics);
+  if (!observed.contract) {
+    return {
+      changed: false,
+      code: "TESSERA_SETTINGS_PROVENANCE_MISSING",
+      message:
+        observed.error ??
+        "The stage report does not retain exact Tessera settings provenance.",
+    };
+  }
+  const frozen = manifest.stageContracts[stage];
+  if (frozen === null) {
+    manifest.stageContracts[stage] = observed.contract;
+    return { changed: true, code: null, message: null };
+  }
+  if (
+    canonicalJson(sortedScenarioContract(frozen)) !==
+    canonicalJson(observed.contract)
+  ) {
+    return {
+      changed: false,
+      code: "TESSERA_SETTINGS_CHANGED",
+      message:
+        `The ${stage === "deepDive" ? "deep-dive" : "screening"} capture did not reproduce the exact frozen Tessera settings and iteration counts.`,
+    };
+  }
+  return { changed: false, code: null, message: null };
 }
 
 async function runStage(
@@ -2057,15 +3608,43 @@ async function runStage(
             input.manifest.preparedOpponents[item.templateId]
               ?.prepared.enrichedRoszPath,
         });
+        const contract = freezeOrValidateStageContract(
+          input.manifest,
+          stage,
+          report,
+          metrics,
+        );
+        if (contract.code) {
+          throw Object.assign(
+            new Error(
+              contract.message ??
+                "The stored stage report does not match the frozen Tessera settings.",
+            ),
+            { code: contract.code },
+          );
+        }
+        if (contract.changed) {
+          await writeManifest(
+            input.manifest,
+            input.manifestPath,
+            input.options,
+            true,
+          );
+        }
         reports.set(item.templateId, report);
         const opponent = preparedOpponent(report, item);
-        if (opponent) delivery.seed(item.roster, opponent);
+        if (opponent) await delivery.seed(item.roster, opponent);
         continue;
       } catch (error) {
         entry.status = "pending";
         entry.reportSha256 = null;
         entry.error = structuredStageError(
-          "TESSERA_STORED_REPORT_INVALID",
+          error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string"
+            ? error.code
+            : "TESSERA_STORED_REPORT_INVALID",
           error instanceof Error ? error.message : "Stored report is invalid.",
         );
         entry.nextAction =
@@ -2083,17 +3662,23 @@ async function runStage(
       warnings.push(
         `${item.templateId}: ${entry.error.message} ${entry.nextAction}`,
       );
+      if (isGlobalStageFailure(entry.error)) break;
       continue;
     }
     if (
-      entry.attemptCount >= retryLimit(input) &&
-      !input.options.forceRetry
+      entry.attemptCount >= retryLimit(input)
     ) {
       entry.nextAction =
-        "The retry budget is exhausted; inspect the error before using --force-retry.";
+        entry.attemptCount >= 5
+          ? exhaustedRetryAction()
+          : "The automatic retry budget for this invocation is exhausted. Resume the same manifest for up to five lifetime attempts.";
       warnings.push(
         `${item.templateId}: ${entry.nextAction}`,
       );
+      if (
+        entry.error &&
+        isGlobalStageFailure(entry.error)
+      ) break;
       continue;
     }
 
@@ -2104,9 +3689,7 @@ async function runStage(
     let result: Awaited<ReturnType<typeof analyzeRosterMatchup>> | null = null;
     let lastCode: string | null = null;
     let attemptWithinTurn = 0;
-    const maximumAttempts = input.options.forceRetry
-      ? entry.attemptCount + 3
-      : retryLimit(input);
+    const maximumAttempts = retryLimit(input);
     while (entry.attemptCount < maximumAttempts) {
       attemptWithinTurn += 1;
       const attemptedAt = new Date().toISOString();
@@ -2136,30 +3719,120 @@ async function runStage(
             input.resumed ||
             input.options.overwrite ||
             attemptWithinTurn > 1,
+          executionMode: input.manifest.simulationRequested
+            ? "simulate"
+            : "prepare-only",
           experimental: input.options.experimental,
           analysisMode: mode,
           phases: ["shooting", "fight"],
           metrics,
-          profilePolicy: input.manifest.profilePolicy,
+          profilePolicyPath: undefined,
+          profilePolicy: scopedProfilePolicy(
+            input.manifest.profilePolicy,
+            [input.playerRoster, item.roster],
+          ),
+          opponentRosterContext: item.roster,
+          frozenScenarioContract:
+            input.manifest.stageContracts[stage],
           sessionId: input.manifest.runId,
           allowPointMismatch: false,
           includeChangeCandidates: stage === "screening",
         },
         delivery.dependencies,
       );
+      const contract =
+        input.manifest.simulationRequested &&
+        result.ok &&
+        result.data?.status === "complete"
+          ? freezeOrValidateStageContract(
+              input.manifest,
+              stage,
+              result.data,
+              metrics,
+            )
+          : {
+              changed: false,
+              code: null,
+              message: null,
+            };
+      if (contract.changed) {
+        await writeManifest(
+          input.manifest,
+          input.manifestPath,
+          input.options,
+          true,
+        );
+      }
+      const warningCodes = unique(
+        (result.data?.warnings ?? []).flatMap((warning) => {
+          const matched = warning.match(
+            /\[(TESSERA_[A-Z0-9_]+)\]/,
+          )?.[1];
+          return matched ? [matched] : [];
+        }),
+      ).filter(
+        (warningCode) =>
+          warningCode !== "TESSERA_PROFILE_POLICY_APPLIED",
+      );
       const code =
-        result.ok && result.data?.status === "complete"
+        contract.code ??
+        (result.ok &&
+        result.data &&
+        (
+          result.data.status === "complete" ||
+          (!input.manifest.simulationRequested &&
+            result.data.status === "prepared")
+        )
           ? null
           : result.violations[0]?.code ??
-            result.data?.warnings
-              .map((warning) =>
-                warning.match(/\[(TESSERA_[A-Z0-9_]+)\]/)?.[1],
-              )
-              .find(Boolean) ??
+            warningCodes.find((warningCode) =>
+              TRANSIENT_TESSERA_CODES.has(warningCode),
+            ) ??
+            warningCodes[0] ??
             (result.data
               ? "TESSERA_SCENARIOS_INCOMPLETE"
-              : "TESSERA_STAGE_FAILED");
+              : "TESSERA_STAGE_FAILED"));
       lastCode = code;
+      const attemptMessage =
+        code === null
+          ? null
+          : contract.message ??
+            result.violations[0]?.message ??
+            result.data?.warnings.find((warning) =>
+              warning.includes(`[${code}]`),
+            ) ??
+            (
+              result.data
+                ? "Tessera did not capture every requested scenario."
+                : `The ${stage} stage did not produce a reusable report.`
+            );
+      const attemptError =
+        code === null
+          ? null
+          : structuredStageError(
+              code,
+              attemptMessage ?? "The Tessera stage failed.",
+            );
+      entry.attemptHistory.push({
+        attempt: entry.attemptCount,
+        startedAt: attemptedAt,
+        completedAt: new Date().toISOString(),
+        outcome:
+          code === null
+            ? "complete"
+            : result.data
+              ? "partial"
+              : "failed",
+        error: attemptError,
+      });
+      entry.error = attemptError;
+      entry.nextAction = stageNextAction(entry);
+      await writeManifest(
+        input.manifest,
+        input.manifestPath,
+        input.options,
+        true,
+      );
       if (code === null || !TRANSIENT_TESSERA_CODES.has(code)) break;
       if (entry.attemptCount >= maximumAttempts) break;
       await (
@@ -2179,7 +3852,9 @@ async function runStage(
     if (result.data) {
       reports.set(item.templateId, result.data);
       const opponentPrepared = preparedOpponent(result.data, item);
-      if (opponentPrepared) delivery.seed(item.roster, opponentPrepared);
+      if (opponentPrepared) {
+        await delivery.seed(item.roster, opponentPrepared);
+      }
     }
     const reportPath =
       result.data?.artifacts.find(
@@ -2187,11 +3862,18 @@ async function runStage(
       )?.written ?? null;
     if (result.ok && result.data && reportPath) {
       entry.status =
-        result.data.status === "complete" ? "complete" : "partial";
+        (
+          result.data.status === "complete" ||
+          (!input.manifest.simulationRequested &&
+            result.data.status === "prepared")
+        ) &&
+        lastCode === null
+          ? "complete"
+          : "partial";
       entry.reportPath = reportPath;
       entry.reportSha256 = await fileSha256(reportPath);
       entry.error =
-        result.data.status === "complete" ||
+        lastCode === null ||
         !input.manifest.simulationRequested
           ? null
           : structuredStageError(
@@ -2202,11 +3884,7 @@ async function runStage(
                   : false,
               ) ?? "Tessera did not capture every requested scenario.",
             );
-      entry.nextAction = entry.error
-        ? entry.attemptCount < 5
-          ? "Resume this run to retry the incomplete proxy."
-          : "Inspect the incomplete scenarios before forcing another retry."
-        : null;
+      entry.nextAction = stageNextAction(entry);
       if (entry.error) {
         warnings.push(`${item.templateId}: ${entry.error.message}`);
       }
@@ -2222,9 +3900,7 @@ async function runStage(
         result.violations[0]?.message ??
           `The ${stage} stage did not produce a reusable report.`,
       );
-      entry.nextAction = entry.error.retryable
-        ? "Resume this run after checking local browser readiness."
-        : "Resolve the terminal error, then resume with --force-retry.";
+      entry.nextAction = stageNextAction(entry);
       warnings.push(`${item.templateId}: ${entry.error.message}`);
     }
     await writeManifest(
@@ -2233,16 +3909,58 @@ async function runStage(
       input.options,
       true,
     );
+    if (
+      entry.error &&
+      isGlobalStageFailure(entry.error)
+    ) {
+      warnings.push(
+        `${item.templateId}: the live Tessera unlock/matrix readiness capture failed, so later ${stage === "deepDive" ? "deep-dive" : "screening"} proxies were not attempted in this invocation.`,
+      );
+      break;
+    }
   }
   return { reports, warnings };
 }
 
-function aggregateChangeCandidates(
+function candidateEvidenceIsCausal(
+  playerRoster: RosterDraftV1,
+  report: TesseraMatchupReport,
+  candidate: TesseraChangeCandidate,
+): boolean {
+  const referenced = new Set(candidate.evidenceFindingIds);
+  if (referenced.size === 0) return false;
+  const selectionId =
+    "selectionId" in candidate.operation
+      ? candidate.operation.selectionId
+      : null;
+  return (report.findings ?? [])
+    .filter(
+      (finding) =>
+        referenced.has(finding.findingId) &&
+        finding.severity === "warn" &&
+        finding.confidence !== "ambiguous",
+    )
+    .some((finding) => {
+      if (finding.kind === "role-gap") return true;
+      if (!selectionId) return false;
+      return finding.evidence.some((evidence) => {
+        const affectedPlayerId =
+          evidence.direction === "player-to-opponent"
+            ? evidence.attackerInstanceId
+            : evidence.targetInstanceId;
+        return affectedPlayerId === selectionId;
+      }) ||
+        finding.unitInstanceIds.includes(selectionId);
+    });
+}
+
+export async function aggregateChangeCandidates(
   playerRoster: RosterDraftV1,
   screeningReports: Map<string, TesseraMatchupReport>,
   portfolio: TesseraStressPortfolio,
   baselineReadiness: TesseraMissionReadinessReport,
-): TesseraChangeCandidate[] {
+  stressFindingResults: TesseraStressFinding[],
+): Promise<TesseraChangeCandidate[]> {
   const groups = new Map<
     string,
     {
@@ -2257,6 +3975,15 @@ function aggregateChangeCandidates(
       portfolio.items.find((item) => item.templateId === templateId)
         ?.posture ?? "unknown";
     for (const candidate of report.changeCandidates ?? []) {
+      if (
+        !candidateEvidenceIsCausal(
+          playerRoster,
+          report,
+          candidate,
+        )
+      ) {
+        continue;
+      }
       const key = JSON.stringify(candidate.operation);
       const group = groups.get(key) ?? {
         candidate,
@@ -2276,34 +4003,253 @@ function aggregateChangeCandidates(
     2,
     Math.ceil(portfolio.coverage.ready * 0.5),
   );
-  return [...groups.values()]
+  const robustSelectionIds = new Set(
+    stressFindingResults
+      .filter((finding) => finding.kind === "robust-answer")
+      .flatMap((finding) => finding.unitInstanceIds),
+  );
+  const accepted: TesseraChangeCandidate[] = [];
+  for (const group of [...groups.values()]
     .filter(
       (group) =>
         group.templateIds.size >= minimumSupport &&
         group.postures.size >= 2,
-    )
-    .flatMap((group) => {
-      const modified = modifyRoster(
-        playerRoster,
-        group.candidate.operation,
+    )) {
+    const operation = group.candidate.operation;
+    if (
+      operation.type === "replace" &&
+      robustSelectionIds.has(operation.selectionId)
+    ) {
+      continue;
+    }
+    const qualified = await qualifyRosterChangeCandidate(
+      playerRoster,
+      baselineReadiness,
+      operation,
+    );
+    if (!qualified) continue;
+    accepted.push({
+      ...group.candidate,
+      rationale: `${group.candidate.rationale} Supported by ${group.templateIds.size} frozen proxies across ${group.postures.size} postures; legality, New Recruit exportability, points utilization, and the deterministic mission-readiness guardrail passed.`,
+      afterPoints: qualified.roster.totalPoints,
+      rosterFingerprint: rosterExecutionFingerprint(
+        qualified.roster,
+      ),
+      evidenceFindingIds: [...group.evidenceFindingIds],
+    });
+    if (accepted.length >= 3) break;
+  }
+  return accepted;
+}
+
+export function assessScreeningIntegrity(
+  reports: Map<string, TesseraMatchupReport>,
+  portfolio: TesseraStressPortfolio,
+  simulationRequested: boolean,
+): TesseraStressTestReport["integrity"] {
+  if (!simulationRequested) {
+    return {
+      status: "not-evaluated",
+      issues: [],
+    };
+  }
+  const issues: TesseraStressTestReport["integrity"]["issues"] = [];
+  const readyItems = portfolio.items.filter(
+    (item) =>
+      item.status === "ready" &&
+      item.roster !== null &&
+      Boolean(item.simulationFingerprint),
+  );
+  const missingEvidence = readyItems
+    .filter((item) => reports.get(item.templateId)?.status !== "complete")
+    .map((item) => item.templateId);
+  if (missingEvidence.length > 0) {
+    issues.push({
+      code: "TESSERA_EVIDENCE_INCOMPLETE",
+      message:
+        `Trusted matrix integrity could not be evaluated for ${missingEvidence.length} prepared proxy result(s) because their simulations did not complete.`,
+      templateIds: missingEvidence,
+    });
+  }
+  for (const item of readyItems) {
+    const report = reports.get(item.templateId);
+    if (!report || report.status !== "complete") continue;
+    const runs = (report.simulation.scenarios ?? [])
+      .flatMap((scenario) =>
+        (scenario.metricRuns ?? []).map((run) => ({
+          key: `${scenario.phase}:${scenario.direction}:${run.metric}`,
+          matrixSha256: run.matrixSha256 ?? null,
+          integrity: run.integrity,
+        })),
+      )
+      .sort((left, right) => left.key.localeCompare(right.key));
+    if (
+      runs.length === 0 ||
+      runs.some((run) => run.matrixSha256 === null)
+    ) {
+      issues.push({
+        code: "TESSERA_MATRIX_FINGERPRINT_MISSING",
+        message:
+          `${item.templateId}: one or more captured matrices lack the v2 content fingerprint required to rule out stale UI reuse.`,
+        templateIds: [item.templateId],
+      });
+      continue;
+    }
+    const aliasedCodes = unique(
+      runs.flatMap((run) =>
+        run.integrity?.status === "aliased"
+          ? run.integrity.issueCodes
+          : [],
+      ),
+    );
+    for (const code of aliasedCodes) {
+      issues.push({
+        code,
+        message:
+          `${item.templateId}: Tessera returned identical matrix content for scenarios that should have been independently captured.`,
+        templateIds: [item.templateId],
+      });
+    }
+  }
+  return {
+    status: issues.length === 0 ? "verified" : "inconclusive",
+    issues,
+  };
+}
+
+function quarantineIntegrityAffectedScenarios(
+  report: TesseraMatchupReport | null,
+  portfolio: TesseraStressPortfolio,
+  integrity: TesseraStressTestReport["integrity"],
+): void {
+  if (!report || integrity.status !== "inconclusive") return;
+  const issueByTemplate = new Map<string, string[]>();
+  for (const integrityIssue of integrity.issues) {
+    if (integrityIssue.code === "TESSERA_EVIDENCE_INCOMPLETE") {
+      continue;
+    }
+    for (const templateId of integrityIssue.templateIds) {
+      const codes = issueByTemplate.get(templateId) ?? [];
+      codes.push(integrityIssue.code);
+      issueByTemplate.set(templateId, codes);
+    }
+  }
+  const codesByOpponent = new Map<string, string[]>();
+  for (const [templateId, codes] of issueByTemplate) {
+    const item = portfolio.items.find(
+      (candidate) => candidate.templateId === templateId,
+    );
+    if (item?.roster) {
+      codesByOpponent.set(item.roster.name, unique(codes));
+    }
+  }
+  for (const scenario of report.simulation.scenarios ?? []) {
+    const codes = codesByOpponent.get(scenario.opponentName);
+    if (!codes?.length) continue;
+    scenario.status = "partial";
+    const warning =
+      `[${codes.join(",")}] This scenario was quarantined because its matrix integrity is inconclusive; its cells are provisional observations, not analytical evidence.`;
+    scenario.warnings = unique([...scenario.warnings, warning]);
+    for (const cell of scenario.cells) {
+      cell.confidence = "ambiguous";
+      cell.warningRefs = unique([...cell.warningRefs, warning]);
+    }
+  }
+}
+
+function recordStageIntegrityIssues(
+  stage: Record<string, ManifestStageEntry>,
+  result: TesseraStressTestReport["integrity"],
+): void {
+  for (const integrityIssue of result.issues) {
+    for (const templateId of integrityIssue.templateIds) {
+      const entry = stage[templateId];
+      if (
+        !entry ||
+        entry.status !== "complete" ||
+        entry.error !== null
+      ) continue;
+      entry.error = structuredStageError(
+        integrityIssue.code,
+        integrityIssue.message,
       );
-      if (!modified.ok || !modified.data) return [];
-      const readiness = analyzeMissionReadiness(modified.data);
-      if (!readiness.ok || !readiness.data) return [];
-      const guardrail = assessMissionReadinessRevisionGuardrail(
-        baselineReadiness,
-        readiness.data,
+      const latestAttempt =
+        entry.attemptHistory[entry.attemptHistory.length - 1];
+      if (
+        latestAttempt &&
+        latestAttempt.attempt === entry.attemptCount &&
+        latestAttempt.error === null
+      ) {
+        latestAttempt.outcome = "partial";
+        latestAttempt.error = entry.error;
+      }
+      entry.nextAction = stageNextAction(entry);
+    }
+  }
+}
+
+async function runIntegrityCheckedStage(
+  input: StressExecutionInput,
+  stage: "screening" | "deepDive",
+  items: TesseraStressPortfolioItem[],
+  metrics: TesseraMetric[],
+  mode: "quick" | "full",
+  delivery: ReturnType<typeof createDeliveryCache>,
+): Promise<StageRunResult & {
+  integrity: TesseraStressTestReport["integrity"];
+}> {
+  const warnings: string[] = [];
+  let result: StageRunResult;
+  let integrity: TesseraStressTestReport["integrity"];
+  while (true) {
+    result = await runStage(
+      input,
+      stage,
+      items,
+      metrics,
+      mode,
+      delivery,
+    );
+    warnings.push(...result.warnings);
+    integrity = assessScreeningIntegrity(
+      result.reports,
+      input.portfolio,
+      input.manifest.simulationRequested,
+    );
+    recordStageIntegrityIssues(
+      input.manifest[stage],
+      integrity,
+    );
+    await writeManifest(
+      input.manifest,
+      input.manifestPath,
+      input.options,
+      true,
+    );
+    const affectedTemplateIds = new Set(
+      integrity.issues.flatMap((issue) => issue.templateIds),
+    );
+    const canRetryIntegrityFailure = [
+      ...affectedTemplateIds,
+    ].some((templateId) => {
+      const entry = input.manifest[stage][templateId];
+      return (
+        entry?.error?.retryable === true &&
+        entry.attemptCount < retryLimit(input)
       );
-      if (!guardrail.accepted) return [];
-      return [
-        {
-          ...group.candidate,
-          rationale: `${group.candidate.rationale} Supported by ${group.templateIds.size} frozen proxies across ${group.postures.size} postures; the deterministic mission-readiness guardrail passed.`,
-          evidenceFindingIds: [...group.evidenceFindingIds],
-        },
-      ];
-    })
-    .slice(0, 3);
+    });
+    if (
+      integrity.status !== "inconclusive" ||
+      !canRetryIntegrityFailure
+    ) {
+      break;
+    }
+  }
+  return {
+    ...result,
+    warnings: unique(warnings),
+    integrity,
+  };
 }
 
 function executionStatus(
@@ -2312,18 +4258,30 @@ function executionStatus(
   strategy: TesseraStressAnalysisStrategy,
   robustness: TesseraStressRobustness,
   manifest: TesseraStressManifest,
+  integrity: TesseraStressTestReport["integrity"],
 ): TesseraStressTestReport["status"] {
   const readyItems = portfolio.items.filter(
     (item) => item.status === "ready" && item.roster !== null,
   );
+  const requiredEvidence = requiredStressEvidence(portfolio);
   const screeningComplete = readyItems.every(
     (item) => manifest.screening[item.templateId]?.status === "complete",
   );
-  const minimum = portfolio.suite === "diverse-9" ? 6 : 3;
+  if (!manifest.simulationRequested) {
+    return screeningComplete && readyItems.length > 0
+      ? "prepared"
+      : "failed";
+  }
+  const minimum = requiredEvidence.minimumConfident;
   if (
     !screeningComplete ||
     readyItems.length < minimum
-  ) return "partial";
+  ) {
+    const capturedMatrices = robustness.samples.some(
+      (sample) => sample.status !== "missing",
+    );
+    return capturedMatrices ? "inconclusive" : "failed";
+  }
 
   const confident = robustness.samples.filter(
     (sample) => sample.status === "confident",
@@ -2333,8 +4291,9 @@ function executionStatus(
   );
   if (
     confident.length < minimum ||
-    confidentPostures.size < 3 ||
-    representatives.length !== 3
+    confidentPostures.size < requiredEvidence.minimumPostures ||
+    representatives.length !== requiredEvidence.representatives ||
+    integrity.status === "inconclusive"
   ) return "inconclusive";
 
   const deepComplete =
@@ -2343,13 +4302,188 @@ function executionStatus(
       (representative) =>
         manifest.deepDive[representative.templateId]?.status === "complete",
     );
-  if (!deepComplete) return "partial";
+  if (!deepComplete) return "inconclusive";
 
   const completeTarget = portfolio.suite === "diverse-9" ? 9 : 3;
+  if (portfolio.coverage.maximumResultStatus === "degraded") {
+    return "degraded";
+  }
   return confident.length === completeTarget &&
     readyItems.length === completeTarget
     ? "complete"
     : "degraded";
+}
+
+function requiredStressEvidence(
+  portfolio: TesseraStressPortfolio,
+): {
+  minimumConfident: number;
+  minimumPostures: number;
+  representatives: number;
+} {
+  const ready = portfolio.items.filter(
+    (item) => item.status === "ready" && item.roster !== null,
+  );
+  const readyPostures = new Set(
+    ready.map((item) => item.posture),
+  ).size;
+  const fullCoverage =
+    portfolio.coverage.maximumResultStatus === "complete";
+  const minimumConfident = fullCoverage
+    ? portfolio.suite === "diverse-9"
+      ? 6
+      : 3
+    : Math.min(2, ready.length);
+  return {
+    minimumConfident,
+    minimumPostures: fullCoverage
+      ? 3
+      : Math.min(2, readyPostures),
+    representatives: Math.min(3, ready.length),
+  };
+}
+
+function stressStatusExplanation(
+  status: TesseraStressTestReport["status"],
+  portfolio: TesseraStressPortfolio,
+  robustness: TesseraStressRobustness,
+  representatives: TesseraStressRepresentative[],
+  manifest: TesseraStressManifest,
+  integrity: TesseraStressTestReport["integrity"],
+): string {
+  const ready = portfolio.coverage.ready;
+  const target = portfolio.coverage.intended;
+  const quantitativelyComplete = robustness.samples.filter(
+    (sample) => sample.status === "confident",
+  ).length;
+  const evidenceSummary =
+    quantitativelyComplete > 0
+      ? ` Aggregate evidence confidence is ${robustness.evidenceConfidence ?? "ambiguous"}, capped by the lowest-confidence contributing simulation cell.`
+      : "";
+  const screeningComplete = portfolio.items.filter(
+    (item) => item.status === "ready",
+  ).filter(
+    (item) => manifest.screening[item.templateId]?.status === "complete",
+  ).length;
+  const deepComplete = representatives.filter(
+    (representative) =>
+      manifest.deepDive[representative.templateId]?.status === "complete",
+  ).length;
+  if (status === "prepared") {
+    return `Preparation completed for the player roster and ${ready}/${target} frozen opponent proxies; no Tessera simulation was requested.`;
+  }
+  if (status === "failed" || status === "partial") {
+    return `Required work is incomplete: ${screeningComplete}/${ready} screening proxies and ${deepComplete}/${representatives.length || 3} selected deep dives are complete.`;
+  }
+  if (status === "inconclusive") {
+    if (integrity.status === "inconclusive") {
+      return `Capture finished, but ${integrity.issues.length} simulation-integrity issue(s) prevent analytical confidence.`;
+    }
+    return `Capture finished, but only ${quantitativelyComplete}/${ready} ready proxies have quantitatively complete coverage across the required postures.${evidenceSummary}`;
+  }
+  if (status === "degraded") {
+    const reason =
+      ready < target
+        ? "the reduced portfolio"
+        : "a portfolio quality gate";
+    return `${quantitativelyComplete}/${target} intended unique proxies have quantitatively complete coverage with all required postures and deep dives covered; ${reason} caps this result at degraded.${evidenceSummary}`;
+  }
+  return `All ${target} unique proxies have quantitatively complete coverage and all required deep dives completed with verified matrix integrity.${evidenceSummary}`;
+}
+
+function stressRecoverySummary(
+  manifest: TesseraStressManifest,
+  manifestPath: string,
+  verifiedFrozenOpponentCount = 0,
+): TesseraStressTestReport["recovery"] {
+  const stages = [
+    ...Object.entries(manifest.screening).map(
+      ([templateId, entry]) => ({
+        label: `screening/${templateId}`,
+        entry,
+      }),
+    ),
+    ...Object.entries(manifest.deepDive).map(
+      ([templateId, entry]) => ({
+        label: `deep-dive/${templateId}`,
+        entry,
+      }),
+    ),
+  ];
+  return {
+    manifest: path.basename(manifestPath),
+    screeningAttempts: Object.values(manifest.screening).reduce(
+      (sum, entry) => sum + entry.attemptCount,
+      0,
+    ),
+    deepDiveAttempts: Object.values(manifest.deepDive).reduce(
+      (sum, entry) => sum + entry.attemptCount,
+      0,
+    ),
+    exhaustedTemplates: stages
+      .filter(({ entry }) => entry.attemptCount >= 5)
+      .map(({ label }) => label),
+    nextActions: unique(
+      stages.flatMap(({ label, entry }) =>
+        entry.nextAction
+          ? [`${label}: ${entry.nextAction}`]
+          : [],
+      ),
+    ),
+    verifiedPreparedPlayer:
+      manifest.preparedPlayer !== null &&
+      manifest.preparedPlayerSha256 !== null,
+    verifiedPreparedOpponents:
+      Math.max(
+        Object.keys(manifest.preparedOpponents).length,
+        verifiedFrozenOpponentCount,
+      ),
+  };
+}
+
+function stressFailures(
+  manifest: TesseraStressManifest,
+  portfolio: TesseraStressPortfolio,
+): NonNullable<TesseraStressTestReport["failures"]> {
+  return (
+    [
+      ["screening", manifest.screening],
+      ["deep-dive", manifest.deepDive],
+    ] as const
+  ).flatMap(([stage, entries]) =>
+    Object.entries(entries).flatMap(([templateId, entry]) => {
+      if (!entry.error) return [];
+      return [{
+        stage,
+        code: entry.error.code,
+        message: entry.error.message,
+        opponentName:
+          portfolio.items.find(
+            (item) => item.templateId === templateId,
+          )?.roster?.name ?? null,
+        retryable: entry.error.retryable,
+      }];
+    }),
+  );
+}
+
+function trustedMatrixCount(
+  reports: Array<TesseraMatchupReport | null>,
+): number {
+  const hashes = new Set<string>();
+  for (const report of reports) {
+    for (const scenario of report?.simulation.scenarios ?? []) {
+      for (const run of scenario.metricRuns ?? []) {
+        if (
+          run.matrixSha256 &&
+          run.integrity?.status !== "aliased"
+        ) {
+          hashes.add(run.matrixSha256);
+        }
+      }
+    }
+  }
+  return hashes.size;
 }
 
 async function finalStressTargets(
@@ -2384,11 +4518,376 @@ async function finalStressTargets(
   return [targets[0], targets[1]];
 }
 
+async function preparedProfileInventory(
+  playerRoster: RosterDraftV1,
+  preparedPlayer: TesseraPreparedRoster,
+  readyItems: Array<
+    TesseraStressPortfolioItem & { roster: RosterDraftV1 }
+  >,
+  manifest: TesseraStressManifest,
+  opponentRoszPaths?: Map<string, string>,
+): Promise<TesseraProfileRequirement[]> {
+  const inventories = await Promise.all([
+    readFile(preparedPlayer.enrichedRoszPath).then((content) =>
+      inspectEnrichedProfileRequirements(
+        content,
+        playerRoster.factionId,
+      ),
+    ),
+    ...readyItems.map((item) => {
+      const enrichedRoszPath =
+        opponentRoszPaths?.get(item.templateId) ??
+        manifest.preparedOpponents[item.templateId]?.prepared
+          .enrichedRoszPath;
+      if (!enrichedRoszPath) {
+        throw new Error(
+          `${item.templateId} has no verified prepared opponent receipt.`,
+        );
+      }
+      return readFile(enrichedRoszPath).then((content) =>
+        inspectEnrichedProfileRequirements(
+          content,
+          item.roster.factionId,
+        ),
+      );
+    }),
+  ]);
+  return mergeProfileInventory(inventories.flat());
+}
+
+function preparationFailureRetryable(code: string): boolean {
+  if (
+    code === "TESSERA_STRESS_DELIVERY_OUTCOME_UNKNOWN" ||
+    code.includes("CATALOGUE_PROVENANCE") ||
+    code.includes("CATALOGUE_DRIFT")
+  ) {
+    return false;
+  }
+  return /TIMEOUT|UNAVAILABLE|SESSION|NAVIGATION|CONNECTION|COMPANION/i.test(
+    code,
+  );
+}
+
+function uniqueConnectorEvents(
+  prepared: TesseraPreparedRoster[],
+): NonNullable<TesseraPreparedRoster["connectorEvents"]> {
+  return [
+    ...new Map(
+      prepared
+        .flatMap((receipt) => receipt.connectorEvents ?? [])
+        .map((event) => [event.eventId, event] as const),
+    ).values(),
+  ];
+}
+
+async function optionalFileSha256(
+  filename: string,
+): Promise<string | null> {
+  try {
+    return (await pathExists(filename))
+      ? await fileSha256(filename)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function preparationFailureArtifacts(
+  input: StressExecutionInput,
+  verifiedPlayer: TesseraPreparedRoster | null,
+  verifiedOpponents: TesseraStressPreparationFailureReport["verifiedPreparedOpponents"],
+  partial: PreparationFailureContext["partialPrepared"],
+  context: PreparationFailureContext,
+): Promise<TesseraStressPreparationFailureReport["artifacts"]> {
+  const artifacts: TesseraStressPreparationFailureReport["artifacts"] =
+    [
+      {
+        format: "stress-manifest",
+        written: input.manifestPath,
+        sha256: await optionalFileSha256(input.manifestPath),
+        verification: "verified",
+        reusable: true,
+        templateId: null,
+      },
+    ];
+  const addPreparedArtifacts = async (
+    prepared: TesseraPreparedRoster,
+    side: "player" | "opponent",
+    templateId: string | null,
+    verification: "verified" | "unverified",
+    reusable: boolean,
+    enrichedSha256?: string,
+  ) => {
+    artifacts.push(
+      {
+        format:
+          side === "player"
+            ? "player-source-rosz"
+            : "opponent-source-rosz",
+        written: prepared.sourceRoszPath,
+        sha256: await optionalFileSha256(
+          prepared.sourceRoszPath,
+        ),
+        verification,
+        reusable,
+        templateId,
+      },
+      {
+        format:
+          side === "player"
+            ? "player-enriched-rosz"
+            : "opponent-enriched-rosz",
+        written: prepared.enrichedRoszPath,
+        sha256:
+          enrichedSha256 ??
+          (await optionalFileSha256(
+            prepared.enrichedRoszPath,
+          )),
+        verification,
+        reusable,
+        templateId,
+      },
+    );
+  };
+  if (verifiedPlayer) {
+    await addPreparedArtifacts(
+      verifiedPlayer,
+      "player",
+      null,
+      "verified",
+      true,
+      input.manifest.preparedPlayerSha256 ?? undefined,
+    );
+  }
+  for (const opponent of verifiedOpponents) {
+    await addPreparedArtifacts(
+      opponent.prepared,
+      "opponent",
+      opponent.templateId,
+      "verified",
+      true,
+      opponent.sha256,
+    );
+  }
+  if (partial) {
+    await addPreparedArtifacts(
+      partial,
+      context.side,
+      context.templateId,
+      "unverified",
+      false,
+    );
+  }
+  return artifacts;
+}
+
+async function preparationFailureReport(
+  input: StressExecutionInput,
+  context: PreparationFailureContext,
+  violations: RosterIssue[],
+  warnings: RosterIssue[],
+): Promise<TesseraStressPreparationFailureReport> {
+  const verifiedPlayer =
+    input.manifest.preparedPlayer &&
+    input.manifest.preparedPlayerSha256
+      ? input.manifest.preparedPlayer
+      : null;
+  const verifiedOpponents =
+    input.portfolio.items.flatMap((item) => {
+      const receipt =
+        input.manifest.preparedOpponents[item.templateId];
+      return receipt
+        ? [
+            {
+              templateId: item.templateId,
+              prepared: receipt.prepared,
+              sha256: receipt.sha256,
+            },
+          ]
+        : [];
+    });
+  const observedReceipts = [
+    ...(verifiedPlayer ? [verifiedPlayer] : []),
+    ...verifiedOpponents.map((entry) => entry.prepared),
+    ...(context.partialPrepared
+      ? [context.partialPrepared]
+      : []),
+  ];
+  const connectorEvents = uniqueConnectorEvents(
+    observedReceipts,
+  );
+  const cacheReuses = observedReceipts.filter(
+    (receipt) => receipt.cacheReused === true,
+  ).length;
+  const recordedRemoteMutations = connectorEvents.filter(
+    (event) =>
+      event.provider === "new-recruit" &&
+      event.action === "prepare" &&
+      event.origin === "new-remote" &&
+      event.outcome === "verified",
+  ).length;
+  const failureIssues =
+    violations.length > 0
+      ? violations
+      : [
+          issue(
+            "TESSERA_STRESS_PREPARATION_FAILED",
+            "New Recruit preparation failed without a structured connector error.",
+          ),
+        ];
+  const recovery = stressRecoverySummary(
+    input.manifest,
+    input.manifestPath,
+    input.opponentRoszPaths?.size ?? 0,
+  );
+  recovery.nextActions = unique([
+    ...recovery.nextActions,
+    context.partialPrepared
+      ? "Inspect the non-reusable partial New Recruit receipt and resolve its provenance failure. Do not import it into Tessera or copy it into manifest success fields."
+      : "Inspect the failed New Recruit preparation and the recovery manifest before explicitly resuming; RosterPilot will not retry an uncertain external outcome automatically.",
+  ]);
+  const report: TesseraStressPreparationFailureReport = {
+    schemaVersion: 3,
+    reportKind: "tessera-stress-preparation-failure",
+    runId: input.manifest.runId,
+    generatedAt: new Date().toISOString(),
+    source: "prepare-only",
+    status: "failed",
+    statusExplanation:
+      context.side === "player"
+        ? "Player New Recruit preparation failed before a verified reusable player receipt existed. Tessera was not started."
+        : `Opponent New Recruit preparation failed for ${context.templateId ?? "the current proxy"}; previously verified receipts were retained and Tessera was not started.`,
+    runtime: getRuntimeProvenance(),
+    tesseraUiIdentity: null,
+    connectorEvents,
+    preparation: {
+      status:
+        verifiedPlayer ||
+        verifiedOpponents.length > 0 ||
+        context.partialPrepared
+          ? "partial"
+          : "failed",
+      source: "new-recruit",
+      failedSide: context.side,
+      failedTemplateId: context.templateId,
+      uniqueRosters:
+        (verifiedPlayer ? 1 : 0) + verifiedOpponents.length,
+      remoteMutations:
+        recordedRemoteMutations > 0
+          ? recordedRemoteMutations
+          : Math.max(0, observedReceipts.length - cacheReuses),
+      cacheReuses,
+      connectorEvents,
+    },
+    simulation: {
+      requested: input.manifest.simulationRequested,
+      status: input.manifest.simulationRequested
+        ? "failed"
+        : "not-requested",
+      engine: "none",
+      trustedMatrices: 0,
+    },
+    failures: failureIssues.map((entry) => ({
+      stage: "preparation",
+      code: entry.code,
+      message: entry.message,
+      opponentName:
+        context.side === "opponent"
+          ? context.rosterName
+          : null,
+      retryable: preparationFailureRetryable(entry.code),
+    })),
+    profilePolicyHash:
+      input.manifest.configuration.profilePolicyHash,
+    pinnedData: {
+      player: input.playerRoster.sourceData,
+      opponents: unique(
+        input.portfolio.items.flatMap((item) =>
+          item.roster
+            ? [canonicalJson(item.roster.sourceData)]
+            : [],
+        ),
+      ).map(
+        (value) =>
+          JSON.parse(value) as RosterDraftV1["sourceData"],
+      ),
+      cachedLiveUpdateCheck:
+        input.manifest.cachedLiveUpdateCheck,
+    },
+    integrity: {
+      status: "not-evaluated",
+      issues: [],
+    },
+    recovery,
+    verifiedPreparedPlayer: verifiedPlayer,
+    verifiedPreparedOpponents: verifiedOpponents,
+    currentPartialPreparedReceipt: context.partialPrepared
+      ? {
+          side: context.side,
+          templateId: context.templateId,
+          prepared: context.partialPrepared,
+          reusable: false,
+          failureCodes: failureIssues.map(
+            (entry) => entry.code,
+          ),
+        }
+      : null,
+    opponentFactionId: input.portfolio.factionId,
+    configuration: input.configuration,
+    suite: input.portfolio.suite,
+    portfolio: input.portfolio,
+    stageProvenance: {
+      screening: null,
+      deepDive: null,
+    },
+    limitations: [
+      "Preparation failed before any Tessera browser activity or trusted simulation evidence.",
+      "Only receipts present in verifiedPreparedPlayer or verifiedPreparedOpponents are reusable.",
+      "currentPartialPreparedReceipt is diagnostic evidence only and cannot upgrade preparation status or support Tessera selection.",
+      "No game win probability or matchup conclusion was produced.",
+    ],
+    warnings: unique([
+      ...input.manifest.warnings,
+      ...warnings.map((entry) => entry.message),
+    ]),
+    artifacts: [],
+  };
+  report.artifacts = await preparationFailureArtifacts(
+    input,
+    verifiedPlayer,
+    verifiedOpponents,
+    context.partialPrepared,
+    context,
+  );
+  const portable = portableReportValue(
+    report,
+    "",
+    input.outputDirectory,
+  ) as TesseraStressPreparationFailureReport;
+  TesseraStressPreparationFailureReportSchema.parse(portable);
+  return portable;
+}
+
 async function executeStressTest(
   input: StressExecutionInput,
-): Promise<ResultEnvelope<TesseraStressTestReport>> {
+): Promise<ResultEnvelope<TesseraStressRunReport>> {
+  const initiallyPreparedRosterIds = new Set<string>([
+    ...(input.manifest.preparedPlayer
+      ? [input.manifest.preparedPlayer.rosterId]
+      : []),
+    ...Object.values(input.manifest.preparedOpponents).map(
+      (receipt) => receipt.prepared.rosterId,
+    ),
+  ]);
   const delivery = createDeliveryCache(input.dependencies);
   let preparedPlayer = input.manifest.preparedPlayer;
+  if (preparedPlayer && !preparedPlayer.constraints) {
+    preparedPlayer = {
+      ...preparedPlayer,
+      constraints: structuredClone(input.playerRoster.constraints),
+    };
+    input.manifest.preparedPlayer = preparedPlayer;
+  }
   if (preparedPlayer) {
     const filesPresent =
       (await pathExists(preparedPlayer.sourceRoszPath)) &&
@@ -2401,18 +4900,55 @@ async function executeStressTest(
       !input.manifest.preparedPlayerSha256 ||
       digest !== input.manifest.preparedPlayerSha256
     ) {
-      return failure(
+      const changedPreparedPlayer = preparedPlayer;
+      preparedPlayer = null;
+      input.manifest.preparedPlayer = null;
+      input.manifest.preparedPlayerSha256 = null;
+      const changedIssue = issue(
         "TESSERA_STRESS_PREPARED_PLAYER_CHANGED",
         "The manifest-owned prepared player artifact is missing or changed. Start a new run instead of mixing prepared files.",
       );
+      const diagnostic = await preparationFailureReport(
+        input,
+        {
+          side: "player",
+          templateId: null,
+          rosterName: input.playerRoster.name,
+          partialPrepared: changedPreparedPlayer,
+        },
+        [changedIssue],
+        [],
+      );
+      return {
+        ok: false,
+        data: diagnostic,
+        violations: [changedIssue],
+        warnings: [],
+      };
     }
-    delivery.seed(input.playerRoster, preparedPlayer);
   } else {
     if (input.manifest.playerPreparationStartedAt) {
-      return failure(
+      const outcomeIssue = issue(
         "TESSERA_STRESS_DELIVERY_OUTCOME_UNKNOWN",
         "A prior New Recruit delivery for the player roster started but no verified receipt was persisted. Resume will not risk creating a duplicate list; inspect the external account and start a new run when safe.",
       );
+      const diagnostic = await preparationFailureReport(
+        input,
+        {
+          side: "player",
+          templateId: null,
+          rosterName: input.playerRoster.name,
+          partialPrepared: null,
+        },
+        [outcomeIssue],
+        [],
+      );
+      return {
+        ok: false,
+        data: diagnostic,
+        violations: [outcomeIssue],
+        warnings: [],
+      };
     }
     input.manifest.playerPreparationStartedAt =
       new Date().toISOString();
@@ -2424,12 +4960,29 @@ async function executeStressTest(
         true,
       );
     } catch (error) {
-      return failure(
+      const markerIssue = issue(
         "WRITE_FAILED",
         error instanceof Error
           ? error.message
           : "The player delivery marker could not be persisted.",
       );
+      const diagnostic = await preparationFailureReport(
+        input,
+        {
+          side: "player",
+          templateId: null,
+          rosterName: input.playerRoster.name,
+          partialPrepared: null,
+        },
+        [markerIssue],
+        [],
+      );
+      return {
+        ok: false,
+        data: diagnostic,
+        violations: [markerIssue],
+        warnings: [],
+      };
     }
     const prepared = await prepareRosterForTessera(
       input.playerRoster,
@@ -2446,13 +4999,26 @@ async function executeStressTest(
       delivery.dependencies,
     );
     if (!prepared.ok || !prepared.data) {
+      const diagnostic = await preparationFailureReport(
+        input,
+        {
+          side: "player",
+          templateId: null,
+          rosterName: input.playerRoster.name,
+          partialPrepared: prepared.data,
+        },
+        prepared.violations,
+        prepared.warnings,
+      );
       return {
         ok: false,
-        data: null,
+        data: diagnostic,
         violations: prepared.violations,
         warnings: prepared.warnings,
       };
     }
+    const preparationStartedAt =
+      input.manifest.playerPreparationStartedAt;
     try {
       preparedPlayer = prepared.data;
       input.manifest.preparedPlayer = preparedPlayer;
@@ -2460,7 +5026,6 @@ async function executeStressTest(
         preparedPlayer.enrichedRoszPath,
       );
       input.manifest.playerPreparationStartedAt = null;
-      delivery.seed(input.playerRoster, preparedPlayer);
       await writeManifest(
         input.manifest,
         input.manifestPath,
@@ -2468,12 +5033,34 @@ async function executeStressTest(
         true,
       );
     } catch (error) {
-      return failure(
+      preparedPlayer = null;
+      input.manifest.preparedPlayer = null;
+      input.manifest.preparedPlayerSha256 = null;
+      input.manifest.playerPreparationStartedAt =
+        preparationStartedAt ?? new Date().toISOString();
+      const persistenceIssue = issue(
         "WRITE_FAILED",
         error instanceof Error
           ? error.message
           : "The verified player delivery receipt could not be persisted.",
       );
+      const diagnostic = await preparationFailureReport(
+        input,
+        {
+          side: "player",
+          templateId: null,
+          rosterName: input.playerRoster.name,
+          partialPrepared: prepared.data,
+        },
+        [persistenceIssue],
+        prepared.warnings,
+      );
+      return {
+        ok: false,
+        data: diagnostic,
+        violations: [persistenceIssue],
+        warnings: prepared.warnings,
+      };
     }
   }
 
@@ -2489,13 +5076,72 @@ async function executeStressTest(
     readyItems,
     delivery,
   );
-  if (!preparedOpponents.ok) {
+  if (preparedOpponents.ok === false) {
+    const diagnostic = await preparationFailureReport(
+      input,
+      preparedOpponents.failureContext,
+      preparedOpponents.violations,
+      preparedOpponents.warnings,
+    );
     return {
       ok: false,
-      data: null,
+      data: diagnostic,
       violations: preparedOpponents.violations,
       warnings: preparedOpponents.warnings,
     };
+  }
+  try {
+    await materializeManifestPreparedArtifacts(
+      input.manifest,
+      input.outputDirectory,
+    );
+    if (!input.manifest.preparedPlayer) {
+      throw artifactMaterializationError(
+        "TESSERA_STRESS_BUNDLE_ARTIFACT_MISSING",
+        "The prepared player receipt disappeared before bundle materialization.",
+      );
+    }
+    preparedPlayer = input.manifest.preparedPlayer;
+    await delivery.seed(input.playerRoster, preparedPlayer);
+    for (const item of readyItems) {
+      const receipt =
+        input.manifest.preparedOpponents[item.templateId];
+      if (receipt) {
+        await delivery.seed(item.roster, receipt.prepared);
+      }
+    }
+    if (input.opponentRoszPaths) {
+      for (const [templateId, filename] of
+        input.opponentRoszPaths.entries()) {
+        const materialized =
+          await materializeContentAddressedRosz(
+            filename,
+            input.outputDirectory,
+          );
+        input.opponentRoszPaths.set(
+          templateId,
+          materialized.filename,
+        );
+      }
+    }
+    if (delivery.dependencies.deliver) {
+      clearPreparedRosterDeliveryMemo(
+        delivery.dependencies.deliver,
+      );
+    }
+    await writeManifest(
+      input.manifest,
+      input.manifestPath,
+      input.options,
+      true,
+    );
+  } catch (error) {
+    return failure(
+      materializationFailureCode(error),
+      error instanceof Error
+        ? error.message
+        : "The verified prepared artifacts could not be bundled.",
+    );
   }
   let frozenArtifacts: TesseraStressFrozenOpponentArtifact[];
   try {
@@ -2509,10 +5155,126 @@ async function executeStressTest(
       error instanceof Error
         ? error.message
         : "A frozen opponent artifact could not be verified.",
+      );
+  }
+  let enrichedRequirements: TesseraProfileRequirement[];
+  try {
+    enrichedRequirements = await preparedProfileInventory(
+      input.playerRoster,
+      preparedPlayer,
+      readyItems,
+      input.manifest,
+      input.opponentRoszPaths,
+    );
+  } catch (error) {
+    return failure(
+      "TESSERA_ENRICHED_PROFILE_INVENTORY_UNREADABLE",
+      error instanceof Error
+        ? error.message
+        : "The enriched New Recruit profile inventory could not be read.",
+      );
+  }
+  const previouslyFrozenEnrichedRequirements =
+    input.manifest.enrichedProfileRequirements;
+  if (
+    previouslyFrozenEnrichedRequirements &&
+    canonicalJson(previouslyFrozenEnrichedRequirements) !==
+      canonicalJson(enrichedRequirements)
+  ) {
+    return failure(
+      "TESSERA_ENRICHED_PROFILE_INVENTORY_CHANGED",
+      "The complete profile inventory in a prepared New Recruit artifact differs from the inventory frozen in this manifest. Start a new run instead of mixing profile decisions.",
+    );
+  }
+  const pinnedRequirements = mergeProfileInventory(
+    aggregateProfileRequirements([
+      input.playerRoster,
+      ...readyItems.map((item) => item.roster),
+    ]),
+  );
+  const inventoryComparison = compareProfileInventories(
+    pinnedRequirements,
+    enrichedRequirements,
+  );
+  input.manifest.enrichedProfileRequirements = enrichedRequirements;
+  if (inventoryComparison.blocking.length > 0) {
+    try {
+      await writeManifest(
+        input.manifest,
+        input.manifestPath,
+        input.options,
+        true,
+      );
+    } catch {
+      // The inventory mismatch remains the primary actionable failure.
+    }
+    return failure(
+      "TESSERA_ENRICHED_PROFILE_INVENTORY_MISMATCH",
+      `The New Recruit-enriched archives do not contain the complete pinned profile inventory. ${inventoryComparison.blocking.join(" ")}`,
+    );
+  }
+  const enrichedPolicyValidation = validateProfilePolicy(
+    enrichedRequirements,
+    input.manifest.profilePolicy,
+  );
+  if (
+    (
+      previouslyFrozenEnrichedRequirements === null &&
+      inventoryComparison.expanded.length > 0
+    ) ||
+    !enrichedPolicyValidation.valid ||
+    enrichedPolicyValidation.hash !==
+      input.manifest.profilePolicyHash
+  ) {
+    let scaffoldPath: string | null = null;
+    try {
+      scaffoldPath = await writeProfilePolicyScaffold(
+        input.outputDirectory,
+        enrichedRequirements,
+        input.options,
+      );
+      await writeManifest(
+        input.manifest,
+        input.manifestPath,
+        input.options,
+        true,
+      );
+    } catch {
+      // Prepared receipts remain reusable even if the convenience scaffold
+      // or manifest refresh cannot be written.
+    }
+    const details = [
+      ...inventoryComparison.expanded,
+      ...enrichedPolicyValidation.errors,
+      ...enrichedPolicyValidation.unresolved.map(
+        (requirement) =>
+          `${requirement.unit} / ${requirement.weaponGroup} / ${requirement.phase}: choose one of ${requirement.availableProfiles.join(", ")} for ${requirement.activeCount} active weapon(s).`,
+      ),
+    ].join(" ");
+    return failure(
+      "TESSERA_PROFILE_POLICY_REQUIRED",
+      `New Recruit enrichment exposed profile decisions that are not covered by the frozen policy. ${details}${
+        scaffoldPath ? ` Complete the scaffold at ${scaffoldPath}.` : ""
+      } Resume this manifest to reuse the verified prepared artifacts; no Tessera simulation has started.`,
+    );
+  }
+  try {
+    await writeManifest(
+      input.manifest,
+      input.manifestPath,
+      input.options,
+      true,
+    );
+  } catch (error) {
+    return failure(
+      "WRITE_FAILED",
+      error instanceof Error
+        ? error.message
+        : "The verified enriched profile inventory could not be persisted.",
     );
   }
   if (
-    input.options.experimental &&
+    input.manifest.simulationRequested &&
     !input.dependencies.runBrowser
   ) {
     const readiness = await getTesseraConnectionStatus();
@@ -2534,7 +5296,7 @@ async function executeStressTest(
     input.configuration.analysisStrategy === "full-all"
       ? "full"
       : "quick";
-  const screening = await runStage(
+  const screening = await runIntegrityCheckedStage(
     input,
     "screening",
     readyItems,
@@ -2549,18 +5311,54 @@ async function executeStressTest(
     screeningMetrics,
     screeningMode,
     screening.warnings,
+    input.manifest.profilePolicyHash,
+  );
+  const screeningIntegrity = screening.integrity;
+  quarantineIntegrityAffectedScenarios(
+    screeningReport,
+    input.portfolio,
+    screeningIntegrity,
   );
   const robustness = computeStressRobustness(
     screeningReport,
     input.portfolio,
   );
+  const confidentScreeningTemplates = new Set(
+    robustness.samples
+      .filter((sample) => sample.status === "confident")
+      .map((sample) => sample.templateId),
+  );
+  const requiredEvidence =
+    requiredStressEvidence(input.portfolio);
+  const minimumConfidentScreening =
+    requiredEvidence.minimumConfident;
+  const confidentScreeningPostures = new Set(
+    robustness.samples
+      .filter((sample) => sample.status === "confident")
+      .map((sample) => sample.posture),
+  );
+  const screeningStable =
+    screening.reports.size === readyItems.length &&
+    screeningIntegrity.status !== "inconclusive" &&
+    readyItems.every(
+      (item) =>
+        input.manifest.screening[item.templateId]?.status ===
+          "complete",
+    ) &&
+    confidentScreeningTemplates.size >=
+      minimumConfidentScreening &&
+    confidentScreeningPostures.size >=
+      requiredEvidence.minimumPostures;
   const previousRepresentatives =
     input.manifest.representatives;
   const representatives =
-    input.frozenRepresentatives ??
-    selectStressRepresentatives(robustness, input.portfolio);
+    screeningStable
+      ? (
+          input.frozenRepresentatives ??
+          selectStressRepresentatives(robustness, input.portfolio)
+        )
+      : [];
   if (
-    !input.frozenRepresentatives &&
     previousRepresentatives.length > 0 &&
     canonicalJson(previousRepresentatives) !==
       canonicalJson(representatives)
@@ -2569,12 +5367,11 @@ async function executeStressTest(
       entry.status = "pending";
       entry.reportPath = null;
       entry.reportSha256 = null;
-      entry.error = structuredStageError(
-        "TESSERA_REPRESENTATIVES_CHANGED",
-        "Representative selection changed before it was complete; the deep-dive stage must be rebuilt.",
-      );
+      entry.error = null;
       entry.nextAction =
-        "Resume the run to rebuild the deep-dive stage.";
+        screeningStable
+          ? "Representative selection changed after screening stabilized; resume to rebuild the deep-dive stage."
+          : "Finish every confident screening proxy before selecting or running deep dives.";
     }
   }
   input.manifest.representatives = representatives;
@@ -2591,7 +5388,11 @@ async function executeStressTest(
   if (input.configuration.analysisStrategy === "full-all") {
     deepDiveReport = screeningReport;
     deepDiveReports = screening.reports;
-  } else if (representatives.length > 0) {
+  } else if (
+    screeningStable &&
+    representatives.length ===
+      requiredEvidence.representatives
+  ) {
     const representativeItems = representatives
       .map((representative) =>
         readyItems.find(
@@ -2605,7 +5406,7 @@ async function executeStressTest(
           roster: RosterDraftV1;
         } => Boolean(item),
       );
-    const deepDive = await runStage(
+    const deepDive = await runIntegrityCheckedStage(
       input,
       "deepDive",
       representativeItems,
@@ -2622,8 +5423,49 @@ async function executeStressTest(
       DEEP_DIVE_METRICS,
       "full",
       deepDive.warnings,
+      input.manifest.profilePolicyHash,
+    );
+  } else if (!screeningStable) {
+    deepWarnings.push(
+      `Deep dives were not selected or run because every frozen screening capture must complete and at least ${minimumConfidentScreening} unique proxies across ${requiredEvidence.minimumPostures} posture(s) must have confident evidence.`,
     );
   }
+  const deepDiveIntegrity =
+    input.configuration.analysisStrategy === "full-all"
+      ? screeningIntegrity
+      : assessScreeningIntegrity(
+          deepDiveReports,
+          input.portfolio,
+          input.manifest.simulationRequested,
+        );
+  if (
+    input.configuration.analysisStrategy !== "full-all"
+  ) {
+    quarantineIntegrityAffectedScenarios(
+      deepDiveReport,
+      input.portfolio,
+      deepDiveIntegrity,
+    );
+  }
+  const integrity: TesseraStressTestReport["integrity"] = {
+    status:
+      screeningIntegrity.status === "not-evaluated"
+        ? "not-evaluated"
+        : (
+            screeningIntegrity.status === "inconclusive" ||
+            deepDiveIntegrity.status === "inconclusive"
+          )
+          ? "inconclusive"
+          : "verified",
+    issues: unique([
+      ...screeningIntegrity.issues,
+      ...deepDiveIntegrity.issues,
+    ].map((entry) => canonicalJson(entry))).map(
+      (entry) =>
+        JSON.parse(entry) as
+          TesseraStressTestReport["integrity"]["issues"][number],
+    ),
+  };
 
   const mission = analyzeMissionReadiness(input.playerRoster);
   if (!mission.ok || !mission.data) {
@@ -2634,41 +5476,183 @@ async function executeStressTest(
       warnings: mission.warnings,
     };
   }
-  const changeCandidates = aggregateChangeCandidates(
-    input.playerRoster,
-    screening.reports,
+  const candidateFindings = stressFindings(
+    robustness,
     input.portfolio,
-    mission.data,
   );
+  const allScreeningStagesComplete = readyItems.every(
+    (item) =>
+      input.manifest.screening[item.templateId]?.status ===
+      "complete",
+  );
+  const analyticalClaimsAllowed =
+    input.manifest.simulationRequested &&
+    allScreeningStagesComplete &&
+    integrity.status === "verified" &&
+    robustness.confidence !== "insufficient";
+  const findings = analyticalClaimsAllowed
+    ? candidateFindings
+    : candidateFindings.filter(
+        (finding) => finding.kind === "insufficient-confidence",
+      );
+  const changeCandidates = analyticalClaimsAllowed
+    ? await aggregateChangeCandidates(
+        input.playerRoster,
+        screening.reports,
+        input.portfolio,
+        mission.data,
+        findings,
+      )
+    : [];
   const warnings = unique([
     ...input.manifest.warnings,
     ...screening.warnings,
     ...deepWarnings,
     ...robustness.warnings,
+    ...integrity.issues.map(
+      (entry) => `[${entry.code}] ${entry.message}`,
+    ),
+    ...(analyticalClaimsAllowed
+      ? []
+      : [
+          "Substantive findings and roster-change candidates were suppressed because the complete screening evidence did not pass every confidence and integrity gate.",
+        ]),
     ...input.portfolio.items.flatMap((item) =>
       item.warnings.map((warning) => warning.message),
     ),
-    ...(input.options.experimental
+    ...(input.manifest.simulationRequested
       ? []
       : [
           "Tessera simulation was not requested; this report contains prepared handoffs and no probability claims.",
         ]),
   ]);
+  const status = executionStatus(
+    input.portfolio,
+    representatives,
+    input.configuration.analysisStrategy,
+    robustness,
+    input.manifest,
+    integrity,
+  );
+  const preparedReceipts = [
+    preparedPlayer,
+    ...readyItems.flatMap((item) => {
+      const receipt =
+        input.manifest.preparedOpponents[item.templateId]?.prepared;
+      return receipt ? [receipt] : [];
+    }),
+  ];
+  const cacheReuses = preparedReceipts.filter(
+    (receipt) =>
+      receipt.cacheReused === true ||
+      initiallyPreparedRosterIds.has(receipt.rosterId),
+  ).length;
+  const failures = stressFailures(
+    input.manifest,
+    input.portfolio,
+  );
+  const trustedMatrices = trustedMatrixCount([
+    screeningReport,
+    deepDiveReport,
+  ]);
+  if (
+    input.manifest.simulationRequested &&
+    status === "failed" &&
+    failures.length === 0
+  ) {
+    failures.push({
+      stage: "screening",
+      code: "TESSERA_EVIDENCE_INCOMPLETE",
+      message:
+        "Tessera did not produce any trusted matrices for the requested simulation.",
+      opponentName: null,
+      retryable: true,
+    });
+  }
   const report: TesseraStressTestReport = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     reportKind: "tessera-stress-test",
     runId: input.manifest.runId,
     generatedAt: new Date().toISOString(),
-    source:
-      screeningReport.source === "tessera-ui"
+    runtime: getRuntimeProvenance(),
+    tesseraUiIdentity:
+      [
+        screeningReport?.tesseraUiIdentity,
+        deepDiveReport?.tesseraUiIdentity,
+      ]
+        .filter((identity): identity is string => Boolean(identity))
+        .sort()
+        .join("|") || null,
+    connectorEvents: [
+      ...(screeningReport?.connectorEvents ?? []),
+      ...(deepDiveReport?.connectorEvents ?? []),
+    ],
+    source: !input.manifest.simulationRequested
+      ? "prepare-only"
+      : trustedMatrices > 0
         ? "tessera-ui"
-        : "handoff-only",
-    status: executionStatus(
+        : "tessera-ui-failed",
+    status,
+    statusExplanation: stressStatusExplanation(
+      status,
       input.portfolio,
-      representatives,
-      input.configuration.analysisStrategy,
       robustness,
+      representatives,
       input.manifest,
+      integrity,
+    ),
+    preparation: {
+      status:
+        preparedReceipts.length === 1 + readyItems.length
+          ? "complete"
+          : preparedReceipts.length > 0
+            ? "partial"
+            : "failed",
+      source: "new-recruit",
+      uniqueRosters: preparedReceipts.length,
+      remoteMutations: Math.max(
+        0,
+        preparedReceipts.length - cacheReuses,
+      ),
+      cacheReuses,
+      connectorEvents: preparedReceipts.flatMap(
+        (receipt) => receipt.connectorEvents ?? [],
+      ),
+    },
+    simulation: {
+      requested: input.manifest.simulationRequested,
+      status: !input.manifest.simulationRequested
+        ? "not-requested"
+        : status === "complete" || status === "degraded"
+          ? "complete"
+          : status === "inconclusive"
+            ? "partial"
+            : "failed",
+      engine: input.manifest.simulationRequested
+        ? "tessera-ui"
+        : "none",
+      trustedMatrices,
+    },
+    failures,
+    profilePolicyHash: input.configuration.profilePolicyHash,
+    pinnedData: {
+      player: input.playerRoster.sourceData,
+      opponents: unique(
+        readyItems.map((item) =>
+          canonicalJson(item.roster.sourceData),
+        ),
+      ).map(
+        (value) =>
+          JSON.parse(value) as RosterDraftV1["sourceData"],
+      ),
+      cachedLiveUpdateCheck:
+        input.manifest.cachedLiveUpdateCheck,
+    },
+    integrity,
+    recovery: stressRecoverySummary(
+      input.manifest,
+      input.manifestPath,
+      input.opponentRoszPaths?.size ?? 0,
     ),
     player: preparedPlayer,
     opponentFactionId: input.portfolio.factionId,
@@ -2704,7 +5688,7 @@ async function executeStressTest(
     representatives,
     robustness,
     missionReadiness: mission.data,
-    findings: stressFindings(robustness, input.portfolio),
+    findings,
     changeCandidates,
     limitations: [
       "This report measures directional combat robustness, not game win probability.",
@@ -2753,15 +5737,116 @@ async function executeStressTest(
       input.options,
       true,
     );
+    const childReportArtifacts = [
+      ...Object.values(input.manifest.screening),
+      ...Object.values(input.manifest.deepDive),
+    ]
+      .filter(
+        (
+          entry,
+        ): entry is typeof entry & {
+          reportPath: string;
+          reportSha256: string;
+        } =>
+          entry.status === "complete" &&
+          entry.reportPath !== null &&
+          entry.reportSha256 !== null,
+      )
+      .filter(
+        (entry, index, entries) =>
+          entries.findIndex(
+            (candidate) =>
+              candidate.reportPath === entry.reportPath,
+          ) === index,
+      )
+      .map((entry) => ({
+        format: "child-report" as const,
+        written: entry.reportPath,
+        sha256: entry.reportSha256,
+      }));
+    const preparedArtifactDescriptors = (
+      await Promise.all(
+        preparedReceipts.flatMap((receipt, index) => [
+          fileSha256(receipt.sourceRoszPath).then((digest) => ({
+            format:
+              index === 0
+                ? ("player-source-rosz" as const)
+                : ("opponent-source-rosz" as const),
+            written: receipt.sourceRoszPath,
+            sha256: digest,
+          })),
+          fileSha256(receipt.enrichedRoszPath).then((digest) => ({
+            format:
+              index === 0
+                ? ("player-enriched-rosz" as const)
+                : ("opponent-enriched-rosz" as const),
+            written: receipt.enrichedRoszPath,
+            sha256: digest,
+          })),
+        ]),
+      )
+    ).filter(
+      (entry, index, entries) =>
+        entries.findIndex(
+          (candidate) =>
+            candidate.format === entry.format &&
+            candidate.written === entry.written,
+        ) === index,
+    );
+    const policyArtifacts: TesseraStressTestReport["artifacts"] = [];
+    if (input.manifest.profilePolicy) {
+      const policyContent = `${JSON.stringify(
+        input.manifest.profilePolicy,
+        null,
+        2,
+      )}\n`;
+      const policyDigest = await fileContentSha256(policyContent);
+      const policyFilename = `tessera-profile-policy-${policyDigest.slice(0, 12)}.json`;
+      const policyPath = path.join(
+        input.outputDirectory,
+        policyFilename,
+      );
+      if (await pathExists(policyPath)) {
+        if ((await fileSha256(policyPath)) !== policyDigest) {
+          throw new Error(
+            "The bundled profile-policy artifact changed.",
+          );
+        }
+      } else {
+        await writeFile(policyPath, policyContent, {
+          flag: "wx",
+        });
+      }
+      policyArtifacts.push({
+        format: "profile-policy",
+        written: policyPath,
+        sha256: policyDigest,
+      });
+    }
     report.artifacts = [
-      { format: "stress-json", written: path.basename(jsonPath) },
-      { format: "stress-html", written: path.basename(htmlPath) },
+      {
+        format: "stress-json",
+        written: path.basename(jsonPath),
+        sha256: null,
+      },
+      {
+        format: "stress-html",
+        written: path.basename(htmlPath),
+        sha256: null,
+      },
       {
         format: "stress-manifest",
         written: path.basename(input.manifestPath),
+        sha256: null,
       },
+      ...childReportArtifacts,
+      ...policyArtifacts,
+      ...preparedArtifactDescriptors,
     ];
-    Object.assign(report, portableStressReport(report));
+    Object.assign(
+      report,
+      portableStressReport(report, input.outputDirectory),
+    );
     await writeExportArtifacts(
       [
         {
@@ -2812,10 +5897,18 @@ async function executeStressTest(
       ),
     };
   }
+  const requestedWorkSucceeded =
+    status === "prepared" ||
+    status === "complete" ||
+    status === "degraded";
   return {
-    ok: true,
+    ok: requestedWorkSucceeded,
     data: report,
-    violations: [],
+    violations: requestedWorkSucceeded
+      ? []
+      : failures.map((entry) =>
+          issue(entry.code, entry.message),
+        ),
     warnings: warnings.map((message) =>
       issue("TESSERA_STRESS_WARNING", message, "warn"),
     ),
@@ -2827,7 +5920,7 @@ export async function runRosterStressTest(
   opponent: TesseraStressOpponentInput,
   options: TesseraStressOptions = {},
   dependencies: TesseraStressDependencies = {},
-): Promise<ResultEnvelope<TesseraStressTestReport>> {
+): Promise<ResultEnvelope<TesseraStressRunReport>> {
   const validation = validateRoster(playerRoster);
   if (!validation.ok) {
     return {
@@ -2836,6 +5929,34 @@ export async function runRosterStressTest(
       violations: validation.violations,
       warnings: validation.warnings,
     };
+  }
+  const freshnessAtEntry =
+    getCachedDataFreshnessResult();
+  const freshnessWarningMessages =
+    freshnessAtEntry?.warnings.map(
+      (warning) => `${warning.code}: ${warning.message}`,
+    ) ?? [];
+  const restartIssue = dependencies.runtimeIssue
+    ? dependencies.runtimeIssue()
+    : dependencies.deliver
+      ? null
+      : runtimeRestartIssue();
+  if (restartIssue) {
+    return failure(
+      restartIssue.code,
+      restartIssue.message,
+      validation.warnings,
+    );
+  }
+  if (
+    options.resumeManifestPath &&
+    options.restartManifestPath
+  ) {
+    return failure(
+      "TESSERA_STRESS_RECOVERY_MODE_CONFLICT",
+      "Choose either --resume or --restart-from, not both.",
+      validation.warnings,
+    );
   }
   let requestedProfilePolicy: ProfilePolicyV1 | null;
   try {
@@ -2858,32 +5979,88 @@ export async function runRosterStressTest(
       ? profilePolicyHash(requestedProfilePolicy)
       : null,
   );
+  const prospectiveRunId = crypto.randomUUID();
   const requestedOutput =
-    options.outputDirectory ?? "exports/tessera";
+    options.outputDirectory ??
+    (
+      options.resumeManifestPath
+        ? path.dirname(options.resumeManifestPath)
+        : defaultStressOutputDirectory(
+            playerRoster,
+            opponent.factionId,
+            prospectiveRunId,
+          )
+    );
   let outputDirectory = resolveFromWriteRoot(
     requestedOutput,
     options,
   );
+  const restartManifestPath = options.restartManifestPath
+    ? resolveFromWriteRoot(options.restartManifestPath, options)
+    : undefined;
+  const resumeManifestPath = options.resumeManifestPath
+    ? resolveFromWriteRoot(options.resumeManifestPath, options)
+    : undefined;
+  const writeRoot = path.resolve(options.rootDir ?? process.cwd());
+  if (
+    !options.allowOutsideRoot &&
+    (
+      !pathInside(writeRoot, outputDirectory) ||
+      (
+        restartManifestPath !== undefined &&
+        !pathInside(writeRoot, restartManifestPath)
+      ) ||
+      (
+        resumeManifestPath !== undefined &&
+        !pathInside(writeRoot, resumeManifestPath)
+      )
+    )
+  ) {
+    return failure(
+      "TESSERA_OUTPUT_OUTSIDE_ROOT",
+      "The Tessera output or recovery path is outside the allowed write root.",
+      validation.warnings,
+    );
+  }
+  if (outputDirectory === path.parse(outputDirectory).root) {
+    return failure(
+      "TESSERA_OUTPUT_OUTSIDE_ROOT",
+      "A filesystem root cannot be used as the Tessera output directory.",
+      validation.warnings,
+    );
+  }
   const manifestPath =
-    (options.resumeManifestPath
-      ? resolveFromWriteRoot(options.resumeManifestPath, options)
-      : undefined) ??
+    resumeManifestPath ??
     path.join(outputDirectory, "stress-manifest.json");
+  const sourceManifestPath =
+    options.resumeManifestPath
+      ? manifestPath
+      : restartManifestPath;
+  const restarting = restartManifestPath !== undefined;
   let manifest: TesseraStressManifest;
   let resumed = false;
-  if (options.resumeManifestPath) {
+  if (sourceManifestPath) {
     try {
-      manifest = await readManifest(manifestPath);
+      manifest = await readManifest(sourceManifestPath);
     } catch (error) {
       return failure(
-        "TESSERA_STRESS_RESUME_UNREADABLE",
+        restarting
+          ? "TESSERA_STRESS_RESTART_UNREADABLE"
+          : "TESSERA_STRESS_RESUME_UNREADABLE",
         error instanceof Error
           ? error.message
-          : "The stress-test resume manifest could not be read.",
+          : "The stress-test recovery manifest could not be read.",
         validation.warnings,
       );
     }
-    resumed = true;
+    resumed = !restarting;
+    manifest.cachedLiveUpdateCheck =
+      freshnessAtEntry?.data ??
+      manifest.cachedLiveUpdateCheck;
+    manifest.warnings = unique([
+      ...manifest.warnings,
+      ...freshnessWarningMessages,
+    ]);
     const migratedFromV1 =
       (manifest as TesseraStressManifest & {
         __migratedFrom?: number | null;
@@ -2895,6 +6072,16 @@ export async function runRosterStressTest(
         manifest.profilePolicyHash,
       );
     }
+    const requestedEnrichedPolicyValidation =
+      manifest.enrichedProfileRequirements
+        ? validateProfilePolicy(
+            manifest.enrichedProfileRequirements,
+            requestedProfilePolicy,
+          )
+        : null;
+    const canAdoptEnrichedProfilePolicy =
+      requestedEnrichedPolicyValidation?.valid === true &&
+      !manifestHasSimulationAttempts(manifest);
     if (
       !options.allowOutsideRoot &&
       !pathInside(
@@ -2908,22 +6095,44 @@ export async function runRosterStressTest(
         validation.warnings,
       );
     }
-    outputDirectory = manifest.outputDirectory;
+    if (restarting) {
+      if (
+        path.resolve(outputDirectory) ===
+          path.resolve(manifest.outputDirectory) ||
+        path.resolve(manifestPath) ===
+          path.resolve(sourceManifestPath)
+      ) {
+        return failure(
+          "TESSERA_STRESS_RESTART_OUTPUT_COLLISION",
+          "A restarted run needs a new --out-dir so its fresh manifest and reports cannot overwrite the source run.",
+          validation.warnings,
+        );
+      }
+    } else {
+      outputDirectory = manifest.outputDirectory;
+    }
     const legacyConfigurationMatches =
       migratedFromV1 &&
       canonicalJson({
         ...manifest.configuration,
         profilePolicyHash: configuration.profilePolicyHash,
       }) === canonicalJson(configuration);
+    const enrichedPolicyConfigurationMatches =
+      canAdoptEnrichedProfilePolicy &&
+      configurationMatchesExceptProfilePolicy(
+        manifest.configuration,
+        configuration,
+      );
     if (
       manifest.playerFingerprint !==
         rosterExecutionFingerprint(playerRoster) ||
       manifest.opponentFactionId !== opponent.factionId ||
       manifest.simulationRequested !==
-        (options.experimental === true) ||
+        stressSimulationRequested(options) ||
       (
         !configurationMatches(manifest.configuration, configuration) &&
-        !legacyConfigurationMatches
+        !legacyConfigurationMatches &&
+        !enrichedPolicyConfigurationMatches
       )
     ) {
       return failure(
@@ -2978,7 +6187,12 @@ export async function runRosterStressTest(
         profilePolicyHash: legacyPolicyValidation.hash,
       };
       try {
+        if (restarting) {
+          // A restart writes only the new v2 manifest below. The v1 source
+          // remains an immutable recovery record.
+        } else {
         await writeManifest(manifest, manifestPath, options, true);
+        }
       } catch (error) {
         return failure(
           "WRITE_FAILED",
@@ -2989,7 +6203,7 @@ export async function runRosterStressTest(
         );
       }
     }
-    if (manifest.finalArtifacts) {
+    if (manifest.finalArtifacts && !restarting) {
       const jsonPresent = await pathExists(
         manifest.finalArtifacts.json,
       );
@@ -3044,18 +6258,54 @@ export async function runRosterStressTest(
               "The completed report identity does not match its manifest.",
             );
           }
-          return {
-            ok: true,
-            data: completed,
-            violations: [],
-            warnings: completed.warnings.map((message) =>
-              issue(
-                "TESSERA_STRESS_WARNING",
-                message,
-                "warn",
+          if (
+            manifest.enrichedProfileRequirements !== null &&
+            (
+              !manifest.simulationRequested ||
+              stressReportHasVerifiedMatrixIntegrity(completed)
+            )
+          ) {
+            return {
+              ok: true,
+              data: completed,
+              violations: [],
+              warnings: completed.warnings.map((message) =>
+                issue(
+                  "TESSERA_STRESS_WARNING",
+                  message,
+                  "warn",
+                ),
               ),
-            ),
-          };
+            };
+          }
+          if (manifest.enrichedProfileRequirements === null) {
+            manifest.warnings = unique([
+              ...manifest.warnings,
+              "The prior completed report predates enriched profile-inventory provenance; prepared artifacts and the frozen policy will be revalidated before its child reports are reused.",
+            ]);
+          }
+          if (
+            manifest.simulationRequested &&
+            !stressReportHasVerifiedMatrixIntegrity(completed)
+          ) {
+            manifest.warnings = unique([
+              ...manifest.warnings,
+              "The prior completed report predates verified matrix fingerprints; its frozen child reports will be revalidated and recaptured as needed.",
+            ]);
+            for (const stage of [
+              manifest.screening,
+              manifest.deepDive,
+            ]) {
+              for (const entry of Object.values(stage)) {
+                if (entry.status !== "complete") continue;
+                entry.error = structuredStageError(
+                  "TESSERA_MATRIX_FINGERPRINT_MISSING",
+                  "The stored child report predates verified matrix fingerprints and must be recaptured.",
+                );
+                entry.nextAction = stageNextAction(entry);
+              }
+            }
+          }
         } catch (error) {
           return failure(
             "TESSERA_STRESS_FINAL_REPORT_INVALID",
@@ -3096,42 +6346,166 @@ export async function runRosterStressTest(
       );
     }
     const profileValidation = validateProfilePolicy(
-      aggregateProfileRequirements([
-        playerRoster,
-        ...manifest.portfolio.items.flatMap((item) =>
-          item.roster ? [item.roster] : [],
-        ),
-      ]),
+      manifest.enrichedProfileRequirements ??
+        aggregateProfileRequirements([
+          playerRoster,
+          ...manifest.portfolio.items.flatMap((item) =>
+            item.roster ? [item.roster] : [],
+          ),
+        ]),
       requestedProfilePolicy,
     );
     if (
       !profileValidation.valid ||
-      profileValidation.hash !== manifest.profilePolicyHash
+      (
+        profileValidation.hash !== manifest.profilePolicyHash &&
+        !canAdoptEnrichedProfilePolicy
+      )
     ) {
       return failure(
-        "TESSERA_STRESS_RESUME_PROFILE_POLICY_CHANGED",
-        "The supplied profile policy is incomplete, invalid, or differs from the policy frozen in this run. Resume and paired revisions require the exact canonical policy hash.",
+        manifest.enrichedProfileRequirements &&
+          !profileValidation.valid &&
+          !manifestHasSimulationAttempts(manifest)
+          ? "TESSERA_PROFILE_POLICY_REQUIRED"
+          : "TESSERA_STRESS_RESUME_PROFILE_POLICY_CHANGED",
+        manifest.enrichedProfileRequirements &&
+          !profileValidation.valid &&
+          !manifestHasSimulationAttempts(manifest)
+          ? "The supplied policy does not resolve every profile decision found in the prepared New Recruit archives. Complete the generated policy scaffold, then resume this manifest to reuse those artifacts."
+          : "The supplied profile policy is incomplete, invalid, or differs from the policy frozen in this run. Resume and paired revisions require the exact canonical policy hash.",
         validation.warnings,
       );
+    }
+    if (
+      canAdoptEnrichedProfilePolicy &&
+      profileValidation.hash !== manifest.profilePolicyHash
+    ) {
+      manifest.profilePolicy = requestedProfilePolicy;
+      manifest.profilePolicyHash = profileValidation.hash;
+      manifest.configuration.profilePolicyHash =
+        profileValidation.hash;
+      configuration = {
+        ...configuration,
+        profilePolicyHash: profileValidation.hash,
+      };
+      manifest.warnings = unique([
+        ...manifest.warnings,
+        "A completed policy was frozen against the verified New Recruit-enriched profile inventory before any Tessera simulation attempts.",
+      ]);
     }
     manifest.warnings = unique([
       ...manifest.warnings,
       ...validation.warnings.map((warning) => warning.message),
       ...preflight.warnings.map((warning) => warning.message),
     ]);
-    try {
-      await writeManifest(manifest, manifestPath, options, true);
-    } catch (error) {
-      return failure(
-        "WRITE_FAILED",
-        error instanceof Error
-          ? error.message
-          : "The stress-test resume manifest could not be updated.",
-        [
-          ...validation.warnings,
-          ...preflight.warnings,
-        ],
+    if (restarting) {
+      const sourceManifest = manifest;
+    const restartedManifest = newManifest(
+        playerRoster,
+        sourceManifest.opponentFactionId,
+        sourceManifest.portfolio,
+        sourceManifest.configuration,
+        outputDirectory,
+        sourceManifest.simulationRequested,
+        sourceManifest.profilePolicy,
+        unique([
+          ...sourceManifest.warnings,
+          `Restarted cleanly from run ${sourceManifest.runId}; only verified prepared artifacts are eligible for reuse.`,
+        ]),
+        prospectiveRunId,
+        freshnessAtEntry?.data ??
+          sourceManifest.cachedLiveUpdateCheck,
       );
+      restartedManifest.preparedPlayer =
+        sourceManifest.preparedPlayer;
+      restartedManifest.preparedPlayerSha256 =
+        sourceManifest.preparedPlayerSha256;
+      restartedManifest.preparedOpponents = {
+        ...sourceManifest.preparedOpponents,
+      };
+      restartedManifest.enrichedProfileRequirements =
+        sourceManifest.enrichedProfileRequirements;
+      restartedManifest.stageContracts = {
+        screening:
+          sourceManifest.stageContracts.screening === null
+            ? null
+            : sortedScenarioContract(
+                sourceManifest.stageContracts.screening,
+              ),
+        deepDive:
+          sourceManifest.stageContracts.deepDive === null
+            ? null
+            : sortedScenarioContract(
+                sourceManifest.stageContracts.deepDive,
+              ),
+      };
+      manifest = restartedManifest;
+      try {
+        await materializeManifestPreparedArtifacts(
+          manifest,
+          outputDirectory,
+        );
+        await resolveExportArtifactTargets(
+          [
+            {
+              format: "roster-json",
+              filename: path.basename(manifestPath),
+              mimeType: "application/json",
+              encoding: "utf8",
+              content: "",
+            },
+          ],
+          path.dirname(manifestPath),
+          options,
+        );
+        await finalStressTargets(
+          playerRoster,
+          manifest.portfolio,
+          outputDirectory,
+          options,
+        );
+        await writeManifest(
+          manifest,
+          manifestPath,
+          options,
+          options.overwrite === true,
+        );
+      } catch (error) {
+        const outputFailure = tesseraOutputFailure(error);
+        const materializationCode =
+          materializationFailureCode(error);
+        return failure(
+          materializationCode ===
+              "TESSERA_STRESS_BUNDLE_ARTIFACT_WRITE_FAILED"
+            ? outputFailure.code
+            : materializationCode,
+          materializationCode ===
+              "TESSERA_STRESS_BUNDLE_ARTIFACT_WRITE_FAILED"
+            ? outputFailure.message
+            : error instanceof Error
+              ? error.message
+              : "The restarted stress-test manifest could not be created.",
+          [
+            ...validation.warnings,
+            ...preflight.warnings,
+          ],
+        );
+      }
+    } else {
+      try {
+        await writeManifest(manifest, manifestPath, options, true);
+      } catch (error) {
+        return failure(
+          "WRITE_FAILED",
+          error instanceof Error
+            ? error.message
+            : "The stress-test resume manifest could not be updated.",
+          [
+            ...validation.warnings,
+            ...preflight.warnings,
+          ],
+        );
+      }
     }
   } else {
     const generated = generateFactionStressPortfolio({
@@ -3229,15 +6603,18 @@ export async function runRosterStressTest(
       ...generated.warnings,
       ...preflight.warnings,
     ].map((warning) => warning.message);
+    initialWarnings.push(...freshnessWarningMessages);
     manifest = newManifest(
       playerRoster,
       preflight.data.factionId,
       preflight.data,
       configuration,
       outputDirectory,
-      options.experimental === true,
+      stressSimulationRequested(options),
       requestedProfilePolicy,
       initialWarnings,
+      prospectiveRunId,
+      freshnessAtEntry?.data ?? null,
     );
     try {
       await resolveExportArtifactTargets(
@@ -3266,11 +6643,10 @@ export async function runRosterStressTest(
         options.overwrite === true,
       );
     } catch (error) {
+      const outputFailure = tesseraOutputFailure(error);
       return failure(
-        "WRITE_FAILED",
-        error instanceof Error
-          ? error.message
-          : "The stress-test output paths could not be reserved.",
+        outputFailure.code,
+        outputFailure.message,
         [...validation.warnings, ...generated.warnings],
       );
     }
@@ -3290,12 +6666,14 @@ export async function runRosterStressTest(
     },
     dependencies,
     frozenRepresentatives:
-      resumed && manifest.representatives.length === 3
+      resumed &&
+      manifest.representatives.length ===
+        requiredStressEvidence(manifest.portfolio).representatives
         ? manifest.representatives
         : undefined,
   });
   if (
-    options.experimental &&
+    manifest.simulationRequested &&
     !dependencies.runBrowser &&
     !manifestHasRetryableWork(manifest)
   ) {
@@ -3396,6 +6774,9 @@ async function readStressBaseline(
   const report = {
     ...parsed.data,
     schemaVersion: 2 as const,
+    portfolio: normalizePortfolioCoverage(
+      parsed.data.portfolio as unknown as TesseraStressPortfolio,
+    ),
     configuration: {
       ...parsed.data.configuration,
       profilePolicyHash:
@@ -3443,6 +6824,27 @@ export async function compareRosterStressRevision(
     baselineReportPath,
     options,
   );
+  const revisionWriteRoot = path.resolve(
+    options.rootDir ?? process.cwd(),
+  );
+  if (
+    !options.allowOutsideRoot &&
+    (
+      !pathInside(revisionWriteRoot, resolvedBaselineReportPath) ||
+      (
+        options.outputDirectory !== undefined &&
+        !pathInside(
+          revisionWriteRoot,
+          resolveFromWriteRoot(options.outputDirectory, options),
+        )
+      )
+    )
+  ) {
+    return failure(
+      "TESSERA_OUTPUT_OUTSIDE_ROOT",
+      "The Tessera baseline or revision output path is outside the allowed write root.",
+    );
+  }
   let baseline: TesseraStressTestReport;
   try {
     baseline = await readStressBaseline(resolvedBaselineReportPath);
@@ -3493,7 +6895,36 @@ export async function compareRosterStressRevision(
       "TESSERA_STRESS_BASELINE_PROVENANCE_INVALID",
       error instanceof Error
         ? error.message
-        : "The baseline manifest or report hash could not be verified.",
+      : "The baseline manifest or report hash could not be verified.",
+    );
+  }
+  const baselineProfileProvenance =
+    baselineManifest.enrichedProfileRequirements === null
+      ? null
+      : validateProfilePolicy(
+          baselineManifest.enrichedProfileRequirements,
+          baselineManifest.profilePolicy,
+        );
+  if (
+    !baselineProfileProvenance?.valid ||
+    baselineProfileProvenance.hash !==
+      baselineManifest.profilePolicyHash
+  ) {
+    return failure(
+      "TESSERA_STRESS_BASELINE_PROFILE_PROVENANCE_REQUIRED",
+      "The paired revision baseline does not retain a policy verified against the complete New Recruit-enriched profile inventory. Run a new v2 baseline; RosterPilot will not infer the missing choices.",
+    );
+  }
+  if (
+    baselineManifest.stageContracts.screening === null ||
+    (
+      baselineManifest.configuration.analysisStrategy === "staged" &&
+      baselineManifest.stageContracts.deepDive === null
+    )
+  ) {
+    return failure(
+      "TESSERA_STRESS_BASELINE_SETTINGS_PROVENANCE_REQUIRED",
+      "The paired revision baseline does not retain an exact frozen Tessera settings and iteration contract for every required stage. Run a new v2 baseline; RosterPilot will not infer missing execution settings.",
     );
   }
   if (
@@ -3618,6 +7049,13 @@ export async function compareRosterStressRevision(
       validation.warnings,
     );
   }
+  if (!stressReportHasVerifiedMatrixIntegrity(baseline)) {
+    return failure(
+      "TESSERA_STRESS_BASELINE_INTEGRITY_REQUIRED",
+      "Paired revision comparison requires a baseline with verified v2 matrix-integrity fingerprints. Run a new baseline instead of pairing against unverified or aliased capture evidence.",
+      validation.warnings,
+    );
+  }
   const requiredSamples =
     baseline.suite === "diverse-9" ? 6 : 3;
   const usableSamples =
@@ -3638,11 +7076,6 @@ export async function compareRosterStressRevision(
     baseline.representatives.map(
       (representative) => representative.templateId,
     ),
-  );
-  const confidentTemplates = new Set(
-    baselineRobustness.samples
-      .filter((sample) => sample.status === "confident")
-      .map((sample) => sample.templateId),
   );
   const representativesUseFrozenTemplates =
     baseline.representatives.every((representative) =>
@@ -3777,9 +7210,6 @@ export async function compareRosterStressRevision(
     representativeTemplates.size !== 3 ||
     !representativesUseFrozenTemplates ||
     readyItems.length !== baseline.portfolio.coverage.ready ||
-    !readyTemplateIds.every((templateId) =>
-      confidentTemplates.has(templateId),
-    ) ||
     canonicalJson(baselineScreeningShape) !==
       canonicalJson(expectedScreeningProvenance) ||
     baseline.stageProvenance.screening.iterations.length === 0 ||
@@ -3910,12 +7340,17 @@ export async function compareRosterStressRevision(
     );
   }
 
+  const revisionRunId = crypto.randomUUID();
   const outputDirectory =
     options.outputDirectory
       ? resolveFromWriteRoot(options.outputDirectory, options)
-      : path.join(
-          path.dirname(resolvedBaselineReportPath),
-          "stress-revision",
+      : resolveFromWriteRoot(
+          defaultStressOutputDirectory(
+            revisedRoster,
+            baseline.opponentFactionId,
+            revisionRunId,
+          ),
+          options,
         );
   const comparisonBasename = `${safeName(revisedRoster.name) || "roster"}-stress-revision`;
   let comparisonTargets: string[];
@@ -3941,11 +7376,10 @@ export async function compareRosterStressRevision(
       options,
     );
   } catch (error) {
+    const outputFailure = tesseraOutputFailure(error);
     return failure(
-      "WRITE_FAILED",
-      error instanceof Error
-        ? error.message
-        : "The revision output paths could not be reserved.",
+      outputFailure.code,
+      outputFailure.message,
       validation.warnings,
     );
   }
@@ -3958,6 +7392,8 @@ export async function compareRosterStressRevision(
     outputDirectory,
     true,
     baselineManifest.profilePolicy,
+    [],
+    revisionRunId,
   );
   const revisionRunDirectory = path.join(
     outputDirectory,
@@ -3966,6 +7402,20 @@ export async function compareRosterStressRevision(
   );
   manifest.outputDirectory = path.resolve(revisionRunDirectory);
   manifest.representatives = baseline.representatives;
+  manifest.stageContracts = {
+    screening:
+      baselineManifest.stageContracts.screening === null
+        ? null
+        : sortedScenarioContract(
+            baselineManifest.stageContracts.screening,
+          ),
+    deepDive:
+      baselineManifest.stageContracts.deepDive === null
+        ? null
+        : sortedScenarioContract(
+            baselineManifest.stageContracts.deepDive,
+          ),
+  };
   const manifestPath = path.join(
     revisionRunDirectory,
     "stress-manifest.json",
@@ -3978,11 +7428,10 @@ export async function compareRosterStressRevision(
       false,
     );
   } catch (error) {
+    const outputFailure = tesseraOutputFailure(error);
     return failure(
-      "WRITE_FAILED",
-      error instanceof Error
-        ? error.message
-        : "The revision manifest could not be written.",
+      outputFailure.code,
+      outputFailure.message,
       validation.warnings,
     );
   }
@@ -4003,7 +7452,27 @@ export async function compareRosterStressRevision(
     opponentRoszPaths: opponentPaths,
     frozenRepresentatives: baseline.representatives,
   });
-  if (!rerun.ok || !rerun.data) {
+  const settingsFailure = [
+    ...Object.values(manifest.screening),
+    ...Object.values(manifest.deepDive),
+  ].find(
+    (entry) =>
+      entry.error?.code === "TESSERA_SETTINGS_CHANGED" ||
+      entry.error?.code === "TESSERA_SETTINGS_REPLAY_FAILED" ||
+      entry.error?.code ===
+        "TESSERA_SETTINGS_PROVENANCE_MISSING",
+  );
+  if (settingsFailure?.error) {
+    return failure(
+      "TESSERA_STRESS_SETTINGS_CHANGED",
+      settingsFailure.error.message,
+      rerun.warnings,
+    );
+  }
+  if (
+    !rerun.data ||
+    rerun.data.reportKind !== "tessera-stress-test"
+  ) {
     return {
       ok: false,
       data: null,
@@ -4039,6 +7508,11 @@ export async function compareRosterStressRevision(
       .filter((sample) => sample.status === "confident")
       .map((sample) => sample.templateId),
   );
+  const revisedConfidentPostures = new Set(
+    (revised.robustness?.samples ?? [])
+      .filter((sample) => sample.status === "confident")
+      .map((sample) => sample.posture),
+  );
   if (
     revised.source !== "tessera-ui" ||
     !["complete", "degraded"].includes(revised.status) ||
@@ -4046,9 +7520,8 @@ export async function compareRosterStressRevision(
     revised.deepDiveReport?.status !== "complete" ||
     revisedScreeningError !== null ||
     revisedDeepDiveError !== null ||
-    !readyTemplateIds.every((templateId) =>
-      revisedConfidentTemplates.has(templateId),
-    ) ||
+    revisedConfidentTemplates.size < requiredSamples ||
+    revisedConfidentPostures.size !== 3 ||
     canonicalJson(revised.representatives) !==
       canonicalJson(baseline.representatives) ||
     canonicalJson(revised.portfolio) !==
@@ -4058,13 +7531,17 @@ export async function compareRosterStressRevision(
   ) {
     return failure(
       "TESSERA_STRESS_REVISION_INCOMPLETE",
-      "The revised roster did not produce complete, confident screening and deep-dive results for every frozen proxy. No paired conclusion was produced.",
+      `The revised roster did not produce at least ${requiredSamples} confident screening proxies across all three postures plus complete frozen deep dives. No paired conclusion was produced.`,
       rerun.warnings,
     );
   }
   if (
-    canonicalJson(revised.stageProvenance) !==
-    canonicalJson(baseline.stageProvenance)
+    canonicalJson(
+      pairedStageExecutionContract(revised.stageProvenance),
+    ) !==
+    canonicalJson(
+      pairedStageExecutionContract(baseline.stageProvenance),
+    )
   ) {
     return failure(
       "TESSERA_STRESS_SETTINGS_CHANGED",
@@ -4137,13 +7614,21 @@ export async function compareRosterStressRevision(
     report.artifacts = [
       {
         format: "stress-revision-json",
-        written: comparisonTargets[0],
+        written: path.basename(comparisonTargets[0]),
       },
       {
         format: "stress-revision-html",
-        written: comparisonTargets[1],
+        written: path.basename(comparisonTargets[1]),
       },
     ];
+    Object.assign(
+      report,
+      portableReportValue(
+        report,
+        "",
+        outputDirectory,
+      ) as TesseraStressRevisionReport,
+    );
     await writeExportArtifacts(
       [
         {

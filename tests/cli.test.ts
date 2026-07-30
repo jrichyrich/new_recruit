@@ -3,6 +3,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
 
+import {
+  buildRoster,
+  rosterExecutionFingerprint,
+  type RosterDraftV1,
+} from "../lib/rosterpilot";
+
 const run = promisify(execFile);
 
 test("CLI standard help flag describes independent workflows", async () => {
@@ -63,18 +69,22 @@ test("CLI preserves natural-language build preferences and constraints", async (
   );
   const result = JSON.parse(stdout) as {
     ok: boolean;
-    data: {
-      pointsLimit: number;
-      totalPoints: number;
-      preferences: string[];
-      constraints: { allowNamedCharacters: boolean };
-    };
+    data: RosterDraftV1;
   };
   assert.equal(result.ok, true);
   assert.equal(result.data.pointsLimit, 1000);
-  assert.equal(result.data.totalPoints, 990);
+  assert.equal(result.data.totalPoints, 1000);
   assert.deepEqual(result.data.preferences, ["mobility"]);
   assert.equal(result.data.constraints.allowNamedCharacters, false);
+  const direct = buildRoster({
+    prompt:
+      "Build a 1,000-point fast Custodes army with no named characters",
+  });
+  assert.ok(direct.data);
+  assert.equal(
+    rosterExecutionFingerprint(result.data),
+    rosterExecutionFingerprint(direct.data),
+  );
 });
 
 test("CLI reports sanitized local New Recruit companion status", async () => {

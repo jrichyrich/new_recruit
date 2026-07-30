@@ -196,12 +196,17 @@ export async function checkDataFreshness(
     );
   }
 
-  return {
+  const result: ResultEnvelope<LiveDataFreshness> = {
     ok: true,
     data,
     violations: [],
     warnings,
   };
+  sharedFreshnessCache = {
+    expiresAt: Date.now() + 15 * 60_000,
+    result,
+  };
+  return result;
 }
 
 export async function checkDataFreshnessCached(
@@ -223,6 +228,32 @@ export async function checkDataFreshnessCached(
     result,
   };
   return result;
+}
+
+export function getCachedDataFreshness(): LiveDataFreshness | null {
+  return sharedFreshnessCache?.result.data ?? null;
+}
+
+export function getCachedDataFreshnessResult():
+  | ResultEnvelope<LiveDataFreshness>
+  | null {
+  if (
+    !sharedFreshnessCache ||
+    sharedFreshnessCache.expiresAt <= Date.now()
+  ) {
+    return null;
+  }
+  return sharedFreshnessCache.result;
+}
+
+export function setCachedDataFreshness(
+  result: ResultEnvelope<LiveDataFreshness>,
+  cacheMs = 15 * 60_000,
+): void {
+  sharedFreshnessCache = {
+    expiresAt: Date.now() + cacheMs,
+    result,
+  };
 }
 
 export function addFreshnessWarnings<T>(

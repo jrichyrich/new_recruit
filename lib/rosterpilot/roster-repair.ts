@@ -4,8 +4,12 @@ import {
   listDetachments,
   validateRoster,
 } from "./engine";
+import { getNewRecruitFactionCatalogue } from "./catalogue";
 import { analyzeMissionReadiness } from "./mission-readiness";
-import { rosterExecutionFingerprint } from "./stress-portfolio";
+import {
+  knownBlockedUnitIds,
+  rosterExecutionFingerprint,
+} from "./stress-portfolio";
 import type {
   BuildRosterInput,
   PreferenceTag,
@@ -145,24 +149,40 @@ export async function repairRosterDeterministically(
   const detachments = listDetachments(factionId)
     .map((detachment) => detachment.id)
     .sort();
+  const mapping = getNewRecruitFactionCatalogue(factionId);
+  const blocked = knownBlockedUnitIds(factionId);
+  const requestedCollection = initial.data.constraints.collectionUnitIds
+    ? new Set(initial.data.constraints.collectionUnitIds)
+    : null;
+  const exportableCollection = Object.keys(mapping?.units ?? {})
+    .filter((unitId) => !blocked.has(unitId))
+    .filter((unitId) => !requestedCollection || requestedCollection.has(unitId))
+    .sort();
   const variants = preferenceVariants(initial.data.preferences);
   const candidateInputs: BuildRosterInput[] = [];
   for (const detachmentId of detachments) {
     for (const preferences of variants) {
-      for (const allowNamedCharacters of [
-        initial.data.constraints.allowNamedCharacters,
-        !initial.data.constraints.allowNamedCharacters,
-      ]) {
-        candidateInputs.push({
-          ...buildInput,
-          faction: factionId,
-          pointsLimit: initial.data.pointsLimit,
-          preferences,
-          detachmentId,
-          allowNamedCharacters,
-          allowLegends: initial.data.constraints.allowLegends,
-        });
-      }
+      candidateInputs.push({
+        ...buildInput,
+        playerFaction: factionId,
+        faction: factionId,
+        pointsLimit: initial.data.pointsLimit,
+        preferences,
+        detachmentId,
+        allowNamedCharacters:
+          initial.data.constraints.allowNamedCharacters,
+        allowLegends: initial.data.constraints.allowLegends,
+        collectionUnitIds: exportableCollection,
+        requiredUnitIds:
+          initial.data.constraints.requiredUnitIds ??
+          buildInput.requiredUnitIds,
+        excludedUnitIds:
+          initial.data.constraints.excludedUnitIds ??
+          buildInput.excludedUnitIds,
+        requiredWarlordUnitId:
+          initial.data.constraints.requiredWarlordUnitId ??
+          buildInput.requiredWarlordUnitId,
+      });
     }
   }
   const unique = new Map<string, DeterministicRosterRepairResult>();

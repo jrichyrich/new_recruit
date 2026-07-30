@@ -6,7 +6,7 @@
   "expected": {
     "factionId": "adeptus-custodes",
     "pointsLimit": 1000,
-    "totalPoints": 990,
+    "totalPoints": 1000,
     "legal": true,
     "allowNamedCharacters": false
   }

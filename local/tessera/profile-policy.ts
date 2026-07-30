@@ -16,6 +16,8 @@ export const ProfilePolicySchema = z.object({
   entries: z.array(z.object({
     faction: z.string().min(1),
     unit: z.string().min(1),
+    unitOccurrence: z.number().int().positive().optional(),
+    modelCount: z.number().int().positive().optional(),
     weaponGroup: z.string().min(1),
     phase: z.enum(["shooting", "fight"]),
     selectedProfile: z.string().min(1),
@@ -23,22 +25,70 @@ export const ProfilePolicySchema = z.object({
   })),
 }).strict();
 
-function normalized(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+function canonicalPunctuation(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[‘’‛`´]/g, "'")
+    .replace(/[“”„‟]/g, '"')
+    .replace(/[‐‑‒–—―]/g, "-");
 }
 
-function entryKey(
+export function normalizeProfileIdentity(value: string): string {
+  return canonicalPunctuation(value)
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase();
+}
+
+type ProfileIdentity = Pick<
+  TesseraProfilePolicyEntry,
+  "faction" | "unit" | "weaponGroup" | "phase"
+> & {
+  unitOccurrence?: number;
+  modelCount?: number;
+};
+
+function baseEntryKey(
   value: Pick<
     TesseraProfilePolicyEntry,
     "faction" | "unit" | "weaponGroup" | "phase"
   >,
 ): string {
   return [
-    normalized(value.faction),
-    normalized(value.unit),
-    normalized(value.weaponGroup),
+    normalizeProfileIdentity(value.faction),
+    normalizeProfileIdentity(value.unit),
+    normalizeProfileIdentity(value.weaponGroup),
     value.phase,
   ].join("|");
+}
+
+export function profilePolicyIdentityKey(
+  value: ProfileIdentity,
+): string {
+  return [
+    baseEntryKey(value),
+    `models:${value.modelCount ?? "legacy"}`,
+    `occurrence:${value.unitOccurrence ?? "legacy"}`,
+  ].join("|");
+}
+
+export function profilePolicyIdentityMatches(
+  left: ProfileIdentity,
+  right: ProfileIdentity,
+): boolean {
+  return (
+    baseEntryKey(left) === baseEntryKey(right) &&
+    (
+      left.modelCount === undefined ||
+      right.modelCount === undefined ||
+      left.modelCount === right.modelCount
+    ) &&
+    (
+      left.unitOccurrence === undefined ||
+      right.unitOccurrence === undefined ||
+      left.unitOccurrence === right.unitOccurrence
+    )
+  );
 }
 
 function canonicalPolicy(policy: ProfilePolicyV1): ProfilePolicyV1 {
@@ -47,16 +97,26 @@ function canonicalPolicy(policy: ProfilePolicyV1): ProfilePolicyV1 {
     policyKind: "tessera-profile-policy",
     entries: [...policy.entries]
       .map((entry) => ({
-        faction: entry.faction.trim(),
-        unit: entry.unit.trim(),
-        weaponGroup: entry.weaponGroup.trim(),
+        faction: canonicalPunctuation(entry.faction).trim(),
+        unit: canonicalPunctuation(entry.unit).trim(),
+        ...(entry.unitOccurrence === undefined
+          ? {}
+          : { unitOccurrence: entry.unitOccurrence }),
+        ...(entry.modelCount === undefined
+          ? {}
+          : { modelCount: entry.modelCount }),
+        weaponGroup: canonicalPunctuation(entry.weaponGroup).trim(),
         phase: entry.phase,
-        selectedProfile: entry.selectedProfile.trim(),
+        selectedProfile: canonicalPunctuation(
+          entry.selectedProfile,
+        ).trim(),
         activeCount: entry.activeCount,
       }))
       .sort(
         (left, right) =>
-          entryKey(left).localeCompare(entryKey(right)) ||
+          profilePolicyIdentityKey(left).localeCompare(
+            profilePolicyIdentityKey(right),
+          ) ||
           left.selectedProfile.localeCompare(right.selectedProfile) ||
           left.activeCount - right.activeCount,
       ),
@@ -74,27 +134,66 @@ export function aggregateProfileRequirements(
   rosters: RosterDraftV1[],
 ): TesseraProfileRequirement[] {
   const grouped = new Map<string, TesseraProfileRequirement>();
-  for (const requirement of rosters.flatMap(rosterProfileRequirements)) {
-    const key = entryKey(requirement);
-    const current = grouped.get(key);
-    if (current) {
-      current.activeCount = Math.max(
-        current.activeCount,
-        requirement.activeCount,
-      );
-      current.availableProfiles = [
-        ...new Set([
-          ...current.availableProfiles,
-          ...requirement.availableProfiles,
-        ]),
-      ].sort();
-      current.selectionId = null;
-    } else {
-      grouped.set(key, structuredClone(requirement));
+  for (const roster of rosters) {
+    const occurrenceByUnitSize = new Map<string, number>();
+    const selectionIdentity = new Map<
+      string,
+      { modelCount: number; unitOccurrence: number }
+    >();
+    for (const selection of roster.units) {
+      const unitSizeKey = [
+        normalizeProfileIdentity(selection.name),
+        selection.modelCount,
+      ].join("|");
+      const unitOccurrence =
+        (occurrenceByUnitSize.get(unitSizeKey) ?? 0) + 1;
+      occurrenceByUnitSize.set(unitSizeKey, unitOccurrence);
+      selectionIdentity.set(selection.selectionId, {
+        modelCount: selection.modelCount,
+        unitOccurrence,
+      });
+    }
+    for (const requirement of rosterProfileRequirements(roster)) {
+      const identity =
+        requirement.selectionId === null
+          ? undefined
+          : selectionIdentity.get(requirement.selectionId);
+      const discriminated = {
+        ...structuredClone(requirement),
+        ...(identity ?? {}),
+      };
+      const key = profilePolicyIdentityKey(discriminated);
+      const current = grouped.get(key);
+      if (current) {
+        current.activeCount = Math.max(
+          current.activeCount,
+          requirement.activeCount,
+        );
+        const profiles = new Map(
+          current.availableProfiles.map((profile) => [
+            normalizeProfileIdentity(profile),
+            profile,
+          ]),
+        );
+        for (const profile of requirement.availableProfiles) {
+          profiles.set(normalizeProfileIdentity(profile), profile);
+        }
+        current.availableProfiles = [...profiles.values()].sort(
+          (left, right) =>
+            normalizeProfileIdentity(left).localeCompare(
+              normalizeProfileIdentity(right),
+            ),
+        );
+        current.selectionId = null;
+      } else {
+        grouped.set(key, discriminated);
+      }
     }
   }
   return [...grouped.values()].sort((left, right) =>
-    entryKey(left).localeCompare(entryKey(right)),
+    profilePolicyIdentityKey(left).localeCompare(
+      profilePolicyIdentityKey(right),
+    ),
   );
 }
 
@@ -107,6 +206,12 @@ export function profilePolicyScaffold(
     entries: requirements.map((requirement) => ({
       faction: requirement.faction,
       unit: requirement.unit,
+      ...(requirement.unitOccurrence === undefined
+        ? {}
+        : { unitOccurrence: requirement.unitOccurrence }),
+      ...(requirement.modelCount === undefined
+        ? {}
+        : { modelCount: requirement.modelCount }),
       weaponGroup: requirement.weaponGroup,
       phase: requirement.phase,
       selectedProfile: `SELECT_ONE_OF: ${requirement.availableProfiles.join(" | ")}`,
@@ -148,29 +253,48 @@ export function validateProfilePolicy(
       errors: [],
     };
   }
-  const entries = new Map<string, TesseraProfilePolicyEntry>();
   const errors: string[] = [];
+  const matchedRequirements = new Set<number>();
   for (const entry of policy.entries) {
-    const key = entryKey(entry);
-    if (entries.has(key)) {
+    let candidates = requirements
+      .map((requirement, index) => ({ requirement, index }))
+      .filter(({ requirement }) =>
+        profilePolicyIdentityMatches(entry, requirement),
+      );
+    if (candidates.length > 1) {
+      const matchingCount = candidates.filter(
+        ({ requirement }) =>
+          requirement.activeCount === entry.activeCount,
+      );
+      if (matchingCount.length === 1) candidates = matchingCount;
+    }
+    const label =
+      `${entry.unit} / ${entry.weaponGroup} / ${entry.phase}`;
+    if (candidates.length === 0) {
       errors.push(
-        `Duplicate profile-policy entry for ${entry.unit} / ${entry.weaponGroup} / ${entry.phase}.`,
+        `The profile-policy entry for ${label} does not match the frozen rosters.`,
       );
       continue;
     }
-    entries.set(key, entry);
-  }
-  const unresolved: TesseraProfileRequirement[] = [];
-  for (const requirement of requirements) {
-    const entry = entries.get(entryKey(requirement));
-    if (!entry) {
-      unresolved.push(requirement);
+    if (candidates.length > 1) {
+      errors.push(
+        `${label} is ambiguous across same-name unit occurrences. Regenerate the scaffold with modelCount and unitOccurrence.`,
+      );
       continue;
     }
+    const [{ requirement, index }] = candidates;
+    if (matchedRequirements.has(index)) {
+      errors.push(
+        `Duplicate profile-policy entry for ${label} (modelCount ${requirement.modelCount ?? "legacy"}, occurrence ${requirement.unitOccurrence ?? "legacy"}).`,
+      );
+      continue;
+    }
+    matchedRequirements.add(index);
     if (
       !requirement.availableProfiles.some(
         (profile) =>
-          normalized(profile) === normalized(entry.selectedProfile),
+          normalizeProfileIdentity(profile) ===
+          normalizeProfileIdentity(entry.selectedProfile),
       )
     ) {
       errors.push(
@@ -183,14 +307,9 @@ export function validateProfilePolicy(
       );
     }
   }
-  const requiredKeys = new Set(requirements.map(entryKey));
-  for (const entry of policy.entries) {
-    if (!requiredKeys.has(entryKey(entry))) {
-      errors.push(
-        `The profile-policy entry for ${entry.unit} / ${entry.weaponGroup} / ${entry.phase} does not match the frozen rosters.`,
-      );
-    }
-  }
+  const unresolved = requirements.filter(
+    (_requirement, index) => !matchedRequirements.has(index),
+  );
   return {
     valid: unresolved.length === 0 && errors.length === 0,
     hash: profilePolicyHash(policy),

@@ -69,7 +69,7 @@ npm run rosterpilot -- build --prompt "Build a 1,000 point fast Custodes army wi
 npm run rosterpilot -- build --faction aeldari --points 1000 --preferences mobility,shooting,objective --out aeldari.json
 npm run rosterpilot -- validate --file roster.json
 npm run rosterpilot -- export --file roster.json --format rosz --out roster.rosz
-npm run rosterpilot -- tessera stress-test --file roster.json --against-faction necrons --experimental --out-dir exports/necrons-stress
+npm run rosterpilot -- tessera stress-test --file roster.json --against-faction necrons --execution-mode simulate --out-dir exports/necrons-stress
 npm run mcp
 npm run data:check
 npm run data:check-latest
@@ -191,6 +191,12 @@ mapped and conflict-free. Unmapped factions fail with
 `NEW_RECRUIT_MAPPING_UNAVAILABLE`; selected source disagreements fail with
 `NEW_RECRUIT_DATA_CONFLICT`.
 
+Mapping reports distinguish raw occurrences from unique root causes and attach
+an explicit remediation owner. A `bsdata` owner means the exact pinned
+catalogue selection is missing, ambiguous, or divergent; a `reconciler` owner
+means RosterPilot cannot safely evaluate that catalogue structure yet. This is
+diagnostic ownership, not a claim about which community project is “wrong.”
+
 For a mapped faction, `prepare_new_recruit_handoff` returns the editable
 `.rosz` and, by default, a printable HTML companion in one validated response.
 Local stdio clients may write both artifacts to a directory; remote clients
@@ -286,7 +292,7 @@ npm run rosterpilot -- tessera prepare \
 npm run rosterpilot -- tessera analyze \
   --file roster.json \
   --opponent-faction necrons \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/tessera
 ```
 
@@ -308,13 +314,15 @@ npm run rosterpilot -- tessera analyze \
   --file roster.json \
   --opponent-file enemy.rosz \
   --analysis-mode quick \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/tessera-quick
 ```
 
-`--phases` and `--metrics` can select an explicit subset. `--experimental`
-opts into local Tessera UI automation; without it, analysis returns verified
-handoff files and a partial report.
+`--phases` and `--metrics` can select an explicit subset.
+`--execution-mode simulate` opts into local Tessera UI automation;
+`--execution-mode prepare-only` returns verified handoff files with
+`status: prepared`. The old `--experimental` flag remains a deprecated
+compatibility alias for simulation.
 
 #### Known faction, unknown list
 
@@ -333,9 +341,14 @@ npm run rosterpilot -- tessera build-and-stress \
   --suite diverse-9 \
   --analysis staged \
   --profile-policy profiles.json \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/custodes-vs-aeldari
 ```
+
+`preview-portfolio` is local-only and does not create New Recruit lists or open
+Tessera. It shows the proposed proxy payload fingerprints, composition
+evidence, represented and missing coverage cells, named-character status,
+exportability, and profile-policy requirements before any external mutation.
 
 `build-and-stress` is the explicit full loop. It preserves opponent context
 and mixed-threat intent, deterministically repairs the roster, requires at
@@ -355,20 +368,27 @@ npm run rosterpilot -- tessera stress-test \
   --suite diverse-9 \
   --analysis staged \
   --profile-policy profiles.json \
-  --experimental \
+  --execution-mode simulate \
   --out-dir exports/aeldari-stress
 ```
 
 The default `diverse-9` suite attempts nine legal, exportable proxies:
 balanced-control, ranged-pressure, and assault-pressure postures crossed with
-mixed, mass, and elite-heavy compositions. A faction may proceed with six to
-eight only when the Tessera payloads are materially distinct and all three
-postures remain represented; weights are renormalized and the result is capped
-at `degraded`. Fewer than six fails preflight. `core-3` requires three unique
-proxies covering all postures. Detachment-only differences do not count as
-distinct payloads, and named anchors are deliberately tested where legal.
+mixed, mass, and elite-heavy compositions. Impossible cells are marked
+unavailable rather than forcing a fictional horde. A degraded run may proceed
+with at least two materially distinct, exportable payloads spanning two
+postures. Only complete requested coverage can produce `status: complete`;
+missing cells or postures cap the result at `degraded`. Detachment-only
+differences do not count as distinct payloads, and named anchors are
+deliberately tested where legal.
 Every survivor is weighted equally; this is a coverage sample, not an estimate
 of what players are likely to bring.
+
+`diverse-9` defaults to staged analysis. `core-3` defaults to `full-all`
+because all three proxies are necessarily selected for complete evidence; one
+full pass per proxy avoids repeating browser setup while preserving the same
+required scenario set. Pass `--analysis staged` explicitly when testing that
+recovery path.
 
 The default `staged` strategy screens every available proxy with half-wipe
 probability in Shooting and Fight, in both directions. It then chooses three
@@ -376,7 +396,13 @@ frozen representatives—stress, central, and contrast—and runs wipe
 probability, mean kills, and mean damage on those representatives. `full-all`
 runs all four metrics, both phases, and both directions for every available
 proxy. On a complete `diverse-9` suite, staged analysis captures 72 raw
-directional scenarios; `full-all` captures 144.
+directional scenarios; `full-all` captures 144. Staged analysis does not select
+or run deep dives until every required screening capture is complete and
+integrity-clean, with at least six confident `diverse-9` proxies (all three for
+`core-3`) spanning every posture for complete coverage. A degraded portfolio
+uses its executable minimum of two proxies across two postures. Representative
+selection is frozen only after that stable screen, so a resumed incomplete
+screen cannot invalidate work that started too early.
 
 Before external activity, RosterPilot scans the player and frozen proxies for
 multi-profile weapons. If any choice is unresolved, it returns
@@ -386,16 +412,28 @@ Tessera. Complete each entry with the intended profile and active count, then
 rerun with `--profile-policy`. The validated canonical policy hash is frozen
 into the manifest and report; changing it invalidates resume and paired
 revision. After New Recruit enrichment, the complete profile inventory is
-verified again.
+verified again. If New Recruit exposes an additional decision, the run freezes
+that inventory, writes an updated scaffold, stops before Tessera, and can
+resume with the completed policy without creating the lists again.
 
-`--experimental` is required to run Tessera simulation. Omitting it still
-performs the explicitly requested New Recruit enrichment and returns a
-handoff-only, partial report; it never fabricates simulation values. A first
+After the local-agent metadata check, the first screening proxy is also the
+live premium-unlock and matrix readiness probe. Infrastructure-wide failures
+stop later proxies for that invocation instead of repeating the same broken
+browser action across the portfolio.
+
+`--execution-mode simulate` is required to run Tessera simulation.
+`prepare-only` performs the explicitly requested New Recruit enrichment and
+returns a successful `prepared` report; it never fabricates simulation values.
+A requested simulation with no trusted matrices returns `ok: false`, preserves
+preparation data, and records structured failures. A first
 uncached `diverse-9` run can create one player copy plus six to nine proxy
 copies. Verified enriched artifacts are cached by execution fingerprint and
 pinned source data, with their content hash and exact summary checked before
 reuse. Staged deep dives reuse those same copies. Remote list URLs are retained
-in a local inventory; RosterPilot never deletes remote lists automatically.
+in `~/Library/Application Support/RosterPilot/new-recruit-run-inventory.json`;
+RosterPilot never deletes remote lists automatically. To clean them up, inspect
+that inventory, open the recorded URLs in New Recruit, and delete only the
+lists you separately authorize.
 
 Each run writes a `stress-manifest.json` beside the JSON and interactive HTML
 reports. Resume an interrupted run without repeating completed stages:
@@ -406,7 +444,7 @@ npm run rosterpilot -- tessera stress-test \
   --against-faction necrons \
   --suite diverse-9 \
   --analysis staged \
-  --experimental \
+  --execution-mode simulate \
   --resume \
   --out-dir exports/necrons-stress
 ```
@@ -425,23 +463,60 @@ cells validate. A mismatch fails closed rather than mixing runs. If delivery
 began but its verified receipt was not persisted before a crash, resume stops
 instead of risking a duplicate New Recruit list.
 
+After the five-attempt lifetime budget is exhausted, start a new run from the
+old manifest and use a different output directory:
+
+```bash
+npm run rosterpilot -- tessera stress-test \
+  --file roster.json \
+  --against-faction necrons \
+  --suite diverse-9 \
+  --analysis staged \
+  --execution-mode simulate \
+  --restart-from exports/necrons-stress/stress-manifest.json \
+  --out-dir exports/necrons-stress-restart
+```
+
+`--resume` continues the same run ID, manifest, stage history, and lifetime
+attempt budget. `--restart-from` creates a new run ID and fresh simulation
+stages while carrying forward only frozen inputs and prepared New Recruit
+artifacts whose file hashes and enriched summaries still verify. It requires a
+new `--out-dir`, never rewrites the source run, and cannot be combined with
+`--resume`. This is the recovery path after attempt exhaustion; `--force-retry`
+does not bypass the five-attempt lifetime ceiling. The same mutually exclusive
+recovery flags are available on `build-and-stress`; its rebuilt-and-repaired
+player fingerprint must still match the source manifest.
+
+Every captured Tessera table has a SHA-256 fingerprint over its headers,
+dimensions, and values for provenance. After a phase, metric, or direction
+change, RosterPilot requires the requested exclusive control state plus a
+matrix-table replacement or matrix-subtree mutation, followed by three stable
+reads. Numeric content is allowed to remain equal: two valid controls or two
+distinct proxy payloads can legitimately produce the same result, especially
+an all-zero matrix. A control change with no matrix refresh is rejected as
+stale. Captured evidence is preserved for diagnosis, but missing fingerprints
+or stale matrices make the analytical result `inconclusive` rather than
+allowing plausible-looking probabilities through. Duplicate proxy payloads are
+rejected separately during portfolio preflight.
+
 Stress reports summarize directional offensive coverage, incoming threat
 exposure, coverage margin, phase dependence, and unit answer breadth across the
 frozen proxies. They do not report a whole-game win probability. Deterministic
 mission readiness is shown separately and acts as a guardrail for roster-change
 suggestions; it is never blended into the combat robustness score. Stress
-report and manifest schema v2 distinguish:
+report schema v3 distinguishes:
 
-- `partial`: required preparation or simulation work is missing or failed;
+- `prepared`: verified New Recruit preparation completed and simulation was
+  not requested;
+- `failed`: requested simulation produced no trusted matrices or a required
+  stage failed;
 - `inconclusive`: capture finished, but analytical confidence is insufficient;
-- `degraded`: at least six confident unique `diverse-9` proxies cover all
-  postures and all three deep dives completed;
-- `complete`: all nine unique confident proxies and all three deep dives
-  completed (`core-3` requires its three).
+- `degraded`: the executable requested postures completed, but full frozen
+  portfolio coverage was unavailable;
+- `complete`: every requested unique proxy and deep dive completed.
 
 Missing estimates are `null`. Below-threshold observations remain separately
-under `provisional` with their point coverage. `partial` takes precedence when
-capture and confidence failures occur together. Shareable JSON and HTML use
+under `provisional` with their point coverage. Shareable JSON and HTML use
 relative artifact references and can be moved as a bundle; only the local
 manifest stores absolute paths. CLI progress goes to stderr and stdout is a
 compact JSON summary by default. Use `--full-json` for the nested payload.
@@ -457,13 +532,18 @@ Schema-v2 reports use stable unit-instance labels and evidence-backed findings
 for reliable coverage, enemy threats, coverage gaps, inefficient attacks,
 overqualified trades, and phase role gaps. When the comparison is matched and
 scenarios were captured, RosterPilot may propose up to three legal
-single-operation changes: add a unit, resize a unit, or replace a unit. Each
-candidate is validated, fingerprinted, and linked to its evidence. Candidates
-are suggestions only; RosterPilot never changes, imports, or simulates a
-revised roster without explicit approval. Use `--no-change-candidates` to omit
-them. Tessera import issues are tied to side, unit, weapon group, available
-profiles, and phase. Only cells involving the affected attacking unit are
-ambiguous and excluded from confident findings.
+single-operation changes: add a unit, resize a unit, or replace a unit. A
+candidate is returned only when the resulting roster is legal, New
+Recruit-exportable, uses at least 98% of its points, and is no worse across the
+mission-readiness guardrails. Its evidence must identify the affected player
+unit or a role gap. RosterPilot does not recommend replacing a unit that the
+same evidence classifies as a reliable or portfolio-wide robust answer; it
+returns no candidate rather than an underfilled or contradictory roster.
+Candidates are fingerprinted suggestions only. RosterPilot never changes,
+imports, or simulates a revised roster without explicit approval. Use
+`--no-change-candidates` to omit them. Tessera import issues are tied to side,
+unit, weapon group, available profiles, and phase. Only cells involving the
+affected attacking unit are ambiguous and excluded from confident findings.
 
 After approving and saving a revised canonical roster, rerun the baseline
 opponents and settings and produce a before/after delta report:
@@ -499,9 +579,10 @@ suite, analysis strategy, simulator settings, and representative selections;
 it does not regenerate the portfolio or choose easier opponents. Missing
 or changed baseline artifacts, execution-fingerprint mismatches, or
 insufficient simulated coverage stop the comparison before a rerun. The
-revised run must reproduce the recorded Tessera settings and iteration counts
-for every exact phase/metric/direction scenario. Margin changes smaller than one
-percentage point are treated as unchanged. The paired conclusion uses the
+revised run actively reapplies the recorded Tessera settings and iteration
+count before capture, then verifies them for every exact
+phase/metric/direction scenario. Margin changes smaller than one percentage
+point are treated as unchanged. The paired conclusion uses the
 screening half-wipe robustness metric; deep-dive wipe, kill, and damage results
 are supporting evidence. The conclusion is suppressed when the separate
 mission-readiness guardrail fails.
@@ -514,13 +595,19 @@ The local MCP exposes `get_tessera_connection_status`,
 `preview_faction_stress_portfolio`, and
 `build_and_stress_roster_against_faction`. Hosted MCP, REST, OpenAPI, and the
 website omit all of them; there is no public stress-test UI. Each stress run
-uses one isolated local Tessera session state across proxy requests and removes
-it on completion or after a 30-minute expiry. The orchestrator never receives
-or returns the premium key. `tessera
-configure` collects the key in a native secure dialog and stores it as a
-dedicated login-Keychain item; only the short-lived Tessera worker can retrieve
-it, and only to fill Tessera's Licence key field on the exact
-`https://playtessera.gg` origin. Use `tessera forget` to remove it.
+uses one isolated, session-scoped Tessera worker across proxy requests. That
+worker owns one live browser context and retains the premium key only in its
+memory. Explicit session close or seven days of inactivity removes its
+user-only browser profile. Local-agent shutdown closes the worker and browser
+context but retains that `0700` run profile so a verified certification resume
+can select the exact existing Tessera lists after restart. Transient browser,
+session, and navigation failures reset the context without deleting the
+profile before the next attempt.
+The orchestrator never receives or returns the premium key. `tessera configure`
+collects the key in a native secure dialog and stores it as a dedicated
+login-Keychain item; only the isolated Tessera worker can retrieve it, and only
+to fill Tessera's Licence key field on the exact `https://playtessera.gg`
+origin. Use `tessera forget` to remove it.
 
 If Tessera is disabled, unavailable, or its UI changes after the enriched
 rosters are prepared, RosterPilot preserves those verified handoff artifacts
@@ -550,6 +637,21 @@ ROSTERPILOT_BROWSER_TESTS=1 \
 
 ## Data and verification
 
+Faction-wide roster, New Recruit, and Tessera certification is documented in
+[`docs/certification.md`](docs/certification.md). The deterministic tier covers
+all 35 factions without browser activity; recorded connector fixtures run on
+macOS, while real New Recruit and Tessera mutations remain guarded and
+scheduled separately. Live certification accepts an explicit
+`--profile-policy <path>`, freezes its hashes and portable artifact, and
+validates it against the exact enriched roster before Tessera starts. A resume
+reuses only fingerprint- and hash-verified preparation evidence and never
+redelivers a missing prior artifact.
+
+`npm run certify:connector` executes the exact registered local browser tests
+and embeds hash-verifiable execution evidence in its report. Skipped or
+unexecuted Chrome fixtures fail certification; source text alone cannot satisfy
+the connector gate.
+
 `data/sources.json` records the release ID, exact rules package, exact
 `BSData/wh40k-11e` commit, and official MFM version/content hash. Generated
 catalogue mappings and structured conflicts live in
@@ -563,5 +665,14 @@ all three live source classes without mutating the release.
 if the checked-in overlay differs. The daily `Roster data freshness` workflow
 uses `npm run data:prepare-update` to open a reviewable update pull request; it
 never auto-merges.
+
+Run `npm run data:prepare-update -- --help` to inspect the command without a
+freshness check, dependency install, staged generation, or publication. The
+command currently accepts no mutation options; it rejects unknown arguments
+before reading source data or making changes.
+
+For an offline or repeated local verification, set
+`ROSTERPILOT_BSDATA_CHECKOUT` to an existing checkout at the exact pinned
+commit. The same revision check runs before the local checkout is trusted.
 
 Community data is pinned for reproducibility. Confirm event-specific rulings before play. Public deployments must display the included “Powered by 40kdc-data” attribution.

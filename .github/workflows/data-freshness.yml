@@ -28,6 +28,7 @@ jobs:
 
       - run: npm ci
       - run: npm run data:prepare-update
+      - run: npm run certify:manifest:sync
       - id: changes
         run: |
           if git diff --quiet; then
@@ -47,7 +48,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -C "$branch"
-          git add package.json package-lock.json data/sources.json data/generated/new-recruit-catalogues.json data/generated/new-recruit-summary.json
+          git add package.json package-lock.json data/sources.json data/generated/new-recruit-catalogues.json data/generated/new-recruit-summary.json data/certification-manifest.json
           git commit -m "Refresh pinned roster data"
           git push --force-with-lease origin "$branch"
           if gh pr view "$branch" >/dev/null 2>&1; then

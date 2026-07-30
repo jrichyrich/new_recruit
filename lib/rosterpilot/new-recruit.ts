@@ -203,7 +203,7 @@ function rosterUnitSelection(
   };
 }
 
-function configurationSelections(
+export function configurationSelections(
   draft: RosterDraftV1,
   faction: NewRecruitFactionCatalogue,
 ): XmlNode[] {
@@ -215,6 +215,8 @@ function configurationSelections(
   }
   const battleSize = configuration.battleSize.choices[draft.battleSize];
   const detachment = configuration.detachment.choices[draft.detachmentId];
+  const detachmentRoot =
+    detachment?.rootReference ?? configuration.detachment.reference;
   const disposition =
     configuration.forceDisposition.choices[draft.forceDispositionId];
   if (!battleSize) {
@@ -266,7 +268,7 @@ function configurationSelections(
     },
     {
       ...selectionFromReference(
-        configuration.detachment.reference,
+        detachmentRoot,
         deterministicId([draft.id, "detachment"]),
         1,
       ),

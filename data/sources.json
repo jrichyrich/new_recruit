@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026-07-28.1",
+  "releaseId": "2026-07-30.1",
   "rules": {
     "package": "@alpaca-software/40kdc-data",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "edition": "11th",
     "dataslate": "launch"
   },
@@ -11,14 +11,14 @@
     "repository": "BSData/wh40k-11e",
     "url": "https://github.com/BSData/wh40k-11e.git",
     "branch": "main",
-    "commit": "2ce1f8bbc80b6c33145fafd610642587420bad52"
+    "commit": "419a80d35346cd9bf26d32f69b4a5df404beb95d"
   },
   "official": {
     "downloadsUrl": "https://www.warhammer-community.com/en-gb/downloads/warhammer-40000/",
     "mfmUrl": "https://mfm.warhammer-community.com/en",
     "mfmVersion": "1.1",
     "updatedAt": "2026-07-22",
-    "contentSha256": "b9ff34a767377e46b285b9e66d481840fda204d39328e80d2c75e7dbbe0f6211",
-    "checkedAt": "2026-07-28T02:45:30.869Z"
+    "contentSha256": "91706631d93b6065ee65c089e044c8df1652d73c752680d3ef10def11e77acfb",
+    "checkedAt": "2026-07-30T04:30:59.203Z"
   }
 }

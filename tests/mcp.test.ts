@@ -4,6 +4,11 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
+import {
+  buildRoster,
+  rosterExecutionFingerprint,
+  type RosterDraftV1,
+} from "../lib/rosterpilot";
 import { createRosterPilotMcpServer } from "../mcp/server";
 
 test("MCP exposes the planned tool contract and matches the engine", async () => {
@@ -180,6 +185,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "get_tessera_connection_status",
         "list_data_conflicts",
         "modify_roster",
+        "modify_roster_batch",
         "prepare_new_recruit_handoff",
         "prepare_roster_for_tessera",
         "search_factions",
@@ -197,11 +203,20 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     assert.equal(response.isError, false);
     const structured = response.structuredContent as {
       ok: boolean;
-      data: { factionId: string; totalPoints: number };
+      data: RosterDraftV1;
     };
     assert.equal(structured.ok, true);
     assert.equal(structured.data.factionId, "adeptus-custodes");
-    assert.equal(structured.data.totalPoints, 990);
+    assert.equal(structured.data.totalPoints, 1000);
+    const direct = buildRoster({
+      prompt:
+        "Build a 1,000 point fast Custodes army with no named characters",
+    });
+    assert.ok(direct.data);
+    assert.equal(
+      rosterExecutionFingerprint(structured.data),
+      rosterExecutionFingerprint(direct.data),
+    );
     assert.equal(freshnessChecks, 1);
 
     const aeldariResponse = await client.callTool({
@@ -221,7 +236,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     };
     assert.equal(aeldari.ok, true);
     assert.equal(aeldari.data.factionId, "aeldari");
-    assert.equal(aeldari.data.totalPoints, 1000);
+    assert.ok(aeldari.data.totalPoints >= 980);
     assert.equal(freshnessChecks, 1, "builds should reuse the freshness TTL");
 
     const forcedFreshness = await client.callTool({

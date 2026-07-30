@@ -1,0 +1,5341 @@
+{
+  "schemaVersion": 1,
+  "manifestKind": "rosterpilot-faction-certification",
+  "dataPin": {
+    "releaseId": "2026-07-30.1",
+    "rulesPackageVersion": "1.2.1",
+    "newRecruitRepository": "BSData/wh40k-11e",
+    "newRecruitCommit": "419a80d35346cd9bf26d32f69b4a5df404beb95d",
+    "newRecruitGameSystemRevision": 7,
+    "officialMfmVersion": "1.1",
+    "officialMfmContentSha256": "91706631d93b6065ee65c089e044c8df1652d73c752680d3ef10def11e77acfb"
+  },
+  "baselines": {
+    "buildableFactions": 35,
+    "exportCapableFactions": 35,
+    "blockingConflicts": 2336,
+    "uniqueBlockingConflicts": 779
+  },
+  "defaults": {
+    "pointBands": [
+      1000,
+      2000
+    ],
+    "minimumPointsUtilization": 0.98,
+    "preferences": [
+      "objective",
+      "durability",
+      "shooting",
+      "melee"
+    ],
+    "allowNamedCharacters": true,
+    "allowLegends": false,
+    "opponentPostures": [
+      "balanced-control",
+      "ranged-pressure",
+      "assault-pressure"
+    ],
+    "specialistCases": [
+      "authoritative-warlord",
+      "minimum-size",
+      "named-character-when-present",
+      "no-named-characters",
+      "required-unit",
+      "excluded-unit",
+      "collection-only",
+      "transport-when-present",
+      "leader-when-present",
+      "duplicate-unit-when-legal",
+      "unusual-composition-when-applicable",
+      "stable-repeat",
+      "serialization-round-trip",
+      "prompt-metamorphism",
+      "multi-profile-when-present",
+      "named-character-specialist",
+      "transport-parity"
+    ],
+    "portfolioPolicy": {
+      "requiredCorePostures": [
+        "balanced-control",
+        "ranged-pressure",
+        "assault-pressure"
+      ],
+      "notApplicableCompositions": [],
+      "namedCharacterSpecialist": "review-pending"
+    }
+  },
+  "browserFixtures": [
+    "new-recruit-delayed-rendering",
+    "new-recruit-changed-labels",
+    "new-recruit-duplicate-names",
+    "new-recruit-truncated-text",
+    "new-recruit-wrong-ordering",
+    "new-recruit-interrupted-import",
+    "new-recruit-failed-verification",
+    "new-recruit-empty-download",
+    "new-recruit-stale-session",
+    "new-recruit-catalogue-drift",
+    "new-recruit-ui-identity",
+    "tessera-delayed-selector-hydration",
+    "tessera-stale-matrix-reopen",
+    "tessera-authoritative-selector-identities",
+    "tessera-saved-list-reuse",
+    "tessera-saved-list-import-once",
+    "tessera-saved-list-duplicate-fail-closed",
+    "tessera-saved-list-unit-count-fail-closed",
+    "tessera-duplicate-glyph-names",
+    "tessera-wrong-selector-order",
+    "tessera-unit-count-mismatch",
+    "tessera-disabled-controls",
+    "tessera-premium-unlock-failure",
+    "tessera-non-rectangular-table",
+    "tessera-repeated-unit-labels",
+    "tessera-dimension-change",
+    "tessera-equal-values-after-refresh",
+    "tessera-control-change-without-refresh",
+    "tessera-transient-scenario-retry",
+    "tessera-direct-adapter-roundtrip"
+  ],
+  "factions": [
+    {
+      "id": "adepta-sororitas",
+      "name": "Adepta Sororitas",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 40,
+      "detachmentIds": [
+        "army-of-faith",
+        "bringers-of-flame",
+        "champions-of-faith",
+        "chorus-of-condemnation",
+        "hallowed-martyrs",
+        "penitent-host",
+        "sacred-champions",
+        "sanctified-orators"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "chorus-of-condemnation",
+            "warlordUnitId": "junith-eruita",
+            "unitModelMultiset": [
+              {
+                "unitId": "arco-flagellants",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "exorcist",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "junith-eruita",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ministorum-priest",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "palatine",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "paragon-warsuits",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sororitas-rhino",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "0a551da8da66258102b6c0a8446308b741f73dda4b44faa5c2638421f22d35cb",
+            "executionFingerprint": "aaa386e362d1d001f670fd592fe33ca1a7c58de57cf83f413320c6bedc29c261",
+            "canonicalRoszSha256": "30f41438e2813ad9b805b96b8a930c82efcb4860f9b008f8633e82e406bccdab"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "chorus-of-condemnation",
+            "warlordUnitId": "junith-eruita",
+            "unitModelMultiset": [
+              {
+                "unitId": "arco-flagellants",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "canoness",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "celestian-insidiants",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "exorcist",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "intranzia-fraye",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "junith-eruita",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ministorum-priest",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "morvenn-vahl",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "palatine",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "repentia-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sororitas-rhino",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "triumph-of-saint-katherine",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "08880b1c725634cc62d87fd2d04e66341f83f152ba880a140d27ee79b52293ac",
+            "executionFingerprint": "2c14b9dbb1b9eb0ef30dfcffbc5f0e18a447cd3dc231f6d2437277369d9191ec",
+            "canonicalRoszSha256": "0abb29d090eeae07bdbfc00893db28886ff2cf0666b6dec6cc5b7a5b7db97a50"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "d1de18da69ecec6c1b0eca4971ea31ee3c12b441e4baa54d5b8d2bc1fa0ebd20",
+          "bindingSha256": "f601e0e47082a4db42996e9eec1212f3ae1476777d086aa4af4ec91417d3a2c8"
+        }
+      }
+    },
+    {
+      "id": "adeptus-astartes",
+      "name": "Adeptus Astartes",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 138,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "b20c4ffbba196d67480609fdb598ee1b71d40f819f18a487756a91f2021baac3",
+            "executionFingerprint": "ff3d8b389e7a631afdd53f462ecf5c0ed6fd31de55b918a2391cd88d8a13135e",
+            "canonicalRoszSha256": "ef5800bccf98141778dbc005b0a40af5279ab5c1a44be279989fb137e4b282a4"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "2577c201f4dd44547071ffe51981960efc4f5033dc8536c0d8e77564692073ca",
+            "executionFingerprint": "f346b873ffffc563280aa0e5cdeb0bfb5f6b8405ee15d7bb7febae5656ffece3",
+            "canonicalRoszSha256": "b669d8220401f9d4d4ef53da9946e9c8d2d0f92333cab08580a68cdeda90262e"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "702270a9c178b17dd1877e22b00c844b9d9a654176aa8d48c3855ff2cae4d0d6",
+          "bindingSha256": "046aaaad41f7043e9a9ec549ed6c262005944695fc364345fcb98d7038093edf"
+        }
+      }
+    },
+    {
+      "id": "adeptus-custodes",
+      "name": "Adeptus Custodes",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 14,
+      "detachmentIds": [
+        "auric-champions",
+        "lions-of-the-emperor",
+        "might-of-the-moritoi",
+        "null-maiden-vigil",
+        "shield-host",
+        "silent-hunters",
+        "solar-spearhead",
+        "talons-of-the-emperor",
+        "tharanatoi-hammerblow"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "shield-host",
+            "warlordUnitId": "shield-captain",
+            "unitModelMultiset": [
+              {
+                "unitId": "allarus-custodians",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "prosecutors",
+                "modelCount": 4,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "sagittarum-custodians",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "shield-captain",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "vigilators",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "witchseekers",
+                "modelCount": 4,
+                "selectionCount": 3
+              }
+            ],
+            "structuralFingerprint": "5174d572f5be30e8d255630caac13750959104f87a07243059f3ae7712e9c4d8",
+            "executionFingerprint": "8acdded024477793de1807604c89fd19963ea9baf2de5bdf2c214aa11430b5d5",
+            "canonicalRoszSha256": "5b6fe9de15694847a825a9e5e898263b00c78827a36ab1e6a031dcc39a727f70"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "shield-host",
+            "warlordUnitId": "shield-captain",
+            "unitModelMultiset": [
+              {
+                "unitId": "aleya",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "allarus-custodians",
+                "modelCount": 2,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "anathema-psykana-rhino",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "aquilon-custodians",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "blade-champion",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "custodian-guard",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "knight-centura",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "pallas-grav-attack",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "prosecutors",
+                "modelCount": 4,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "shield-captain",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "vigilators",
+                "modelCount": 4,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "witchseekers",
+                "modelCount": 4,
+                "selectionCount": 3
+              }
+            ],
+            "structuralFingerprint": "ad1f9022d0abbea2e395bdf408e9e9c6469798f0bc64f7b2ed7849772a3c7b4e",
+            "executionFingerprint": "cb07fea5e3aeef5d2b84f947988c4411ad4b08030b16db5d2033c80c0e0bb529",
+            "canonicalRoszSha256": "725f77d7aea2a27c6210bf4bd3383aaa2a895114a42d8e69d54b0b2bb5970ed7"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "dfba99e3d9d473b9e222eb0638a81574b4cfb4efd2507b2d5d489a1f101fc960",
+          "bindingSha256": "eab870537f4544f888e394af9083e204fa96a3888739ba623019832015a7f6f7"
+        }
+      }
+    },
+    {
+      "id": "adeptus-mechanicus",
+      "name": "Adeptus Mechanicus",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 30,
+      "detachmentIds": [
+        "cohort-acquisitus",
+        "cohort-cybernetica",
+        "data-psalm-conclave",
+        "eradication-cohort",
+        "explorator-maniple",
+        "haloscreed-battle-clade",
+        "lords-of-the-forge",
+        "luminen-auto-choir",
+        "rad-zone-corps",
+        "skitarii-hunter-cohort"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "cohort-acquisitus",
+            "warlordUnitId": "thulia-ghuld",
+            "unitModelMultiset": [
+              {
+                "unitId": "corpuscarii-electro-priests",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "kastelan-robots",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "serberys-sulphurhounds",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "sydonian-dragoons-with-radium-jezzails",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "sydonian-skatros",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tech-priest-enginseer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "thulia-ghuld",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "b0dceb8d18451a76f4eec6c94b6e96b0a03ced772ea1214256e5068479fcd25c",
+            "executionFingerprint": "6e99ed25453ea18b7b682abb3563cb0f791aa0539dd3dac316872c14aaa65e7f",
+            "canonicalRoszSha256": "de69794f79783e2671930afc2032b13605c7397a7e8b52ac9a52cd8621bdcb2a"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "cohort-acquisitus",
+            "warlordUnitId": "thulia-ghuld",
+            "unitModelMultiset": [
+              {
+                "unitId": "kastelan-robots",
+                "modelCount": 4,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "skorpius-disintegrator",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "sydonian-dragoons-with-taser-lances",
+                "modelCount": 3,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "thulia-ghuld",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "3a139a7bb8c110ca1d3ced57b185d75439cbd155222062a64d360eaa87427a40",
+            "executionFingerprint": "7715020dcd879ea896ac0a416a257e4a6e68143f9836c7fcc982555c6483774e",
+            "canonicalRoszSha256": "7d881a522179162ae206f3cc928deab5878780d52f194b71d11a1706a56c10c6"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "b44023754b7e3e3835d5fb11e4ec06527d52b01dacdf5148b0ade4322c9ba941",
+          "bindingSha256": "01afdf138ad2d10b3eee8193b217d4c3a84d0f2d38cd896c300c1f0aa3dfdc56"
+        }
+      }
+    },
+    {
+      "id": "aeldari",
+      "name": "Aeldari",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 42,
+      "detachmentIds": [
+        "armoured-warhost",
+        "aspect-host",
+        "corsair-coterie",
+        "devoted-of-ynnead",
+        "eldritch-raiders",
+        "fateful-performance",
+        "ghosts-of-the-webway",
+        "guardian-battlehost",
+        "path-of-the-outcast",
+        "seer-council",
+        "serpents-brood",
+        "spirit-conclave",
+        "twilight-flickers",
+        "warhost",
+        "windrider-host"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "armoured-warhost",
+            "warlordUnitId": "farseer-skyrunner",
+            "unitModelMultiset": [
+              {
+                "unitId": "farseer-skyrunner",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "fire-prism",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "shadowseer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "spiritseer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "troupe",
+                "modelCount": 12,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "warlock-skyrunners",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "wraithknight-with-ghostglaive",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ynnari-succubus",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "93c0eb63e6d32ccb02f036391e7abd5fe6c1754d591fa5a3ddf82f66d5de666f",
+            "executionFingerprint": "3d0413ba875b38c08e139f5c81a977a417e0bff4fdf4b8e0d3d9220361f8aeac",
+            "canonicalRoszSha256": "1fb282f46d73fb5a428921bd28badbe5f1d5e4b450b9e70fc2ed3c20e63ba792"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "armoured-warhost",
+            "warlordUnitId": "farseer-skyrunner",
+            "unitModelMultiset": [
+              {
+                "unitId": "falcon",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "farseer-skyrunner",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "rangers",
+                "modelCount": 5,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "shadow-weaver-platform",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "shadowseer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "spiritseer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "starfangs",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "storm-guardians",
+                "modelCount": 11,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "troupe",
+                "modelCount": 12,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "vibro-cannon-platform",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "warlock-conclave",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "warlock-skyrunners",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "wraithknight",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ynnari-succubus",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "5ba8408a7c75cf31211e383e77abd0bfe1e55b107928196d3bf8c403a620a2bb",
+            "executionFingerprint": "04fd807c1af4229f9ce2cd3810c4b7611d99bbe6517aa10360e4dc8d72c03235",
+            "canonicalRoszSha256": "a409584a8e9432e982263d8fc6cbd89927c56dc29cf65ab23b73948642654788"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "reviewedAt": "2026-07-28",
+        "assertions": [
+          "Character eligibility, not presentation role, controls Warlord assignment.",
+          "Warlock Skyrunners are not a valid exported Warlord mapping.",
+          "Named-character restrictions survive deterministic repair."
+        ],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "a63c1a5a220b6ba2e92965f15fd80b27003dda612515b7598c947783b9360e00",
+          "bindingSha256": "7053bfae967fa42760edf93f505d893406657d8a9d94f7ed20e62ff0d947348b"
+        },
+        "invalidationReason": "unbound-legacy"
+      }
+    },
+    {
+      "id": "agents-of-the-imperium",
+      "name": "Agents of the Imperium",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 31,
+      "detachmentIds": [
+        "imperialis-fleet",
+        "ordo-hereticus-purgation-force",
+        "ordo-malleus-daemon-hunters",
+        "ordo-xenos-alien-hunters",
+        "veiled-blade-elimination-force"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "veiled-blade-elimination-force",
+            "warlordUnitId": "inquisitor-kroyle",
+            "unitModelMultiset": [
+              {
+                "unitId": "deathwatch-kill-team",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "imperial-rhino",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "inquisitor",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "inquisitor-greyfax",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "inquisitor-kroyle",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "inquisitorial-agents",
+                "modelCount": 6,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "inquisitorial-chimera",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "navigator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "rogue-trader-entourage",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "voidsmen-at-arms",
+                "modelCount": 6,
+                "selectionCount": 3
+              }
+            ],
+            "structuralFingerprint": "58b91dc33f2282530f242ccd0112ae438a36e3a5c163285bad0b321a0f9f521b",
+            "executionFingerprint": "b72e7fda02c16a091eaccd06aad8473b8b79e8dcb247beedb76f52abdbc8a9cf",
+            "canonicalRoszSha256": "0fd977c6320c273aee8ac4a17a2a05c0b131bf3f37df08a3d7226c2ac4b93bf5"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "veiled-blade-elimination-force",
+            "warlordUnitId": "inquisitor-kroyle",
+            "unitModelMultiset": [
+              {
+                "unitId": "callidus-assassin",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "corvus-blackstar",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "culexus-assassin",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "deathwatch-kill-team",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "imperial-rhino",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "inquisitor-greyfax",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "inquisitor-kroyle",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "inquisitorial-chimera",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "vigilant-squad",
+                "modelCount": 11,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "watch-captain-artemis",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "watch-master",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "6c38ace6164dda0912939922b1a02d8b5e16c910006fbe4db1a66f9f2b64d0cf",
+            "executionFingerprint": "43ec266fe3a8dc5d1fd3e5255b923aad5f378ad181cdba7dc96d96964542a85d",
+            "canonicalRoszSha256": "8eaaa6145ea11c4c5f06376983fb939bfb560c89e4a17bc601820d94b0e5b244"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "5151a99c967df3336b2b64b95623de938554480d0313b231b52c49cb5527dc9d",
+          "bindingSha256": "3442d496bd1d645543a004db5a41f7b31f49756f1a0861cf356852c86d7f1048"
+        }
+      }
+    },
+    {
+      "id": "astra-militarum",
+      "name": "Astra Militarum",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 119,
+      "detachmentIds": [
+        "abhuman-auxiliaries",
+        "armoured-infantry",
+        "bridgehead-strike",
+        "combined-arms",
+        "designation-force",
+        "grizzled-company",
+        "hammer-of-the-emperor",
+        "mechanised-assault",
+        "recon-element",
+        "siege-regiment",
+        "steel-hammer"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "abhuman-auxiliaries",
+            "warlordUnitId": "lord-marshal-dreir",
+            "unitModelMultiset": [
+              {
+                "unitId": "armoured-sentinels",
+                "modelCount": 2,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "field-ordnance-battery",
+                "modelCount": 2,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "hellhound",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hippogriff-afv",
+                "modelCount": 2,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "lord-marshal-dreir",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "scout-sentinels",
+                "modelCount": 2,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "4d28692fc1b65b48d90bc657c3cbc8aa5a3f3195c4065994f05951d20ff80186",
+            "executionFingerprint": "faca6df36438decc3d663a2bc140c1e2758570ed7a6aec60b59b9d96d714a066",
+            "canonicalRoszSha256": "f842e1bcf2746e7e36834dee18769918088653ede12c515f89fa8c4c75722036"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "abhuman-auxiliaries",
+            "warlordUnitId": "lord-marshal-dreir",
+            "unitModelMultiset": [
+              {
+                "unitId": "armoured-sentinels",
+                "modelCount": 2,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "cadian-heavy-weapons-squad",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "commissar-graves",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hellhound",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "hippogriff-afv",
+                "modelCount": 2,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "leman-russ-commander",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "lord-marshal-dreir",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "scout-sentinels",
+                "modelCount": 2,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "sly-marbo",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "d386d6a55cd69b6ea575b2655c3dcc183aee3363b92bea72e324f380a639182c",
+            "executionFingerprint": "6f46bc5840d03a4d18e3b7bc214209ebac748036582e072163df1c998abaf82f",
+            "canonicalRoszSha256": "94f3a92d0c3a3659fdbb7aaa349a4066045f1689dcc5459f62743486d7db39b0"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "2bc9ccd9213dfa6b205fabe7c95cb601ad2a002d426525806cf080a402e38ee3",
+          "bindingSha256": "48c94c9fa66b65a4ddeef5bf1db7bead1f0bf2669a08747c16d9e4a9ec5b8f06"
+        }
+      }
+    },
+    {
+      "id": "black-templars",
+      "name": "Black Templars",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 137,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "companions-of-vehemence",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "godhammer-assault-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "marshals-household",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "the-living-miracle",
+        "vanguard-spearhead",
+        "vindication-task-force",
+        "wrathful-procession"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "high-marshal-helbrecht",
+            "unitModelMultiset": [
+              {
+                "unitId": "assault-intercessor-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaplain",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "execrator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "high-marshal-helbrecht",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "judiciar",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "e60c233d06855de5de4cfb5f6928f441e4e1defb32436345af9423549d369859",
+            "executionFingerprint": "e8a589f10a2400772fd7290fadfc785f807eb1133843a5cf9ea4d944120f32c7",
+            "canonicalRoszSha256": "df3eba337cabb06212317f3e519b9b49df7965b83f76dd8b98c5de976deb2074"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "high-marshal-helbrecht",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "high-marshal-helbrecht",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "scout-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "ff5c05d44abf6ac76f97e0d00f86b529f5944676f890056b4164d66da033211d",
+            "executionFingerprint": "8e2d40c4e1ad24ca3d12f8f2bb00414291dd1e2e81757b82c05c429564dc2fba",
+            "canonicalRoszSha256": "29b3b26e865677b703f7a6026666a068f9e43bf4cd17288b5bd00fc8266bf546"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "629705b15a1c84d8ca9641d0e22d16a3ad057d3e3260d5c62253616410114b1f",
+          "bindingSha256": "0da1009cadbac190fcf9010a4c24791f02b46a94fb411e34e836be5b9d25993a"
+        }
+      }
+    },
+    {
+      "id": "blood-angels",
+      "name": "Blood Angels",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 140,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "angelic-inheritors",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "encarmine-speartip",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "legacy-of-grace",
+        "liberator-assault-group",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "rage-cursed-onslaught",
+        "stormlance-task-force",
+        "subversion-assets",
+        "the-angelic-host",
+        "the-lost-brethren",
+        "vanguard-spearhead",
+        "wrath-of-the-doomed"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "encarmine-speartip",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "3d91c7ee497b5e292eae3dc61c6961cb27da3e143788b65d5d64154f8740c05f",
+            "executionFingerprint": "b15e38225087a22ddb45ba3692825ce7e36a32a4ea391e41637ff93f9ca6e0bb",
+            "canonicalRoszSha256": "732d71a54ffe78e268387a06fd13074a2f850c137a73a6e7d64b2a0de33b69c1"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "encarmine-speartip",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "f2e6c3e09265a124695aa4b2cf72d18cbacc7072436ee41cb2c4f5758654dc24",
+            "executionFingerprint": "faa8fe71d13d5aa82fd4af099ebbd0d22f74cde72dd5c3dc054b1a4019908a06",
+            "canonicalRoszSha256": "25b2c30c20fd9870b579b62b142272dd4f5f4c4f784f3e77c49230e54ccd32cd"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "d6ba710ff32f1079ce707a488490daddbd8d53812404eb034c05bab3423b9752",
+          "bindingSha256": "ad3fbe1c098a6b049a1bcbe4024768788f8d7c8404e0f7ccce2cb825ab8ae0b2"
+        }
+      }
+    },
+    {
+      "id": "chaos-daemons",
+      "name": "Chaos Daemons",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 23,
+      "detachmentIds": [
+        "blood-legion",
+        "cavalcade-of-chaos",
+        "daemonic-incursion",
+        "legion-of-excess",
+        "lords-of-the-warp",
+        "plague-legion",
+        "scintillating-legion",
+        "shadow-legion",
+        "warptide"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "cavalcade-of-chaos",
+            "warlordUnitId": "karanak",
+            "unitModelMultiset": [
+              {
+                "unitId": "bloodletters",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "bloodmaster",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "changecaster",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "flamers",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "flesh-hounds",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "infernal-enrapturess",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "karanak",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "nurglings",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "poxbringer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sloppity-bilepiper",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "spoilpox-scrivener",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tranceweaver",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "41a9ac80ad0486fa690ef7ea5cb1f5da7e02ed260e1ef51afebe16d998af443a",
+            "executionFingerprint": "8105cafcdba2995c2187dab2e59ad3247ad894c2e3e4303ccf4b2afdb6796b94",
+            "canonicalRoszSha256": "14f56c310d096c53a30bf64ca9579214d3e232f45935971dcfbbc962186dcd6c"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "cavalcade-of-chaos",
+            "warlordUnitId": "karanak",
+            "unitModelMultiset": [
+              {
+                "unitId": "belakor",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "changecaster",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "flesh-hounds",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hellflayers",
+                "modelCount": 2,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "infernal-enrapturess",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "karanak",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "nurglings",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "plague-drones",
+                "modelCount": 4,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "poxbringer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sloppity-bilepiper",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "spoilpox-scrivener",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tranceweaver",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "cabbc0cc14ff3c71fd4a9814310f8e2b7dc7ff42016b106d5c3df521595b3447",
+            "executionFingerprint": "1fcfd2c61b19afaa82fea21c7b557a6a42cb66bcd0cccdba40346187417be08a",
+            "canonicalRoszSha256": "993c7e7aefb36448dbdeedce1254832be5ea0a0f7deafc2f50dac31c9480e4a0"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "4079fbafd7a131ebac41153a1f6a547c848bb9b1366e41696f2519f14491a49a",
+          "bindingSha256": "807b8128c8c181e4988fe60154a8153eae5a72611ccfbd1e0d25db33e634e47e"
+        }
+      }
+    },
+    {
+      "id": "chaos-knights",
+      "name": "Chaos Knights",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 2,
+      "detachmentIds": [
+        "bastions-of-tyranny",
+        "helhunt-lance",
+        "houndpack-lance",
+        "hunting-warpack",
+        "iconoclast-fiefdom",
+        "infernal-lance",
+        "lords-of-dread",
+        "traitoris-lance"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "bastions-of-tyranny",
+            "warlordUnitId": "knight-ruinator",
+            "unitModelMultiset": [
+              {
+                "unitId": "knight-ruinator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "war-dog-executioner",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "war-dog-huntsman",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "war-dog-stalker",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "ba43502239b711c1de8e58a61d09b6374513bab8899ce015369de70f2463a67b",
+            "executionFingerprint": "07b99176a564f4f9e628c7320e7c987f00c72b549e9e847d7e5cd6aba214b963",
+            "canonicalRoszSha256": "9e9f0245bd046b72ea5685c4fd611b9574f0c59b1e2a02cb8a3fbdbf81b36566"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "bastions-of-tyranny",
+            "warlordUnitId": "knight-ruinator",
+            "unitModelMultiset": [
+              {
+                "unitId": "knight-abominant",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "knight-desecrator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "knight-ruinator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "war-dog-executioner",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "war-dog-huntsman",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "war-dog-karnivore",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "war-dog-stalker",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "4ffacced950dccf0d206284dbcdf92a6838ad74f0d8c428cec6298ccaf6080c2",
+            "executionFingerprint": "4fcd5f886b68d0e733445614369a2f81015dcc52a672380b6a43fde5a087c825",
+            "canonicalRoszSha256": "e7aed8a05359f5c9e053c15f3f91bfb83a73641ba3a2f051639d929fd2cb0649"
+          }
+        }
+      ],
+      "expectedLimitations": [
+        "Mass composition is expert-reviewed as not applicable; core certification still requires distinct balanced, ranged, and assault vehicle-heavy postures."
+      ],
+      "portfolioPolicy": {
+        "requiredCorePostures": [
+          "balanced-control",
+          "ranged-pressure",
+          "assault-pressure"
+        ],
+        "notApplicableCompositions": [
+          {
+            "composition": "mass",
+            "reason": "Chaos Knights cannot represent a conventional high-model-count mass army; vehicle-heavy density is the reviewed equivalent evidence."
+          }
+        ],
+        "namedCharacterSpecialist": "not-applicable"
+      },
+      "expertReview": {
+        "status": "pending",
+        "reviewedAt": "2026-07-29",
+        "assertions": [
+          "Mass composition is not applicable to Chaos Knights.",
+          "Core coverage still requires distinct balanced, ranged, and assault vehicle-heavy payloads.",
+          "Named-character specialist coverage is not applicable at 1,000 points under the pinned source data."
+        ],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "695cec17fd6c3de441592e163e0c0468b20ba1b7a79b8b53a38d30f700779d7f",
+          "bindingSha256": "a792d816b04bfe2380e05bd3cd24177d3231e22b3305d1de2a5e6873874185ab"
+        },
+        "invalidationReason": "unbound-legacy"
+      }
+    },
+    {
+      "id": "chaos-space-marines",
+      "name": "Chaos Space Marines",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 21,
+      "detachmentIds": [
+        "cabal-of-chaos",
+        "chaos-cult",
+        "creations-of-bile",
+        "cult-of-the-arkifane",
+        "deceptors",
+        "devotees-of-destruction",
+        "dread-talons",
+        "fellhammer-siege-host",
+        "hurons-marauders",
+        "murdertalon-raiders",
+        "nightmare-hunt",
+        "pactbound-zealots",
+        "renegade-raiders",
+        "renegade-warband",
+        "soulforged-warpack",
+        "veterans-of-the-long-war",
+        "warpstrike-champions"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "cabal-of-chaos",
+            "warlordUnitId": "lord-discordant-on-helstalker",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-land-raider",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaos-spawn",
+                "modelCount": 2,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "chaos-vindicator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "cultist-firebrand",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "cultist-mob",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "fellgor-beastmen",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "lord-discordant-on-helstalker",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "4a4df3dcd63f8a4827a4007e92f067587dc031d64a9eecb87ffccd5de7c666e8",
+            "executionFingerprint": "1418f46caee2e12664dc7ef2165ccb02bdb4e76219d205feac569f393f984a92",
+            "canonicalRoszSha256": "6e89a471fbd75d425d489a388fc07a0a5342fccd2ba208fa21e283a41cce32a9"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "cabal-of-chaos",
+            "warlordUnitId": "lord-discordant-on-helstalker",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-bikers",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaos-land-raider",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "chaos-spawn",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaos-vindicator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "cultist-firebrand",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "cultist-mob",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "fellgor-beastmen",
+                "modelCount": 10,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "forgefiend",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "khorne-lord-of-skulls",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "lord-discordant-on-helstalker",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "obliterators",
+                "modelCount": 2,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "9005d5c0ef6c7a440d20bc822f9d59848df722ea59469704d988b70dd99b4e74",
+            "executionFingerprint": "7a5a2d4b37ee481fe53e12bddaec137f2500433597371acfefcf6926cfcb5fcf",
+            "canonicalRoszSha256": "1f4020bfd2cdc71d7971e8b6ad2b7b615b755d24dc1ad1c405f30219b5ab0e19"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "4376e88f2bf391a62b86f9077fc6c5cf857eb3849ebf278c60b65fd5c2c2ab7e",
+          "bindingSha256": "d3c5be7ef25a7b037848aacd75368d8af8dcecd2438b137841ad03e00057dabb"
+        }
+      }
+    },
+    {
+      "id": "crimson-fists",
+      "name": "Crimson Fists",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 135,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "4a878d38fb6bec8580d455f0a524603f88dfaf96770673c12049a6811516163b",
+            "executionFingerprint": "22bf0259359d74aa9430354dfc7524980a52606f3f6a49a6270820ec2a357364",
+            "canonicalRoszSha256": "2247962cca39025dfdfe7e73ce17d5d0c6fba7ea229b75c3ec2f7f546f4ac1a3"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "2250abdce8cc996abc146b92ffe0676a9c690836769202d2f4c3ef2dddf248a2",
+            "executionFingerprint": "a24fbfba28a13093d3c5fa76450e7c654cd59ffca1cc3ccf5fb088e7727a7f71",
+            "canonicalRoszSha256": "3c997e4e86e6bb103ea747a1396f7d5f05ff4e05e02349392ee1c106360e29dc"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "741a9c8be1f31132ab2e66e454678c8a44862ac23ee6072565d1836012f37514",
+          "bindingSha256": "6c86675b6aa06a4eda623ac4282e2930f1a7f344ab02e737183d5eacef71eaba"
+        }
+      }
+    },
+    {
+      "id": "dark-angels",
+      "name": "Dark Angels",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 122,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "company-of-hunters",
+        "dark-age-arsenal",
+        "darkflight-pursuit",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "inner-circle-task-force",
+        "interrogation-conclave",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "lions-blade-task-force",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "unforgiven-task-force",
+        "vanguard-spearhead",
+        "wrath-of-the-rock"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "dark-age-arsenal",
+            "warlordUnitId": "sammael",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "reiver-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sammael",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "160edb94e4f7069c74c56bc654967b2427b49c46beb597bc05312b1d6f57f534",
+            "executionFingerprint": "c01fe090799696fd2ce0dadc4fb01f3fc01cc8424788dd69bd2fb70d6eb86dcb",
+            "canonicalRoszSha256": "bf97b38b625d0ecf3df301fd289d3d8a3e996f81a8b9d9badc5f9b7bbda2239b"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "dark-age-arsenal",
+            "warlordUnitId": "sammael",
+            "unitModelMultiset": [
+              {
+                "unitId": "assault-intercessor-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sammael",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "dcd24ff2420d213ad0deae545dcdee6e8ec40370825aeab2d338fc87f5fa32ee",
+            "executionFingerprint": "61798109fbf4cd0c1a421dbd6819b5de4ecf4d8bd937ac088922afc8da1aedba",
+            "canonicalRoszSha256": "c130517bc65387e2727fbbdc756be8f259bf58a7c45becec1199a1f02d13ddad"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "c1c04337224c4fe3b175dc787282660f8d5ec06802b14f23a69b8479812210fa",
+          "bindingSha256": "44708b5b15ee17e642363c4ed7e9bf4c1b9ef6d7848c65b592484c0ce957a74d"
+        }
+      }
+    },
+    {
+      "id": "death-guard",
+      "name": "Death Guard",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 22,
+      "detachmentIds": [
+        "champions-of-contagion",
+        "contagion-engines",
+        "death-lords-chosen",
+        "flyblown-host",
+        "mortarions-hammer",
+        "paragons-of-putrescence",
+        "shamblerot-vectorium",
+        "tallyband-summoners",
+        "virulent-vectorium"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "contagion-engines",
+            "warlordUnitId": "daemon-prince-of-nurgle-with-wings",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-predator-destructor",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "daemon-prince-of-nurgle-with-wings",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "defiler",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "icon-bearer",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "406072365f50812a0463a6f46826aa8640806ba80ac3eb0a23fc06db87571b1e",
+            "executionFingerprint": "a97ef0602b9f6d5df117057c83d80f3b28597dbe4b673f916114adf5cd845bcf",
+            "canonicalRoszSha256": "3a70174742917e26249dea837845bc43d35564d0920e7d64f948fffe89bb13a3"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "contagion-engines",
+            "warlordUnitId": "daemon-prince-of-nurgle-with-wings",
+            "unitModelMultiset": [
+              {
+                "unitId": "blightlord-terminators",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaos-land-raider",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "daemon-prince-of-nurgle-with-wings",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "defiler",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "mortarion",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "plagueburst-crawler",
+                "modelCount": 1,
+                "selectionCount": 2
+              }
+            ],
+            "structuralFingerprint": "de21c5fbd6b8af2f39500d658627a91f86f327bdeddcb0df43d8df2e44de3f2f",
+            "executionFingerprint": "bb304c89766f66e6f734416dd7077568010eba0b9b16800ab85ad35478f2d09c",
+            "canonicalRoszSha256": "3146a2e5db15e4707d56502b0b7a395da9c71c3661cd1b2b16852d9e9951da50"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "reviewedAt": "2026-07-29",
+        "assertions": [
+          "Deathshroud subgroup profile occurrences remain distinct.",
+          "Slow projection and actual movement are reported separately.",
+          "Hard exclusions survive candidate generation."
+        ],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "dc89b7002308a1a2102304f5ed7ddb33ed74cec159476586bdcbc971e564f06d",
+          "bindingSha256": "9fdacea9cf5953bef1178ee16e55d64883600c004e39e0a21ca16f9574a5d2c7"
+        },
+        "invalidationReason": "unbound-legacy"
+      }
+    },
+    {
+      "id": "deathwatch",
+      "name": "Deathwatch",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 140,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "black-spear-task-force",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "dc51b71031943098e60b155e6a835e484418295e7fd8fe901a49aa21923419b0",
+            "executionFingerprint": "ffba39bc27f675a43234db664202d00096a3a13a2fde95f4aad900ed22abe038",
+            "canonicalRoszSha256": "599baeb84ef2cc074c3a80dfb23730ba38b62a989bdb600de30e901c14c41bf5"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "8a9a52042aa98b89ddc007ac214659f77c02541ea22f8165abe37c4d94908bc3",
+            "executionFingerprint": "939670b790ae80dd52bc327d1744e20dac2b26c16569e26de42301169e160dcd",
+            "canonicalRoszSha256": "89155b92ceef44d1a7c4920fcae9e40345395809abfb8c96443de1b5dd6b58c8"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "ad1e963592da7d894fc8ff989a93dfd54f3881c51029e98c2eeb0e65e3707b04",
+          "bindingSha256": "e83528b7d4c1c2d63d1e43caf70cc9c7a1c3f22f0dd39bee271cc89b82f855c4"
+        }
+      }
+    },
+    {
+      "id": "drukhari",
+      "name": "Drukhari",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 14,
+      "detachmentIds": [
+        "covenite-coterie",
+        "exhibition-of-slaughter",
+        "kabalite-agonysts",
+        "kabalite-cartel",
+        "realspace-raiders",
+        "reapers-wager",
+        "skysplinter-assault",
+        "spectacle-of-spite",
+        "tools-of-torment"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "exhibition-of-slaughter",
+            "warlordUnitId": "haemonculus",
+            "unitModelMultiset": [
+              {
+                "unitId": "haemonculus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hand-of-the-archon",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "kabalite-warriors",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "raider",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "reavers",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "wracks",
+                "modelCount": 10,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "a8d91741d9e42e264589e071848ba7e405b0b7db8aa60c3af43c4f804b01e418",
+            "executionFingerprint": "3bdd9eb05b76e84fccba2b283a09e1b14c7b4716b51a2e531b31c01d2f124a35",
+            "canonicalRoszSha256": "01effe7584d7985e9f17129244365a75453bce1b2494f36f597a649585e7cbc5"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "exhibition-of-slaughter",
+            "warlordUnitId": "haemonculus",
+            "unitModelMultiset": [
+              {
+                "unitId": "cronos",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "haemonculus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hand-of-the-archon",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "hellions",
+                "modelCount": 10,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "incubi",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "mandrakes",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "ravager",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "wracks",
+                "modelCount": 10,
+                "selectionCount": 3
+              }
+            ],
+            "structuralFingerprint": "f5adbd30d26fe520ef9090ce6b329be8aecdb616ff753768c9b9be918114ad80",
+            "executionFingerprint": "2513f08efd0798ddb9a4a48adc6fdf07952609d026bb1789180a47cbc1119e23",
+            "canonicalRoszSha256": "3cff4a1131a6dd122a134efd5621215d8d527a20bb57bbc96f4fab6faf9a5253"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "f59cc85fab90cad6f75c6f3910e90733fa09ba4fd70f52c6cd2a2eadc3b319a6",
+          "bindingSha256": "ffec23a3f017986181d4cfd9567f5866f0070ff7f99840dc03c0a1e8e5bcb0ca"
+        }
+      }
+    },
+    {
+      "id": "emperors-children",
+      "name": "Emperor’s Children",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 7,
+      "detachmentIds": [
+        "carnival-of-excess",
+        "coterie-of-the-conceited",
+        "court-of-the-phoenician",
+        "elegant-brutes",
+        "frenzied-host",
+        "mercurial-host",
+        "peerless-bladesmen",
+        "rapid-evisceration",
+        "slaaneshs-chosen",
+        "spectacle-of-slaughter"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "elegant-brutes",
+            "warlordUnitId": "daemon-prince-of-slaanesh",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-spawn",
+                "modelCount": 2,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "daemon-prince-of-slaanesh",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "fulgrim",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "noise-marines",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sorcerer",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tormentors",
+                "modelCount": 5,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "400c4e5a87f57d70f690e6708b155d001e0b3c0cfc633e90751b8a33f4b02e70",
+            "executionFingerprint": "734bf39d1135194034ac9fd94413d952dbe1ea87e2b15a2c005d66fc9462a2ce",
+            "canonicalRoszSha256": "6314f44adcedff2b0090df63fe77872c930fe07a109f933f941466d2591a9beb"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "elegant-brutes",
+            "warlordUnitId": "daemon-prince-of-slaanesh",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-land-raider",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "daemon-prince-of-slaanesh",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "daemon-prince-of-slaanesh-with-wings",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "fulgrim",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "infractors",
+                "modelCount": 10,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "maulerfiend",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tormentors",
+                "modelCount": 10,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "150a81bb96fd7b5c94dcb0cf9f443896cab39f7d423d0bc80ddc4032af5d62b2",
+            "executionFingerprint": "37e3f1e9797a41cc6e73846d83045f12fb99af0f0e2341889ed6316cfdad184e",
+            "canonicalRoszSha256": "0e4fa7501b55033d3fb50698329f106870c686fc71c4dd7c5426e3abbb13a669"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "94c6a853484a9f9848734ca88f48e6232b90310b97e48956c039971299728477",
+          "bindingSha256": "96d5122536627b19ae7f41410a5510cc7ce6546904710ba08f648fd50ffe833b"
+        }
+      }
+    },
+    {
+      "id": "genestealer-cults",
+      "name": "Genestealer Cults",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 18,
+      "detachmentIds": [
+        "biosanctic-broodsurge",
+        "brood-brothers-auxilia",
+        "final-day",
+        "heroes-of-the-uprising",
+        "host-of-ascension",
+        "outlander-claw",
+        "purestrain-broodswarm",
+        "xenocreed-congregation",
+        "xenocult-masses"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "heroes-of-the-uprising",
+            "warlordUnitId": "acolyte-iconward",
+            "unitModelMultiset": [
+              {
+                "unitId": "acolyte-hybrids-with-autopistols",
+                "modelCount": 5,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "acolyte-hybrids-with-autopistols",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "acolyte-iconward",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "atalan-jackals",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "goliath-rockgrinder",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "jackal-alphus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "kelermorph",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "magus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sanctus",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "5df53960e44622cabcc912cab299675660c5539a149c9e927e51bf559dd444e6",
+            "executionFingerprint": "fb5b014d2ea882df137f5a6baa8ec8aba6eb6fc3fc657cc7cff1069865a990cb",
+            "canonicalRoszSha256": "c9373e4bfccf63b431be0315e6cf6f443cfb51ebdd3e147c330dad4ddbe18935"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "heroes-of-the-uprising",
+            "warlordUnitId": "acolyte-iconward",
+            "unitModelMultiset": [
+              {
+                "unitId": "aberrants",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "acolyte-hybrids-with-autopistols",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "acolyte-hybrids-with-hand-flamers",
+                "modelCount": 10,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "acolyte-iconward",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "atalan-jackals",
+                "modelCount": 6,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "goliath-rockgrinder",
+                "modelCount": 1,
+                "selectionCount": 3
+              }
+            ],
+            "structuralFingerprint": "a18c7c03cb0ff98903d62e910c09fd05d1cb9e99d3bf0391f1fed9fecd459ed5",
+            "executionFingerprint": "b0cd65a1c0c8b299d8aca34b8cd888358e6d98079ed47aa960a9b46c864d454d",
+            "canonicalRoszSha256": "e73d9183f97569b724cea72a963b94fbcc799308626a4a915685322818f589dc"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "19e9f75c24b55a880970d714ba3a8ad7f102b768578845a3f5000a2974e00382",
+          "bindingSha256": "645493734fabe800382acc15b89443c7f8b4259539f11ef9155353a11f6efe78"
+        }
+      }
+    },
+    {
+      "id": "grey-knights",
+      "name": "Grey Knights",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 6,
+      "detachmentIds": [
+        "argent-assault",
+        "augurium-task-force",
+        "banishers",
+        "brotherhood-strike",
+        "fires-of-purgation",
+        "hallowed-conclave",
+        "immaterial-interdiction",
+        "sanctic-spearhead",
+        "warpbane-task-force"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "argent-assault",
+            "warlordUnitId": "venerable-dreadnought",
+            "unitModelMultiset": [
+              {
+                "unitId": "brotherhood-champion",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "brotherhood-chaplain",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "brotherhood-terminator-squad",
+                "modelCount": 8,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "purgation-squad",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "rhino",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "venerable-dreadnought",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "625cd170f8c70f8b452937743bd6f34907f4cc4e1263da178f0049191eb743d5",
+            "executionFingerprint": "9e4d6699c777e63418886ad5a4a21f2eacd9b00bcd712050e8852fac4c33135a",
+            "canonicalRoszSha256": "5dda3ad64e137b721e4866841e4d02259e6105224430536a8dd615a543de79fb"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "argent-assault",
+            "warlordUnitId": "venerable-dreadnought",
+            "unitModelMultiset": [
+              {
+                "unitId": "brotherhood-champion",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "brotherhood-chaplain",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "brotherhood-terminator-squad",
+                "modelCount": 9,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "brotherhood-terminator-squad",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "interceptor-squad",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "razorback",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "rhino",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "strike-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "venerable-dreadnought",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "19965206e7296954d2193370aa1e0ce48df04e2c4dcdb7ac0ff1e89b05bba49c",
+            "executionFingerprint": "78dbe3c643b5fe304c0aa428ef690fd87e247b9c2037612009c81e5fca9ee988",
+            "canonicalRoszSha256": "d53f8da5667a4b42b6263173ddf5c8e6b2c89ac7ec32d91876fe7828579f1dc4"
+          }
+        }
+      ],
+      "expectedLimitations": [
+        "Mass composition is expert-reviewed as not applicable; core certification still requires distinct balanced, ranged, and assault elite or mixed postures."
+      ],
+      "portfolioPolicy": {
+        "requiredCorePostures": [
+          "balanced-control",
+          "ranged-pressure",
+          "assault-pressure"
+        ],
+        "notApplicableCompositions": [
+          {
+            "composition": "mass",
+            "reason": "Grey Knights are reviewed as an elite force; mixed or elite-heavy density is the appropriate core evidence."
+          }
+        ],
+        "namedCharacterSpecialist": "required"
+      },
+      "expertReview": {
+        "status": "pending",
+        "reviewedAt": "2026-07-29",
+        "assertions": [
+          "Mass composition is not applicable to Grey Knights.",
+          "Core coverage still requires distinct balanced, ranged, and assault elite or mixed payloads.",
+          "Named-character specialist coverage remains a separate required case."
+        ],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "b9ad41c299aeb5e282b856063c2e4127081f392452e79bf227478e5fd964f965",
+          "bindingSha256": "133a24afffa2c017845363ba223a86ba62d16972d51571298ebe3cb6ce0fda78"
+        },
+        "invalidationReason": "unbound-legacy"
+      }
+    },
+    {
+      "id": "imperial-fists",
+      "name": "Imperial Fists",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 135,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "emperors-shield",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "f023a7a27385188aa4e2264c48518b5e31ebdd602f65d692cb787c7b8661296e",
+            "executionFingerprint": "d00db9bbc5aa16f13814b5216644aed58e9131c165ee5491aca45aeab7ceedbd",
+            "canonicalRoszSha256": "b0ef942bfdc276b5ab51d61c96b637bb5e569b6eff8a7e7ecf5c3ad75398bcab"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "6af229dee59c76bb54209186077546e90b631380ee3928a7d05e6f3b0d634d55",
+            "executionFingerprint": "e6a090881d387df0cdbba61a57d7458836cf1582448eac90225d67713925c9e8",
+            "canonicalRoszSha256": "4c38deb04905410edbdda801f43a203dde9f0ced86e0f088b9c0f490045cda82"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "4c40a331aeaf2d2fb428a064bdf00848f3f38002f70b3ff9cad4cba269df5961",
+          "bindingSha256": "63a4a464add636029fdb5129b8ac38072d9e95c80fbd1fd5f2498b7647e35316"
+        }
+      }
+    },
+    {
+      "id": "imperial-knights",
+      "name": "Imperial Knights",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 33,
+      "detachmentIds": [
+        "dominus-foebreakers",
+        "freeblade-company",
+        "gate-warden-lance",
+        "questor-forgepact",
+        "questoris-companions",
+        "spearhead-at-arms",
+        "throne-bonded-outriders",
+        "valourstrike-lance"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "dominus-foebreakers",
+            "warlordUnitId": "knight-destrier",
+            "unitModelMultiset": [
+              {
+                "unitId": "armiger-moirax",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "canis-rex",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "knight-destrier",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "b8b0873ebd1abac6037d46901fae859e7e733a009aa68aae8dd7f9e726a06416",
+            "executionFingerprint": "eff96b3cb4bc6d433a96a06ce70a1911dffada46979b477ff921e231765084ad",
+            "canonicalRoszSha256": "ede957758a8fa895b163e00c117305fd11c72f7242b1ddd8c4b83af6ab2a4ebb"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "dominus-foebreakers",
+            "warlordUnitId": "knight-destrier",
+            "unitModelMultiset": [
+              {
+                "unitId": "acastus-knight-asterius",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "armiger-moirax",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "canis-rex",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "knight-destrier",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "questoris-knight-magaera",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "9b60e3a9bfcb60d2953a55adfee0f8b80ddb98f73a52a4ee2461b02c2fa05504",
+            "executionFingerprint": "eeb345d7033e4949a8360eb1abf6107da057e0b10afb4fe143305c36973fad7d",
+            "canonicalRoszSha256": "fd277fa5dce5f6f542217e515221623ce3ce3a1852ad4c96ff65bb0f783e0efb"
+          }
+        }
+      ],
+      "expectedLimitations": [
+        "Mass composition is expert-reviewed as not applicable; core certification still requires distinct balanced, ranged, and assault vehicle-heavy postures."
+      ],
+      "portfolioPolicy": {
+        "requiredCorePostures": [
+          "balanced-control",
+          "ranged-pressure",
+          "assault-pressure"
+        ],
+        "notApplicableCompositions": [
+          {
+            "composition": "mass",
+            "reason": "Imperial Knights cannot represent a conventional high-model-count mass army; vehicle-heavy density is the reviewed equivalent evidence."
+          }
+        ],
+        "namedCharacterSpecialist": "required"
+      },
+      "expertReview": {
+        "status": "pending",
+        "reviewedAt": "2026-07-29",
+        "assertions": [
+          "Mass composition is not applicable to Imperial Knights.",
+          "Core coverage still requires distinct balanced, ranged, and assault vehicle-heavy payloads.",
+          "Named-character specialist coverage remains a separate required case."
+        ],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "6ca4e9be9a86e77efd28ff87145cb0e7479c4d917751ea7ee0ff0409bf27f8e9",
+          "bindingSha256": "92563e6e1dd0a21900366466fb1210399cd9ac3bd97052398de7ebb4204e301f"
+        },
+        "invalidationReason": "unbound-legacy"
+      }
+    },
+    {
+      "id": "iron-hands",
+      "name": "Iron Hands",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 136,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "hammer-of-avernii",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "f17f9ebcf3f901cc8f1820360392282459dcf4d63281d4dc88303f3dc09758b4",
+            "executionFingerprint": "34db8c558b677d6b28fcefd3c096fe237e5ae96f5866a143cddd56101be4282b",
+            "canonicalRoszSha256": "87c58c23b7a2fc356eb7320b99857e73d478d356f3230dc4a1de345ce4221bba"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "6337e080a4cd042db8424554618d268b093b857664b326a9489bc9f9a22397d7",
+            "executionFingerprint": "058464ceb730bb5286adf3f0901ba54e320178fcc406f672945892eb8e3caee6",
+            "canonicalRoszSha256": "a9e22dfae6082f1c506111e307c22172d2f8cc72ed625a5515f61973f5a746eb"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "20f4ba6ba2bc52f5d83c5739e2e53c1ff1aad6dea0cf8bbb55bcfc5f9fb2d1e8",
+          "bindingSha256": "69335b2a84722bfa092554e3ed34a251cb5cdab5054fa1b64574dd9a3ed7a591"
+        }
+      }
+    },
+    {
+      "id": "leagues-of-votann",
+      "name": "Leagues of Votann",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 7,
+      "detachmentIds": [
+        "armoured-trailblazers",
+        "brandfast-oathband",
+        "delve-assault-shift",
+        "farseekers",
+        "hearthband",
+        "hearthfyre-arsenal",
+        "hearthguard-covenant",
+        "mercenary-oathband",
+        "needgaard-oathband",
+        "persecution-prospect"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "armoured-trailblazers",
+            "warlordUnitId": "einhyr-champion",
+            "unitModelMultiset": [
+              {
+                "unitId": "einhyr-champion",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hekaton-land-fortress",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "hernkyn-yaegirs",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "kapricus-defenders",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "b68a5c5b1cbb58b09dbbd89b66c2c576d585a795454359bc7c665fda43b86652",
+            "executionFingerprint": "7507c09a2dcc995b2b9cf49e3a1001b5cc0978c479e2d4f75690c64f974338b1",
+            "canonicalRoszSha256": "4d8ab272035c89cab0d5ec3b03e5aaf4104bf6d7782362c88963bd78e6ea88ba"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "armoured-trailblazers",
+            "warlordUnitId": "einhyr-champion",
+            "unitModelMultiset": [
+              {
+                "unitId": "arkanyst-evaluator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "brokhyr-iron-master",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "brokhyr-thunderkyn",
+                "modelCount": 3,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "cthonian-beserks",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "einhyr-champion",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "grimnyr",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hearthkyn-warriors",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "hekaton-land-fortress",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "hernkyn-pioneers",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ironkin-steeljacks-with-heavy-volkanite-disintegrators",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ironkin-steeljacks-with-melee-weapons",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "kahl",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "kapricus-carrier",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "kapricus-defenders",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "memnyr-strategist",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "0cdb68fc5f515117d6714f3cfad7dee5688678eea9e7ba2b27329ffd7794eb99",
+            "executionFingerprint": "29fea712c1f5eb0eec0c2ce4c122714248ae11a81cd5a39edeae43031b96cb6a",
+            "canonicalRoszSha256": "c9d797e3eaa658ea30f9c7c27427b04912b85026ce97e7ad6d7bf44a3388cf31"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "d7e3f4b3b9804633453182dc870778bdf0b14cf5fc8cc775d4efa43af613b95c",
+          "bindingSha256": "cb5bd8d94083037834066c37b147e9456f4f71dab66fd43fee84ac1232bf8971"
+        }
+      }
+    },
+    {
+      "id": "necrons",
+      "name": "Necrons",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 21,
+      "detachmentIds": [
+        "annihilation-legion",
+        "awakened-dynasty",
+        "canoptek-court",
+        "cryptek-conclave",
+        "cursed-legion",
+        "hand-of-the-dynasty",
+        "hypercrypt-legion",
+        "obeisance-phalanx",
+        "pantheon-of-woe",
+        "skyshroud-spearhead",
+        "starshatter-arsenal",
+        "the-phaerons-armoury"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "hand-of-the-dynasty",
+            "warlordUnitId": "lokhust-lord",
+            "unitModelMultiset": [
+              {
+                "unitId": "canoptek-scarab-swarms",
+                "modelCount": 3,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "canoptek-spyders",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "deathmarks",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "lokhust-destroyers",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "lokhust-lord",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "seraptek-heavy-construct",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "ad447cc4b83d6ac0ae62d6e22c8e2eacf575c67e36709888b414fc955a156e9c",
+            "executionFingerprint": "a4d4225b3bbd7594baf33dcf5b8d34326145d751d58fadb0a16d44fef969c33e",
+            "canonicalRoszSha256": "64199985776f89813e75663e92f40aa8456f906dbd7934f381ee2e653221d67e"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "hand-of-the-dynasty",
+            "warlordUnitId": "lokhust-lord",
+            "unitModelMultiset": [
+              {
+                "unitId": "canoptek-scarab-swarms",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "canoptek-spyders",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "doomsday-ark",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "immortals",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "lokhust-destroyers",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "lokhust-lord",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "monolith",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "obelisk",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "royal-warden",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "seraptek-heavy-construct",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "3647e58859d8210122b425582f0403eb904d320609b73ebdccef7e31cdedbc07",
+            "executionFingerprint": "cbc6a0d344c6390931ddce6dc3ec587d0175e4953106f3015afefbb216b4f29d",
+            "canonicalRoszSha256": "87277cecc38acadb1f67c12e1d46d7fdc497c8bcd7c26dbf8090d96457736d0e"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "16e42289811d4b7847aa0088332634f66c1918c637e4adbf9c94188b368e9c44",
+          "bindingSha256": "8c044b214fa1a3795f8d7699a3198567569248d0a80b87ddb3d00acc14414bfc"
+        }
+      }
+    },
+    {
+      "id": "orks",
+      "name": "Orks",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 31,
+      "detachmentIds": [
+        "blitz-brigade",
+        "bully-boyz",
+        "da-big-hunt",
+        "dread-mob",
+        "freebooter-krew",
+        "green-tide",
+        "kult-of-speed",
+        "more-dakka",
+        "rollin-deff",
+        "speedwaaagh",
+        "taktikal-brigade",
+        "war-horde"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "more-dakka",
+            "warlordUnitId": "ghazghkull-thraka",
+            "unitModelMultiset": [
+              {
+                "unitId": "deffkoptas",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ghazghkull-thraka",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "mek-gunz",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "stompa",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "d56b57e29ae38b43936367b2832695e5d24cbec0bb8a6297e5d2c073f057c329",
+            "executionFingerprint": "00aafc8abc52fbf4e39e61e0d385be9c08724c94f35c588ce767de578674e934",
+            "canonicalRoszSha256": "a83de17ec5fc78fea4aeff854b28e0927283cf4dfed806360247748431a33a11"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "more-dakka",
+            "warlordUnitId": "ghazghkull-thraka",
+            "unitModelMultiset": [
+              {
+                "unitId": "beast-snagga-boyz",
+                "modelCount": 20,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "ghazghkull-thraka",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "kill-rig",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "killa-kans",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "killa-kans",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "stompa",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "4e5cbc0be1063778195639a33ae67a5e6d5dd84d5f8db79c54980766eff03b82",
+            "executionFingerprint": "d2d4d214a05488dc41bce67a15c304589449966e7a5c9dacbdf92fddc23b6af0",
+            "canonicalRoszSha256": "1974d13bb41029523d039b33b498a403c0dfcceacfd1c86278ca55854b417c85"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "reviewedAt": "2026-07-29",
+        "assertions": [
+          "Elite infantry counts toward elite density regardless of model count.",
+          "Infeasible mass compositions are unavailable rather than fabricated.",
+          "Core coverage contains distinct balanced, ranged, and assault payloads."
+        ],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "ec2ad8078c5830a1428a6afe1576f85d1680ebb4a4e4a4792d1844625b33f471",
+          "bindingSha256": "caa98ac09d9777cf4b402726810aca5481b40b62a34a86d1ddf9a3da87100f31"
+        },
+        "invalidationReason": "unbound-legacy"
+      }
+    },
+    {
+      "id": "raven-guard",
+      "name": "Raven Guard",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 136,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "shadowmark-talon",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "b230974d9638bf5011ea934966d64742425a573f3ff3a5dc852b610832e3694e",
+            "executionFingerprint": "7a653b0646c82529a71a5b226e2cf1531d4aa210e6f6e26dd48dffb323ab5b27",
+            "canonicalRoszSha256": "2f2a70047160188f5ec24c101d57a59a38c2c27b0bda3d7b5ec964b87aab0fee"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "ee4aa4f30af5817172133bc99d5366a57d90a5b19f15d1a983a5a4e60f6c6235",
+            "executionFingerprint": "91d2283d4e9f5b68d9634119a58abf5e5a04f31b759b41bc733b8278c4ee25a2",
+            "canonicalRoszSha256": "373f6846f20a958325525a0639892e5e8b8c5039071af7a678c9bcfd690b6787"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "da213f922a40bb387e5fcd02954395e3b23b4ae2a6868dc767cb11feb102d009",
+          "bindingSha256": "073cb2a1d00bd43afa2289b9fa238c14f8b1827d3e9c022b7a1bc8d647b60b18"
+        }
+      }
+    },
+    {
+      "id": "salamanders",
+      "name": "Salamanders",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 136,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "forgefathers-seekers",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "4b697e163d049bd922050c52edc6284f871f948434e0f0d5e12766bf8332e85b",
+            "executionFingerprint": "4ec3380750c49a9e92426313f77b01a43162b3d5a13bf9028068e866695c7e48",
+            "canonicalRoszSha256": "e516c5d8c7c3d1a1192270cd5b30ae702e5aed313bfe6329b6ca68356413e6c6"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "c977631201c5683e5988ab68f07dc1fa35598edc1e77094e190ecf5f581e22c2",
+            "executionFingerprint": "3b9a7e7cc6a9d1a7a47c52b0e8831ff177dae2cef4d45e1b87fe295d8feb8655",
+            "canonicalRoszSha256": "7598b1782f94d45f709d0afcdfb64de475b6a5e23f528074bfa7ad32bbbd0b55"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "49cac2cc76dc911c7c422852ede37e2988d89235150b0b9f0e7ef4907af16249",
+          "bindingSha256": "59821df0fa028b81d86856b6d1f49f59cf760fe56e6a5d071589c553e7aa682b"
+        }
+      }
+    },
+    {
+      "id": "space-wolves",
+      "name": "Space Wolves",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 142,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "champions-of-fenris",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "legends-of-saga-and-song",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "saga-of-the-beastslayer",
+        "saga-of-the-bold",
+        "saga-of-the-great-wolf",
+        "saga-of-the-hunter",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead",
+        "veterans-of-the-fang"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "champions-of-fenris",
+            "warlordUnitId": "bjorn-the-fell-handed",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "bjorn-the-fell-handed",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "fenrisian-wolves",
+                "modelCount": 5,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "iron-priest",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "judiciar",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "outrider-squad",
+                "modelCount": 3,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "d6ad5de130fc71960d1820a1a55814547d4386bbfe11722295c021248a2695c0",
+            "executionFingerprint": "fbfdf6d898f9ac45ba7059f8f1c6496be9834f02edf12b193c88e48558e4ac3f",
+            "canonicalRoszSha256": "bd66b65e84bece3cb594e79008824f36629c584f43ef306327fde46c7f7547e1"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "champions-of-fenris",
+            "warlordUnitId": "bjorn-the-fell-handed",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "bjorn-the-fell-handed",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "blood-claws",
+                "modelCount": 11,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "fenrisian-wolves",
+                "modelCount": 5,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "heavy-intercessor-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "iron-priest",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "judiciar",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "28206ac5a11ba90f7312f147f4f7662361588597e94729dfa91e8fa0d23c44db",
+            "executionFingerprint": "f74ae84140bbac517a9f8697871163652cf65fbbbaa97f8193b63a28435f1ccd",
+            "canonicalRoszSha256": "0c6fbabbaabdea95ee427d9653f4f7a8a68c0ed0186fb15319ebf72218af3740"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "046369e7cd02bdea34fb650e332ce95e3b188fe04eb669216ba51989efebf7fc",
+          "bindingSha256": "f53df6debadd13183885f30062204471e306ef467415f9628a9185595e578bb7"
+        }
+      }
+    },
+    {
+      "id": "tau-empire",
+      "name": "T’au Empire",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 45,
+      "detachmentIds": [
+        "advanced-acquisition-cadre",
+        "auxiliary-cadre",
+        "experimental-prototype-cadre",
+        "kauyon",
+        "kroot-hunting-pack",
+        "montka",
+        "retaliation-cadre"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "advanced-acquisition-cadre",
+            "warlordUnitId": "the-twin-lance",
+            "unitModelMultiset": [
+              {
+                "unitId": "firesight-team",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "kroot-hounds",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "krootox-rampagers",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "krootox-riders",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "stormsurge",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "the-twin-lance",
+                "modelCount": 2,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "64859ad34e628a88bc93252b6f93817672b9fe8dd99f88ec9c236cd2a3c43b3a",
+            "executionFingerprint": "23d1fd3810b09a354ad23bcc280bfaa369d60e1e135557499b9ebc5181b0f6e7",
+            "canonicalRoszSha256": "bb5de7a385b97480312e247dfd0d3aa1b6c48954813b52e0891bfb0e22df79a9"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "advanced-acquisition-cadre",
+            "warlordUnitId": "the-twin-lance",
+            "unitModelMultiset": [
+              {
+                "unitId": "broadside-battlesuits",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "krootox-rampagers",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "krootox-riders",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "piranhas",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "sky-ray-gunship",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "taunar-supremacy-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "the-twin-lance",
+                "modelCount": 2,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "3a2466c7c54faea5a1e697f927f231fd91f057553896016529c717b63b5050dd",
+            "executionFingerprint": "f19d05e8b8ef0d38ae7ec9027c8bf9949831a736838ac3704ed70a19cb8656f4",
+            "canonicalRoszSha256": "3431d2f997c4cf85623465329b3d4cbca2b57da1a92b0d0da5a91510e70b1512"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "a10dc52c5a305824c1bf8ed2ed83ccb127db99cd33df22663ac080ed5a0dc35a",
+          "bindingSha256": "f6ae47fadbb9b472a585404fd20142c2e61a5e80ba840d34907278b8156ea7a8"
+        }
+      }
+    },
+    {
+      "id": "thousand-sons",
+      "name": "Thousand Sons",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 6,
+      "detachmentIds": [
+        "changehost-of-deceit",
+        "grand-coven",
+        "hexwarp-thrallband",
+        "ritual-of-regeneration",
+        "rubricae-phalanx",
+        "sekhetar-cohort",
+        "servants-of-change",
+        "warpforged-cabal",
+        "warpmeld-pact"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "ritual-of-regeneration",
+            "warlordUnitId": "exalted-sorcerer-on-disc-of-tzeentch",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-predator-annihilator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaos-spawn",
+                "modelCount": 2,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "chaos-vindicator",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "exalted-sorcerer-on-disc-of-tzeentch",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tzaangor-enlightened",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "tzaangor-enlightened-with-fatecaster-greatbows",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "tzaangor-shaman",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tzaangors",
+                "modelCount": 10,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "114173d1db0c61e89503082194cf4686d6cf7ab38f04878c7d75f0e8f19ef02a",
+            "executionFingerprint": "f0488ec7d119639ee8061ad7b2ed49b0ecc267157d786732132c2f16503f8f04",
+            "canonicalRoszSha256": "d51fe17fecb0f2475ee13076fe4a0770c6faaff932ed9ad19529621c1ce097aa"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "ritual-of-regeneration",
+            "warlordUnitId": "exalted-sorcerer-on-disc-of-tzeentch",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-land-raider",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaos-spawn",
+                "modelCount": 2,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "chaos-vindicator",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "defiler",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "exalted-sorcerer-on-disc-of-tzeentch",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "mutalith-vortex-beast",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "tzaangor-enlightened",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "tzaangor-enlightened-with-fatecaster-greatbows",
+                "modelCount": 3,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "tzaangor-shaman",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "c931516fc6cf6a3d82a82f0984d5a73963ef24f95e8fff75d4bb64ae368036e9",
+            "executionFingerprint": "bbf9185e817fbf08abccc03cf46c0100c57b6cc862e946907b1a1f2b25df02d8",
+            "canonicalRoszSha256": "e08e3a86f8d0e04b2d69ca9435b444af6937318f96af30454a2f522ad89fa9ca"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "41c9fe8f6a098dec320f242e0c621b0c3233d8b534c96c655cc5790b8b0d42fe",
+          "bindingSha256": "23026d2fac3111ac80a29005486d0957d70a57803c96dc81fa3e0a27f120cc4b"
+        }
+      }
+    },
+    {
+      "id": "tyranids",
+      "name": "Tyranids",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 28,
+      "detachmentIds": [
+        "ambush-predators",
+        "assimilation-swarm",
+        "crusher-stampede",
+        "invasion-fleet",
+        "subterranean-assault",
+        "synaptic-nexus",
+        "talons-of-the-norn-queen",
+        "unending-swarm",
+        "vanguard-onslaught",
+        "warrior-bioform-onslaught"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "ambush-predators",
+            "warlordUnitId": "neurotyrant",
+            "unitModelMultiset": [
+              {
+                "unitId": "carnifexes",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "gargoyles",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "mucolid-spores",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "neurogaunts",
+                "modelCount": 11,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "neurotyrant",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "norn-emissary",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "pyrovores",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "ripper-swarms",
+                "modelCount": 1,
+                "selectionCount": 3
+              }
+            ],
+            "structuralFingerprint": "1dc69557c62a24a8caafb567aa4ea3b6b55223c9d25b216ca4f830020adec76a",
+            "executionFingerprint": "8e1467f3e6d589e8cf26eb170b541962e3fd46f5ed13f9ac438a486e4ad4f126",
+            "canonicalRoszSha256": "adb34009410f1e15ee27bf48069c6259a7932a48307b4d37ee266713e767d150"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "ambush-predators",
+            "warlordUnitId": "neurotyrant",
+            "unitModelMultiset": [
+              {
+                "unitId": "barbgaunts",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "carnifexes",
+                "modelCount": 2,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "gargoyles",
+                "modelCount": 20,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "hierophant",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "mucolid-spores",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "neurogaunts",
+                "modelCount": 11,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "neurotyrant",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "pyrovores",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "ripper-swarms",
+                "modelCount": 1,
+                "selectionCount": 3
+              },
+              {
+                "unitId": "spore-mines",
+                "modelCount": 3,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "venomthropes",
+                "modelCount": 3,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "2775f19bdbca14b16fee4f8148d52b05ed63c269d30da161e8209162c0f0cd6d",
+            "executionFingerprint": "873f616ab9efd20ac506aedc0b6c96fe0d6d35b84ffb96fabe7c9eef7a215796",
+            "canonicalRoszSha256": "18601df8583297340d6da28a4d7e065c5349b67cad12f7f58b4b190d0ac16cf5"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "4404d9dbcddfe6e9be2874578ae4ea6d71e2d6a238d3f54f3d23c09a78e5eb3b",
+          "bindingSha256": "e71882e340768e91f1429f97d56b8d58e5149cc56c22c407ec81527040c24a64"
+        }
+      }
+    },
+    {
+      "id": "ultramarines",
+      "name": "Ultramarines",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 132,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "blade-of-ultramar",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "reclamation-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "land-speeder",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "9849870c3d5e37ce1787c91247b982b24d5b3eead5137f06823c33c5b5db07c2",
+            "executionFingerprint": "6a88921d643c23b55ea5a3b3a9482c7dd7866ec33171d4c576ac0328c45e820d",
+            "canonicalRoszSha256": "f424e555e2533e68d46d5836348bff8df86b389af42eb48d7d1b80c73f00e9c2"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "captain-in-phobos-armour",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "captain-in-phobos-armour",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "victrix-honour-guard",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "whirlwind",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "c889302fae84f4dbc31254f1923adf53d4412bf1f96e5ec32e9445eaf43fa6bb",
+            "executionFingerprint": "9577153e8ac842134629b94a5eb327552127b038ec45305f8ea871bbba50a691",
+            "canonicalRoszSha256": "52646a386d1973a754abac253270e648925a267e035e2ea14b5c3d511933e903"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "32bc32fccd8bdc0a657df5fcf28f1cd8dc20f4d05c72b09f01d5982dc7bda026",
+          "bindingSha256": "d24dba66edac37e94656fcf65a96eb6da94e9045ca9d452c59cd1815ee0bcf37"
+        }
+      }
+    },
+    {
+      "id": "white-scars",
+      "name": "White Scars",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 136,
+      "detachmentIds": [
+        "1st-company-task-force",
+        "anvil-siege-force",
+        "armoured-speartip",
+        "bastion-task-force",
+        "ceramite-sentinels",
+        "firestorm-assault-force",
+        "fulguris-task-force",
+        "gladius-task-force",
+        "headhunter-task-force",
+        "ironstorm-spearhead",
+        "librarius-conclave",
+        "orbital-assault-force",
+        "spearpoint-task-force",
+        "stormlance-task-force",
+        "subversion-assets",
+        "vanguard-spearhead"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "suboden-khan",
+            "unitModelMultiset": [
+              {
+                "unitId": "assault-intercessor-squad",
+                "modelCount": 10,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "chaplain",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "judiciar",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "korsarro-khan",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "scout-squad",
+                "modelCount": 5,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "suboden-khan",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "57e2b1decc11aa586b48cd5c9bf8b2b8c9f55b0015b7b6c0957f8633ae272ad0",
+            "executionFingerprint": "650371f3807a0b48e77e6eff9c413c8e5a31b439ba12e5f4f82e55a69c7463ea",
+            "canonicalRoszSha256": "9bc8b982044affe76bd36fd1397a4b848e8fe8732bcd8c6ff0f71a3c58e16d0e"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "fulguris-task-force",
+            "warlordUnitId": "suboden-khan",
+            "unitModelMultiset": [
+              {
+                "unitId": "astraeus",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 4,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-assault-squad",
+                "modelCount": 6,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "centurion-devastator-squad",
+                "modelCount": 6,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "razorback",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "suboden-khan",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "2bc4f35b5aa92ab6db19cfd3bcd879e83ac662c9f5321752d4043c26f95d3934",
+            "executionFingerprint": "0b2f04bf451734f242148c631b314f783a386965a19c9f7e581d15d66d8dcf64",
+            "canonicalRoszSha256": "93e6c0483295150c80c0257a09a81461debc69be68224f85abce969203b480ce"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "00330be46c82fce879a81bc74b64b66c1d4251523be8a8ba5edbf49f37b8cdc7",
+          "bindingSha256": "3aa0c0605d96d11446e018b1d0ce05fc5e396c785f04db3323580eaf380ebbe5"
+        }
+      }
+    },
+    {
+      "id": "world-eaters",
+      "name": "World Eaters",
+      "rosterCorrectness": "required",
+      "newRecruitExport": "required",
+      "newRecruitDelivery": "required",
+      "tesseraPreparation": "complete",
+      "trustedTesseraSimulation": "required",
+      "expectedBlockingConflicts": 11,
+      "detachmentIds": [
+        "berzerker-warband",
+        "brazen-engines",
+        "butchers-of-khorne",
+        "cult-of-blood",
+        "goretrack-onslaught",
+        "khorne-daemonkin",
+        "possessed-slaughterband",
+        "vessels-of-wrath"
+      ],
+      "representativeRosters": [
+        {
+          "id": "core-1000",
+          "pointsLimit": 1000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export",
+            "new-recruit-delivery",
+            "tessera-preparation",
+            "tessera-simulation"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "brazen-engines",
+            "warlordUnitId": "lord-on-juggernaut",
+            "unitModelMultiset": [
+              {
+                "unitId": "khorne-berzerkers",
+                "modelCount": 20,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "khorne-lord-of-skulls",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "lord-on-juggernaut",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "master-of-executions",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "1c56c41ab05653455684eaa69af814534a44a45090af1341bb0d8dc3883fff8f",
+            "executionFingerprint": "59a6f3f658d4a53b11d6d95a60af4fa1e7ddd914b0a545074fcf9c9f577d2d0d",
+            "canonicalRoszSha256": "675cf9131e57cea7e7258ac09e239dea2aad02af0f0496435d78866973ee2b4c"
+          }
+        },
+        {
+          "id": "core-2000",
+          "pointsLimit": 2000,
+          "capabilities": [
+            "roster-correctness",
+            "new-recruit-export"
+          ],
+          "minimumPointsUtilization": 0.98,
+          "goldenEvidence": {
+            "schemaVersion": 1,
+            "detachmentId": "brazen-engines",
+            "warlordUnitId": "lord-on-juggernaut",
+            "unitModelMultiset": [
+              {
+                "unitId": "chaos-land-raider",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "defiler",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "forgefiend",
+                "modelCount": 1,
+                "selectionCount": 1
+              },
+              {
+                "unitId": "khorne-lord-of-skulls",
+                "modelCount": 1,
+                "selectionCount": 2
+              },
+              {
+                "unitId": "lord-on-juggernaut",
+                "modelCount": 1,
+                "selectionCount": 1
+              }
+            ],
+            "structuralFingerprint": "5592a52180b3df03830a0a73ef56a6d3c521b13f81f9c9c3eb3419ec3171e8f3",
+            "executionFingerprint": "76b5f4fac6f5e0f51224c6c292e5ff2f9265f6d8ef52c75145cdcadb9ef230cb",
+            "canonicalRoszSha256": "e865fcf2240e8206505f1f65ddcce22ea01b69370ecc7fb88b13f50a45f53fbb"
+          }
+        }
+      ],
+      "expectedLimitations": [],
+      "expertReview": {
+        "status": "pending",
+        "assertions": [],
+        "binding": {
+          "schemaVersion": 1,
+          "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
+          "factionContractSha256": "44adf8dc845d9a40a0f9cdb5134a3f655a0fae582f2661764108b4e0189127f4",
+          "bindingSha256": "a3e49b6f93bb667f80cb448b40a1a0c9a30766df041a79d173c044a33eefb85b"
+        }
+      }
+    }
+  ]
+}

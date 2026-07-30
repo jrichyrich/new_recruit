@@ -4,16 +4,24 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  buildRoster,
+  analyzeMissionReadiness,
+  baselineDamageCells,
+  compareNewRecruitCatalogueProvenance,
+  generateFactionStressPortfolio,
+  getNewRecruitFactionSummary,
   inspectEnrichedRosz,
-  modifyRoster,
+  newRecruitCatalogue,
+  rosterExecutionFingerprint,
   searchUnits,
   validateRoster,
   type EnrichedRoszSummary,
+  type ExportArtifact,
+  type ConnectorEvent,
   type ModifyRosterOperation,
   type ProfilePolicyV1,
   type ResultEnvelope,
   type RosterDraftV1,
+  type RosterIssue,
   type TesseraArchetype,
   type TesseraAnalysisConfiguration,
   type TesseraChangeCandidate,
@@ -21,6 +29,7 @@ import {
   type TesseraConnectionStatus,
   type TesseraDirection,
   type TesseraFinding,
+  type TesseraFrozenScenarioContract,
   type TesseraMatchupReport,
   type TesseraMetric,
   type TesseraMetricValues,
@@ -31,6 +40,7 @@ import {
   type TesseraRevisionDelta,
   type TesseraScenarioCell,
   type TesseraScenarioResult,
+  type TesseraStressPortfolioItem,
   type TesseraUnitInstance,
 } from "../../lib/rosterpilot";
 import {
@@ -46,6 +56,10 @@ import {
   type NewRecruitDeliveryOptions,
 } from "../new-recruit/companion";
 import {
+  loadNewRecruitCache,
+  storeNewRecruitCache,
+} from "../new-recruit/cache";
+import {
   getLocalAgentStatus,
   LocalAgentError,
   runTesseraThroughLocalAgent,
@@ -57,9 +71,23 @@ import {
   type TesseraBrowserResult,
 } from "./browser";
 import {
+  qualifyRosterChangeCandidate,
+} from "./candidate-quality";
+import {
   renderTesseraMatchupReportHtml,
   renderTesseraRevisionComparisonHtml,
 } from "./report";
+import {
+  aggregateProfileRequirements,
+  profilePolicyHash,
+  profilePolicyScaffold,
+  ProfilePolicySchema,
+  validateProfilePolicy,
+} from "./profile-policy";
+import {
+  getRuntimeProvenance,
+  runtimeRestartIssue,
+} from "../runtime-provenance";
 
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -73,6 +101,14 @@ const ARCHETYPE_PREFERENCES: Record<
   "assault-pressure": ["melee", "mobility"],
 };
 
+const injectedDeliveryCaches = new WeakMap<
+  NonNullable<TesseraDependencies["deliver"]>,
+  Map<
+    string,
+    ReturnType<NonNullable<TesseraDependencies["deliver"]>>
+  >
+>();
+
 export type TesseraOpponentInput =
   | { kind: "roster"; roster: RosterDraftV1 }
   | { kind: "rosz"; path: string }
@@ -84,11 +120,22 @@ export type TesseraOpponentInput =
 
 export type TesseraAnalysisOptions = WriteOptions & {
   outputDirectory?: string;
+  executionMode?: "prepare-only" | "simulate";
+  fallbackMode?: "none" | "baseline-damage-v1";
+  profilePolicyPath?: string;
+  /** @deprecated Use executionMode. */
   experimental?: boolean;
   analysisMode?: "quick" | "full";
   phases?: TesseraPhase[];
   metrics?: TesseraMetric[];
   profilePolicy?: ProfilePolicyV1 | null;
+  /**
+   * Internal frozen source context for a ROSZ opponent. Resumable stress
+   * runs use it to finish policy and legality preflights before reopening a
+   * previously verified enriched archive.
+   */
+  opponentRosterContext?: RosterDraftV1;
+  frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
   sessionId?: string;
   allowPointMismatch?: boolean;
   includeChangeCandidates?: boolean;
@@ -98,7 +145,14 @@ export type TesseraDependencies = {
   deliver?: typeof deliverRosterToNewRecruit;
   enrich?: typeof enrichRoszThroughNewRecruit;
   runBrowser?: typeof runTesseraBrowserMatchup;
+  runtimeIssue?: typeof runtimeRestartIssue;
 };
+
+export function clearPreparedRosterDeliveryMemo(
+  deliver: NonNullable<TesseraDependencies["deliver"]>,
+): void {
+  injectedDeliveryCaches.delete(deliver);
+}
 
 async function exists(filename: string): Promise<boolean> {
   try {
@@ -134,12 +188,18 @@ export async function getTesseraConnectionStatus(): Promise<
   const brokerAvailable = agentStatus?.brokerAvailable === true;
   const installationCurrent =
     agentStatus?.projectDirectory === projectRoot;
+  const runtime = getRuntimeProvenance();
+  const runtimeCompatible =
+    agentStatus?.runtime?.buildId === runtime.buildId &&
+    agentStatus.runtime.stale === false &&
+    runtime.stale === false;
   const available =
     process.platform === "darwin" &&
     browserAvailable &&
     agentStatus?.available === true &&
     agentStatus.protocolCompatible &&
     installationCurrent &&
+    runtimeCompatible &&
     provider?.credentialState === "ready";
   return {
     ok: true,
@@ -153,6 +213,9 @@ export async function getTesseraConnectionStatus(): Promise<
       agentVersion: agentStatus?.version ?? null,
       protocolCompatible: agentStatus?.protocolCompatible === true,
       installationCurrent,
+      runtimeCompatible,
+      runtimeBuildId: runtime.buildId,
+      agentRuntimeBuildId: agentStatus?.runtime?.buildId ?? null,
       credentialState:
         provider?.credentialState ??
         (brokerAvailable ? "unavailable" : "not-configured"),
@@ -165,6 +228,15 @@ export async function getTesseraConnectionStatus(): Promise<
           {
             code: agentError.code,
             message: agentError.message,
+            severity: "warn",
+          },
+        ]
+      : !runtimeCompatible && agentStatus?.available
+        ? [
+          {
+            code: "RUNTIME_RESTART_REQUIRED",
+            message:
+              "The MCP process and local agent do not share the same current source fingerprint. Restart both before Tessera analysis.",
             severity: "warn",
           },
         ]
@@ -216,6 +288,8 @@ async function runTesseraViaAgent(
     phases: input.phases ? [...input.phases] : undefined,
     metrics: input.metrics ? [...input.metrics] : undefined,
     profilePolicy: input.profilePolicy,
+    frozenScenarioContract: input.frozenScenarioContract,
+    savedListReuse: input.savedListReuse,
     sessionId: input.sessionId,
   });
 }
@@ -234,15 +308,76 @@ export async function prepareRosterForTessera(
       warnings: validation.warnings,
     };
   }
-  const delivery = await (dependencies.deliver ?? deliverRosterToNewRecruit)(
-    roster,
-    {
-      ...options,
-      downloadEnrichedRosz: true,
-      downloadPrettyHtml: false,
-      outputDirectory: options.outputDirectory ?? "exports/tessera",
-    },
-  );
+  const restartIssue = dependencies.runtimeIssue
+    ? dependencies.runtimeIssue()
+    : dependencies.deliver
+      ? null
+      : runtimeRestartIssue();
+  if (restartIssue) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          ...restartIssue,
+          severity: "error",
+        },
+      ],
+      warnings: validation.warnings,
+    };
+  }
+  let cacheReused = false;
+  let delivery: Awaited<ReturnType<typeof deliverRosterToNewRecruit>>;
+  if (dependencies.deliver) {
+    const dependencyCache =
+      injectedDeliveryCaches.get(dependencies.deliver) ??
+      new Map();
+    injectedDeliveryCaches.set(
+      dependencies.deliver,
+      dependencyCache,
+    );
+    const cacheKey = [
+      rosterExecutionFingerprint(roster),
+      roster.sourceData.releaseId,
+    ].join(":");
+    let pending = dependencyCache.get(cacheKey);
+    if (pending) {
+      cacheReused = true;
+    } else {
+      pending = dependencies.deliver(roster, {
+        ...options,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        outputDirectory:
+          options.outputDirectory ?? "exports/tessera",
+      });
+      dependencyCache.set(cacheKey, pending);
+    }
+    delivery = await pending;
+    if (!delivery.ok) dependencyCache.delete(cacheKey);
+  } else {
+    const cached = await loadNewRecruitCache(roster);
+    if (cached) {
+      delivery = cached;
+      cacheReused = true;
+    } else {
+      delivery = await deliverRosterToNewRecruit(roster, {
+        ...options,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        outputDirectory: options.outputDirectory ?? "exports/tessera",
+      });
+      if (delivery.ok) await storeNewRecruitCache(roster, delivery);
+    }
+  }
+  if (
+    delivery.data?.cacheReused === true ||
+    delivery.warnings.some(
+      (warning) => warning.code === "NEW_RECRUIT_CACHE_REUSED",
+    )
+  ) {
+    cacheReused = true;
+  }
   const source = delivery.data?.artifacts.find(
     (artifact) =>
       artifact.format === "rosz" ||
@@ -275,19 +410,94 @@ export async function prepareRosterForTessera(
       warnings: delivery.warnings,
     };
   }
+  const prepared: TesseraPreparedRoster = {
+    rosterId: roster.id,
+    rosterName: roster.name,
+    factionId: roster.factionId,
+    listUrl: delivery.data.listUrl,
+    sourceRoszPath: source.written,
+    enrichedRoszPath: enriched.written,
+    summary: delivery.data.enrichedSummary,
+    fingerprint: rosterFingerprint(roster),
+    units: canonicalUnits(roster, "player"),
+    cacheReused,
+    connectorEvents: delivery.data.connectorEvents ?? [],
+    constraints: structuredClone(roster.constraints),
+  };
+  const factionCatalogue = getNewRecruitFactionSummary(roster.factionId);
+  if (!factionCatalogue?.catalogue.id) {
+    return {
+      ok: false,
+      data: prepared,
+      violations: [
+        {
+          code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNAVAILABLE",
+          message:
+            `The pinned ${roster.factionName} New Recruit catalogue identity is unavailable, so Tessera cannot verify the prepared roster's catalogue provenance.`,
+          severity: "error",
+        },
+      ],
+      warnings: delivery.warnings,
+    };
+  }
+  const catalogueProvenance = compareNewRecruitCatalogueProvenance(
+    delivery.data.enrichedSummary,
+    {
+      releaseId: roster.sourceData.releaseId,
+      gameSystem: {
+        id: newRecruitCatalogue.gameSystem.id,
+        name: newRecruitCatalogue.gameSystem.name,
+        revision: roster.sourceData.newRecruit.gameSystemRevision,
+      },
+      catalogue: {
+        id: factionCatalogue.catalogue.id,
+        name: factionCatalogue.catalogue.name,
+        revision: roster.sourceData.newRecruit.catalogueRevision,
+      },
+    },
+  );
+  prepared.catalogueProvenance = catalogueProvenance;
+  if (catalogueProvenance.status === "drift") {
+    const mismatchSummary = catalogueProvenance.mismatches
+      .map(
+        (mismatch) =>
+          `${mismatch.field} expected ${mismatch.expected}, observed ${
+            mismatch.observed ?? "missing"
+          }`,
+      )
+      .join("; ");
+    return {
+      ok: false,
+      data: prepared,
+      violations: [
+        {
+          code: "NEW_RECRUIT_CATALOGUE_DRIFT",
+          message:
+            `The catalogue identity observed in New Recruit's enriched ROSZ differs from pinned release ${roster.sourceData.releaseId}: ${mismatchSummary}. Tessera was not started. This comparison does not infer New Recruit's backend commit.`,
+          severity: "error",
+        },
+      ],
+      warnings: delivery.warnings,
+    };
+  }
+  if (catalogueProvenance.status === "unverifiable") {
+    return {
+      ok: false,
+      data: prepared,
+      violations: [
+        {
+          code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNVERIFIABLE",
+          message:
+            `New Recruit's enriched ROSZ omitted ${catalogueProvenance.missing.join(", ")}. The pinned release remains recorded, but Tessera was not started because the live catalogue identity could not be verified.`,
+          severity: "error",
+        },
+      ],
+      warnings: delivery.warnings,
+    };
+  }
   return {
     ok: true,
-    data: {
-      rosterId: roster.id,
-      rosterName: roster.name,
-      factionId: roster.factionId,
-      listUrl: delivery.data.listUrl,
-      sourceRoszPath: source.written,
-      enrichedRoszPath: enriched.written,
-      summary: delivery.data.enrichedSummary,
-      fingerprint: rosterFingerprint(roster),
-      units: canonicalUnits(roster, "player"),
-    },
+    data: prepared,
     violations: [],
     warnings: delivery.warnings,
   };
@@ -613,23 +823,81 @@ function unitMatchesIssue(
   });
 }
 
+function matrixUnitForLabel(
+  units: TesseraUnitInstance[],
+  label: string,
+  occurrence: number,
+): TesseraUnitInstance | null {
+  const normalizedLabel = label
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+  const normalizedUnit = (value: string) =>
+    value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  const exactLabels = units.filter(
+    (unit) => normalizedUnit(unit.label) === normalizedLabel,
+  );
+  if (exactLabels.length === 1) return exactLabels[0];
+  const exactNames = units.filter(
+    (unit) => normalizedUnit(unit.name) === normalizedLabel,
+  );
+  const candidates =
+    exactNames.length > 0
+      ? exactNames
+      : units.filter((unit) => {
+          const name = normalizedUnit(unit.name);
+          const canonicalLabel = normalizedUnit(unit.label);
+          return (
+            normalizedLabel.includes(name) ||
+            name.includes(normalizedLabel) ||
+            normalizedLabel.includes(canonicalLabel) ||
+            canonicalLabel.includes(normalizedLabel)
+          );
+        });
+  if (candidates.length === 1) return candidates[0];
+  const explicitOrdinal = normalizedLabel.match(
+    /(?:\bunit\s*|#)(\d+)\b/,
+  )?.[1];
+  if (explicitOrdinal) {
+    const ordinal = Number(explicitOrdinal);
+    const matched = candidates.filter(
+      (unit) => unit.ordinal === ordinal,
+    );
+    if (matched.length === 1) return matched[0];
+  }
+  const occurrenceIndex = occurrence - 1;
+  return occurrenceIndex >= 0 &&
+    occurrenceIndex < candidates.length
+    ? candidates[occurrenceIndex]
+    : null;
+}
+
 function warningConfidence(
   warnings: string[],
   result: TesseraBrowserResult,
   attacker: TesseraUnitInstance,
   phase: TesseraPhase,
 ): TesseraConfidence {
-  if (
-    (result.importIssues ?? []).some(
+  const relevantIssues = (result.importIssues ?? []).filter(
       (entry) =>
         entry.side === attacker.side &&
-        entry.code === "alternate-profile" &&
-        !entry.resolvedByPolicy &&
         (entry.phase === null || entry.phase === phase) &&
         unitMatchesIssue(attacker, entry.unit),
+  );
+  if (
+    relevantIssues.some(
+      (entry) =>
+        entry.code === "alternate-profile" &&
+        !entry.resolvedByPolicy,
     )
   ) {
     return "ambiguous";
+  }
+  if (
+    relevantIssues.length > 0 &&
+    relevantIssues.every((entry) => entry.resolvedByPolicy)
+  ) {
+    return "high";
   }
   return warnings.length > 0 ? "review" : "high";
 }
@@ -652,6 +920,12 @@ function consolidateBrowserScenarios(
         metric: TesseraMetric;
         iterations: number | null;
         settings: Record<string, string>;
+        matrixSha256?: string;
+        integrity?: {
+          status: "trusted" | "aliased";
+          issueCodes: string[];
+          aliasedScenarioIds: string[];
+        };
       }>;
       iterations: number | null;
       settings: Record<string, string>;
@@ -681,6 +955,8 @@ function consolidateBrowserScenarios(
       metric,
       iterations: raw.iterations ?? null,
       settings: { ...(raw.settings ?? {}) },
+      matrixSha256: raw.matrixSha256,
+      integrity: raw.integrity,
     });
     group.iterations ??= raw.iterations ?? null;
     Object.assign(group.settings, raw.settings ?? {});
@@ -697,11 +973,19 @@ function consolidateBrowserScenarios(
         ? (result.importWarnings?.opponent ?? [])
         : (result.importWarnings?.player ?? []);
     for (const rawCell of raw.cells) {
-      const attacker = attackers[rawCell.attackerIndex];
-      const target = targets[rawCell.targetIndex];
+      const attacker = matrixUnitForLabel(
+        attackers,
+        rawCell.attacker,
+        rawCell.attackerOccurrence,
+      );
+      const target = matrixUnitForLabel(
+        targets,
+        rawCell.target,
+        rawCell.targetOccurrence,
+      );
       if (!attacker || !target) {
         group.warnings.push(
-          `Tessera returned an out-of-range ${direction} cell at ${rawCell.attackerIndex},${rawCell.targetIndex}.`,
+          `Tessera returned a ${direction} cell whose labels could not be mapped exactly: attacker="${rawCell.attacker}" occurrence=${rawCell.attackerOccurrence}, target="${rawCell.target}" occurrence=${rawCell.targetOccurrence}.`,
         );
         continue;
       }
@@ -718,19 +1002,29 @@ function consolidateBrowserScenarios(
           (entry.side === target.side &&
             (entry.unit === null || unitMatchesIssue(target, entry.unit))),
       );
-      const warningRefs = relevantIssues.length > 0
-        ? relevantIssues.map(
-            (entry) =>
-              `${entry.side === attacker.side ? "Attacker" : "Target"} import: ${entry.message}`,
-          )
-        : [
-            ...attackerImportWarnings.map(
-              (warning) => `Attacker import: ${warning}`,
-            ),
-            ...targetImportWarnings.map(
-              (warning) => `Target import: ${warning}`,
-            ),
-          ];
+      const warningRefs = [
+        ...new Set(
+          relevantIssues.length > 0
+            ? relevantIssues.map(
+                (entry) => {
+                  const subject =
+                    entry.side === attacker.side ? "Attacker" : "Target";
+                  if (entry.resolvedByPolicy) {
+                    return `${subject} import profile resolved by frozen policy: ${entry.weaponGroup ?? "alternate weapon"} → ${entry.selectedProfile ?? "selected profile"}.`;
+                  }
+                  return `${subject} import: ${entry.message}`;
+                },
+              )
+            : [
+                ...attackerImportWarnings.map(
+                  (warning) => `Attacker import: ${warning}`,
+                ),
+                ...targetImportWarnings.map(
+                  (warning) => `Target import: ${warning}`,
+                ),
+              ],
+        ),
+      ];
       const cellKey = `${attacker.instanceId}:${target.instanceId}`;
       const cell =
         group.values.get(cellKey) ??
@@ -759,8 +1053,19 @@ function consolidateBrowserScenarios(
     const missingMetrics = configuration.metrics.filter(
       (metric) => !group.metrics.has(metric),
     );
+    const integrityCodes = [
+      ...new Set(
+        group.metricRuns.flatMap((run) =>
+          run.integrity?.status === "aliased"
+            ? run.integrity.issueCodes
+            : [],
+        ),
+      ),
+    ];
     const status =
-      group.values.size === expectedCellCount && missingMetrics.length === 0
+      group.values.size === expectedCellCount &&
+      missingMetrics.length === 0 &&
+      integrityCodes.length === 0
         ? "complete"
         : "partial";
     const warnings = [...group.warnings];
@@ -771,6 +1076,11 @@ function consolidateBrowserScenarios(
     }
     if (missingMetrics.length) {
       warnings.push(`Missing metrics: ${missingMetrics.join(", ")}.`);
+    }
+    for (const code of integrityCodes) {
+      warnings.push(
+        `[${code}] Tessera returned identical content for independently captured matrices; this scenario is not trusted.`,
+      );
     }
     return {
       scenarioId: crypto
@@ -1048,56 +1358,141 @@ function legacyFindingText(findings: TesseraFinding[]) {
 function candidateRoleTags(findings: TesseraFinding[]): Array<
   "shooting" | "melee" | "objective" | "durability"
 > {
-  const tags: Array<"shooting" | "melee" | "objective" | "durability"> = [];
-  if (
-    findings.some(
-      (finding) =>
-        finding.kind === "role-gap" && /shooting/i.test(finding.summary),
-    )
-  ) {
-    tags.push("shooting");
-  }
-  if (
-    findings.some(
-      (finding) =>
-        finding.kind === "role-gap" && /fight/i.test(finding.summary),
-    )
-  ) {
-    tags.push("melee");
-  }
-  if (findings.some((finding) => finding.kind === "enemy-threat")) {
-    tags.push("durability");
-  }
+  const tags = [
+    ...new Set(findings.flatMap(roleTagsForFinding)),
+  ];
   if (tags.length === 0) tags.push("objective");
   return tags;
 }
 
-function changeCandidates(
+function playerUnitIdsForFinding(
+  roster: RosterDraftV1,
+  finding: TesseraFinding,
+): Set<string> {
+  const rosterSelectionIds = new Set(
+    roster.units.map((unit) => unit.selectionId),
+  );
+  const ids = new Set<string>();
+  for (const evidence of finding.evidence) {
+    const playerId =
+      evidence.direction === "player-to-opponent"
+        ? evidence.attackerInstanceId
+        : evidence.targetInstanceId;
+    if (rosterSelectionIds.has(playerId)) ids.add(playerId);
+  }
+  for (const instanceId of finding.unitInstanceIds) {
+    if (rosterSelectionIds.has(instanceId)) ids.add(instanceId);
+  }
+  return ids;
+}
+
+function roleTagsForFinding(
+  finding: TesseraFinding,
+): Array<"shooting" | "melee" | "objective" | "durability"> {
+  const tags: Array<
+    "shooting" | "melee" | "objective" | "durability"
+  > = [];
+  if (
+    /shooting/i.test(finding.summary) ||
+    finding.evidence.some((entry) => entry.phase === "shooting")
+  ) {
+    tags.push("shooting");
+  }
+  if (
+    /fight/i.test(finding.summary) ||
+    finding.evidence.some((entry) => entry.phase === "fight")
+  ) {
+    tags.push("melee");
+  }
+  if (finding.kind === "enemy-threat") tags.push("durability");
+  return [...new Set(tags)];
+}
+
+function candidateEvidence(
   roster: RosterDraftV1,
   findings: TesseraFinding[],
-): TesseraChangeCandidate[] {
-  const candidates: TesseraChangeCandidate[] = [];
-  const seen = new Set<string>();
-  const evidenceFindingIds = findings
+  selectionId: string | null,
+  candidateTags: string[],
+): TesseraFinding[] {
+  return findings
     .filter(
       (finding) =>
         finding.severity === "warn" &&
         finding.confidence !== "ambiguous",
     )
-    .map((finding) => finding.findingId)
+    .filter((finding) => {
+      if (
+        selectionId &&
+        playerUnitIdsForFinding(roster, finding).has(selectionId)
+      ) {
+        return true;
+      }
+      if (finding.kind !== "role-gap") return false;
+      const requiredTags = roleTagsForFinding(finding);
+      return (
+        requiredTags.length > 0 &&
+        requiredTags.every((tag) => candidateTags.includes(tag))
+      );
+    })
     .slice(0, 6);
-  if (evidenceFindingIds.length === 0) return [];
-  const actionableFindings = findings.filter((finding) =>
-    evidenceFindingIds.includes(finding.findingId),
+}
+
+function selectionIdForOperation(
+  operation: ModifyRosterOperation,
+): string | null {
+  return "selectionId" in operation ? operation.selectionId : null;
+}
+
+async function changeCandidates(
+  roster: RosterDraftV1,
+  findings: TesseraFinding[],
+): Promise<TesseraChangeCandidate[]> {
+  const candidates: TesseraChangeCandidate[] = [];
+  const seen = new Set<string>();
+  const baselineReadiness = analyzeMissionReadiness(roster);
+  if (!baselineReadiness.ok || !baselineReadiness.data) return [];
+  const baselineReadinessReport = baselineReadiness.data;
+  const actionableFindings = findings.filter(
+    (finding) =>
+      finding.severity === "warn" &&
+      finding.confidence !== "ambiguous",
   );
-  const addCandidate = (
+  if (actionableFindings.length === 0) return [];
+  const reliableSelectionIds = new Set(
+    findings
+      .filter((finding) => finding.kind === "reliable-coverage")
+      .flatMap((finding) => [
+        ...playerUnitIdsForFinding(roster, finding),
+      ]),
+  );
+  const addCandidate = async (
     title: string,
     rationale: string,
     operation: ModifyRosterOperation,
-  ) => {
-    const modified = modifyRoster(roster, operation);
-    if (!modified.ok || !modified.data) return;
-    const key = rosterFingerprint(modified.data);
+    candidateTags: string[],
+  ): Promise<void> => {
+    const selectionId = selectionIdForOperation(operation);
+    if (
+      operation.type === "replace" &&
+      selectionId &&
+      reliableSelectionIds.has(selectionId)
+    ) {
+      return;
+    }
+    const evidence = candidateEvidence(
+      roster,
+      actionableFindings,
+      selectionId,
+      candidateTags,
+    );
+    if (evidence.length === 0) return;
+    const qualified = await qualifyRosterChangeCandidate(
+      roster,
+      baselineReadinessReport,
+      operation,
+    );
+    if (!qualified) return;
+    const key = rosterFingerprint(qualified.roster);
     if (seen.has(key) || key === rosterFingerprint(roster)) return;
     seen.add(key);
     candidates.push({
@@ -1110,9 +1505,11 @@ function changeCandidates(
       rationale,
       operation,
       beforePoints: roster.totalPoints,
-      afterPoints: modified.data.totalPoints,
+      afterPoints: qualified.roster.totalPoints,
       rosterFingerprint: key,
-      evidenceFindingIds,
+      evidenceFindingIds: evidence.map(
+        (finding) => finding.findingId,
+      ),
     });
   };
 
@@ -1125,19 +1522,23 @@ function changeCandidates(
   const allowedUnits = units.filter(
     (unit) =>
       (roster.constraints.allowNamedCharacters || !unit.isNamedCharacter) &&
+      !(roster.constraints.excludedUnitIds ?? []).includes(unit.id) &&
       (!roster.constraints.collectionUnitIds ||
         roster.constraints.collectionUnitIds.includes(unit.id)),
   );
   const remaining = roster.pointsLimit - roster.totalPoints;
-  const addition = allowedUnits.find((unit) => unit.pointsFrom <= remaining);
-  if (addition) {
-    addCandidate(
+  for (const addition of allowedUnits.filter(
+    (unit) => unit.pointsFrom <= remaining,
+  )) {
+    await addCandidate(
       `Add ${addition.name}`,
       `Uses available points to add ${candidateRoleTags(actionableFindings).join(
         "/",
-      )} coverage.`,
+      )} coverage while preserving a complete, exportable roster.`,
       { type: "add", unitId: addition.id },
+      addition.tags,
     );
+    if (candidates.length >= 3) break;
   }
 
   for (const selection of roster.units) {
@@ -1151,42 +1552,181 @@ function changeCandidates(
       .filter((count) => count > selection.modelCount)
       .sort((a, b) => a - b)[0];
     if (larger !== undefined) {
-      addCandidate(
+      await addCandidate(
         `Increase ${selection.name} to ${larger} models`,
-        "Uses spare points to strengthen an existing unit without changing its battlefield role.",
+        "Uses spare points to strengthen an evidence-linked unit without changing its battlefield role.",
         {
           type: "set-model-count",
           selectionId: selection.selectionId,
           modelCount: larger,
         },
+        selection.tags,
       );
       if (candidates.length >= 3) break;
     }
   }
 
   if (candidates.length < 3) {
-    const replaceable = [...roster.units].sort(
-      (a, b) => b.points - a.points || a.name.localeCompare(b.name),
+    const requiredUnitIds = new Set(
+      roster.constraints.requiredUnitIds ?? [],
     );
+    const replaceable = roster.units
+      .filter(
+        (selection) =>
+          !requiredUnitIds.has(selection.unitId) &&
+          selection.unitId !==
+            roster.constraints.requiredWarlordUnitId,
+      )
+      .sort(
+        (a, b) =>
+          b.points - a.points || a.name.localeCompare(b.name),
+      );
     outer: for (const selection of replaceable) {
       for (const unit of allowedUnits) {
         if (unit.id === selection.unitId) continue;
-        addCandidate(
+        await addCandidate(
           `Replace ${selection.name} with ${unit.name}`,
           `Tests a legal ${candidateRoleTags(actionableFindings).join(
             "/",
-          )} alternative against the same scenarios.`,
+          )} alternative while preserving a complete, exportable roster.`,
           {
             type: "replace",
             selectionId: selection.selectionId,
             unitId: unit.id,
           },
+          unit.tags,
         );
         if (candidates.length >= 3) break outer;
       }
     }
   }
   return candidates.slice(0, 3);
+}
+
+async function requestedAnalysisProfilePolicy(
+  options: TesseraAnalysisOptions,
+): Promise<ProfilePolicyV1 | null> {
+  let fromPath: ProfilePolicyV1 | null = null;
+  if (options.profilePolicyPath) {
+    const parsed = ProfilePolicySchema.safeParse(
+      JSON.parse(await readFile(options.profilePolicyPath, "utf8")),
+    );
+    if (!parsed.success) {
+      throw new Error(
+        `The profile policy at ${options.profilePolicyPath} is not a valid v1 Tessera profile policy.`,
+      );
+    }
+    fromPath = parsed.data;
+  }
+  if (
+    fromPath &&
+    options.profilePolicy &&
+    profilePolicyHash(fromPath) !==
+      profilePolicyHash(options.profilePolicy)
+  ) {
+    throw new Error(
+      "profilePolicy and profilePolicyPath resolve to different canonical policies.",
+    );
+  }
+  return fromPath ?? options.profilePolicy ?? null;
+}
+
+function failedPreparationReport(input: {
+  playerRoster: RosterDraftV1;
+  player: TesseraPreparedRoster;
+  opponents?: TesseraMatchupReport["opponents"];
+  simulationRequested: boolean;
+  configuration: TesseraAnalysisConfiguration;
+  profilePolicy: ProfilePolicyV1 | null;
+  violations: RosterIssue[];
+  warnings: RosterIssue[];
+  opponentName?: string | null;
+}): TesseraMatchupReport {
+  const opponents = input.opponents ?? [];
+  const connectorEvents = [
+    ...(input.player.connectorEvents ?? []),
+    ...opponents.flatMap(
+      (opponent) => opponent.connectorEvents ?? [],
+    ),
+  ];
+  const remoteMutations = connectorEvents.filter(
+    (event) =>
+      event.provider === "new-recruit" &&
+      event.action === "prepare" &&
+      event.origin === "new-remote" &&
+      event.outcome === "verified",
+  ).length;
+  const cacheReuses = connectorEvents.filter(
+    (event) =>
+      event.provider === "new-recruit" &&
+      event.action === "prepare" &&
+      event.outcome === "reused",
+  ).length;
+  return {
+    schemaVersion: 3,
+    runId: crypto.randomUUID(),
+    generatedAt: new Date().toISOString(),
+    source: "prepare-only",
+    status: "failed",
+    preparation: {
+      status: "failed",
+      source: "new-recruit",
+      uniqueRosters: 1 + opponents.length,
+      remoteMutations,
+      cacheReuses,
+      connectorEvents,
+    },
+    failures: input.violations.map((violation) => ({
+      stage: "preparation",
+      code: violation.code,
+      message: violation.message,
+      opponentName: input.opponentName ?? null,
+      retryable: false,
+    })),
+    profilePolicyHash: input.profilePolicy
+      ? profilePolicyHash(input.profilePolicy)
+      : null,
+    runtime: getRuntimeProvenance(),
+    tesseraUiIdentity: null,
+    connectorEvents,
+    pinnedData: input.playerRoster.sourceData,
+    comparisonClass: "matched",
+    configuration: input.configuration,
+    pointsComparisons: [],
+    player: input.player,
+    opponents,
+    simulation: {
+      requested: input.simulationRequested,
+      executionMode: input.simulationRequested
+        ? "simulate"
+        : "prepare-only",
+      experimental: true,
+      status: input.simulationRequested ? "failed" : "not-requested",
+      engine: "tessera-ui",
+      settings: {},
+      legacyProjection: {
+        status: "unavailable",
+        phase: null,
+        metric: null,
+        scenarioIds: [],
+      },
+      matrices: [],
+      scenarios: [],
+    },
+    strengths: [],
+    weaknesses: [],
+    suggestions: [],
+    findings: [],
+    changeCandidates: [],
+    limitations: [
+      "Preparation failed before trusted Tessera evidence was collected.",
+      "This report retains verified New Recruit artifacts and catalogue provenance for diagnosis and resume.",
+      "No game win probability or matchup conclusion was produced.",
+    ],
+    warnings: input.warnings.map((warning) => warning.message),
+    supplementalAnalyses: [],
+    artifacts: [],
+  };
 }
 
 export async function analyzeRosterMatchup(
@@ -1197,6 +1737,30 @@ export async function analyzeRosterMatchup(
 ): Promise<ResultEnvelope<TesseraMatchupReport>> {
   const outputDirectory = options.outputDirectory ?? "exports/tessera";
   const configuration = analysisConfiguration(options);
+  const simulationRequested =
+    options.executionMode !== undefined
+      ? options.executionMode === "simulate"
+      : options.experimental === true;
+  let profilePolicy: ProfilePolicyV1 | null;
+  try {
+    profilePolicy = await requestedAnalysisProfilePolicy(options);
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "TESSERA_PROFILE_POLICY_INVALID",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The requested profile policy could not be read.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
   const playerValidation = validateRoster(playerRoster);
   if (!playerValidation.ok) {
     return {
@@ -1240,6 +1804,111 @@ export async function analyzeRosterMatchup(
       };
     }
   }
+  let factionProxyItems: Array<
+    TesseraStressPortfolioItem & { roster: RosterDraftV1 }
+  > = [];
+  if (opponent.kind === "faction-archetypes") {
+    const generated = generateFactionStressPortfolio({
+      faction: opponent.factionId,
+      pointsLimit: playerRoster.pointsLimit,
+      suite: "core-3",
+      pointsTolerancePercent: configuration.pointsTolerancePercent,
+      allowLegends: false,
+    });
+    if (!generated.ok || !generated.data) {
+      return {
+        ok: false,
+        data: null,
+        violations: generated.violations,
+        warnings: generated.warnings,
+      };
+    }
+    const requested = new Set(
+      opponent.archetypes?.length
+        ? opponent.archetypes
+        : (Object.keys(ARCHETYPE_PREFERENCES) as TesseraArchetype[]),
+    );
+    factionProxyItems = generated.data.items.filter(
+      (
+        item,
+      ): item is TesseraStressPortfolioItem & {
+        roster: RosterDraftV1;
+      } =>
+        item.status === "ready" &&
+        item.roster !== null &&
+        requested.has(item.posture),
+    );
+    if (factionProxyItems.length === 0) {
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: "NO_OPPONENTS_PREPARED",
+            message:
+              "The shared faction portfolio generator produced no requested, exportable opponent proxies.",
+            severity: "error",
+          },
+        ],
+        warnings: generated.warnings,
+      };
+    }
+  }
+  const profileRequirements = aggregateProfileRequirements([
+    playerRoster,
+    ...(opponent.kind === "roster" ? [opponent.roster] : []),
+    ...(opponent.kind === "rosz" && options.opponentRosterContext
+      ? [options.opponentRosterContext]
+      : []),
+    ...factionProxyItems.map((item) => item.roster),
+  ]);
+  const profileValidation = validateProfilePolicy(
+    profileRequirements,
+    profilePolicy,
+  );
+  const enforceProfilePolicy =
+    simulationRequested &&
+    (
+      options.executionMode === "simulate" ||
+      options.profilePolicy !== undefined ||
+      options.profilePolicyPath !== undefined
+    );
+  if (enforceProfilePolicy && !profileValidation.valid) {
+    let scaffoldPath: string | null = null;
+    try {
+      scaffoldPath = await writeExportArtifact(
+        {
+          format: "roster-json",
+          filename: "profile-policy.scaffold.json",
+          mimeType: "application/json",
+          encoding: "utf8",
+          content: `${JSON.stringify(
+            profilePolicyScaffold(profileRequirements),
+            null,
+            2,
+          )}\n`,
+        },
+        path.join(outputDirectory, "profile-policy.scaffold.json"),
+        options,
+      );
+    } catch {
+      // The validation error remains actionable without a written scaffold.
+    }
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "TESSERA_PROFILE_POLICY_REQUIRED",
+          message: `Explicit weapon-profile choices are required before New Recruit or Tessera activity.${
+            scaffoldPath ? ` Complete ${scaffoldPath}.` : ""
+          }`,
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
   const player = await prepareRosterForTessera(
     playerRoster,
     { ...options, outputDirectory: path.join(outputDirectory, "player") },
@@ -1248,7 +1917,17 @@ export async function analyzeRosterMatchup(
   if (!player.ok || !player.data) {
     return {
       ok: false,
-      data: null,
+      data: player.data
+        ? failedPreparationReport({
+            playerRoster,
+            player: player.data,
+            simulationRequested,
+            configuration,
+            profilePolicy,
+            violations: player.violations,
+            warnings: player.warnings,
+          })
+        : null,
       violations: player.violations,
       warnings: player.warnings,
     };
@@ -1256,6 +1935,7 @@ export async function analyzeRosterMatchup(
   const preparedPlayer = player.data;
 
   const opponents: TesseraMatchupReport["opponents"] = [];
+  const opponentDrafts: Array<RosterDraftV1 | null> = [];
   const warnings: string[] = player.warnings.map((warning) => warning.message);
   if (opponent.kind === "roster") {
     const prepared = await prepareRosterForTessera(
@@ -1264,9 +1944,35 @@ export async function analyzeRosterMatchup(
       dependencies,
     );
     if (!prepared.ok || !prepared.data) {
+      const preparedOpponent = prepared.data
+        ? [
+            {
+              kind: "roster" as const,
+              rosterName: prepared.data.rosterName,
+              enrichedRoszPath: prepared.data.enrichedRoszPath,
+              summary: prepared.data.summary,
+              fingerprint: rosterFingerprint(opponent.roster),
+              units: canonicalUnits(opponent.roster, "opponent"),
+              cacheReused: prepared.data.cacheReused,
+              connectorEvents: prepared.data.connectorEvents,
+              catalogueProvenance: prepared.data.catalogueProvenance,
+            },
+          ]
+        : [];
       return {
         ok: false,
-        data: null,
+        data: failedPreparationReport({
+          playerRoster,
+          player: preparedPlayer,
+          opponents: preparedOpponent,
+          simulationRequested,
+          configuration,
+          profilePolicy,
+          violations: prepared.violations,
+          warnings: [...player.warnings, ...prepared.warnings],
+          opponentName:
+            prepared.data?.rosterName ?? opponent.roster.name,
+        }),
         violations: prepared.violations,
         warnings: [...player.warnings, ...prepared.warnings],
       };
@@ -1278,7 +1984,11 @@ export async function analyzeRosterMatchup(
       summary: prepared.data.summary,
       fingerprint: rosterFingerprint(opponent.roster),
       units: canonicalUnits(opponent.roster, "opponent"),
+      cacheReused: prepared.data.cacheReused,
+      connectorEvents: prepared.data.connectorEvents,
+      catalogueProvenance: prepared.data.catalogueProvenance,
     });
+    opponentDrafts.push(opponent.roster);
   } else if (opponent.kind === "rosz") {
     const prepared = await prepareUploadedRosz(
       opponent.path,
@@ -1289,7 +1999,17 @@ export async function analyzeRosterMatchup(
     if (!prepared.ok || !prepared.data) {
       return {
         ok: false,
-        data: null,
+        data: failedPreparationReport({
+          playerRoster,
+          player: preparedPlayer,
+          opponents,
+          simulationRequested,
+          configuration,
+          profilePolicy,
+          violations: prepared.violations,
+          warnings: [...player.warnings, ...prepared.warnings],
+          opponentName: path.basename(opponent.path),
+        }),
         violations: prepared.violations,
         warnings: [...player.warnings, ...prepared.warnings],
       };
@@ -1301,80 +2021,96 @@ export async function analyzeRosterMatchup(
       summary: prepared.data.summary,
       fingerprint: summaryFingerprint(prepared.data.summary),
       units: enrichedUnits(prepared.data.summary, "opponent"),
+      cacheReused: false,
     });
+    opponentDrafts.push(options.opponentRosterContext ?? null);
   } else {
-    const requested =
-      opponent.archetypes?.length
-        ? opponent.archetypes
-        : (Object.keys(ARCHETYPE_PREFERENCES) as TesseraArchetype[]);
-    const seen = new Set<string>();
-    for (const archetype of requested.slice(0, 3)) {
-      const built = buildRoster({
-        faction: opponent.factionId,
-        pointsLimit: playerRoster.pointsLimit,
-        name: `${opponent.factionId} ${archetype} proxy`,
-        preferences: ARCHETYPE_PREFERENCES[archetype],
-        allowLegends: false,
-        allowNamedCharacters: true,
-      });
-      if (!built.ok || !built.data) {
-        warnings.push(
-          `Could not build ${archetype}: ${
-            built.violations[0]?.message ?? "unknown build failure"
-          }`,
-        );
-        continue;
-      }
-      const key = rosterFingerprint(built.data);
-      if (seen.has(key)) {
-        warnings.push(
-          `${archetype} duplicated another deterministic proxy and was omitted.`,
-        );
-        continue;
-      }
-      seen.add(key);
+    for (const item of factionProxyItems) {
       const prepared = await prepareRosterForTessera(
-        built.data,
+        item.roster,
         {
           ...options,
           outputDirectory: path.join(
             outputDirectory,
             "opponents",
-            archetype,
+            item.templateId.replace(":", "-"),
           ),
         },
         dependencies,
       );
       if (!prepared.ok || !prepared.data) {
-        warnings.push(
-          `Could not prepare ${archetype}: ${
-            prepared.violations[0]?.message ?? "New Recruit handoff failed"
-          }`,
-        );
-        continue;
+        const preparedOpponent = prepared.data
+          ? [
+              {
+                kind: "faction-archetype" as const,
+                archetype: item.posture,
+                rosterName: prepared.data.rosterName,
+                enrichedRoszPath: prepared.data.enrichedRoszPath,
+                summary: prepared.data.summary,
+                fingerprint:
+                  item.simulationFingerprint ??
+                  rosterExecutionFingerprint(item.roster),
+                units: canonicalUnits(item.roster, "opponent"),
+                cacheReused: prepared.data.cacheReused,
+                connectorEvents: prepared.data.connectorEvents,
+                catalogueProvenance:
+                  prepared.data.catalogueProvenance,
+              },
+            ]
+          : [];
+        return {
+          ok: false,
+          data: failedPreparationReport({
+            playerRoster,
+            player: preparedPlayer,
+            opponents: [...opponents, ...preparedOpponent],
+            simulationRequested,
+            configuration,
+            profilePolicy,
+            violations: prepared.violations,
+            warnings: [...player.warnings, ...prepared.warnings],
+            opponentName:
+              prepared.data?.rosterName ?? item.roster.name,
+          }),
+          violations: prepared.violations,
+          warnings: [...player.warnings, ...prepared.warnings],
+        };
       }
       opponents.push({
         kind: "faction-archetype",
-        archetype,
+        archetype: item.posture,
         rosterName: prepared.data.rosterName,
         enrichedRoszPath: prepared.data.enrichedRoszPath,
         summary: prepared.data.summary,
-        fingerprint: rosterFingerprint(built.data),
-        units: canonicalUnits(built.data, "opponent"),
+        fingerprint:
+          item.simulationFingerprint ??
+          rosterExecutionFingerprint(item.roster),
+        units: canonicalUnits(item.roster, "opponent"),
+        cacheReused: prepared.data.cacheReused,
+        connectorEvents: prepared.data.connectorEvents,
+        catalogueProvenance: prepared.data.catalogueProvenance,
       });
+      opponentDrafts.push(item.roster);
     }
   }
   if (opponents.length === 0) {
+    const violation: RosterIssue = {
+      code: "NO_OPPONENTS_PREPARED",
+      message: "No opponent roster could be prepared for Tessera.",
+      severity: "error",
+    };
     return {
       ok: false,
-      data: null,
-      violations: [
-        {
-          code: "NO_OPPONENTS_PREPARED",
-          message: "No opponent roster could be prepared for Tessera.",
-          severity: "error",
-        },
-      ],
+      data: failedPreparationReport({
+        playerRoster,
+        player: preparedPlayer,
+        simulationRequested,
+        configuration,
+        profilePolicy,
+        violations: [violation],
+        warnings: player.warnings,
+      }),
+      violations: [violation],
       warnings: player.warnings,
     };
   }
@@ -1393,16 +2129,26 @@ export async function analyzeRosterMatchup(
   if (unmatchedIndexes.length && !configuration.allowPointMismatch) {
     if (opponent.kind !== "faction-archetypes") {
       const comparison = pointsComparisons[unmatchedIndexes[0]];
+      const violation: RosterIssue = {
+        code: "TESSERA_POINTS_MISMATCH",
+        message: pointsMismatchMessage(comparison),
+        severity: "error",
+      };
       return {
         ok: false,
-        data: null,
-        violations: [
-          {
-            code: "TESSERA_POINTS_MISMATCH",
-            message: pointsMismatchMessage(comparison),
-            severity: "error",
-          },
-        ],
+        data: failedPreparationReport({
+          playerRoster,
+          player: preparedPlayer,
+          opponents,
+          simulationRequested,
+          configuration,
+          profilePolicy,
+          violations: [violation],
+          warnings: player.warnings,
+          opponentName:
+            opponents[unmatchedIndexes[0]]?.rosterName ?? null,
+        }),
+        violations: [violation],
         warnings: player.warnings,
       };
     }
@@ -1411,20 +2157,28 @@ export async function analyzeRosterMatchup(
         `${opponents[index].rosterName} was omitted because its ${opponents[index].summary.totalPoints}-point total is outside the ${configuration.pointsTolerancePercent}% tolerance.`,
       );
       opponents.splice(index, 1);
+      opponentDrafts.splice(index, 1);
       pointsComparisons.splice(index, 1);
     }
     if (opponents.length === 0) {
+      const violation: RosterIssue = {
+        code: "TESSERA_POINTS_MISMATCH",
+        message:
+          "No generated faction archetype was within the matched-points tolerance.",
+        severity: "error",
+      };
       return {
         ok: false,
-        data: null,
-        violations: [
-          {
-            code: "TESSERA_POINTS_MISMATCH",
-            message:
-              "No generated faction archetype was within the matched-points tolerance.",
-            severity: "error",
-          },
-        ],
+        data: failedPreparationReport({
+          playerRoster,
+          player: preparedPlayer,
+          simulationRequested,
+          configuration,
+          profilePolicy,
+          violations: [violation],
+          warnings: player.warnings,
+        }),
+        violations: [violation],
         warnings: player.warnings,
       };
     }
@@ -1433,7 +2187,16 @@ export async function analyzeRosterMatchup(
   const matrices: TesseraMatchupReport["simulation"]["matrices"] = [];
   const scenarios: TesseraScenarioResult[] = [];
   const settings: Record<string, string> = {};
-  if (options.experimental) {
+  const failures: NonNullable<TesseraMatchupReport["failures"]> = [];
+  const simulationConnectorEvents: ConnectorEvent[] = [];
+  const tesseraUiIdentities = new Set<string>();
+  let legacyProjection:
+    | NonNullable<
+        TesseraMatchupReport["simulation"]["legacyProjection"]
+      >
+    | undefined;
+  let captureIntegrityClean = true;
+  if (simulationRequested) {
     for (const prepared of opponents) {
       const profileDirectory = await mkdtemp(
         path.join(os.tmpdir(), "rosterpilot-tessera-"),
@@ -1450,11 +2213,48 @@ export async function analyzeRosterMatchup(
           analysisMode: configuration.analysisMode,
           phases: configuration.phases,
           metrics: configuration.metrics,
-          profilePolicy: options.profilePolicy,
+          profilePolicy,
+          frozenScenarioContract: options.frozenScenarioContract,
           sessionId: options.sessionId,
         });
         Object.assign(settings, result.settings);
+        if (result.legacyProjection) {
+          legacyProjection =
+            !legacyProjection ||
+            (legacyProjection.status === "derived" &&
+              result.legacyProjection.status === "derived" &&
+              legacyProjection.phase === result.legacyProjection.phase &&
+              legacyProjection.metric === result.legacyProjection.metric)
+              ? {
+                  ...result.legacyProjection,
+                  scenarioIds: [
+                    ...new Set([
+                      ...(legacyProjection?.scenarioIds ?? []),
+                      ...result.legacyProjection.scenarioIds,
+                    ]),
+                  ],
+                }
+              : {
+                  status: "unavailable",
+                  phase: null,
+                  metric: null,
+                  scenarioIds: [],
+                };
+        }
+        if (result.uiIdentity) tesseraUiIdentities.add(result.uiIdentity);
         warnings.push(...result.warnings);
+        if ((result.integrityIssues?.length ?? 0) > 0) {
+          captureIntegrityClean = false;
+          for (const integrityIssue of result.integrityIssues ?? []) {
+            failures.push({
+              stage: "simulation",
+              code: integrityIssue.code,
+              message: integrityIssue.message,
+              opponentName: prepared.rosterName,
+              retryable: false,
+            });
+          }
+        }
         matrices.push({
           opponentName: prepared.rosterName,
           cells: result.cells,
@@ -1469,6 +2269,24 @@ export async function analyzeRosterMatchup(
             configuration,
           ),
         );
+        simulationConnectorEvents.push({
+          schemaVersion: 1,
+          eventId: crypto.randomUUID(),
+          recordedAt: new Date().toISOString(),
+          provider: "tessera",
+          action: "simulate",
+          origin: "new-remote",
+          outcome: "verified",
+          remoteId: null,
+          contentSha256: crypto
+            .createHash("sha256")
+            .update(
+              result.scenarios
+                .map((scenario) => scenario.matrixSha256 ?? "")
+                .join("|"),
+            )
+            .digest("hex"),
+        });
       } catch (error) {
         const errorCode =
           error &&
@@ -1482,14 +2300,36 @@ export async function analyzeRosterMatchup(
             error instanceof Error ? error.message : "unknown browser failure"
           }`,
         );
+        failures.push({
+          stage: "simulation",
+          code: errorCode,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unknown Tessera browser failure.",
+          opponentName: prepared.rosterName,
+          retryable:
+            /TIMEOUT|SESSION|NAVIGATION|STALE|LIST_SELECTION/.test(
+              errorCode,
+            ),
+        });
+        simulationConnectorEvents.push({
+          schemaVersion: 1,
+          eventId: crypto.randomUUID(),
+          recordedAt: new Date().toISOString(),
+          provider: "tessera",
+          action: "simulate",
+          origin: "new-remote",
+          outcome: "uncertain",
+          remoteId: null,
+          contentSha256: null,
+        });
       } finally {
         await rm(profileDirectory, { recursive: true, force: true });
       }
     }
   }
 
-  const findings = structuredFindings(scenarios);
-  const legacy = legacyFindingText(findings);
   const allMatched = pointsComparisons.every((comparison) => comparison.matched);
   const expectedScenarioCount =
     opponents.length *
@@ -1498,33 +2338,231 @@ export async function analyzeRosterMatchup(
   const scenariosComplete =
     scenarios.length === expectedScenarioCount &&
     scenarios.every((scenario) => scenario.status === "complete");
+  const analyticalClaimsAllowed =
+    simulationRequested &&
+    matrices.length === opponents.length &&
+    captureIntegrityClean &&
+    scenariosComplete;
+  const findings = analyticalClaimsAllowed
+    ? structuredFindings(scenarios)
+    : [];
+  const legacy = legacyFindingText(findings);
+  if (simulationRequested && !analyticalClaimsAllowed) {
+    warnings.push(
+      "Substantive matchup findings and roster-change candidates were suppressed because the required capture evidence was incomplete or failed matrix-integrity checks.",
+    );
+  }
   const proposedChanges =
+    analyticalClaimsAllowed &&
     configuration.includeChangeCandidates &&
-    allMatched &&
-    scenarios.length > 0
-      ? changeCandidates(playerRoster, findings)
+    allMatched
+      ? await changeCandidates(playerRoster, findings)
       : [];
   const runId = crypto.randomUUID();
+  const basename = `${safeName(playerRoster.name) || "roster"}-matchup`;
+  const baselineArtifactName =
+    `${basename}-baseline-damage-v1.json`;
+  const supplementalAnalyses: NonNullable<
+    TesseraMatchupReport["supplementalAnalyses"]
+  > = [];
+  if (options.fallbackMode === "baseline-damage-v1") {
+    for (const [index, prepared] of opponents.entries()) {
+      const opponentDraft = opponentDrafts[index];
+      if (!opponentDraft) {
+        supplementalAnalyses.push({
+          engine: "baseline-damage-v1",
+          status: "unavailable",
+          opponentName: prepared.rosterName,
+          artifact: baselineArtifactName,
+          assumptions: {
+            scope: "unit-to-unit-expected-damage",
+            range:
+              "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
+            cover: false,
+            charge: true,
+            abilities:
+              "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
+            attachments:
+              "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
+            profilePolicyHash: profilePolicy
+              ? profilePolicyHash(profilePolicy)
+              : null,
+          },
+          cells: [],
+          warnings: [
+            "The baseline requires a canonical roster draft; an uploaded ROSZ alone is insufficient.",
+          ],
+        });
+        continue;
+      }
+      try {
+        const cells = baselineDamageCells(
+          playerRoster,
+          opponentDraft,
+          profilePolicy,
+        );
+        supplementalAnalyses.push({
+          engine: "baseline-damage-v1",
+          status: cells.length > 0 ? "complete" : "unavailable",
+          opponentName: prepared.rosterName,
+          artifact: baselineArtifactName,
+          assumptions: {
+            scope: "unit-to-unit-expected-damage",
+            range:
+              "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
+            cover: false,
+            charge: true,
+            abilities:
+              "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
+            attachments:
+              "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
+            profilePolicyHash: profilePolicy
+              ? profilePolicyHash(profilePolicy)
+              : null,
+          },
+          cells,
+          warnings:
+            cells.length > 0
+              ? []
+              : [
+                  "No canonical unit-to-unit damage cells could be resolved.",
+                ],
+        });
+      } catch (error) {
+        supplementalAnalyses.push({
+          engine: "baseline-damage-v1",
+          status: "unavailable",
+          opponentName: prepared.rosterName,
+          artifact: baselineArtifactName,
+          assumptions: {
+            scope: "unit-to-unit-expected-damage",
+            range:
+              "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
+            cover: false,
+            charge: true,
+            abilities:
+              "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
+            attachments:
+              "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
+            profilePolicyHash: profilePolicy
+              ? profilePolicyHash(profilePolicy)
+              : null,
+          },
+          cells: [],
+          warnings: [
+            error instanceof Error
+              ? error.message
+              : "The deterministic damage baseline failed.",
+          ],
+        });
+      }
+    }
+  }
+  const simulationStatus: NonNullable<
+    TesseraMatchupReport["simulation"]["status"]
+  > = !simulationRequested
+    ? "not-requested"
+    : analyticalClaimsAllowed
+      ? "complete"
+      : matrices.length > 0
+        ? "partial"
+        : "failed";
+  if (
+    simulationRequested &&
+    !analyticalClaimsAllowed &&
+    failures.length === 0
+  ) {
+    const preservedBrowserCode = warnings
+      .flatMap((warning) => [
+        warning.match(/\[(TESSERA_[A-Z0-9_]+)\]/)?.[1] ?? null,
+      ])
+      .find(
+        (code): code is string =>
+          code !== null &&
+          code !== "TESSERA_PROFILE_POLICY_APPLIED",
+      );
+    failures.push({
+      stage: "simulation",
+      code: preservedBrowserCode ?? "TESSERA_EVIDENCE_INCOMPLETE",
+      message:
+        "Tessera did not produce the complete trusted matrix and scenario set required for analytical findings.",
+      opponentName: null,
+      retryable: true,
+    });
+  }
+  const cacheReuses =
+    Number(preparedPlayer.cacheReused === true) +
+    opponents.filter((prepared) => prepared.cacheReused === true).length;
+  const preparationConnectorEvents = [
+    ...(preparedPlayer.connectorEvents ?? []),
+    ...opponents.flatMap(
+      (prepared) => prepared.connectorEvents ?? [],
+    ),
+  ];
   const report: TesseraMatchupReport = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId,
     generatedAt: new Date().toISOString(),
-    source: matrices.length ? "tessera-ui" : "handoff-only",
-    status:
-      options.experimental &&
-      matrices.length === opponents.length &&
-      scenariosComplete
+    source: !simulationRequested
+      ? "prepare-only"
+      : matrices.length
+        ? "tessera-ui"
+        : "tessera-ui-failed",
+    status: !simulationRequested
+      ? "prepared"
+      : analyticalClaimsAllowed
         ? "complete"
-        : "partial",
+        : matrices.length > 0
+          ? "inconclusive"
+          : "failed",
+    preparation: {
+      status: "complete",
+      source: "new-recruit",
+      uniqueRosters: 1 + opponents.length,
+      remoteMutations: 1 + opponents.length - cacheReuses,
+      cacheReuses,
+      connectorEvents: preparationConnectorEvents,
+    },
+    failures,
+    profilePolicyHash: profilePolicy
+      ? profilePolicyHash(profilePolicy)
+      : null,
+    runtime: getRuntimeProvenance(),
+    tesseraUiIdentity:
+      tesseraUiIdentities.size === 0
+        ? null
+        : tesseraUiIdentities.size === 1
+          ? [...tesseraUiIdentities][0]
+          : crypto
+              .createHash("sha256")
+              .update([...tesseraUiIdentities].sort().join("|"))
+              .digest("hex"),
+    connectorEvents: [
+      ...preparationConnectorEvents,
+      ...simulationConnectorEvents,
+    ],
+    pinnedData: playerRoster.sourceData,
     comparisonClass: allMatched ? "matched" : "unmatched",
     configuration,
     pointsComparisons,
     player: preparedPlayer,
     opponents,
     simulation: {
-      requested: options.experimental === true,
+      requested: simulationRequested,
+      executionMode: simulationRequested
+        ? "simulate"
+        : "prepare-only",
       experimental: true,
+      status: simulationStatus,
+      engine: "tessera-ui",
       settings,
+      legacyProjection:
+        legacyProjection ?? {
+          status: "unavailable",
+          phase: null,
+          metric: null,
+          scenarioIds: [],
+        },
       matrices,
       scenarios,
     },
@@ -1539,34 +2577,81 @@ export async function analyzeRosterMatchup(
       "Faction archetypes are deterministic proxies, not current tournament-meta lists.",
     ],
     warnings: [...new Set(warnings)],
+    supplementalAnalyses,
     artifacts: [],
   };
-  const basename = `${safeName(playerRoster.name) || "roster"}-matchup`;
   try {
+    const portableArtifacts: TesseraMatchupReport["artifacts"] = [
+      {
+        format: "matchup-json",
+        written: `${basename}.json`,
+      },
+      {
+        format: "matchup-html",
+        written: `${basename}.html`,
+      },
+      ...(options.fallbackMode === "baseline-damage-v1"
+        ? [
+            {
+              format: "baseline-json" as const,
+              written: baselineArtifactName,
+            },
+          ]
+        : []),
+    ];
+    const portableReport: TesseraMatchupReport = {
+      ...report,
+      artifacts: portableArtifacts,
+    };
+    const artifacts: ExportArtifact[] = [
+      {
+        format: "roster-json",
+        filename: `${basename}.json`,
+        mimeType: "application/json",
+        encoding: "utf8",
+        content: `${JSON.stringify(portableReport, null, 2)}\n`,
+      },
+      {
+        format: "html",
+        filename: `${basename}.html`,
+        mimeType: "text/html; charset=utf-8",
+        encoding: "utf8",
+        content: renderTesseraMatchupReportHtml(portableReport),
+      },
+      ...(options.fallbackMode === "baseline-damage-v1"
+        ? [
+            {
+              format: "roster-json" as const,
+              filename: baselineArtifactName,
+              mimeType: "application/json",
+              encoding: "utf8" as const,
+              content: `${JSON.stringify(
+                {
+                  schemaVersion: 1,
+                  engine: "baseline-damage-v1",
+                  runId,
+                  generatedAt: report.generatedAt,
+                  sourceData: playerRoster.sourceData,
+                  analyses: supplementalAnalyses,
+                  limitation:
+                    "Unit-to-unit expected damage only; this does not estimate game win probability.",
+                },
+                null,
+                2,
+              )}\n`,
+            },
+          ]
+        : []),
+    ];
     const written = await writeExportArtifacts(
-      [
-        {
-          format: "roster-json",
-          filename: `${basename}.json`,
-          mimeType: "application/json",
-          encoding: "utf8",
-          content: `${JSON.stringify(report, null, 2)}\n`,
-        },
-        {
-          format: "html",
-          filename: `${basename}.html`,
-          mimeType: "text/html; charset=utf-8",
-          encoding: "utf8",
-          content: renderTesseraMatchupReportHtml(report),
-        },
-      ],
+      artifacts,
       outputDirectory,
       options,
     );
-    report.artifacts = [
-      { format: "matchup-json", written: written[0] },
-      { format: "matchup-html", written: written[1] },
-    ];
+    report.artifacts = portableArtifacts.map((artifact, index) => ({
+      ...artifact,
+      written: written[index],
+    }));
   } catch (error) {
     return {
       ok: false,
@@ -1581,10 +2666,17 @@ export async function analyzeRosterMatchup(
       warnings: player.warnings,
     };
   }
+  const successful = !simulationRequested || analyticalClaimsAllowed;
   return {
-    ok: true,
+    ok: successful,
     data: report,
-    violations: [],
+    violations: successful
+      ? []
+      : failures.map((failure) => ({
+          code: failure.code,
+          message: failure.message,
+          severity: "error" as const,
+        })),
     warnings: report.warnings.map((message) => ({
       code: "TESSERA_WARNING",
       message,
@@ -1748,7 +2840,7 @@ export async function compareRosterRevision(
   }
   const baselineScenarios = baseline.simulation?.scenarios ?? [];
   if (
-    baseline.schemaVersion !== 2 ||
+    ![2, 3].includes(baseline.schemaVersion ?? 0) ||
     !baseline.runId ||
     !baseline.configuration ||
     !Array.isArray(baseline.opponents) ||
@@ -1764,7 +2856,7 @@ export async function compareRosterRevision(
         {
           code: "TESSERA_BASELINE_INCOMPATIBLE",
           message:
-            "Revision comparison requires a complete schema-v2 baseline with captured scenarios.",
+            "Revision comparison requires a complete schema-v2 or schema-v3 baseline with captured scenarios.",
           severity: "error",
         },
       ],

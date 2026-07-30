@@ -11,6 +11,7 @@ import {
   type TesseraMetric,
   type TesseraPhase,
   type TesseraStressAnalysisStrategy,
+  type TesseraStressRunReport,
   type TesseraStressSuite,
 } from "../lib/rosterpilot";
 import { createRosterPilotMcpServer } from "../mcp/server";
@@ -29,7 +30,7 @@ type AnalysisOptions = {
 };
 
 type RevisionOptions = {
-  outputDirectory: string;
+  outputDirectory?: string;
   overwrite: boolean;
   experimental: boolean;
 };
@@ -38,7 +39,7 @@ type StressOptions = {
   suite: TesseraStressSuite;
   analysisStrategy: TesseraStressAnalysisStrategy;
   resumeManifestPath?: string;
-  outputDirectory: string;
+  outputDirectory?: string;
   overwrite: boolean;
   experimental: boolean;
 };
@@ -87,6 +88,32 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       }
     | undefined;
   const server = createRosterPilotMcpServer({
+    freshnessChecker: async () => ({
+      ok: true,
+      data: {
+        checkedAt: "2026-07-30T00:00:00.000Z",
+        state: "current",
+        rules: {
+          pinnedVersion: "fixture",
+          latestVersion: "fixture",
+          updateAvailable: false,
+        },
+        newRecruit: {
+          pinnedCommit: "fixture",
+          latestCommit: "fixture",
+          updateAvailable: false,
+        },
+        official: {
+          pinnedVersion: "fixture",
+          latestVersion: "fixture",
+          pinnedContentSha256: "a".repeat(64),
+          latestContentSha256: "a".repeat(64),
+          updateAvailable: false,
+        },
+      },
+      violations: [],
+      warnings: [],
+    }),
     tesseraCompanion: {
       status: async () => notInvoked("STATUS_FIXTURE"),
       prepare: async () => notInvoked("PREPARE_FIXTURE"),
@@ -223,6 +250,8 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       "full-all",
     ]);
     assert.equal(stressProperties.analysisStrategy.default, "staged");
+    assert.equal(stressProperties.outputDirectory.default, undefined);
+    assert.equal(stressProperties.responseDetail.default, "compact");
 
     await client.callTool({
       name: "analyze_roster_matchup",
@@ -234,6 +263,9 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     assert.deepEqual(analyses[0], {
       outputDirectory: "exports/tessera",
       overwrite: false,
+      executionMode: undefined,
+      fallbackMode: "none",
+      profilePolicyPath: undefined,
       experimental: false,
       analysisMode: "full",
       phases: undefined,
@@ -260,6 +292,9 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     assert.deepEqual(analyses[1], {
       outputDirectory: "exports/quick",
       overwrite: true,
+      executionMode: undefined,
+      fallbackMode: "none",
+      profilePolicyPath: undefined,
       experimental: true,
       analysisMode: "quick",
       phases: ["fight"],
@@ -288,13 +323,21 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       },
     });
 
-    await client.callTool({
+    const compactStress = await client.callTool({
       name: "stress_test_roster_against_faction",
       arguments: {
         playerRoster: built.data,
         factionId: "aeldari",
       },
     });
+    assert.equal(
+      (
+        compactStress.structuredContent as {
+          warningCount?: number;
+        }
+      ).warningCount,
+      0,
+    );
     assert.deepEqual(stressTests[0], {
       rosterId: built.data.id,
       factionId: "aeldari",
@@ -302,15 +345,17 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         suite: "diverse-9",
         analysisStrategy: "staged",
         resumeManifestPath: undefined,
+        restartManifestPath: undefined,
         profilePolicyPath: undefined,
         forceRetry: false,
-        outputDirectory: "exports/tessera",
+        executionMode: undefined,
+        outputDirectory: undefined,
         overwrite: false,
         experimental: false,
       },
     });
 
-    await client.callTool({
+    const fullStress = await client.callTool({
       name: "stress_test_roster_against_faction",
       arguments: {
         playerRoster: built.data,
@@ -318,13 +363,23 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         suite: "core-3",
         analysisStrategy: "full-all",
         resumeManifestPath: "/fixture/manifest.json",
+        restartManifestPath: undefined,
         profilePolicyPath: undefined,
         forceRetry: false,
+        executionMode: undefined,
         outputDirectory: "exports/stress",
         overwrite: true,
         experimental: true,
+        responseDetail: "full",
       },
     });
+    assert.equal(
+      Object.hasOwn(
+        fullStress.structuredContent as object,
+        "warningCount",
+      ),
+      false,
+    );
     assert.deepEqual(stressTests[1], {
       rosterId: built.data.id,
       factionId: "necrons",
@@ -332,8 +387,10 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         suite: "core-3",
         analysisStrategy: "full-all",
         resumeManifestPath: "/fixture/manifest.json",
+        restartManifestPath: undefined,
         profilePolicyPath: undefined,
         forceRetry: false,
+        executionMode: undefined,
         outputDirectory: "exports/stress",
         overwrite: true,
         experimental: true,
@@ -359,6 +416,235 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         experimental: true,
       },
     });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("compact Astra stress handoff stays bounded and preserves freshness and artifact paths", async () => {
+  const built = buildRoster({
+    faction: "astra-militarum",
+    pointsLimit: 1000,
+    name: "Astra Militarum 1000 vs Custodes",
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "adeptus-custodes",
+    },
+  });
+  assert.ok(built.ok && built.data);
+
+  const report = {
+    schemaVersion: 3,
+    reportKind: "tessera-stress-test",
+    runId: "12345678-compact-astra",
+    status: "complete",
+    statusExplanation: "All three core postures completed.",
+    player: {
+      rosterName: built.data.name,
+      factionId: built.data.factionId,
+      summary: {
+        factionName: built.data.factionName,
+        totalPoints: built.data.totalPoints,
+      },
+    },
+    opponentFactionId: "adeptus-custodes",
+    suite: "core-3",
+    portfolio: {
+      factionName: "Adeptus Custodes",
+      pointsLimit: 1000,
+      coverage: {
+        requested: 3,
+        ready: 3,
+        blocked: 0,
+        requestedPostures: [
+          "balanced-control",
+          "ranged-pressure",
+          "assault-pressure",
+        ],
+        representedPostures: [
+          "balanced-control",
+          "ranged-pressure",
+          "assault-pressure",
+        ],
+        missingPostures: [],
+        requestedCompositions: [],
+        representedCompositions: ["elite-heavy"],
+        missingCompositions: [],
+        requestedCells: [],
+        representedCells: [],
+        missingCells: [],
+        uniqueSimulationFingerprints: 3,
+        minimumExecutable: 3,
+        executable: true,
+        maximumResultStatus: "complete",
+      },
+    },
+    integrity: { status: "trusted", issues: [] },
+    failures: [],
+    recovery: {
+      manifest:
+        "exports/tessera/astra-vs-custodes/stress-manifest.json",
+      screeningAttempts: 3,
+      deepDiveAttempts: 3,
+      exhaustedTemplates: [],
+      nextActions: [],
+      verifiedPreparedPlayer: true,
+      verifiedPreparedOpponents: 3,
+    },
+    preparation: {
+      status: "complete",
+      source: "new-recruit",
+      uniqueRosters: 4,
+      remoteMutations: 4,
+      cacheReuses: 0,
+      connectorEvents: [],
+    },
+    simulation: {
+      requested: true,
+      status: "complete",
+      engine: "tessera-ui",
+      trustedMatrices: 48,
+    },
+    representatives: [],
+    robustness: null,
+    pinnedData: {
+      cachedLiveUpdateCheck: {
+        checkedAt: "2026-07-30T00:00:00.000Z",
+        state: "update-available",
+      },
+    },
+    artifacts: [
+      {
+        format: "stress-json",
+        written: "stress-report.json",
+        sha256: "a".repeat(64),
+      },
+      {
+        format: "stress-html",
+        written: "stress-report.html",
+        sha256: "b".repeat(64),
+      },
+    ],
+    oversizedDiagnostics: "x".repeat(75_000),
+  } as unknown as TesseraStressRunReport;
+
+  const server = createRosterPilotMcpServer({
+    freshnessChecker: async () => ({
+      ok: true,
+      data: {
+        checkedAt: "2026-07-30T00:00:00.000Z",
+        state: "update-available",
+        rules: {
+          pinnedVersion: "1.0.0",
+          latestVersion: "1.0.1",
+          updateAvailable: true,
+        },
+        newRecruit: {
+          pinnedCommit: "a".repeat(40),
+          latestCommit: "b".repeat(40),
+          updateAvailable: true,
+        },
+        official: {
+          pinnedVersion: "1.0",
+          latestVersion: "1.0",
+          pinnedContentSha256: "c".repeat(64),
+          latestContentSha256: "c".repeat(64),
+          updateAvailable: false,
+        },
+      },
+      violations: [],
+      warnings: [
+        {
+          code: "DATA_UPDATE_AVAILABLE",
+          message:
+            "Newer data is available; this run remains pinned.",
+          severity: "warn",
+        },
+      ],
+    }),
+    tesseraCompanion: {
+      status: async () => notInvoked("STATUS_FIXTURE"),
+      prepare: async () => notInvoked("PREPARE_FIXTURE"),
+      analyze: async () => notInvoked("ANALYZE_FIXTURE"),
+      stressTest: async () => ({
+        ok: true,
+        data: report,
+        violations: [],
+        warnings: [],
+      }),
+    },
+  });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const client = new Client({
+    name: "rosterpilot-compact-stress-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+
+  try {
+    const compact = await client.callTool({
+      name: "stress_test_roster_against_faction",
+      arguments: {
+        playerRoster: built.data,
+        factionId: "adeptus-custodes",
+        suite: "core-3",
+      },
+    });
+    const compactPayload =
+      compact.structuredContent as Record<string, unknown>;
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(compactPayload)) <
+        50_000,
+    );
+    assert.equal(compactPayload.warningCount, 1);
+    assert.equal(
+      (
+        compactPayload.warnings as Array<{
+          code: string;
+        }>
+      )[0].code,
+      "DATA_UPDATE_AVAILABLE",
+    );
+    assert.equal(
+      (
+        compactPayload.data as {
+          artifactPaths: unknown[];
+        }
+      ).artifactPaths.length,
+      2,
+    );
+    assert.equal(
+      Object.hasOwn(
+        compactPayload.data as object,
+        "oversizedDiagnostics",
+      ),
+      false,
+    );
+
+    const full = await client.callTool({
+      name: "stress_test_roster_against_faction",
+      arguments: {
+        playerRoster: built.data,
+        factionId: "adeptus-custodes",
+        suite: "core-3",
+        responseDetail: "full",
+      },
+    });
+    assert.equal(
+      (
+        (
+          full.structuredContent as {
+            data: { oversizedDiagnostics: string };
+          }
+        ).data.oversizedDiagnostics
+      ).length,
+      75_000,
+    );
   } finally {
     await client.close();
     await server.close();
@@ -423,6 +709,11 @@ test("CLI help documents Tessera analysis and stress-test options", async () => 
   );
   assert.match(stdout, /--suite core-3\|diverse-9/);
   assert.match(stdout, /--analysis staged\|full-all/);
+  assert.match(stdout, /--restart-from manifest\.json/);
+  assert.match(
+    stdout,
+    /verified prepared artifacts are reused/,
+  );
   assert.match(
     stdout,
     /tessera compare-stress-revision --baseline-report stress-test\.json --revised-roster revised\.json/,

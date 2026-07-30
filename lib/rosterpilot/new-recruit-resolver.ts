@@ -11,6 +11,45 @@ import type {
   CatalogueUnitReference,
 } from "./catalogue-types";
 
+const UNICODE_DASHES = /[\u058a\u05be\u1400\u1806\u2010-\u2015\u2e17\u2e1a\u2e3a-\u2e3b\u2e40\u301c\u3030\u30a0\ufe31-\ufe32\ufe58\ufe63\uff0d\u2212]/g;
+
+/**
+ * BSData and the rules package occasionally use different Unicode forms for
+ * punctuation. Keep matching deterministic and conservative: canonicalize
+ * compatibility characters, dash variants, and whitespace, then delegate the
+ * existing punctuation/diacritic behavior to the rules package normalizer.
+ */
+export function normalizeNewRecruitName(value: string): string {
+  return normalizeName(
+    value
+      .normalize("NFKC")
+      .replace(UNICODE_DASHES, "-")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
+export function newRecruitEquipmentSignature(
+  equipment: Array<{
+    itemId?: string;
+    name: string;
+    count: number;
+  }>,
+): string {
+  const counts = new Map<string, number>();
+  for (const item of equipment) {
+    if (item.count <= 0) continue;
+    const key = item.itemId
+      ? `id:${item.itemId}`
+      : `name:${normalizeNewRecruitName(item.name)}`;
+    counts.set(key, (counts.get(key) ?? 0) + item.count);
+  }
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => `${key}=${count}`)
+    .join("|");
+}
+
 export type NewRecruitUnitInput = {
   unitId: string;
   name: string;
@@ -71,10 +110,97 @@ function referencesByName(
   references: CatalogueSelectionReference[],
   name: string,
 ): CatalogueSelectionReference[] {
-  const normalizedName = normalizeName(name);
+  const normalizedName = normalizeNewRecruitName(name);
   return references.filter(
-    (reference) => reference.normalizedName === normalizedName,
+    (reference) =>
+      normalizeNewRecruitName(reference.name) === normalizedName,
   );
+}
+
+function resolveCoherentEquipmentSet(
+  references: CatalogueSelectionReference[],
+  equipment: Array<{
+    itemId: string;
+    name: string;
+    count: number;
+  }>,
+):
+  | { ok: true; equipment: ResolvedEquipmentReference[] }
+  | { ok: false; equipmentName: string; matchCount: number } {
+  const matchesByEquipment = equipment.map((item) => ({
+    item,
+    matches: referencesByName(references, item.name),
+  }));
+  const missing = matchesByEquipment.find(
+    ({ matches }) => matches.length === 0,
+  );
+  if (missing) {
+    return {
+      ok: false,
+      equipmentName: missing.item.name,
+      matchCount: 0,
+    };
+  }
+  if (matchesByEquipment.every(({ matches }) => matches.length === 1)) {
+    return {
+      ok: true,
+      equipment: matchesByEquipment.map(({ item, matches }) => ({
+        ...item,
+        reference: matches[0],
+      })),
+    };
+  }
+
+  const choiceIds = new Set(
+    matchesByEquipment.flatMap(({ matches }) =>
+      matches.flatMap((reference) =>
+        reference.loadoutChoiceId ? [reference.loadoutChoiceId] : [],
+      ),
+    ),
+  );
+  const candidates = [...choiceIds].flatMap((choiceId) => {
+    const selected: ResolvedEquipmentReference[] = [];
+    let scopedMatches = 0;
+    for (const { item, matches } of matchesByEquipment) {
+      const inChoice = matches.filter(
+        (reference) => reference.loadoutChoiceId === choiceId,
+      );
+      const unscoped = matches.filter(
+        (reference) => reference.loadoutChoiceId === undefined,
+      );
+      const match =
+        inChoice.length === 1
+          ? inChoice[0]
+          : inChoice.length === 0 && unscoped.length === 1
+            ? unscoped[0]
+            : undefined;
+      if (!match) return [];
+      if (inChoice.length === 1) scopedMatches += 1;
+      selected.push({ ...item, reference: match });
+    }
+    return [{ choiceId, selected, scopedMatches }];
+  });
+  candidates.sort(
+    (left, right) =>
+      right.scopedMatches - left.scopedMatches ||
+      left.choiceId.localeCompare(right.choiceId),
+  );
+  const best = candidates[0];
+  const tied =
+    best &&
+    candidates[1]?.scopedMatches === best.scopedMatches;
+  if (best && !tied) {
+    return { ok: true, equipment: best.selected };
+  }
+
+  const ambiguous = matchesByEquipment.find(
+    ({ matches }) => matches.length > 1,
+  ) as (typeof matchesByEquipment)[number];
+  return {
+    ok: false,
+    equipmentName: ambiguous.item.name,
+    matchCount: ambiguous.matches.length,
+  };
 }
 
 function modelNameRank(
@@ -82,8 +208,8 @@ function modelNameRank(
   reference: CatalogueModelReference,
 ): number {
   if (!modelName) return 3;
-  const expected = normalizeName(modelName);
-  const actual = reference.normalizedName;
+  const expected = normalizeNewRecruitName(modelName);
+  const actual = normalizeNewRecruitName(reference.name);
   if (actual === expected) return 0;
   if (
     actual.startsWith(`${expected} `) ||
@@ -97,7 +223,7 @@ function modelNameRank(
 
 function looksLikeLeaderModel(name: string): boolean {
   return /\b(alpha|champion|exarch|huntmaster|leader|master|princeps|sergeant|superior|watchmaster)\b/.test(
-    normalizeName(name),
+    normalizeNewRecruitName(name),
   );
 }
 
@@ -119,13 +245,20 @@ function equipmentGroups(
     ]),
   );
   const composition = dataset.unitCompositionOf(unit.raw);
-  const groups = groupLoadout(
-    unit.raw,
-    selection.modelCount,
-    dataset.wargearOptionsOf(unit.raw),
-    composition?.models,
-    counts,
-  );
+  let groups: ReturnType<typeof groupLoadout>;
+  try {
+    groups = groupLoadout(
+      unit.raw,
+      selection.modelCount,
+      dataset.wargearOptionsOf(unit.raw),
+      composition?.models,
+      counts,
+    );
+  } catch {
+    // Malformed or combinatorially explosive upstream composition data must
+    // block this mapping without terminating roster generation or export.
+    return null;
+  }
   if (groups) {
     const resolved: EquipmentGroup[] = [];
     for (const group of groups) {
@@ -144,8 +277,8 @@ function equipmentGroups(
         isLeaderModel:
           composition?.models.find(
             (model) =>
-              normalizeName(model.name) ===
-              normalizeName(group.model_name ?? ""),
+              normalizeNewRecruitName(model.name) ===
+              normalizeNewRecruitName(group.model_name ?? ""),
           )?.is_leader_model ?? null,
         count: group.count,
         equipment,
@@ -200,10 +333,14 @@ function candidateForGroup(
   }
 
   const mappedNames = new Set(
-    modelEquipment.map((equipment) => normalizeName(equipment.name)),
+    modelEquipment.map((equipment) =>
+      normalizeNewRecruitName(equipment.name),
+    ),
   );
   const availableNames = new Set(
-    model.equipment.map((equipment) => equipment.normalizedName),
+    model.equipment.map((equipment) =>
+      normalizeNewRecruitName(equipment.name),
+    ),
   );
   return {
     model,
@@ -275,29 +412,24 @@ export function resolveNewRecruitUnit(
     (equipment) => equipment.count > 0,
   );
   if (mapping.models.length === 0) {
-    const directEquipment: ResolvedEquipmentReference[] = [];
-    for (const equipment of positiveEquipment) {
-      const matches = referencesByName(
-        mapping.directEquipment,
-        equipment.name,
-      );
-      if (matches.length !== 1) {
-        return {
-          ok: false,
-          reason: `New Recruit catalogue mapping for ${selection.name} equipment "${equipment.name}" is ${
-            matches.length === 0 ? "missing" : "ambiguous"
-          }.`,
-        };
-      }
-      directEquipment.push({
-        ...equipment,
-        reference: matches[0],
-      });
+    const directEquipment = resolveCoherentEquipmentSet(
+      mapping.directEquipment,
+      positiveEquipment,
+    );
+    if (!directEquipment.ok) {
+      return {
+        ok: false,
+        reason: `New Recruit catalogue mapping for ${selection.name} equipment "${directEquipment.equipmentName}" is ${
+          directEquipment.matchCount === 0 ? "missing" : "ambiguous"
+        }.`,
+      };
     }
     return {
       ok: true,
       models: [],
-      directEquipment: aggregateDirectEquipment(directEquipment),
+      directEquipment: aggregateDirectEquipment(
+        directEquipment.equipment,
+      ),
     };
   }
 

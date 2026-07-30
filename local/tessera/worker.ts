@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import type { BrowserContext } from "playwright-core";
 
-import type { ProfilePolicyV1 } from "../../lib/rosterpilot";
+import type {
+  ProfilePolicyV1,
+  TesseraFrozenScenarioContract,
+} from "../../lib/rosterpilot";
 import {
+  classifyTesseraAutomationFailure,
+  invalidatesCachedTesseraLicenseKey,
   runTesseraBrowserMatchup,
   TesseraAutomationError,
   type TesseraAnalysisMode,
@@ -9,6 +16,9 @@ import {
   type TesseraMetric,
   type TesseraPhase,
 } from "./browser";
+import type {
+  TesseraSavedListReuse,
+} from "./saved-list-reuse";
 
 type WorkerRequest = {
   brokerPath: string;
@@ -21,11 +31,25 @@ type WorkerRequest = {
   phases?: TesseraPhase[];
   metrics?: TesseraMetric[];
   profilePolicy?: ProfilePolicyV1 | null;
+  frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
+  savedListReuse?: TesseraSavedListReuse | null;
 };
 
 type WorkerResult =
   | { ok: true; data: TesseraBrowserResult }
   | { ok: false; code: string; message: string };
+
+type WorkerFailure = Extract<WorkerResult, { ok: false }>;
+
+type PersistentWorkerRequest =
+  | { action: "analyze"; request: WorkerRequest }
+  | { action: "reset" }
+  | { action: "close" };
+
+type PersistentWorkerControlResult = {
+  ok: true;
+  action: "reset" | "close";
+};
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -71,22 +95,18 @@ async function retrieveLicenseKey(brokerPath: string): Promise<string> {
   return parsed.licenseKey;
 }
 
-function failure(error: unknown): WorkerResult {
+function failure(error: unknown): WorkerFailure {
+  const { code, message } = classifyTesseraAutomationFailure(error);
   return {
     ok: false,
-    code:
-      error instanceof TesseraAutomationError
-        ? error.code
-        : "TESSERA_COMPANION_FAILED",
-    message:
-      error instanceof Error ? error.message : "Tessera companion failed.",
+    code,
+    message,
   };
 }
 
-try {
-  const input = JSON.parse(await readStdin()) as WorkerRequest;
+async function analyzeOnce(input: WorkerRequest): Promise<TesseraBrowserResult> {
   const licenseKey = await retrieveLicenseKey(input.brokerPath);
-  const data = await runTesseraBrowserMatchup({
+  return runTesseraBrowserMatchup({
     profileDirectory: input.profileDirectory,
     playerRoszPath: input.playerRoszPath,
     playerName: input.playerName,
@@ -97,9 +117,126 @@ try {
     phases: input.phases,
     metrics: input.metrics,
     profilePolicy: input.profilePolicy,
+    frozenScenarioContract: input.frozenScenarioContract,
+    savedListReuse: input.savedListReuse,
   });
-  process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
-} catch (error) {
-  process.stdout.write(`${JSON.stringify(failure(error))}\n`);
-  process.exitCode = 2;
+}
+
+async function runOneShotWorker(): Promise<void> {
+  try {
+    const input = JSON.parse(await readStdin()) as WorkerRequest;
+    const data = await analyzeOnce(input);
+    process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
+  } catch (error) {
+    process.stdout.write(`${JSON.stringify(failure(error))}\n`);
+    process.exitCode = 2;
+  }
+}
+
+async function runPersistentWorker(): Promise<void> {
+  let context: BrowserContext | undefined;
+  let licenseKey: string | undefined;
+  let brokerPath: string | undefined;
+  let profileDirectory: string | undefined;
+  let closing = false;
+
+  const closeContext = async () => {
+    const active = context;
+    context = undefined;
+    await active?.close().catch(() => undefined);
+  };
+  const reset = async () => {
+    await closeContext();
+  };
+  const close = async () => {
+    if (closing) return;
+    closing = true;
+    await closeContext();
+    licenseKey = undefined;
+  };
+  const shutdown = () => {
+    void close().finally(() => process.exit(0));
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+
+  const lines = createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
+  for await (const line of lines) {
+    if (!line.trim()) continue;
+    let response: WorkerResult | PersistentWorkerControlResult;
+    let shouldClose = false;
+    try {
+      const envelope = JSON.parse(line) as PersistentWorkerRequest;
+      if (envelope.action === "close") {
+        await close();
+        response = { ok: true, action: "close" };
+        shouldClose = true;
+      } else if (envelope.action === "reset") {
+        await reset();
+        response = { ok: true, action: "reset" };
+      } else if (envelope.action === "analyze") {
+        const input = envelope.request;
+        if (
+          (brokerPath && brokerPath !== input.brokerPath) ||
+          (profileDirectory &&
+            profileDirectory !== input.profileDirectory)
+        ) {
+          throw new TesseraAutomationError(
+            "TESSERA_WORKER_SESSION_MISMATCH",
+            "The persistent Tessera worker refused a request for another session.",
+          );
+        }
+        brokerPath = input.brokerPath;
+        profileDirectory = input.profileDirectory;
+        licenseKey ??= await retrieveLicenseKey(input.brokerPath);
+        const data = await runTesseraBrowserMatchup(
+          {
+            profileDirectory: input.profileDirectory,
+            playerRoszPath: input.playerRoszPath,
+            playerName: input.playerName,
+            opponentRoszPath: input.opponentRoszPath,
+            opponentName: input.opponentName,
+            licenseKey,
+            analysisMode: input.analysisMode,
+            phases: input.phases,
+            metrics: input.metrics,
+            profilePolicy: input.profilePolicy,
+            frozenScenarioContract: input.frozenScenarioContract,
+            savedListReuse: input.savedListReuse,
+          },
+          {
+            context,
+            keepContextOpen: true,
+            onContext: (created) => {
+              context = created;
+            },
+          },
+        );
+        response = { ok: true, data };
+      } else {
+        throw new TesseraAutomationError(
+          "TESSERA_WORKER_PROTOCOL_ERROR",
+          "The persistent Tessera worker received an unsupported action.",
+        );
+      }
+    } catch (error) {
+      response = failure(error);
+      if (invalidatesCachedTesseraLicenseKey(response.code)) {
+        licenseKey = undefined;
+        await closeContext();
+      }
+    }
+    process.stdout.write(`${JSON.stringify(response)}\n`);
+    if (shouldClose) break;
+  }
+  await close();
+}
+
+if (process.argv.includes("--persistent")) {
+  await runPersistentWorker();
+} else {
+  await runOneShotWorker();
 }

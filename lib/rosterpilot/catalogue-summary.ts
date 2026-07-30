@@ -5,6 +5,7 @@ import type {
   NewRecruitCatalogueSummaryManifest,
   NewRecruitFactionSummary,
 } from "./catalogue-types";
+import { newRecruitEquipmentSignature } from "./new-recruit-resolver";
 
 export type NewRecruitCapability = {
   factionId: string;
@@ -32,10 +33,91 @@ export type DataConflictFilter = {
 
 export type DataConflictPage = {
   total: number;
+  uniqueTotal: number;
   offset: number;
   limit: number;
   items: DataConflict[];
 };
+
+export type RosterConflictInput = {
+  factionId: string;
+  detachmentId: string;
+  units: Array<{
+    unitId: string;
+    modelCount?: number;
+    ordinal?: number;
+    enhancementId?: string | null;
+    equipment: Array<{
+      itemId?: string;
+      name: string;
+      count: number;
+    }>;
+  }>;
+};
+
+/**
+ * Returns true only when a conflict proves that every configuration of the
+ * referenced unit is blocked. Model-count and loadout-scoped conflicts must
+ * remain available to the builder so it can choose a different legal
+ * configuration.
+ */
+export function conflictBlocksAllUnitConfigurations(
+  conflict: DataConflict,
+): boolean {
+  if (!conflict.blocking) return false;
+  if (conflict.entityType === "unit") return true;
+  if (conflict.entityType !== "points") return false;
+  if (
+    conflict.scope?.modelCount !== undefined ||
+    conflict.scope?.unitOrdinalMin !== undefined ||
+    conflict.scope?.unitOrdinalMax !== undefined ||
+    (conflict.scope?.selectionScopes?.length ?? 0) > 0 ||
+    conflict.scope?.equipmentSignature !== undefined ||
+    conflict.scope?.equipmentItemId !== undefined
+  ) {
+    return false;
+  }
+  const entitySuffix = conflict.entityId.split(":").at(-1);
+  return !entitySuffix || !/^\d+$/.test(entitySuffix);
+}
+
+function ordinalInScope(
+  ordinal: number | undefined,
+  scope: {
+    unitOrdinalMin?: number;
+    unitOrdinalMax?: number | null;
+  },
+): boolean {
+  const value = ordinal ?? 1;
+  return (
+    (scope.unitOrdinalMin === undefined ||
+      value >= scope.unitOrdinalMin) &&
+    (
+      scope.unitOrdinalMax === undefined ||
+      scope.unitOrdinalMax === null ||
+      value <= scope.unitOrdinalMax
+    )
+  );
+}
+
+function selectionScopeMatches(
+  scope: NonNullable<
+    NonNullable<
+      DataConflict["scope"]
+    >["selectionScopes"]
+  >[number],
+  unit: RosterConflictInput["units"][number],
+): boolean {
+  return (
+    scope.modelCount === unit.modelCount &&
+    ordinalInScope(unit.ordinal, scope) &&
+    (
+      scope.equipmentSignature === undefined ||
+      scope.equipmentSignature ===
+        newRecruitEquipmentSignature(unit.equipment)
+    )
+  );
+}
 
 export const newRecruitCatalogue =
   catalogueJson as NewRecruitCatalogueSummaryManifest;
@@ -117,28 +199,19 @@ export function listDataConflicts(
     );
   return {
     total: items.length,
+    uniqueTotal: new Set(
+      items.map((item) => item.rootCauseKey ?? item.id),
+    ).size,
     offset,
     limit,
     items: items.slice(offset, offset + limit),
   };
 }
 
-export function conflictsForRoster(input: {
-  factionId: string;
-  detachmentId: string;
-  units: Array<{
-    unitId: string;
-    modelCount?: number;
-    enhancementId?: string | null;
-    equipment: Array<{
-      itemId?: string;
-      name: string;
-      count: number;
-    }>;
-  }>;
-}): DataConflict[] {
-  const faction = getNewRecruitFactionSummary(input.factionId);
-  if (!faction) return [];
+export function conflictAppliesToRoster(
+  item: DataConflict,
+  input: RosterConflictInput,
+): boolean {
   const unitIds = new Set(input.units.map((unit) => unit.unitId));
   const equipmentIds = new Set(
     input.units.flatMap((unit) =>
@@ -157,29 +230,104 @@ export function conflictsForRoster(input: {
       unit.enhancementId ? [unit.enhancementId] : [],
     ),
   );
-  return faction.conflicts.filter(
-    (item) => {
-      if (item.entityType === "catalogue") return true;
-      if (item.entityType === "detachment") {
-        return item.entityId === input.detachmentId;
+  if (item.entityType === "catalogue") return true;
+  if (item.entityType === "detachment") {
+    return item.entityId === input.detachmentId;
+  }
+  if (item.entityType === "unit") return unitIds.has(item.entityId);
+  if (item.entityType === "points") {
+    return input.units.some((unit) => {
+      if (
+        item.entityId !== unit.unitId &&
+        !item.entityId.startsWith(`${unit.unitId}:`)
+      ) {
+        return false;
       }
-      if (item.entityType === "unit") return unitIds.has(item.entityId);
-      if (item.entityType === "points") {
-        return [...unitIds].some(
-          (unitId) =>
-            item.entityId === unitId ||
-            item.entityId.startsWith(`${unitId}:`),
+      if (
+        item.scope?.selectionScopes &&
+        !item.scope.selectionScopes.some(
+          (scope) => selectionScopeMatches(scope, unit),
+        )
+      ) {
+        return false;
+      }
+      const legacyModelCount =
+        item.scope?.modelCount === undefined &&
+        item.entityId.startsWith(`${unit.unitId}:`) &&
+        /^\d+$/.test(item.entityId.slice(unit.unitId.length + 1))
+          ? Number(item.entityId.slice(unit.unitId.length + 1))
+          : undefined;
+      return (
+        (item.scope?.modelCount === undefined ||
+          item.scope.modelCount === unit.modelCount) &&
+        ordinalInScope(unit.ordinal, item.scope ?? {}) &&
+        (
+          item.scope?.equipmentSignature === undefined ||
+          item.scope.equipmentSignature ===
+            newRecruitEquipmentSignature(unit.equipment)
+        ) &&
+        (legacyModelCount === undefined ||
+          legacyModelCount === unit.modelCount)
+      );
+    });
+  }
+  if (item.entityType === "equipment") {
+    const selectedUnits = input.units.filter(
+      (candidate) =>
+        item.entityId === candidate.unitId ||
+        item.entityId.startsWith(`${candidate.unitId}:`),
+    );
+    return selectedUnits.some((unit) => {
+      if (
+        item.scope?.selectionScopes &&
+        !item.scope.selectionScopes.some((scope) =>
+          selectionScopeMatches(scope, unit),
+        )
+      ) {
+        return false;
+      }
+      if (item.scope?.selectionScopes) return true;
+      if (
+        item.scope?.modelCount !== undefined &&
+        item.scope.modelCount !== unit.modelCount
+      ) {
+        return false;
+      }
+      if (!ordinalInScope(unit.ordinal, item.scope ?? {})) {
+        return false;
+      }
+      if (
+        item.scope?.equipmentSignature !== undefined &&
+        item.scope.equipmentSignature !==
+          newRecruitEquipmentSignature(unit.equipment)
+      ) {
+        return false;
+      }
+      if (item.scope?.equipmentSignature !== undefined) return true;
+      if (item.scope?.equipmentItemId !== undefined) {
+        return unit.equipment.some(
+          (equipment) =>
+            equipment.count > 0 &&
+            equipment.itemId ===
+              item.scope?.equipmentItemId,
         );
       }
-      if (item.entityType === "equipment") {
-        return (
-          unitIds.has(item.entityId) || equipmentIds.has(item.entityId)
-        );
-      }
-      if (item.entityType === "enhancement") {
-        return enhancementIds.has(item.entityId);
-      }
-      return false;
-    },
+      return unitIds.has(item.entityId) ||
+        equipmentIds.has(item.entityId);
+    });
+  }
+  if (item.entityType === "enhancement") {
+    return enhancementIds.has(item.entityId);
+  }
+  return false;
+}
+
+export function conflictsForRoster(
+  input: RosterConflictInput,
+): DataConflict[] {
+  const faction = getNewRecruitFactionSummary(input.factionId);
+  if (!faction) return [];
+  return faction.conflicts.filter((item) =>
+    conflictAppliesToRoster(item, input),
   );
 }

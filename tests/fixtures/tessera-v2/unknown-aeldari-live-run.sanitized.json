@@ -1,0 +1,81 @@
+{
+  "fixtureKind": "tessera-unknown-faction-live-run",
+  "schemaVersion": 1,
+  "sanitized": true,
+  "playerFaction": "adeptus-custodes",
+  "opponentFaction": "aeldari",
+  "pointsLimit": 1000,
+  "alternateProfiles": [
+    {
+      "side": "player",
+      "unit": "Blade Champion",
+      "weaponGroup": "Vaultswords",
+      "phase": "fight",
+      "availableProfiles": [
+        "Behemor",
+        "Hurricanis",
+        "Victus"
+      ]
+    },
+    {
+      "side": "opponent",
+      "unit": "Fire Prism",
+      "weaponGroup": "Prism cannon",
+      "phase": "shooting",
+      "availableProfiles": [
+        "Dispersed pulse",
+        "Focused lances"
+      ]
+    }
+  ],
+  "premiumFailures": [
+    {
+      "code": "TESSERA_PREMIUM_UNLOCK_TIMEOUT",
+      "retryable": true
+    },
+    {
+      "code": "TESSERA_PREMIUM_STILL_LOCKED",
+      "retryable": true
+    }
+  ],
+  "duplicatePayloads": {
+    "templateIds": [
+      "ranged-pressure-mixed",
+      "ranged-pressure-elite-heavy"
+    ],
+    "sameSimulationFingerprint": true
+  },
+  "zeroConfidentEvidence": {
+    "status": "inconclusive",
+    "offensiveCoverage": null,
+    "threatExposure": null,
+    "provisional": {
+      "offensiveCoverage": 0.61,
+      "offensivePointCoverage": 0.43,
+      "threatExposure": 0.38,
+      "threatPointCoverage": 0.47
+    }
+  },
+  "retryState": {
+    "status": "partial",
+    "attemptCount": 3,
+    "attemptHistory": [
+      {
+        "attempt": 1,
+        "outcome": "failed",
+        "errorCode": "TESSERA_PREMIUM_UNLOCK_TIMEOUT"
+      },
+      {
+        "attempt": 2,
+        "outcome": "failed",
+        "errorCode": "TESSERA_PREMIUM_UNLOCK_TIMEOUT"
+      },
+      {
+        "attempt": 3,
+        "outcome": "failed",
+        "errorCode": "TESSERA_PREMIUM_STILL_LOCKED"
+      }
+    ],
+    "nextAction": "Resume the same manifest after restoring Tessera readiness."
+  }
+}

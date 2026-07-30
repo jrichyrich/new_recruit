@@ -15,6 +15,7 @@ import test from "node:test";
 
 import {
   LOCAL_AGENT_PROTOCOL_VERSION,
+  LOCAL_AGENT_VERSION,
   type LocalAgentResponse,
 } from "../local/agent/contracts";
 import {
@@ -22,11 +23,118 @@ import {
   deliverThroughLocalAgent,
   getLocalAgentStatus,
   LocalAgentError,
+  probeNewRecruitThroughLocalAgent,
   runTesseraThroughLocalAgent,
 } from "../local/agent/client";
 import { FrameDecoder, encodeFrame } from "../local/agent/framing";
 import { renderLaunchAgent } from "../local/agent/lifecycle";
 import { startLocalAgent } from "../local/agent/server";
+
+async function writePersistentTesseraWorkerFixture(
+  filename: string,
+  logPath: string,
+): Promise<void> {
+  await writeFile(
+    filename,
+    `import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+let contextGeneration = 0;
+let contextActive = false;
+let failedTransient = false;
+let profileDirectory = null;
+const log = (value) => appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({
+  pid: process.pid,
+  contextGeneration,
+  ...value
+}) + "\\n");
+const result = (warnings = []) => ({
+  settings: {},
+  warnings,
+  cells: [],
+  scenarios: [],
+  importWarnings: { player: [], opponent: [] },
+  importIssues: [],
+  integrityIssues: []
+});
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+for await (const line of lines) {
+  const envelope = JSON.parse(line);
+  if (envelope.action === "analyze") {
+    profileDirectory = envelope.request.profileDirectory;
+    if (!contextActive) {
+      contextActive = true;
+      contextGeneration += 1;
+    }
+    mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
+    const savedListMarker = join(
+      profileDirectory,
+      "saved-list-state.fixture"
+    );
+    const savedListStatePresent = existsSync(savedListMarker);
+    if (!savedListStatePresent) {
+      writeFileSync(savedListMarker, "verified saved-list state");
+    }
+    log({
+      action: "analyze",
+      profileDirectory,
+      savedListStatePresent,
+      frozenScenarioContract: envelope.request.frozenScenarioContract,
+      savedListReuse: envelope.request.savedListReuse
+    });
+    if (
+      envelope.request.opponentName === "Transient" &&
+      !failedTransient
+    ) {
+      failedTransient = true;
+      process.stdout.write(JSON.stringify({
+        ok: false,
+        code: "TESSERA_BROWSER_TIMEOUT",
+        message: "fixture timeout"
+      }) + "\\n");
+    } else if (envelope.request.opponentName === "Partial") {
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        data: result([
+          "[TESSERA_PROFILE_POLICY_APPLIED] fixture",
+          "[TESSERA_STALE_MATRIX] fixture stale matrix"
+        ])
+      }) + "\\n");
+    } else {
+      process.stdout.write(JSON.stringify({ ok: true, data: result() }) + "\\n");
+    }
+  } else if (envelope.action === "reset") {
+    contextActive = false;
+    log({
+      action: "reset",
+      profileDirectory,
+      savedListStatePresent: profileDirectory
+        ? existsSync(join(profileDirectory, "saved-list-state.fixture"))
+        : false
+    });
+    process.stdout.write(JSON.stringify({ ok: true, action: "reset" }) + "\\n");
+  } else if (envelope.action === "close") {
+    contextActive = false;
+    log({ action: "close", profileDirectory });
+    process.stdout.write(JSON.stringify({ ok: true, action: "close" }) + "\\n");
+    break;
+  }
+}
+`,
+  );
+}
+
+async function waitForCondition(
+  predicate: () => Promise<boolean>,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail("Timed out waiting for the local-agent fixture condition.");
+}
 
 test("local-agent framing round-trips a fragmented message", () => {
   const frame = encodeFrame({ ok: true, value: "fixture" });
@@ -70,7 +178,36 @@ test("local agent reports providers through a user-only transport", async () => 
     assert.equal(spoolStat.mode & 0o777, 0o700);
     const status = await getLocalAgentStatus({ spoolDirectory });
     assert.equal(status.available, true);
+    assert.equal(LOCAL_AGENT_PROTOCOL_VERSION, 9);
     assert.equal(status.protocolVersion, LOCAL_AGENT_PROTOCOL_VERSION);
+    assert.equal(LOCAL_AGENT_VERSION, "1.8.0");
+    assert.equal(status.version, LOCAL_AGENT_VERSION);
+    assert.match(status.runtime?.buildId ?? "", /^[0-9a-f]{20}$/);
+    assert.equal(status.runtime?.stale, false);
+    assert.equal(
+      typeof status.runtime?.rosterPilotVersion,
+      "string",
+    );
+    assert.equal(
+      typeof status.runtime?.rulesPackageVersion,
+      "string",
+    );
+    assert.equal(
+      typeof status.runtime?.stressGeneratorVersion,
+      "string",
+    );
+    assert.match(
+      status.runtime?.processStartedAt ?? "",
+      /^\d{4}-\d{2}-\d{2}T/,
+    );
+    assert.match(
+      status.runtime?.sourceFingerprintAtStart ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.match(
+      status.runtime?.sourceFingerprintNow ?? "",
+      /^[0-9a-f]{64}$/,
+    );
     assert.equal(typeof status.projectDirectory, "string");
     assert.equal(typeof status.nodeExecutable, "string");
     assert.equal(status.brokerAvailable, false);
@@ -179,10 +316,27 @@ test("local agent returns browser artifacts without returning credentials or pat
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+if (input.action === "probe") {
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    uiIdentity: "${"d".repeat(64)}",
+    sessionReused: true,
+    importControlVisible: true
+  }));
+  process.exit(0);
+}
+if (input.expected.name === "Invalid stdout") {
+  process.stdout.write("not-json");
+  process.exit(2);
+}
 if (input.enrichedRoszPath) writeFileSync(input.enrichedRoszPath, "enriched");
 if (input.prettyHtmlPath) writeFileSync(input.prettyHtmlPath, "<h1>Pretty</h1>");
 process.stdout.write(JSON.stringify({
   ok: true,
+  uiIdentity: input.expected.name === "Malformed"
+    ? "https://www.newrecruit.eu/assets/app.js"
+    : "${"c".repeat(64)}",
+  rawUiMetadata: "secret-browser-build-metadata",
   imported: true,
   sessionReused: false,
   listUrl: "https://www.newrecruit.eu/app/Lists/fixture",
@@ -226,10 +380,64 @@ process.stdout.write(JSON.stringify({
       "<h1>Pretty</h1>",
     );
     assert.equal(result.worker.imported, true);
+    assert.equal(result.worker.uiIdentity, "c".repeat(64));
     assert.doesNotMatch(
       JSON.stringify(result),
-      /password|cookie|access.?token|rosterpilot-agent-delivery-/i,
+      /password|cookie|access.?token|rawUiMetadata|secret-browser-build-metadata|rosterpilot-agent-delivery-/i,
     );
+    const malformed = await deliverThroughLocalAgent(
+      {
+        sourceFilename: "fixture.rosz",
+        sourceRoszBase64:
+          Buffer.from("source").toString("base64"),
+        downloadEnrichedRosz: false,
+        downloadPrettyHtml: false,
+        expected: {
+          name: "Malformed",
+          factionName: "Faction",
+          totalPoints: 1000,
+          units: [],
+        },
+      },
+      { spoolDirectory },
+    );
+    assert.equal(malformed.worker.uiIdentity, null);
+    assert.doesNotMatch(
+      JSON.stringify(malformed),
+      /assets\/app\.js/,
+    );
+    const unknownOutcome =
+      await deliverThroughLocalAgent(
+        {
+          sourceFilename: "fixture.rosz",
+          sourceRoszBase64:
+            Buffer.from("source").toString("base64"),
+          downloadEnrichedRosz: false,
+          downloadPrettyHtml: false,
+          expected: {
+            name: "Invalid stdout",
+            factionName: "Faction",
+            totalPoints: 1000,
+            units: [],
+          },
+        },
+        { spoolDirectory },
+      );
+    assert.equal(unknownOutcome.worker.ok, false);
+    assert.equal(
+      unknownOutcome.worker.remoteOutcomeUnknown,
+      true,
+    );
+    const probe =
+      await probeNewRecruitThroughLocalAgent({
+        spoolDirectory,
+      });
+    assert.deepEqual(probe, {
+      ok: true,
+      uiIdentity: "d".repeat(64),
+      sessionReused: true,
+      importControlVisible: true,
+    });
   } finally {
     await running.close();
     await rm(directory, { recursive: true, force: true });
@@ -249,8 +457,19 @@ test("local agent returns sanitized Tessera matrix results", async () => {
   await chmod(brokerPath, 0o700);
   await writeFile(
     workerPath,
-    `const chunks = [];
+    `import { readFileSync } from "node:fs";
+import { basename } from "node:path";
+const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
+const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+if (
+  basename(input.playerRoszPath) !== "player.rosz" ||
+  basename(input.opponentRoszPath) !== "opponent.rosz" ||
+  readFileSync(input.playerRoszPath, "utf8") !== "player" ||
+  readFileSync(input.opponentRoszPath, "utf8") !== "opponent"
+) {
+  throw new Error("role-specific Tessera inputs were not materialized");
+}
 process.stdout.write(JSON.stringify({
   ok: true,
   data: {
@@ -278,10 +497,10 @@ process.stdout.write(JSON.stringify({
   try {
     const result = await runTesseraThroughLocalAgent(
       {
-        playerFilename: "player.rosz",
+        playerFilename: "enriched.rosz",
         playerRoszBase64: Buffer.from("player").toString("base64"),
         playerName: "Player",
-        opponentFilename: "opponent.rosz",
+        opponentFilename: "enriched.rosz",
         opponentRoszBase64: Buffer.from("opponent").toString("base64"),
         opponentName: "Opponent",
       },
@@ -298,7 +517,7 @@ process.stdout.write(JSON.stringify({
   }
 });
 
-test("local agent reuses and explicitly removes an isolated Tessera session", async () => {
+test("explicit fake Tessera workers keep one-shot EOF behavior and frozen contracts", async () => {
   const directory = await mkdtemp(
     path.join("/private/tmp", "rosterpilot-agent-session-"),
   );
@@ -316,7 +535,10 @@ test("local agent reuses and explicitly removes an isolated Tessera session", as
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-appendFileSync(${JSON.stringify(profileLog)}, input.profileDirectory + "\\n");
+appendFileSync(${JSON.stringify(profileLog)}, JSON.stringify({
+  profileDirectory: input.profileDirectory,
+  frozenScenarioContract: input.frozenScenarioContract
+}) + "\\n");
 process.stdout.write(JSON.stringify({
   ok: true,
   data: {
@@ -346,22 +568,327 @@ process.stdout.write(JSON.stringify({
     opponentRoszBase64: Buffer.from("opponent").toString("base64"),
     opponentName: "Opponent",
     sessionId: "stress-run-fixture",
+    frozenScenarioContract: [
+      {
+        phase: "shooting" as const,
+        direction: "player-to-opponent" as const,
+        metric: "wipe-probability" as const,
+        settings: { iterations: "1000" },
+        iterations: 1_000,
+      },
+    ],
   };
   try {
     await runTesseraThroughLocalAgent(payload, { spoolDirectory });
     await runTesseraThroughLocalAgent(payload, { spoolDirectory });
-    const profiles = (await readFile(profileLog, "utf8"))
+    const records = (await readFile(profileLog, "utf8"))
       .trim()
-      .split("\n");
-    assert.equal(profiles.length, 2);
-    assert.equal(profiles[0], profiles[1]);
-    await access(profiles[0]);
+      .split("\n")
+      .map((line) => JSON.parse(line) as {
+        profileDirectory: string;
+        frozenScenarioContract: unknown;
+      });
+    assert.equal(records.length, 2);
+    assert.equal(
+      records[0].profileDirectory,
+      records[1].profileDirectory,
+    );
+    assert.deepEqual(
+      records[0].frozenScenarioContract,
+      payload.frozenScenarioContract,
+    );
+    await access(records[0].profileDirectory);
     const closed = await closeTesseraLocalAgentSession(
       payload.sessionId,
       { spoolDirectory },
     );
     assert.equal(closed.closed, true);
-    await assert.rejects(access(profiles[0]));
+    await assert.rejects(access(records[0].profileDirectory));
+  } finally {
+    await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("persistent Tessera sessions reuse one worker and reset poisoned contexts", async () => {
+  const directory = await mkdtemp(
+    path.join("/private/tmp", "rosterpilot-agent-persistent-"),
+  );
+  const workerPath = path.join(directory, "tessera-worker.mjs");
+  const workerLog = path.join(directory, "worker.log");
+  await writePersistentTesseraWorkerFixture(workerPath, workerLog);
+  const spoolDirectory = path.join(directory, "spool");
+  const running = await startLocalAgent({
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath: path.join(directory, "unused-broker"),
+    tesseraPersistentWorkerPath: workerPath,
+  });
+  const frozenScenarioContract = [
+    {
+      phase: "shooting" as const,
+      direction: "player-to-opponent" as const,
+      metric: "wipe-probability" as const,
+      settings: { iterations: "1000" },
+      iterations: 1_000,
+    },
+  ];
+  const savedListReuse = {
+    schemaVersion: 1 as const,
+    player: {
+      runId: "persistent-fixture",
+      enrichedRoszSha256: "a".repeat(64),
+      scopedProfilePolicySha256: "b".repeat(64),
+      rosterExecutionFingerprint: "c".repeat(64),
+      expectedUnitCount: 2,
+    },
+    opponent: {
+      runId: "persistent-fixture",
+      enrichedRoszSha256: "d".repeat(64),
+      scopedProfilePolicySha256: "b".repeat(64),
+      rosterExecutionFingerprint: "c".repeat(64),
+      expectedUnitCount: 2,
+    },
+  };
+  const payload = {
+    playerFilename: "player.rosz",
+    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerName: "Player",
+    opponentFilename: "opponent.rosz",
+    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentName: "Opponent",
+    sessionId: "persistent-fixture",
+    frozenScenarioContract,
+    savedListReuse,
+  };
+  type WorkerLog = {
+    pid: number;
+    contextGeneration: number;
+    action: string;
+    profileDirectory: string;
+    frozenScenarioContract?: unknown;
+    savedListReuse?: unknown;
+  };
+  const records = async (): Promise<WorkerLog[]> =>
+    (await readFile(workerLog, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as WorkerLog);
+  try {
+    await runTesseraThroughLocalAgent(payload, { spoolDirectory });
+    await runTesseraThroughLocalAgent(payload, { spoolDirectory });
+    let log = await records();
+    assert.deepEqual(
+      log.map((entry) => entry.contextGeneration),
+      [1, 1],
+    );
+    assert.equal(new Set(log.map((entry) => entry.pid)).size, 1);
+    assert.deepEqual(
+      log[0].frozenScenarioContract,
+      frozenScenarioContract,
+    );
+    assert.deepEqual(log[0].savedListReuse, savedListReuse);
+
+    await assert.rejects(
+      runTesseraThroughLocalAgent(
+        { ...payload, opponentName: "Transient" },
+        { spoolDirectory },
+      ),
+      (error: unknown) =>
+        error instanceof LocalAgentError &&
+        error.code === "TESSERA_BROWSER_TIMEOUT",
+    );
+    log = await records();
+    assert.equal(log.at(-1)?.action, "reset");
+
+    await runTesseraThroughLocalAgent(payload, { spoolDirectory });
+    log = await records();
+    assert.equal(log.at(-1)?.contextGeneration, 2);
+
+    await runTesseraThroughLocalAgent(
+      { ...payload, opponentName: "Partial" },
+      { spoolDirectory },
+    );
+    log = await records();
+    assert.equal(log.at(-1)?.action, "reset");
+    await runTesseraThroughLocalAgent(payload, { spoolDirectory });
+    log = await records();
+    assert.equal(log.at(-1)?.contextGeneration, 3);
+    assert.equal(new Set(log.map((entry) => entry.pid)).size, 1);
+
+    const profileDirectory = log.find(
+      (entry) => entry.action === "analyze",
+    )?.profileDirectory;
+    assert.ok(profileDirectory);
+    await access(profileDirectory);
+    const closed = await closeTesseraLocalAgentSession(
+      payload.sessionId,
+      { spoolDirectory },
+    );
+    assert.equal(closed.closed, true);
+    log = await records();
+    assert.equal(log.at(-1)?.action, "close");
+    await assert.rejects(access(profileDirectory));
+  } finally {
+    await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Tessera certification profile state survives a graceful local-agent restart until explicit close", async () => {
+  const directory = await mkdtemp(
+    path.join("/private/tmp", "rosterpilot-agent-restart-"),
+  );
+  const workerPath = path.join(directory, "tessera-worker.mjs");
+  const workerLog = path.join(directory, "worker.log");
+  await writePersistentTesseraWorkerFixture(workerPath, workerLog);
+  const spoolDirectory = path.join(directory, "spool");
+  const options = {
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath: path.join(directory, "unused-broker"),
+    tesseraPersistentWorkerPath: workerPath,
+  };
+  const payload = {
+    playerFilename: "player.rosz",
+    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerName: "Player",
+    opponentFilename: "opponent.rosz",
+    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentName: "Opponent",
+    sessionId: "restart-fixture",
+  };
+  type RestartLog = {
+    pid: number;
+    action: string;
+    profileDirectory: string;
+    savedListStatePresent?: boolean;
+  };
+  const records = async (): Promise<RestartLog[]> =>
+    (await readFile(workerLog, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as RestartLog);
+  const first = await startLocalAgent(options);
+  let firstClosed = false;
+  let second:
+    | Awaited<ReturnType<typeof startLocalAgent>>
+    | null = null;
+  try {
+    await runTesseraThroughLocalAgent(payload, {
+      spoolDirectory,
+    });
+    const firstAnalyze = (await records()).find(
+      (entry) => entry.action === "analyze",
+    );
+    assert.ok(firstAnalyze);
+    assert.equal(firstAnalyze.savedListStatePresent, false);
+    assert.equal(
+      (await stat(firstAnalyze.profileDirectory)).mode & 0o777,
+      0o700,
+    );
+
+    await first.close();
+    firstClosed = true;
+    await access(firstAnalyze.profileDirectory);
+    assert.equal(
+      await readFile(
+        path.join(
+          firstAnalyze.profileDirectory,
+          "saved-list-state.fixture",
+        ),
+        "utf8",
+      ),
+      "verified saved-list state",
+    );
+
+    second = await startLocalAgent(options);
+    await runTesseraThroughLocalAgent(payload, {
+      spoolDirectory,
+    });
+    const analyzes = (await records()).filter(
+      (entry) => entry.action === "analyze",
+    );
+    assert.equal(analyzes.length, 2);
+    assert.equal(
+      analyzes[1].profileDirectory,
+      firstAnalyze.profileDirectory,
+    );
+    assert.equal(analyzes[1].savedListStatePresent, true);
+    assert.notEqual(analyzes[1].pid, firstAnalyze.pid);
+
+    const closed = await closeTesseraLocalAgentSession(
+      payload.sessionId,
+      { spoolDirectory },
+    );
+    assert.equal(closed.closed, true);
+    await assert.rejects(access(firstAnalyze.profileDirectory));
+  } finally {
+    if (!firstClosed) await first.close();
+    await second?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("persistent Tessera sessions are deleted after their bounded expiry", async () => {
+  const directory = await mkdtemp(
+    path.join("/private/tmp", "rosterpilot-agent-expiry-"),
+  );
+  const workerPath = path.join(directory, "tessera-worker.mjs");
+  const workerLog = path.join(directory, "worker.log");
+  await writePersistentTesseraWorkerFixture(workerPath, workerLog);
+  const spoolDirectory = path.join(directory, "spool");
+  const running = await startLocalAgent({
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath: path.join(directory, "unused-broker"),
+    tesseraPersistentWorkerPath: workerPath,
+    tesseraSessionTtlMs: 400,
+    tesseraSessionCleanupIntervalMs: 20,
+  });
+  const payload = {
+    playerFilename: "player.rosz",
+    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerName: "Player",
+    opponentFilename: "opponent.rosz",
+    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentName: "Opponent",
+    sessionId: "expiry-fixture",
+  };
+  const logEntries = async () =>
+    (await readFile(workerLog, "utf8").catch(() => ""))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as {
+        action: string;
+        profileDirectory: string;
+      });
+  try {
+    await runTesseraThroughLocalAgent(payload, { spoolDirectory });
+    const expiringProfile = (await logEntries())[0].profileDirectory;
+    await waitForCondition(async () => {
+      const log = await logEntries();
+      const removed = await access(expiringProfile).then(
+        () => false,
+        () => true,
+      );
+      return log.some((entry) => entry.action === "close") && removed;
+    });
+
+    await assert.rejects(
+      closeTesseraLocalAgentSession("..", { spoolDirectory }),
+      (error: unknown) =>
+        error instanceof LocalAgentError &&
+        error.code === "LOCAL_AGENT_PROTOCOL_ERROR",
+    );
+    await access(path.join(spoolDirectory, "tessera-sessions"));
+
   } finally {
     await running.close();
     await rm(directory, { recursive: true, force: true });

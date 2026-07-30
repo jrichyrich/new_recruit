@@ -15,13 +15,14 @@ import { fileURLToPath } from "node:url";
 
 import {
   baseLoadout,
+  baseUnitPoints,
   dataset,
   detachments,
   enhancements,
   factions,
   forceDispositions,
-  normalizeName,
   units,
+  wargearPoints,
 } from "@alpaca-software/40kdc-data";
 
 import type {
@@ -36,11 +37,14 @@ import type {
   NewRecruitFactionCatalogue,
 } from "../lib/rosterpilot/catalogue-types";
 import {
+  newRecruitEquipmentSignature,
+  normalizeNewRecruitName,
   resolveNewRecruitUnit,
+  type NewRecruitUnitResolution,
   type NewRecruitUnitInput,
 } from "../lib/rosterpilot/new-recruit-resolver";
 
-type JsonRecord = Record<string, unknown>;
+export type JsonRecord = Record<string, unknown>;
 
 type SourceManifest = {
   schemaVersion: 1;
@@ -60,22 +64,32 @@ type SourceManifest = {
   official: NewRecruitCatalogueManifest["sources"]["official"];
 };
 
-type Overrides = {
-  schemaVersion: 1;
+export type Overrides = {
+  schemaVersion: 1 | 2;
   factionCatalogues: Record<string, string>;
   unitAliases: Record<string, string>;
   detachmentAliases: Record<string, string>;
   enhancementAliases: Record<string, string>;
+  exactPathOverrides?: {
+    units?: Record<string, ExactPathOverride>;
+    detachments?: Record<string, ExactPathOverride>;
+  };
 };
 
-type CatalogueDocument = {
+export type ExactPathOverride = {
+  catalogueId: string;
+  catalogueRevision: number;
+  entryPath: string;
+};
+
+export type CatalogueDocument = {
   file: string;
   root: JsonRecord;
   id: string;
   name: string;
 };
 
-type SelectionIndex = {
+export type SelectionIndex = {
   entries: Map<string, JsonRecord>;
   groups: Map<string, JsonRecord>;
 };
@@ -84,12 +98,14 @@ type UnitCandidate = {
   document: CatalogueDocument;
   rootLink: JsonRecord;
   target: JsonRecord;
+  entryPath: string;
 };
 
-type WalkedSelection = {
+export type WalkedSelection = {
   reference: CatalogueSelectionReference;
   node: JsonRecord;
   modelId?: string;
+  ancestorEntryIds: string[];
 };
 
 const projectRoot = path.resolve(
@@ -162,7 +178,7 @@ function selectionReference(
   const groupId = text(group?.id);
   return {
     name,
-    normalizedName: normalizeName(name),
+    normalizedName: normalizeNewRecruitName(name),
     type: entryType(node.type),
     entryId,
     ...(groupId
@@ -174,7 +190,7 @@ function selectionReference(
   };
 }
 
-function localSelectionIndex(root: JsonRecord): SelectionIndex {
+export function localSelectionIndex(root: JsonRecord): SelectionIndex {
   const entries = new Map<string, JsonRecord>();
   const groups = new Map<string, JsonRecord>();
   const visited = new Set<JsonRecord>();
@@ -225,7 +241,7 @@ function dependencyDocuments(
   return result;
 }
 
-function combinedSelectionIndex(
+export function combinedSelectionIndex(
   documents: CatalogueDocument[],
   gameSystem: JsonRecord,
 ): SelectionIndex {
@@ -256,7 +272,7 @@ function resolveLink(
   return target ? { target, kind: "entry" } : undefined;
 }
 
-function walkSelections(
+export function walkSelections(
   node: JsonRecord,
   rootPrefix: string,
   index: SelectionIndex,
@@ -265,6 +281,7 @@ function walkSelections(
   currentGroup?: JsonRecord,
   result: WalkedSelection[] = [],
   visited = new Set<string>(),
+  ancestorEntryIds: string[] = [],
 ): WalkedSelection[] {
   for (const entry of records(node.selectionEntries)) {
     const id = text(entry.id);
@@ -280,8 +297,13 @@ function walkSelections(
         : undefined,
     );
     const modelId =
-      reference.type === "model" ? id : currentModelId;
-    result.push({ reference, node: entry, ...(modelId ? { modelId } : {}) });
+      reference.type === "model" ? reference.entryId : currentModelId;
+    result.push({
+      reference,
+      node: entry,
+      ...(modelId ? { modelId } : {}),
+      ancestorEntryIds,
+    });
     walkSelections(
       entry,
       rootPrefix,
@@ -291,6 +313,9 @@ function walkSelections(
       undefined,
       result,
       visited,
+      reference.type === "upgrade"
+        ? [...ancestorEntryIds, reference.entryId]
+        : ancestorEntryIds,
     );
   }
 
@@ -303,8 +328,13 @@ function walkSelections(
         id: joinEntryId(rootPrefix, text(group.id)),
       });
       const modelId =
-        reference.type === "model" ? id : currentModelId;
-      result.push({ reference, node: entry, ...(modelId ? { modelId } : {}) });
+        reference.type === "model" ? reference.entryId : currentModelId;
+      result.push({
+        reference,
+        node: entry,
+        ...(modelId ? { modelId } : {}),
+        ancestorEntryIds,
+      });
       walkSelections(
         entry,
         rootPrefix,
@@ -314,6 +344,9 @@ function walkSelections(
         undefined,
         result,
         visited,
+        reference.type === "upgrade"
+          ? [...ancestorEntryIds, reference.entryId]
+          : ancestorEntryIds,
       );
     }
     walkSelections(
@@ -325,6 +358,7 @@ function walkSelections(
       undefined,
       result,
       visited,
+      ancestorEntryIds,
     );
   }
 
@@ -350,11 +384,12 @@ function walkSelections(
           : undefined,
       );
       const modelId =
-        reference.type === "model" ? targetId : currentModelId;
+        reference.type === "model" ? reference.entryId : currentModelId;
       result.push({
         reference,
         node: resolved.target,
         ...(modelId ? { modelId } : {}),
+        ancestorEntryIds,
       });
       walkSelections(
         resolved.target,
@@ -365,6 +400,9 @@ function walkSelections(
         undefined,
         result,
         visited,
+        reference.type === "upgrade"
+          ? [...ancestorEntryIds, reference.entryId]
+          : ancestorEntryIds,
       );
     } else {
       for (const entry of records(resolved.target.selectionEntries)) {
@@ -375,11 +413,12 @@ function walkSelections(
           id: joinEntryId(rootPrefix, linkId),
         });
         const modelId =
-          reference.type === "model" ? id : currentModelId;
+          reference.type === "model" ? reference.entryId : currentModelId;
         result.push({
           reference,
           node: entry,
           ...(modelId ? { modelId } : {}),
+          ancestorEntryIds,
         });
         walkSelections(
           entry,
@@ -390,6 +429,9 @@ function walkSelections(
           undefined,
           result,
           visited,
+          reference.type === "upgrade"
+            ? [...ancestorEntryIds, reference.entryId]
+            : ancestorEntryIds,
         );
       }
     }
@@ -397,34 +439,358 @@ function walkSelections(
   return result;
 }
 
-function pointValues(node: JsonRecord, pointsTypeId: string): number[] {
-  const values = new Set<number>();
-  const visit = (value: unknown) => {
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
+/**
+ * BSData can encode fixed weapon bundles as sibling loadout entries. When two
+ * siblings repeat the same weapon name, a flat name lookup is ambiguous even
+ * though the complete selected loadout identifies exactly one sibling. Retain
+ * the first divergent ancestor as branch context so the runtime resolver can
+ * choose the coherent set without a catalogue-specific override.
+ */
+export function choiceAwareEquipmentReferences(
+  items: WalkedSelection[],
+): CatalogueSelectionReference[] {
+  const itemsByName = new Map<string, WalkedSelection[]>();
+  for (const item of items) {
+    const name = item.reference.normalizedName;
+    itemsByName.set(name, [...(itemsByName.get(name) ?? []), item]);
+  }
+
+  const choiceIds = new Set<string>();
+  for (const sameNameItems of itemsByName.values()) {
+    const distinctItems = [
+      ...new Map(
+        sameNameItems.map((item) => [item.reference.entryId, item]),
+      ).values(),
+    ];
+    if (distinctItems.length < 2) continue;
+    const paths = distinctItems.map((item) => item.ancestorEntryIds);
+    const sharedLength = Math.min(...paths.map((item) => item.length));
+    for (let index = 0; index < sharedLength; index += 1) {
+      const values = new Set(paths.map((item) => item[index]));
+      if (values.size < 2) continue;
+      for (const item of paths) choiceIds.add(item[index]);
+      break;
     }
-    const item = record(value);
-    if (!item) return;
-    for (const cost of records(item.costs)) {
-      if (cost.typeId === pointsTypeId) {
-        const amount = numberValue(cost.value);
-        if (amount !== undefined) values.add(amount);
-      }
-    }
-    for (const modifier of records(item.modifiers)) {
+  }
+
+  return items.map((item) => {
+    const loadoutChoiceId = item.ancestorEntryIds
+      .filter((entryId) => choiceIds.has(entryId))
+      .at(-1);
+    return loadoutChoiceId
+      ? { ...item.reference, loadoutChoiceId }
+      : item.reference;
+  });
+}
+
+export type UnitMappingResult = {
+  mapping: CatalogueUnitReference;
+  nodesByEntryPath: Map<string, JsonRecord>;
+};
+
+export type EvaluatedPoints =
+  | { ok: true; value: number; unresolvedReasons: string[] }
+  | { ok: false; reason: string };
+
+function numericConditionMatches(
+  type: unknown,
+  actual: number,
+  expected: number,
+): boolean | undefined {
+  switch (type) {
+    case "atLeast":
+      return actual >= expected;
+    case "atMost":
+      return actual <= expected;
+    case "greaterThan":
+      return actual > expected;
+    case "lessThan":
+      return actual < expected;
+    case "equalTo":
+      return actual === expected;
+    case "notEqualTo":
+      return actual !== expected;
+    default:
+      return undefined;
+  }
+}
+
+type PointEvaluationContext = {
+  nodeId: string | undefined,
+  modelCount: number,
+  unitOrdinal: number,
+  primaryCatalogueId: string;
+  selectedCountsByNodeId: Map<string, number>;
+};
+
+function pointConditionMatches(
+  condition: JsonRecord,
+  context: PointEvaluationContext,
+): boolean | undefined {
+  if (condition.field !== "selections") return undefined;
+  const scope = text(condition.scope);
+  const childId = text(condition.childId);
+  const expected = numberValue(condition.value);
+  if (!scope || !childId || expected === undefined) return undefined;
+
+  let actual: number | undefined;
+  if (scope === "primary-catalogue" && condition.type === "instanceOf") {
+    actual = childId === context.primaryCatalogueId ? 1 : 0;
+  } else if (scope === "self" || scope === context.nodeId) {
+    actual =
+      childId === "model"
+        ? context.modelCount
+        : context.selectedCountsByNodeId.get(childId) ?? 0;
+  }
+  if (actual === undefined) return undefined;
+  if (condition.type === "instanceOf") return actual >= expected;
+  return numericConditionMatches(condition.type, actual, expected);
+}
+
+function combineConditionResults(
+  operator: string,
+  results: Array<boolean | undefined>,
+): boolean | undefined {
+  if (results.length === 0) return true;
+  if (operator === "or") {
+    if (results.some((result) => result === true)) return true;
+    return results.some((result) => result === undefined)
+      ? undefined
+      : false;
+  }
+  if (results.some((result) => result === false)) return false;
+  return results.some((result) => result === undefined)
+    ? undefined
+    : true;
+}
+
+function pointConditionGroupMatches(
+  group: JsonRecord,
+  context: PointEvaluationContext,
+): boolean | undefined {
+  if (records(group.repeats).length > 0) return undefined;
+  const localResults = records(group.localConditionGroups).map(
+    (localGroup) => {
+      const expected = numberValue(localGroup.value);
+      const conditions = records(localGroup.conditions);
+      const sameUnit = conditions.some(
+        (condition) =>
+          condition.field === "selections" &&
+          condition.scope === "self" &&
+          condition.type === "instanceOf" &&
+          text(condition.childId) === context.nodeId,
+      );
+      const beforeCurrent = conditions.some(
+        (condition) =>
+          condition.field === "selections" &&
+          condition.scope === "self" &&
+          condition.type === "before" &&
+          condition.childId === "any",
+      );
       if (
-        modifier.field === pointsTypeId &&
-        (modifier.type === "set" || modifier.type === "increment")
+        localGroup.field !== "selections" ||
+        localGroup.scope !== "parent" ||
+        expected === undefined ||
+        !sameUnit ||
+        !beforeCurrent
       ) {
-        const amount = numberValue(modifier.value);
-        if (amount !== undefined) values.add(amount);
+        return undefined;
       }
+      return numericConditionMatches(
+        localGroup.type,
+        context.unitOrdinal - 1,
+        expected,
+      );
+    },
+  );
+  return combineConditionResults(
+    text(group.type) ?? "and",
+    [
+      ...records(group.conditions).map((condition) =>
+        pointConditionMatches(condition, context),
+      ),
+      ...records(group.conditionGroups).map((nested) =>
+        pointConditionGroupMatches(nested, context),
+      ),
+      ...localResults,
+    ],
+  );
+}
+
+function pointModifierActive(
+  modifier: JsonRecord,
+  context: PointEvaluationContext,
+): boolean | undefined {
+  if (records(modifier.repeats).length > 0) return undefined;
+  return combineConditionResults(
+    "and",
+    [
+      ...records(modifier.conditions).map((condition) =>
+        pointConditionMatches(condition, context),
+      ),
+      ...records(modifier.conditionGroups).map((group) =>
+        pointConditionGroupMatches(group, context),
+      ),
+    ],
+  );
+}
+
+function selectedNodePointCost(
+  node: JsonRecord,
+  pointsTypeId: string,
+  context: PointEvaluationContext,
+): EvaluatedPoints {
+  let value = 0;
+  for (const cost of records(node.costs)) {
+    if (cost.typeId !== pointsTypeId) continue;
+    const amount = numberValue(cost.value);
+    if (amount === undefined) {
+      return {
+        ok: false,
+        reason: "the selected BSData entry has a non-numeric points value",
+      };
     }
-    for (const child of Object.values(item)) visit(child);
+    value += amount;
+  }
+  const unresolvedReasons: string[] = [];
+  const modifierQueue = [
+    ...records(node.modifiers),
+    ...records(node.modifierGroups),
+  ];
+  while (modifierQueue.length > 0) {
+    const modifier = modifierQueue.shift() as JsonRecord;
+    modifierQueue.push(
+      ...records(modifier.modifiers),
+      ...records(modifier.modifierGroups),
+    );
+    if (modifier.field !== pointsTypeId) continue;
+    const active = pointModifierActive(modifier, {
+      ...context,
+      nodeId: text(node.id),
+    });
+    if (active === false) continue;
+    if (active === undefined) {
+      unresolvedReasons.push(
+        "a selected BSData entry has a points modifier whose conditions require roster context",
+      );
+      continue;
+    }
+    const amount = numberValue(modifier.value);
+    if (amount === undefined) {
+      return {
+        ok: false,
+        reason: "a selected BSData points modifier is non-numeric",
+      };
+    }
+    switch (modifier.type) {
+      case "set":
+        value = amount;
+        break;
+      case "increment":
+        value += amount;
+        break;
+      case "multiply":
+        value *= amount;
+        break;
+      default:
+        unresolvedReasons.push(
+          `a selected BSData entry uses the unsupported ${String(modifier.type)} points operation`,
+        );
+    }
+  }
+  return { ok: true, value, unresolvedReasons };
+}
+
+export function evaluateResolvedPoints(
+  result: UnitMappingResult,
+  resolution: Extract<NewRecruitUnitResolution, { ok: true }>,
+  pointsTypeId: string,
+  modelCount: number,
+  primaryCatalogueId: string,
+  unitOrdinal = 1,
+): EvaluatedPoints {
+  const selections: Array<{
+    reference: CatalogueSelectionReference;
+    count: number;
+  }> = [
+    { reference: result.mapping, count: 1 },
+    ...resolution.models.map((model) => ({
+      reference: model.reference,
+      count: model.count,
+    })),
+    ...resolution.models.flatMap((model) =>
+      model.equipment.map((equipment) => ({
+        reference: equipment.reference,
+        count: equipment.count,
+      })),
+    ),
+    ...resolution.directEquipment.map((equipment) => ({
+      reference: equipment.reference,
+      count: equipment.count,
+    })),
+  ];
+  const selectedCountsByNodeId = new Map<string, number>();
+  for (const selection of selections) {
+    const node = result.nodesByEntryPath.get(selection.reference.entryId);
+    const nodeId = text(node?.id);
+    const selectionIds = [
+      nodeId,
+      selection.reference.entryGroupId?.split("::").at(-1),
+    ].filter((value): value is string => Boolean(value));
+    for (const selectionId of selectionIds) {
+      selectedCountsByNodeId.set(
+        selectionId,
+        (selectedCountsByNodeId.get(selectionId) ?? 0) +
+          selection.count,
+      );
+    }
+  }
+  let value = 0;
+  const unresolvedReasons = new Set<string>();
+  const evaluateSelection = (
+    selection: (typeof selections)[number],
+  ): EvaluatedPoints => {
+    const node = result.nodesByEntryPath.get(selection.reference.entryId);
+    if (!node) {
+      return {
+        ok: false,
+        reason: `the selected entry path ${selection.reference.entryId} was not retained`,
+      };
+    }
+    const cost = selectedNodePointCost(
+      node,
+      pointsTypeId,
+      {
+        nodeId: text(node.id),
+        modelCount,
+        unitOrdinal,
+        primaryCatalogueId,
+        selectedCountsByNodeId,
+      },
+    );
+    if (!cost.ok) return cost;
+    return {
+      ok: true,
+      value: cost.value * selection.count,
+      unresolvedReasons: cost.unresolvedReasons,
+    };
   };
-  visit(node);
-  return [...values].sort((left, right) => left - right);
+  const rootCost = evaluateSelection(selections[0]);
+  if (!rootCost.ok) return rootCost;
+  if (rootCost.value !== 0) return rootCost;
+  for (const selection of selections) {
+    const cost = evaluateSelection(selection);
+    if (!cost.ok) return cost;
+    value += cost.value;
+    for (const reason of cost.unresolvedReasons) {
+      unresolvedReasons.add(reason);
+    }
+  }
+  return {
+    ok: true,
+    value,
+    unresolvedReasons: [...unresolvedReasons],
+  };
 }
 
 function categoryReferences(node: JsonRecord): CatalogueCategoryReference[] {
@@ -447,10 +813,9 @@ function categoryReferences(node: JsonRecord): CatalogueCategoryReference[] {
 function unitMapping(
   candidate: UnitCandidate,
   index: SelectionIndex,
-  pointsTypeId: string,
   relevantEnhancements: Map<string, string>,
   relevantEquipment: Set<string>,
-): CatalogueUnitReference {
+): UnitMappingResult {
   const rootId = text(candidate.rootLink.id) as string;
   const targetId = text(candidate.target.id) as string;
   const rootReference = selectionReference(
@@ -471,24 +836,26 @@ function unitMapping(
       equipment: [],
     });
   }
-  for (const item of walked) {
-    if (
-      item.reference.type !== "upgrade" ||
-      !item.modelId ||
-      !relevantEquipment.has(item.reference.normalizedName)
-    ) {
-      continue;
-    }
+  const relevantWalkedEquipment = walked.filter(
+    (item) =>
+      item.reference.type === "upgrade" &&
+      relevantEquipment.has(item.reference.normalizedName),
+  );
+  const choiceAwareWalkedEquipment = choiceAwareEquipmentReferences(
+    relevantWalkedEquipment,
+  ).map(
+    (reference, index): WalkedSelection => ({
+      ...relevantWalkedEquipment[index],
+      reference,
+    }),
+  );
+  for (const item of choiceAwareWalkedEquipment) {
+    if (!item.modelId) continue;
     modelById.get(item.modelId)?.equipment.push(item.reference);
   }
 
-  const directEquipment = walked
-    .filter(
-      (item) =>
-        item.reference.type === "upgrade" &&
-        !item.modelId &&
-        relevantEquipment.has(item.reference.normalizedName),
-    )
+  const directEquipment = choiceAwareWalkedEquipment
+    .filter((item) => !item.modelId)
     .map((item) => item.reference);
   const warlord = walked.find(
     (item) => item.reference.normalizedName === "warlord",
@@ -504,8 +871,7 @@ function unitMapping(
       enhancementReferences[enhancementId] = matches[0].reference;
     }
   }
-  const points = pointValues(candidate.target, pointsTypeId);
-  return {
+  const mapping: CatalogueUnitReference = {
     ...rootReference,
     categories: categoryReferences(candidate.target),
     directEquipment: deduplicateReferences(directEquipment),
@@ -515,9 +881,19 @@ function unitMapping(
     })),
     ...(warlord ? { warlord } : {}),
     enhancements: enhancementReferences,
-    pointsByModelCount: Object.fromEntries(
-      points.map((value) => [String(value), value]),
-    ),
+    pointsByModelCount: {},
+  };
+  return {
+    mapping,
+    nodesByEntryPath: new Map([
+      [rootReference.entryId, candidate.target],
+      ...walked.map(
+        (item): [string, JsonRecord] => [
+          item.reference.entryId,
+          item.node,
+        ],
+      ),
+    ]),
   };
 }
 
@@ -526,7 +902,10 @@ function deduplicateReferences(
 ): CatalogueSelectionReference[] {
   const result = new Map<string, CatalogueSelectionReference>();
   for (const reference of references) {
-    result.set(`${reference.entryId}\0${reference.normalizedName}`, reference);
+    result.set(
+      `${reference.entryId}\0${reference.normalizedName}\0${reference.loadoutChoiceId ?? ""}`,
+      reference,
+    );
   }
   return [...result.values()].sort(
     (left, right) =>
@@ -576,11 +955,51 @@ function modelCounts(unit: ReturnType<typeof units.get>): number[] {
   if (!unit) return [];
   const values = new Set<number>();
   for (const tier of unit.raw.points ?? []) {
-    values.add(tier.models);
-    if (tier.models_max) values.add(tier.models_max);
+    const maximum = tier.models_max ?? tier.models;
+    for (let count = tier.models; count <= maximum; count += 1) {
+      values.add(count);
+    }
   }
   if (values.size === 0) values.add(unit.raw.model_count?.min ?? 1);
   return [...values].sort((left, right) => left - right);
+}
+
+type UnitOrdinalBand = {
+  min: number;
+  max: number | null;
+};
+
+function ordinalBandsForModelCount(
+  unit: NonNullable<ReturnType<typeof units.get>>,
+  modelCount: number,
+): UnitOrdinalBand[] {
+  const matchingTiers = (unit.raw.points ?? []).filter(
+    (tier) =>
+      modelCount >= tier.models &&
+      modelCount <= (tier.models_max ?? tier.models),
+  );
+  const boundaries = new Set<number>([1]);
+  for (const tier of matchingTiers) {
+    if (tier.unit_count_min !== undefined) {
+      boundaries.add(tier.unit_count_min);
+    }
+    if (tier.unit_count_max !== undefined && tier.unit_count_max !== null) {
+      boundaries.add(tier.unit_count_max + 1);
+    }
+  }
+  const starts = [...boundaries]
+    .filter((value) => value > 0)
+    .sort((left, right) => left - right);
+  const bands: UnitOrdinalBand[] = [];
+  for (const [index, min] of starts.entries()) {
+    if (baseUnitPoints(unit.raw, modelCount, min) <= 0) {
+      continue;
+    }
+    const next = starts[index + 1];
+    const max = next === undefined ? null : next - 1;
+    bands.push({ min, max });
+  }
+  return bands;
 }
 
 function equipmentName(unit: NonNullable<ReturnType<typeof units.get>>, id: string) {
@@ -640,7 +1059,7 @@ function validEquipment(
   return [...ids]
     .map((itemId) => {
       const name = equipmentName(unit, itemId);
-      return { itemId, name, normalizedName: normalizeName(name) };
+      return { itemId, name, normalizedName: normalizeNewRecruitName(name) };
     })
     .sort(
       (left, right) =>
@@ -656,12 +1075,39 @@ function conflict(
   entityName: string,
   code: DataConflict["code"],
   message: string,
-  values: Pick<DataConflict, "rulesValue" | "newRecruitValue"> = {},
+  details: Pick<
+    DataConflict,
+    | "rulesValue"
+    | "newRecruitValue"
+    | "scope"
+    | "catalogue"
+  > & {
+    source: NonNullable<DataConflict["source"]>;
+    rootCauseIdentity?: string;
+  },
 ): DataConflict {
+  const { rootCauseIdentity, ...values } = details;
+  const rootCauseKey = sha256(
+    [
+      entityType,
+      entityId,
+      code,
+      rootCauseIdentity ?? normalizeNewRecruitName(message),
+      JSON.stringify(values.scope ?? {}),
+    ].join("\0"),
+  ).slice(0, 16);
   return {
     id: sha256(
-      [factionId, entityType, entityId, code, message].join("\0"),
+      [
+        factionId,
+        entityType,
+        entityId,
+        code,
+        message,
+        JSON.stringify(values.scope ?? {}),
+      ].join("\0"),
     ).slice(0, 16),
+    rootCauseKey,
     factionId,
     entityType,
     entityId,
@@ -673,55 +1119,166 @@ function conflict(
   };
 }
 
-function buildConfiguration(
+type DetachmentEntryCandidate = {
+  document: CatalogueDocument;
+  rootReference: CatalogueSelectionReference;
+  reference: CatalogueSelectionReference;
+  node: JsonRecord;
+};
+
+function isDetachmentLabel(value: unknown): boolean {
+  return ["detachment", "detachments", "detachment choice"].includes(
+    normalizeNewRecruitName(text(value) ?? ""),
+  );
+}
+
+function isConfigurationEntry(
+  node: JsonRecord,
+  configurationCategoryId: string,
+  link?: JsonRecord,
+): boolean {
+  return [
+    ...records(link?.categoryLinks),
+    ...records(node.categoryLinks),
+  ].some(
+    (link) =>
+      text(link.targetId) === configurationCategoryId ||
+      normalizeNewRecruitName(text(link.name) ?? "") === "configuration",
+  );
+}
+
+function detachmentEntriesForRoot(
+  document: CatalogueDocument,
+  link: JsonRecord,
+  target: JsonRecord,
+  index: SelectionIndex,
+): DetachmentEntryCandidate[] {
+  const rootId = text(link.id);
+  const targetId = text(target.id);
+  if (!rootId || !targetId) return [];
+  const rootReference = selectionReference(
+    target,
+    joinEntryId(rootId, targetId),
+  );
+  const directGroups = records(target.selectionEntryGroups).map((group) => ({
+    group,
+    entryPrefix: rootId,
+    groupId: joinEntryId(rootId, text(group.id)),
+  }));
+  const linkedGroups = records(target.entryLinks).flatMap((nestedLink) => {
+    const linkId = text(nestedLink.id);
+    const resolved = resolveLink(nestedLink, index);
+    if (
+      !linkId ||
+      resolved?.kind !== "group" ||
+      (!isDetachmentLabel(nestedLink.name) &&
+        !isDetachmentLabel(resolved.target.name))
+    ) {
+      return [];
+    }
+    return [
+      {
+        group: resolved.target,
+        entryPrefix: joinEntryId(rootId, linkId),
+        groupId: joinEntryId(rootId, linkId),
+      },
+    ];
+  });
+  return [...directGroups, ...linkedGroups].flatMap(
+    ({ group, entryPrefix, groupId }) =>
+      records(group.selectionEntries).flatMap((entry) => {
+        const entryId = text(entry.id);
+        if (!entryId) return [];
+        return [
+          {
+            document,
+            rootReference,
+            reference: selectionReference(
+              entry,
+              joinEntryId(entryPrefix, entryId),
+              {
+                ...group,
+                id: groupId,
+              },
+            ),
+            node: entry,
+          },
+        ];
+      }),
+  );
+}
+
+export function buildConfiguration(
   primary: CatalogueDocument,
   documents: CatalogueDocument[],
   gameSystem: JsonRecord,
   index: SelectionIndex,
   engineDetachments: ReturnType<typeof factionDetachments>,
   overrides: Overrides,
-  pointsTypeId: string,
   detachmentPointsTypeId: string,
   conflicts: DataConflict[],
   factionId: string,
 ): NewRecruitConfiguration | null {
   const configurationCategory = records(gameSystem.categoryEntries).find(
-    (entry) => normalizeName(text(entry.name) ?? "") === "configuration",
+    (entry) =>
+      normalizeNewRecruitName(text(entry.name) ?? "") === "configuration",
   );
+  const configurationCategoryId = text(configurationCategory?.id);
   const globalLinks = records(gameSystem.entryLinks);
   const battleLink = globalLinks.find(
-    (link) => normalizeName(text(link.name) ?? "") === "battle size",
+    (link) =>
+      normalizeNewRecruitName(text(link.name) ?? "") === "battle size",
   );
   const dispositionLink = globalLinks.find(
-    (link) => normalizeName(text(link.name) ?? "") === "force disposition",
+    (link) =>
+      normalizeNewRecruitName(text(link.name) ?? "") === "force disposition",
   );
-  const detachmentCandidates = documents.flatMap((document) =>
-    records(document.root.entryLinks)
-      .filter(
-        (link) =>
-          ["detachment", "detachments"].includes(
-            normalizeName(text(link.name) ?? ""),
-          ),
-      )
-      .map((link) => ({ document, link })),
-  );
-  const detachmentRoot = detachmentCandidates[0];
   const resolvedBattle = battleLink ? resolveLink(battleLink, index) : undefined;
   const resolvedDisposition = dispositionLink
     ? resolveLink(dispositionLink, index)
     : undefined;
-  const resolvedDetachment = detachmentRoot
-    ? resolveLink(detachmentRoot.link, index)
-    : undefined;
+  const detachmentEntries =
+    configurationCategoryId === undefined
+      ? []
+      : documents.flatMap((document) =>
+          records(document.root.entryLinks).flatMap((link) => {
+            if (!isDetachmentLabel(link.name)) return [];
+            const resolved = resolveLink(link, index);
+            if (
+              resolved?.kind !== "entry" ||
+              !isConfigurationEntry(
+                resolved.target,
+                configurationCategoryId,
+                link,
+              )
+            ) {
+              return [];
+            }
+            return detachmentEntriesForRoot(
+              document,
+              link,
+              resolved.target,
+              index,
+            );
+          }),
+        );
+  const uniqueDetachmentEntries = [
+    ...new Map(
+      detachmentEntries.map((candidate) => [
+        `${candidate.rootReference.entryId}\0${candidate.reference.entryId}`,
+        candidate,
+      ]),
+    ).values(),
+  ];
 
   if (
     !configurationCategory ||
+    !configurationCategoryId ||
     !battleLink ||
     !dispositionLink ||
-    !detachmentRoot ||
     resolvedBattle?.kind !== "entry" ||
     resolvedDisposition?.kind !== "entry" ||
-    resolvedDetachment?.kind !== "entry"
+    uniqueDetachmentEntries.length === 0
   ) {
     conflicts.push(
       conflict(
@@ -731,6 +1288,14 @@ function buildConfiguration(
         primary.name,
         "UNSUPPORTED",
         "The Battle Size, Detachments, or Force Disposition configuration tree could not be resolved.",
+        {
+          source: "reconciler",
+          catalogue: {
+            id: primary.id,
+            revision: numberValue(primary.root.revision) ?? 0,
+          },
+          rootCauseIdentity: "configuration-tree-unresolved",
+        },
       ),
     );
     return null;
@@ -746,7 +1311,7 @@ function buildConfiguration(
     normalized: string,
   ): CatalogueSelectionReference | undefined => {
     const found = battleChoices.find(({ entry }) =>
-      normalizeName(text(entry.name) ?? "").includes(normalized),
+      normalizeNewRecruitName(text(entry.name) ?? "").includes(normalized),
     );
     if (!found) return undefined;
     return selectionReference(
@@ -772,62 +1337,68 @@ function buildConfiguration(
   for (const disposition of forceDispositions.all) {
     const match = dispositionWalk.find(
       (item) =>
-        item.reference.normalizedName === normalizeName(disposition.name),
+        item.reference.normalizedName ===
+        normalizeNewRecruitName(disposition.name),
     );
     if (match) dispositionChoices[disposition.id] = match.reference;
   }
 
-  const detachmentRootId = text(detachmentRoot.link.id) as string;
-  const detachmentTargetId = text(resolvedDetachment.target.id) as string;
-  const directDetachmentGroups = records(
-    resolvedDetachment.target.selectionEntryGroups,
-  ).map((group) => ({
-    group,
-    entryPrefix: detachmentRootId,
-    groupId: joinEntryId(detachmentRootId, text(group.id)),
-  }));
-  const linkedDetachmentGroups = records(
-    resolvedDetachment.target.entryLinks,
-  ).flatMap((link) => {
-    const linkName = normalizeName(text(link.name) ?? "");
-    const linkId = text(link.id);
-    const resolved = resolveLink(link, index);
-    if (
-      !["detachment", "detachments"].includes(linkName) ||
-      !linkId ||
-      resolved?.kind !== "group"
-    ) {
-      return [];
-    }
-    return [
-      {
-        group: resolved.target,
-        entryPrefix: joinEntryId(detachmentRootId, linkId),
-        groupId: joinEntryId(detachmentRootId, linkId),
-      },
-    ];
-  });
-  const detachmentEntries = [
-    ...directDetachmentGroups,
-    ...linkedDetachmentGroups,
-  ].flatMap(({ group, entryPrefix, groupId }) =>
-    records(group.selectionEntries).map((entry) => ({
-      group,
-      entry,
-      entryPrefix,
-      groupId,
-    })),
-  );
   const detachmentChoices: NewRecruitConfiguration["detachment"]["choices"] =
     {};
   for (const detachment of engineDetachments) {
     const alias =
       overrides.detachmentAliases[`${factionId}:${detachment.id}`] ??
       detachment.name;
-    const matches = detachmentEntries.filter(
-      ({ entry }) =>
-        normalizeName(text(entry.name) ?? "") === normalizeName(alias),
+    const override =
+      overrides.exactPathOverrides?.detachments?.[
+        `${factionId}:${detachment.id}`
+      ];
+    let matches = uniqueDetachmentEntries.filter(
+      ({ reference }) =>
+        reference.normalizedName === normalizeNewRecruitName(alias),
     );
+    if (override) {
+      const sourceDocument = documents.find(
+        (document) => document.id === override.catalogueId,
+      );
+      if (
+        !sourceDocument ||
+        numberValue(sourceDocument.root.revision) !==
+          override.catalogueRevision
+      ) {
+        conflicts.push(
+          conflict(
+            factionId,
+            "detachment",
+            detachment.id,
+            detachment.name,
+            "STALE_OVERRIDE",
+            `The reviewed New Recruit path override for ${detachment.name} targets a catalogue revision that is not pinned.`,
+            {
+              source: "reconciler",
+              catalogue: {
+                id: override.catalogueId,
+                revision: override.catalogueRevision,
+                entryPath: override.entryPath,
+              },
+              scope: { entryPath: override.entryPath },
+              rootCauseIdentity: `stale-detachment-override:${override.catalogueId}:${override.entryPath}`,
+            },
+          ),
+        );
+        continue;
+      }
+      matches = uniqueDetachmentEntries.filter(
+        (candidate) =>
+          candidate.document.id === override.catalogueId &&
+          candidate.reference.entryId === override.entryPath,
+      );
+    } else {
+      const primaryMatches = matches.filter(
+        (candidate) => candidate.document.id === primary.id,
+      );
+      if (primaryMatches.length === 1) matches = primaryMatches;
+    }
     if (matches.length !== 1) {
       conflicts.push(
         conflict(
@@ -837,25 +1408,33 @@ function buildConfiguration(
           detachment.name,
           matches.length === 0 ? "UNMAPPED" : "AMBIGUOUS",
           `${detachment.name} matched ${matches.length} New Recruit detachment entries.`,
+          {
+            source: "bsdata",
+            ...(override
+              ? {
+                  scope: { entryPath: override.entryPath },
+                  catalogue: {
+                    id: override.catalogueId,
+                    revision: override.catalogueRevision,
+                    entryPath: override.entryPath,
+                  },
+                }
+              : {}),
+            rootCauseIdentity: `detachment-match:${detachment.id}:${matches.length}`,
+          },
         ),
       );
       continue;
     }
-    const { entry, group, entryPrefix, groupId } = matches[0];
+    const matched = matches[0];
     const dp =
-      records(entry.costs).find(
+      records(matched.node.costs).find(
         (cost) => cost.typeId === detachmentPointsTypeId,
       )?.value ?? detachment.detachment_points ?? 0;
     detachmentChoices[detachment.id] = {
-      ...selectionReference(
-        entry,
-        joinEntryId(entryPrefix, text(entry.id)),
-        {
-          ...group,
-          id: groupId,
-        },
-      ),
+      ...matched.reference,
       detachmentPoints: numberValue(dp) ?? 0,
+      rootReference: matched.rootReference,
     };
   }
 
@@ -868,6 +1447,14 @@ function buildConfiguration(
         primary.name,
         "UNSUPPORTED",
         "Incursion or Strike Force battle-size selections are unavailable.",
+        {
+          source: "bsdata",
+          catalogue: {
+            id: primary.id,
+            revision: numberValue(primary.root.revision) ?? 0,
+          },
+          rootCauseIdentity: "battle-size-unresolved",
+        },
       ),
     );
     return null;
@@ -887,10 +1474,9 @@ function buildConfiguration(
       choices: { incursion, "strike-force": strikeForce },
     },
     detachment: {
-      reference: selectionReference(
-        resolvedDetachment.target,
-        joinEntryId(detachmentRootId, detachmentTargetId),
-      ),
+      reference:
+        Object.values(detachmentChoices)[0]?.rootReference ??
+        uniqueDetachmentEntries[0].rootReference,
       choices: detachmentChoices,
     },
     forceDisposition: {
@@ -903,7 +1489,7 @@ function buildConfiguration(
   };
 }
 
-function generate(
+export function generate(
   checkout: string,
   source: SourceManifest,
   overrides: Overrides,
@@ -920,14 +1506,14 @@ function generate(
     numberValue(gameSystem.battleScribeVersion)?.toFixed(2);
   const xmlns = "http://www.battlescribe.net/schema/rosterSchema";
   const forceEntry = records(gameSystem.forceEntries).find(
-    (entry) => normalizeName(text(entry.name) ?? "") === "army roster",
+    (entry) => normalizeNewRecruitName(text(entry.name) ?? "") === "army roster",
   );
   const pointsType = records(gameSystem.costTypes).find(
-    (cost) => normalizeName(text(cost.name) ?? "") === "pts",
+    (cost) => normalizeNewRecruitName(text(cost.name) ?? "") === "pts",
   );
   const detachmentPointsType = records(gameSystem.costTypes).find(
     (cost) =>
-      normalizeName(text(cost.name) ?? "") === "detachment points",
+      normalizeNewRecruitName(text(cost.name) ?? "") === "detachment points",
   );
   const forceEntryId = text(forceEntry?.id);
   const pointsTypeId = text(pointsType?.id);
@@ -985,6 +1571,9 @@ function generate(
           faction.name,
           "MISSING_CATALOGUE",
           `No BSData catalogue is configured for ${faction.name}.`,
+          {
+            source: "reconciler",
+          },
         ),
       );
       factionResults[faction.id] = {
@@ -1010,21 +1599,35 @@ function generate(
     const availableDocuments = dependencyDocuments(primary, byId);
     const shared = combinedSelectionIndex(availableDocuments, gameSystem);
     const unitCandidates = new Map<string, UnitCandidate[]>();
+    const unitCandidatesByPath = new Map<string, UnitCandidate[]>();
     for (const document of availableDocuments) {
       const local = localSelectionIndex(document.root);
       for (const link of records(document.root.entryLinks)) {
         if (link.type !== "selectionEntry") continue;
+        const linkId = text(link.id);
         const targetId = text(link.targetId);
         const target = targetId
           ? local.entries.get(targetId) ?? shared.entries.get(targetId)
           : undefined;
-        if (!target) continue;
+        if (!linkId || !targetId || !target) continue;
         const name = text(target.name) ?? text(link.name);
         if (!name) continue;
-        const key = normalizeName(name);
+        const entryPath = joinEntryId(linkId, targetId);
+        const candidate = {
+          document,
+          rootLink: link,
+          target,
+          entryPath,
+        };
+        const key = normalizeNewRecruitName(name);
         const values = unitCandidates.get(key) ?? [];
-        values.push({ document, rootLink: link, target });
+        values.push(candidate);
         unitCandidates.set(key, values);
+        const pathKey = `${document.id}\0${entryPath}`;
+        unitCandidatesByPath.set(pathKey, [
+          ...(unitCandidatesByPath.get(pathKey) ?? []),
+          candidate,
+        ]);
       }
     }
 
@@ -1037,7 +1640,7 @@ function generate(
             overrides.enhancementAliases[
               `${faction.id}:${enhancementId}`
             ] ?? entity.name;
-          relevantEnhancements.set(enhancementId, normalizeName(alias));
+          relevantEnhancements.set(enhancementId, normalizeNewRecruitName(alias));
         }
       }
     }
@@ -1047,7 +1650,48 @@ function generate(
     for (const unit of engineUnits) {
       const alias =
         overrides.unitAliases[`${faction.id}:${unit.id}`] ?? unit.name;
-      const candidates = unitCandidates.get(normalizeName(alias)) ?? [];
+      const exactOverride =
+        overrides.exactPathOverrides?.units?.[
+          `${faction.id}:${unit.id}`
+        ];
+      let candidates =
+        unitCandidates.get(normalizeNewRecruitName(alias)) ?? [];
+      if (exactOverride) {
+        const sourceDocument = availableDocuments.find(
+          (document) => document.id === exactOverride.catalogueId,
+        );
+        if (
+          !sourceDocument ||
+          numberValue(sourceDocument.root.revision) !==
+            exactOverride.catalogueRevision
+        ) {
+          conflicts.push(
+            conflict(
+              faction.id,
+              "unit",
+              unit.id,
+              unit.name,
+              "STALE_OVERRIDE",
+              `The reviewed New Recruit path override for ${unit.name} targets a catalogue revision that is not pinned.`,
+              {
+                source: "reconciler",
+                catalogue: {
+                  id: exactOverride.catalogueId,
+                  revision: exactOverride.catalogueRevision,
+                  entryPath: exactOverride.entryPath,
+                },
+                scope: { entryPath: exactOverride.entryPath },
+                rootCauseIdentity: `stale-unit-override:${exactOverride.catalogueId}:${exactOverride.entryPath}`,
+              },
+            ),
+          );
+          continue;
+        }
+        candidates =
+          unitCandidatesByPath.get(
+            `${exactOverride.catalogueId}\0${exactOverride.entryPath}`,
+          ) ?? [];
+      }
       const preferred = candidates.filter(
         (candidate) => candidate.document.id === primary.id,
       );
@@ -1066,43 +1710,101 @@ function generate(
             unit.name,
             candidates.length === 0 ? "UNMAPPED" : "AMBIGUOUS",
             `${unit.name} matched ${candidates.length} New Recruit unit entries in ${primary.name} and its imports.`,
+            {
+              source: "bsdata",
+              ...(exactOverride
+                ? {
+                    scope: { entryPath: exactOverride.entryPath },
+                    catalogue: {
+                      id: exactOverride.catalogueId,
+                      revision: exactOverride.catalogueRevision,
+                      entryPath: exactOverride.entryPath,
+                    },
+                  }
+                : {
+                    catalogue: {
+                      id: primary.id,
+                      revision: numberValue(primary.root.revision) ?? 0,
+                    },
+                  }),
+              rootCauseIdentity: `unit-match:${unit.id}:${candidates.length}`,
+            },
           ),
         );
         continue;
       }
       const equipment = validEquipment(unit);
-      const mapping = unitMapping(
+      const mappingResult = unitMapping(
         selected,
         shared,
-        pointsTypeId,
         relevantEnhancements,
         new Set(equipment.map((item) => item.normalizedName)),
       );
-      const baseResolutions = baseSelections(unit).map((selection) => ({
-        selection,
-        resolution: resolveNewRecruitUnit(mapping, selection),
-      }));
+      const mapping = mappingResult.mapping;
+      const baseResolutions = baseSelections(unit).map((selection) => {
+        const resolution = resolveNewRecruitUnit(mapping, selection);
+        return { selection, resolution };
+      });
       const supportsBase = baseResolutions.every(
         ({ resolution }) => resolution.ok,
       );
       if (supportsBase) {
         mappedBaseLoadouts += 1;
-      } else {
-        const failure = baseResolutions.find(
-          ({ resolution }) => !resolution.ok,
-        );
+      }
+      const failedBaseResolutions = baseResolutions.filter(
+        ({ resolution }) => !resolution.ok,
+      );
+      const failuresByReason = new Map<
+        string,
+        typeof failedBaseResolutions
+      >();
+      for (const failure of failedBaseResolutions) {
+        const reason = failure.resolution.ok
+          ? "unknown loadout resolution failure"
+          : failure.resolution.reason;
+        const key = normalizeNewRecruitName(reason);
+        failuresByReason.set(key, [
+          ...(failuresByReason.get(key) ?? []),
+          failure,
+        ]);
+      }
+      for (const [reasonKey, failures] of failuresByReason) {
+        const selectionScopes = failures.map((failure) => ({
+          modelCount: failure.selection.modelCount,
+          equipmentSignature: newRecruitEquipmentSignature(
+            failure.selection.equipment,
+          ),
+        }));
+        const modelCounts = selectionScopes
+          .map((scope) => scope.modelCount)
+          .join(", ");
+        const firstFailure = failures[0];
+        const reason = firstFailure.resolution.ok
+          ? "The selected loadout did not resolve."
+          : firstFailure.resolution.reason;
         conflicts.push(
           conflict(
             faction.id,
             "equipment",
-            unit.id,
+            `${unit.id}:base:${sha256(reasonKey).slice(0, 12)}`,
             unit.name,
             "UNMAPPED",
-            `At least one deterministic ${unit.name} base loadout cannot be represented in the New Recruit catalogue. ${
-              failure && !failure.resolution.ok
-                ? failure.resolution.reason
-                : ""
-            }`.trim(),
+            `The deterministic ${unit.name} base loadout for model count${
+              selectionScopes.length === 1 ? "" : "s"
+            } ${modelCounts} cannot be represented in the New Recruit catalogue. ${reason}`,
+            {
+              source: "bsdata",
+              scope: {
+                selectionScopes,
+                entryPath: selected.entryPath,
+              },
+              catalogue: {
+                id: selected.document.id,
+                revision: numberValue(selected.document.root.revision) ?? 0,
+                entryPath: selected.entryPath,
+              },
+              rootCauseIdentity: `base-loadout:${unit.id}:${reasonKey}`,
+            },
           ),
         );
       }
@@ -1125,36 +1827,131 @@ function generate(
             `${unit.name}: ${item.name}`,
             "UNMAPPED",
             `${item.name} for ${unit.name} is legal in 40kdc but has no New Recruit catalogue selection.`,
+            {
+              source: "bsdata",
+              scope: {
+                equipmentItemId: item.itemId,
+                entryPath: selected.entryPath,
+              },
+              catalogue: {
+                id: selected.document.id,
+                revision: numberValue(selected.document.root.revision) ?? 0,
+                entryPath: selected.entryPath,
+              },
+              rootCauseIdentity: `equipment:${unit.id}:${item.itemId}`,
+            },
           ),
         );
       }
 
-      const bsdataPoints = new Set(
-        Object.values(mapping.pointsByModelCount),
-      );
-      for (const tier of unit.raw.points ?? []) {
-        if (
-          (tier.unit_count_min ?? 1) > 1 ||
-          tier.cost <= 0 ||
-          bsdataPoints.size === 0
-        ) {
-          continue;
-        }
-        if (!bsdataPoints.has(tier.cost)) {
-          conflicts.push(
-            conflict(
-              faction.id,
-              "points",
-              `${unit.id}:${tier.models}`,
-              unit.name,
-              "POINTS_MISMATCH",
-              `${unit.name} (${tier.models} models) is ${tier.cost} points in 40kdc but that value is absent from its New Recruit entry.`,
-              {
-                rulesValue: tier.cost,
-                newRecruitValue: [...bsdataPoints].join(", "),
-              },
-            ),
+      for (const result of baseResolutions) {
+        if (!result.resolution.ok) continue;
+        const equipmentCounts = new Map(
+          result.selection.equipment.map((item) => [
+            item.itemId,
+            item.count,
+          ]),
+        );
+        for (const band of ordinalBandsForModelCount(
+          unit,
+          result.selection.modelCount,
+        )) {
+          const evaluatedPoints = evaluateResolvedPoints(
+            mappingResult,
+            result.resolution,
+            pointsTypeId,
+            result.selection.modelCount,
+            primary.id,
+            band.min,
           );
+          const canonicalPoints =
+            baseUnitPoints(
+              unit.raw,
+              result.selection.modelCount,
+              band.min,
+            ) +
+            wargearPoints(unit.raw, equipmentCounts);
+          if (canonicalPoints <= 0) continue;
+          const scope = {
+            modelCount: result.selection.modelCount,
+            unitOrdinalMin: band.min,
+            unitOrdinalMax: band.max,
+            equipmentSignature:
+              newRecruitEquipmentSignature(
+                result.selection.equipment,
+              ),
+            entryPath: selected.entryPath,
+          };
+          const unresolvedReason =
+            evaluatedPoints.ok &&
+            evaluatedPoints.unresolvedReasons.length > 0
+              ? evaluatedPoints.unresolvedReasons.join("; ")
+              : null;
+          if (!evaluatedPoints.ok || unresolvedReason) {
+            conflicts.push(
+              conflict(
+                faction.id,
+                "points",
+                `${unit.id}:${result.selection.modelCount}`,
+                unit.name,
+                "POINTS_EVALUATION_UNSUPPORTED",
+                `New Recruit points for ${unit.name} (${result.selection.modelCount} models, copies ${band.min}${band.max === null ? "+" : `-${band.max}`}) could not be evaluated safely because ${
+                  unresolvedReason ??
+                  (evaluatedPoints.ok
+                    ? "the selected loadout did not resolve"
+                    : evaluatedPoints.reason) ??
+                  "the selected loadout did not resolve"
+                }.`,
+                {
+                  source: "reconciler",
+                  rulesValue: canonicalPoints,
+                  scope,
+                  catalogue: {
+                    id: selected.document.id,
+                    revision: numberValue(selected.document.root.revision) ?? 0,
+                    entryPath: selected.entryPath,
+                  },
+                  rootCauseIdentity: `points-evaluation:${unit.id}:${result.selection.modelCount}:${band.min}:${band.max ?? "*"}`,
+                },
+              ),
+            );
+            continue;
+          }
+          const firstCopyBand =
+            band.min <= 1 &&
+            (band.max === null || band.max >= 1);
+          if (
+            firstCopyBand &&
+            evaluatedPoints.value === canonicalPoints
+          ) {
+            mapping.pointsByModelCount[
+              String(result.selection.modelCount)
+            ] = evaluatedPoints.value;
+          }
+          if (evaluatedPoints.value !== canonicalPoints) {
+            conflicts.push(
+              conflict(
+                faction.id,
+                "points",
+                `${unit.id}:${result.selection.modelCount}`,
+                unit.name,
+                "POINTS_MISMATCH",
+                `${unit.name} (${result.selection.modelCount} models, copies ${band.min}${band.max === null ? "+" : `-${band.max}`}) is ${canonicalPoints} points in RosterPilot but evaluates to ${evaluatedPoints.value} points in the selected New Recruit path.`,
+                {
+                  source: "bsdata",
+                  rulesValue: canonicalPoints,
+                  newRecruitValue: evaluatedPoints.value,
+                  scope,
+                  catalogue: {
+                    id: selected.document.id,
+                    revision: numberValue(selected.document.root.revision) ?? 0,
+                    entryPath: selected.entryPath,
+                  },
+                  rootCauseIdentity: `points-mismatch:${unit.id}:${result.selection.modelCount}:${band.min}:${band.max ?? "*"}:${canonicalPoints}:${evaluatedPoints.value}`,
+                },
+              ),
+            );
+          }
         }
       }
       mappedUnits[unit.id] = mapping;
@@ -1167,7 +1964,6 @@ function generate(
       shared,
       engineDetachments,
       overrides,
-      pointsTypeId,
       detachmentPointsTypeId,
       conflicts,
       faction.id,
@@ -1220,8 +2016,14 @@ function generate(
     { cwd: checkout, encoding: "utf8" },
   ).trim();
   const allFactions = Object.values(factionResults);
+  const allConflicts = allFactions.flatMap(
+    (faction) => faction.conflicts,
+  );
+  const blockingConflicts = allConflicts.filter(
+    (item) => item.blocking,
+  );
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     releaseId: source.releaseId,
     generatedAt,
     sources: {
@@ -1267,20 +2069,19 @@ function generate(
         (sum, faction) => sum + faction.coverage.mappedBaseLoadouts,
         0,
       ),
-      conflicts: allFactions.reduce(
-        (sum, faction) => sum + faction.conflicts.length,
-        0,
-      ),
-      blockingConflicts: allFactions.reduce(
-        (sum, faction) =>
-          sum + faction.conflicts.filter((item) => item.blocking).length,
-        0,
-      ),
+      conflicts: allConflicts.length,
+      blockingConflicts: blockingConflicts.length,
+      uniqueConflicts: new Set(
+        allConflicts.map((item) => item.rootCauseKey ?? item.id),
+      ).size,
+      uniqueBlockingConflicts: new Set(
+        blockingConflicts.map((item) => item.rootCauseKey ?? item.id),
+      ).size,
     },
   };
 }
 
-function summarizeManifest(
+export function summarizeManifest(
   manifest: NewRecruitCatalogueManifest,
 ): NewRecruitCatalogueSummaryManifest {
   return {
@@ -1308,7 +2109,9 @@ function parseArguments() {
     return index >= 0 ? args[index + 1] : undefined;
   };
   return {
-    checkout: valueAfter("--checkout"),
+    checkout:
+      valueAfter("--checkout") ??
+      process.env.ROSTERPILOT_BSDATA_CHECKOUT,
     commit: valueAfter("--commit"),
     latest: args.includes("--latest"),
     write: args.includes("--write"),
@@ -1359,57 +2162,70 @@ function withCheckout<T>(
   }
 }
 
-const argumentsValue = parseArguments();
-const source = readJson<SourceManifest>(sourcesPath);
-const overrides = readJson<Overrides>(overridesPath);
-withCheckout(
-  source,
-  argumentsValue.checkout,
-  argumentsValue.latest,
-  (checkout, actualCommit) => {
-    const requestedCommit = argumentsValue.commit ?? source.newRecruit.commit;
-    if (!argumentsValue.latest && actualCommit !== requestedCommit) {
-      throw new Error(
-        `BSData checkout is ${actualCommit}; expected ${requestedCommit}.`,
-      );
-    }
-    if (argumentsValue.latest && actualCommit !== source.newRecruit.commit) {
-      throw new Error(
-        `Latest BSData commit is ${actualCommit}; update data/sources.json before writing generated data.`,
-      );
-    }
-    const manifest = generate(checkout, source, overrides);
-    const output = stableJson(manifest);
-    const summaryOutput = stableJson(summarizeManifest(manifest));
-    if (argumentsValue.write) {
-      mkdirSync(path.dirname(outputPath), { recursive: true });
-      writeFileSync(outputPath, output);
-      writeFileSync(summaryOutputPath, summaryOutput);
-    }
-    if (argumentsValue.check) {
-      const existing = readFileSync(outputPath, "utf8");
-      const existingSummary = readFileSync(summaryOutputPath, "utf8");
-      if (existing !== output || existingSummary !== summaryOutput) {
+function main(): void {
+  const argumentsValue = parseArguments();
+  const source = readJson<SourceManifest>(sourcesPath);
+  const overrides = readJson<Overrides>(overridesPath);
+  withCheckout(
+    source,
+    argumentsValue.checkout,
+    argumentsValue.latest,
+    (checkout, actualCommit) => {
+      const requestedCommit =
+        argumentsValue.commit ?? source.newRecruit.commit;
+      if (!argumentsValue.latest && actualCommit !== requestedCommit) {
         throw new Error(
-          "Generated New Recruit catalogue data is stale. Run npm run data:sync.",
+          `BSData checkout is ${actualCommit}; expected ${requestedCommit}.`,
         );
       }
-    }
-    process.stdout.write(
-      `${JSON.stringify(
-        {
-          ok: true,
-          releaseId: manifest.releaseId,
-          commit: manifest.sources.newRecruit.commit,
-          ...manifest.summary,
-          outputs: [
-            path.relative(projectRoot, outputPath),
-            path.relative(projectRoot, summaryOutputPath),
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-    );
-  },
-);
+      if (
+        argumentsValue.latest &&
+        actualCommit !== source.newRecruit.commit
+      ) {
+        throw new Error(
+          `Latest BSData commit is ${actualCommit}; update data/sources.json before writing generated data.`,
+        );
+      }
+      const manifest = generate(checkout, source, overrides);
+      const output = stableJson(manifest);
+      const summaryOutput = stableJson(summarizeManifest(manifest));
+      if (argumentsValue.write) {
+        mkdirSync(path.dirname(outputPath), { recursive: true });
+        writeFileSync(outputPath, output);
+        writeFileSync(summaryOutputPath, summaryOutput);
+      }
+      if (argumentsValue.check) {
+        const existing = readFileSync(outputPath, "utf8");
+        const existingSummary = readFileSync(summaryOutputPath, "utf8");
+        if (existing !== output || existingSummary !== summaryOutput) {
+          throw new Error(
+            "Generated New Recruit catalogue data is stale. Run npm run data:sync.",
+          );
+        }
+      }
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            ok: true,
+            releaseId: manifest.releaseId,
+            commit: manifest.sources.newRecruit.commit,
+            ...manifest.summary,
+            outputs: [
+              path.relative(projectRoot, outputPath),
+              path.relative(projectRoot, summaryOutputPath),
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    },
+  );
+}
+
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main();
+}

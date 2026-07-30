@@ -9,17 +9,19 @@ import {
 import path from "node:path";
 
 import {
-  inspectEnrichedRosz,
+  type ConnectorEvent,
   rosterExecutionFingerprint,
   type EnrichedRoszSummary,
   type NewRecruitDelivery,
   type ResultEnvelope,
   type RosterDraftV1,
+  validateEnrichedRoszGameplayIdentity,
 } from "../../lib/rosterpilot";
 import { rosterPilotSupportDirectory } from "../agent/paths";
+import { safeNewRecruitUiIdentity } from "./ui-identity";
 
-type CacheReceiptV1 = {
-  schemaVersion: 1;
+type CacheReceiptV2 = {
+  schemaVersion: 1 | 2;
   cacheKind: "new-recruit-enriched-roster";
   cacheKey: string;
   createdAt: string;
@@ -27,10 +29,12 @@ type CacheReceiptV1 = {
   sourceData: RosterDraftV1["sourceData"];
   rosterId: string;
   rosterName: string;
+  uiIdentity?: string | null;
   listUrl: string | null;
   sourceRoszSha256: string;
   enrichedRoszSha256: string;
   enrichedSummary: EnrichedRoszSummary;
+  connectorEvents?: ConnectorEvent[];
 };
 
 type RunInventoryV1 = {
@@ -88,7 +92,7 @@ function cacheRoot(): string {
 function cachedDelivery(
   roster: RosterDraftV1,
   directory: string,
-  receipt: CacheReceiptV1,
+  receipt: CacheReceiptV2,
 ): ResultEnvelope<NewRecruitDelivery> {
   const sourceRoszPath = path.join(directory, "source.rosz");
   const enrichedRoszPath = path.join(directory, "enriched.rosz");
@@ -97,9 +101,27 @@ function cachedDelivery(
     data: {
       rosterId: roster.id,
       rosterName: receipt.rosterName,
+      uiIdentity: safeNewRecruitUiIdentity(
+        receipt.uiIdentity,
+      ),
       listUrl: receipt.listUrl,
       imported: true,
       sessionReused: true,
+      cacheReused: true,
+      connectorEvents: [
+        ...(receipt.connectorEvents ?? []),
+        {
+          schemaVersion: 1,
+          eventId: crypto.randomUUID(),
+          recordedAt: new Date().toISOString(),
+          provider: "new-recruit",
+          action: "prepare",
+          origin: "persistent-cache",
+          outcome: "reused",
+          remoteId: receipt.listUrl,
+          contentSha256: receipt.enrichedRoszSha256,
+        },
+      ],
       verification: null,
       enrichedSummary: receipt.enrichedSummary,
       artifacts: [
@@ -137,11 +159,11 @@ export async function loadNewRecruitCache(
   try {
     const receipt = JSON.parse(
       await readFile(path.join(directory, "receipt.json"), "utf8"),
-    ) as CacheReceiptV1;
+    ) as CacheReceiptV2;
     const sourceRoszPath = path.join(directory, "source.rosz");
     const enrichedRoszPath = path.join(directory, "enriched.rosz");
     if (
-      receipt.schemaVersion !== 1 ||
+      ![1, 2].includes(receipt.schemaVersion) ||
       receipt.cacheKind !== "new-recruit-enriched-roster" ||
       receipt.cacheKey !== key ||
       receipt.executionFingerprint !== rosterExecutionFingerprint(roster) ||
@@ -149,9 +171,11 @@ export async function loadNewRecruitCache(
       receipt.sourceRoszSha256 !== (await sha256(sourceRoszPath)) ||
       receipt.enrichedRoszSha256 !== (await sha256(enrichedRoszPath))
     ) return null;
-    const actualSummary = inspectEnrichedRosz(
-      await readFile(enrichedRoszPath),
-    );
+    const enrichedContent = await readFile(enrichedRoszPath);
+    const actualSummary = validateEnrichedRoszGameplayIdentity(
+      enrichedContent,
+      roster,
+    ).summary;
     if (canonical(actualSummary) !== canonical(receipt.enrichedSummary)) {
       return null;
     }
@@ -208,12 +232,24 @@ export async function storeNewRecruitCache(
 ): Promise<void> {
   if (!delivery.ok || !delivery.data?.enrichedSummary) return;
   const sourceRoszPath = delivery.data.artifacts.find(
-    (artifact) => artifact.format === "rosterpilot-source-rosz",
+    (artifact) =>
+      artifact.format === "rosterpilot-source-rosz" ||
+      artifact.format === "rosz",
   )?.written;
   const enrichedRoszPath = delivery.data.artifacts.find(
     (artifact) => artifact.format === "new-recruit-enriched-rosz",
   )?.written;
   if (!sourceRoszPath || !enrichedRoszPath) return;
+  const enrichedContent = await readFile(enrichedRoszPath);
+  const actualSummary = validateEnrichedRoszGameplayIdentity(
+    enrichedContent,
+    roster,
+  ).summary;
+  if (canonical(actualSummary) !== canonical(delivery.data.enrichedSummary)) {
+    throw new Error(
+      "The New Recruit cache refused an enriched artifact whose exact summary changed.",
+    );
+  }
   const key = newRecruitCacheKey(roster);
   const directory = path.join(cacheRoot(), key);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -223,14 +259,8 @@ export async function storeNewRecruitCache(
     copyFile(sourceRoszPath, cachedSource),
     copyFile(enrichedRoszPath, cachedEnriched),
   ]);
-  const actualSummary = inspectEnrichedRosz(await readFile(cachedEnriched));
-  if (canonical(actualSummary) !== canonical(delivery.data.enrichedSummary)) {
-    throw new Error(
-      "The New Recruit cache refused an enriched artifact whose exact summary changed.",
-    );
-  }
-  const receipt: CacheReceiptV1 = {
-    schemaVersion: 1,
+  const receipt: CacheReceiptV2 = {
+    schemaVersion: 2,
     cacheKind: "new-recruit-enriched-roster",
     cacheKey: key,
     createdAt: new Date().toISOString(),
@@ -238,10 +268,14 @@ export async function storeNewRecruitCache(
     sourceData: roster.sourceData,
     rosterId: roster.id,
     rosterName: delivery.data.rosterName,
+    uiIdentity: safeNewRecruitUiIdentity(
+      delivery.data.uiIdentity,
+    ),
     listUrl: delivery.data.listUrl,
     sourceRoszSha256: await sha256(cachedSource),
     enrichedRoszSha256: await sha256(cachedEnriched),
     enrichedSummary: actualSummary,
+    connectorEvents: delivery.data.connectorEvents ?? [],
   };
   const receiptPath = path.join(directory, "receipt.json");
   const temporary = `${receiptPath}.${crypto.randomUUID()}.tmp`;

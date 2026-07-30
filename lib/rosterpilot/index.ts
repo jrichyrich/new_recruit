@@ -9,3 +9,6 @@ export * from "./enriched-rosz";
 export * from "./stress-portfolio";
 export * from "./mission-readiness";
 export * from "./roster-repair";
+export * from "./baseline-damage";
+export * from "./stress-summary";
+export * from "./build-and-stress";

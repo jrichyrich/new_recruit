@@ -1,17 +1,14 @@
-import path from "node:path";
-
 import {
   buildRoster,
   previewFactionStressPortfolio,
   repairRosterDeterministically,
-  type BuildRosterInput,
+  type BuildAndStressRosterInput,
+  type BuildAndStressRosterResult,
   type DeterministicRosterRepairResult,
   type ResultEnvelope,
   type RosterIssue,
-  type TesseraStressAnalysisStrategy,
   type TesseraStressPortfolioPreview,
-  type TesseraStressSuite,
-  type TesseraStressTestReport,
+  type TesseraStressRunReport,
 } from "../../lib/rosterpilot";
 import {
   runRosterStressTest,
@@ -19,43 +16,13 @@ import {
   type TesseraStressOptions,
 } from "./stress";
 
-export type BuildAndStressRosterInput = {
-  prompt: string;
-  againstFaction: string;
-  pointsLimit?: number;
-  suite?: TesseraStressSuite;
-  analysisStrategy?: TesseraStressAnalysisStrategy;
-  profilePolicyPath?: string;
-  outputDirectory?: string;
-  resumeManifestPath?: string;
-  allowReadinessWarnings?: boolean;
-  forceRetry?: boolean;
-  experimental?: boolean;
-};
-
-export type BuildAndStressRosterResult = {
-  schemaVersion: 1;
-  resultKind: "tessera-build-and-stress";
-  generatedAt: string;
-  rosterRepair: DeterministicRosterRepairResult;
-  portfolioPreview: TesseraStressPortfolioPreview;
-  stressReport: TesseraStressTestReport;
-  automaticRevisionApplied: false;
-  revisionCandidatesRequireAuthorization: true;
-};
-
-function failure<T>(
-  code: string,
-  message: string,
-  warnings: RosterIssue[] = [],
-): ResultEnvelope<T> {
-  return {
-    ok: false,
-    data: null,
-    violations: [{ code, message, severity: "error" }],
-    warnings,
-  };
-}
+export type {
+  BuildAndStressRosterInput,
+  BuildAndStressRosterResult,
+} from "../../lib/rosterpilot";
+export {
+  compactBuildAndStressResult,
+} from "../../lib/rosterpilot";
 
 function uniqueIssues(issues: RosterIssue[]): RosterIssue[] {
   return issues.filter(
@@ -67,6 +34,32 @@ function uniqueIssues(issues: RosterIssue[]): RosterIssue[] {
           candidate.severity === issue.severity,
       ) === index,
   );
+}
+
+function stagedResult(
+  rosterRepair: DeterministicRosterRepairResult,
+  portfolioPreview: TesseraStressPortfolioPreview | null,
+  stressReport: TesseraStressRunReport | null,
+  failureDetail: BuildAndStressRosterResult["failure"],
+): BuildAndStressRosterResult {
+  return {
+    schemaVersion: 2,
+    resultKind: "tessera-build-and-stress",
+    generatedAt: new Date().toISOString(),
+    stage: failureDetail
+      ? "failed"
+      : stressReport
+        ? "stress-complete"
+        : portfolioPreview
+          ? "portfolio-previewed"
+          : "roster-repaired",
+    rosterRepair,
+    portfolioPreview,
+    stressReport,
+    failure: failureDetail,
+    automaticRevisionApplied: false,
+    revisionCandidatesRequireAuthorization: true,
+  };
 }
 
 function stableRosterName(
@@ -84,7 +77,15 @@ export async function buildAndStressRosterAgainstFaction(
 ): Promise<ResultEnvelope<BuildAndStressRosterResult>> {
   const seed = buildRoster({
     prompt: input.prompt,
+    playerFaction: input.playerFaction,
     pointsLimit: input.pointsLimit,
+    requiredUnitIds: input.requiredUnitIds,
+    excludedUnitIds: input.excludedUnitIds,
+    requiredWarlordUnitId: input.requiredWarlordUnitId,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: input.againstFaction,
+    },
   });
   if (!seed.ok || !seed.data) {
     return {
@@ -110,6 +111,7 @@ export async function buildAndStressRosterAgainstFaction(
   const pointsLimit = input.pointsLimit ?? seed.data.pointsLimit;
   const buildInput: BuildRosterInput = {
     prompt: input.prompt,
+    playerFaction: seed.data.factionId,
     faction: seed.data.factionId,
     pointsLimit,
     name: stableRosterName(
@@ -120,6 +122,15 @@ export async function buildAndStressRosterAgainstFaction(
     preferences: seed.data.preferences,
     allowNamedCharacters: seed.data.constraints.allowNamedCharacters,
     allowLegends: seed.data.constraints.allowLegends,
+    requiredUnitIds:
+      seed.data.constraints.requiredUnitIds ??
+      input.requiredUnitIds,
+    excludedUnitIds:
+      seed.data.constraints.excludedUnitIds ??
+      input.excludedUnitIds,
+    requiredWarlordUnitId:
+      seed.data.constraints.requiredWarlordUnitId ??
+      input.requiredWarlordUnitId,
     opponentContext: {
       kind: "known-faction",
       factionId: opponentSeed.data.factionId,
@@ -148,11 +159,29 @@ export async function buildAndStressRosterAgainstFaction(
       repaired.data.missionReadiness.overallBand === "red"
     )
   ) {
-    return failure(
-      "TESSERA_BUILD_READINESS_GATE_FAILED",
-      `The repaired roster uses ${Math.round(utilization * 1000) / 10}% of its points and has ${repaired.data.missionReadiness.overallBand} mission readiness. No New Recruit or Tessera activity was started. Use --allow-readiness-warnings only after reviewing the gate evidence.`,
-      uniqueIssues(repaired.warnings),
-    );
+    const message = `The repaired roster uses ${Math.round(utilization * 1000) / 10}% of its points and has ${repaired.data.missionReadiness.overallBand} mission readiness. No New Recruit or Tessera activity was started. Use --allow-readiness-warnings only after reviewing the gate evidence.`;
+    return {
+      ok: false,
+      data: stagedResult(
+        repaired.data,
+        null,
+        null,
+        {
+          stage: "readiness",
+          code: "TESSERA_BUILD_READINESS_GATE_FAILED",
+          message,
+          retryable: false,
+        },
+      ),
+      violations: [
+        {
+          code: "TESSERA_BUILD_READINESS_GATE_FAILED",
+          message,
+          severity: "error",
+        },
+      ],
+      warnings: uniqueIssues(repaired.warnings),
+    };
   }
   const preview = await previewFactionStressPortfolio({
     faction: opponentSeed.data.factionId,
@@ -164,7 +193,21 @@ export async function buildAndStressRosterAgainstFaction(
   if (!preview.ok || !preview.data) {
     return {
       ok: false,
-      data: null,
+      data: stagedResult(
+        repaired.data,
+        preview.data,
+        null,
+        {
+          stage: "portfolio",
+          code:
+            preview.violations[0]?.code ??
+            "STRESS_PORTFOLIO_PREVIEW_FAILED",
+          message:
+            preview.violations[0]?.message ??
+            "The opponent portfolio is not viable.",
+          retryable: false,
+        },
+      ),
       violations: preview.violations,
       warnings: uniqueIssues([
         ...seed.warnings,
@@ -174,11 +217,7 @@ export async function buildAndStressRosterAgainstFaction(
     };
   }
   const outputDirectory =
-    input.outputDirectory ??
-    path.join(
-      "exports",
-      `${repaired.data.roster.factionId}-vs-unknown-${opponentSeed.data.factionId}-${pointsLimit}`,
-    );
+    input.outputDirectory ?? options.outputDirectory;
   const stress = await runRosterStressTest(
     repaired.data.roster,
     { kind: "faction", factionId: opponentSeed.data.factionId },
@@ -189,7 +228,9 @@ export async function buildAndStressRosterAgainstFaction(
       analysisStrategy: input.analysisStrategy ?? "staged",
       profilePolicyPath: input.profilePolicyPath,
       resumeManifestPath: input.resumeManifestPath,
+      restartManifestPath: input.restartManifestPath,
       forceRetry: input.forceRetry,
+      executionMode: input.executionMode,
       experimental: input.experimental,
     },
     dependencies,
@@ -197,7 +238,23 @@ export async function buildAndStressRosterAgainstFaction(
   if (!stress.ok || !stress.data) {
     return {
       ok: false,
-      data: null,
+      data: stagedResult(
+        repaired.data,
+        preview.data,
+        stress.data,
+        {
+          stage: "stress",
+          code:
+            stress.violations[0]?.code ??
+            "TESSERA_STRESS_FAILED",
+          message:
+            stress.violations[0]?.message ??
+            "The stress workflow failed after portfolio preflight.",
+          retryable: stress.violations.some((violation) =>
+            /TIMEOUT|SESSION|NAVIGATION|STALE/i.test(violation.code),
+          ),
+        },
+      ),
       violations: stress.violations,
       warnings: uniqueIssues([
         ...seed.warnings,
@@ -209,16 +266,12 @@ export async function buildAndStressRosterAgainstFaction(
   }
   return {
     ok: true,
-    data: {
-      schemaVersion: 1,
-      resultKind: "tessera-build-and-stress",
-      generatedAt: new Date().toISOString(),
-      rosterRepair: repaired.data,
-      portfolioPreview: preview.data,
-      stressReport: stress.data,
-      automaticRevisionApplied: false,
-      revisionCandidatesRequireAuthorization: true,
-    },
+    data: stagedResult(
+      repaired.data,
+      preview.data,
+      stress.data,
+      null,
+    ),
     violations: [],
     warnings: uniqueIssues([
       ...seed.warnings,

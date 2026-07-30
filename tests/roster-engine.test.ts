@@ -14,24 +14,44 @@ import { unzipSync, strFromU8 } from "fflate";
 import {
   buildRoster,
   checkDataFreshness,
+  explainRoster,
   exportRoster,
   getDataStatus,
   getNewRecruitCapability,
   modifyRoster,
+  modifyRosterBatch,
   parseRosterDraft,
   prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
   validateRoster,
+  type BuildRosterInput,
   type RosterDraftV1,
 } from "../lib/rosterpilot";
-import { conflictsForRoster } from "../lib/rosterpilot/catalogue-summary";
+import {
+  conflictBlocksAllUnitConfigurations,
+  conflictsForRoster,
+  newRecruitCatalogue,
+} from "../lib/rosterpilot/catalogue-summary";
+import { getNewRecruitFactionCatalogue } from "../lib/rosterpilot/catalogue";
+import type { DataConflict } from "../lib/rosterpilot/catalogue-types";
 import {
   writeExportArtifact,
   writeExportArtifacts,
 } from "../lib/rosterpilot/io";
 
 const fixtures = new URL("./fixtures/", import.meta.url);
+
+function installSyntheticConflict(conflict: DataConflict): () => void {
+  const conflicts =
+    newRecruitCatalogue.factions[conflict.factionId]?.conflicts;
+  assert.ok(conflicts, `Missing conflict fixture faction ${conflict.factionId}`);
+  conflicts.push(conflict);
+  return () => {
+    const index = conflicts.indexOf(conflict);
+    if (index >= 0) conflicts.splice(index, 1);
+  };
+}
 
 test("searches and builds real faction data across the supported catalog", () => {
   const factionResult = searchFactions("custodes");
@@ -53,8 +73,483 @@ test("searches and builds real faction data across the supported catalog", () =>
   });
   assert.equal(aeldari.ok, true);
   assert.equal(aeldari.data?.factionId, "aeldari");
-  assert.equal(aeldari.data?.totalPoints, 1000);
+  assert.ok((aeldari.data?.totalPoints ?? 0) >= 980);
   assert.ok(aeldari.data?.units.some((unit) => unit.tags.includes("mobility")));
+});
+
+test("requires an explicit player faction when prose names two armies", () => {
+  const ambiguous = buildRoster({
+    prompt:
+      "Build a 1000 point Aeldari army to battle an unknown Adeptus Custodes list.",
+    pointsLimit: 1000,
+  });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.data, null);
+  assert.ok(
+    ambiguous.violations.some(
+      (violation) => violation.code === "AMBIGUOUS_PLAYER_FACTION",
+    ),
+  );
+
+  const explicit = buildRoster({
+    prompt:
+      "Build a 1000 point Aeldari army to battle an unknown Adeptus Custodes list.",
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "adeptus-custodes",
+    },
+  });
+  assert.equal(explicit.ok, true);
+  assert.equal(explicit.data?.factionId, "aeldari");
+  assert.equal(
+    explicit.data?.constraints.opponentFactionId,
+    "adeptus-custodes",
+  );
+  const explanation = explainRoster(explicit.data!);
+  assert.equal(
+    explanation.data?.optimizer.generatorVersion,
+    "beam-search-v1",
+  );
+  assert.deepEqual(
+    explanation.data?.optimizer.scoreOrder.slice(0, 3),
+    [
+      "hard constraints and legality",
+      "New Recruit exportability",
+      "points utilization",
+    ],
+  );
+  assert.equal(
+    explanation.data?.optimizer.targetProfileCoverage
+      ?.opponentFactionId,
+    "adeptus-custodes",
+  );
+  assert.ok(
+    explanation.data?.optimizer.selectedCandidates.every(
+      (candidate) =>
+        Number.isFinite(candidate.components.total),
+    ),
+  );
+});
+
+test("keeps generic Sentinel defaults but selects anti-elite profiles against Custodes", async () => {
+  const requiredUnitIds = [
+    "armoured-sentinels",
+    "scout-sentinels",
+  ];
+  const generic = buildRoster({
+    playerFaction: "astra-militarum",
+    pointsLimit: 1000,
+    requiredUnitIds,
+  });
+  assert.ok(generic.ok && generic.data);
+  const genericSentinels = generic.data.units.filter(
+    (unit) => requiredUnitIds.includes(unit.unitId),
+  );
+  assert.ok(genericSentinels.length >= 2);
+  assert.ok(
+    genericSentinels.every((unit) =>
+      unit.equipment.some(
+        (equipment) =>
+          equipment.itemId === "multi-laser",
+      ),
+    ),
+  );
+
+  const matchup = buildRoster({
+    playerFaction: "astra-militarum",
+    pointsLimit: 1000,
+    requiredUnitIds,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "adeptus-custodes",
+    },
+  });
+  assert.ok(
+    matchup.ok && matchup.data,
+    matchup.violations
+      .map((violation) => violation.message)
+      .join("; "),
+  );
+  const matchupSentinels = matchup.data.units.filter(
+    (unit) => requiredUnitIds.includes(unit.unitId),
+  );
+  assert.ok(matchupSentinels.length >= 2);
+  assert.ok(
+    matchupSentinels.every(
+      (unit) =>
+        !unit.equipment.some(
+          (equipment) =>
+            equipment.itemId === "multi-laser",
+        ) &&
+        unit.equipment.some(
+          (equipment) =>
+            equipment.itemId === "lascannon",
+        ),
+    ),
+  );
+  assert.equal(validateRoster(matchup.data).ok, true);
+  const exported = await exportRoster(matchup.data, "rosz");
+  assert.equal(
+    exported.ok,
+    true,
+    exported.violations
+      .map((violation) => violation.message)
+      .join("; "),
+  );
+  const explanation = explainRoster(matchup.data);
+  assert.ok(
+    explanation.data?.optimizer.targetProfileCoverage
+      ?.selectedProfileEvidence.some(
+        (evidence) =>
+          /Lascannon.*S 12.*AP -3/i.test(evidence),
+      ),
+  );
+  assert.ok(
+    explanation.data?.optimizer.selectedCandidates
+      .filter((candidate) =>
+        requiredUnitIds.includes(candidate.unitId),
+      )
+      .every((candidate) =>
+        candidate.equipmentSignature.includes("lascannon"),
+      ),
+  );
+});
+
+test("distinguishes whole-unit blockers from scoped configuration conflicts", () => {
+  const base: DataConflict = {
+    id: "synthetic-conflict",
+    rootCauseKey: "synthetic-root",
+    factionId: "adeptus-custodes",
+    entityType: "points",
+    entityId: "prosecutors",
+    entityName: "Prosecutors",
+    code: "POINTS_MISMATCH",
+    blocking: true,
+    message: "Synthetic points conflict.",
+    source: "bsdata",
+  };
+  assert.equal(conflictBlocksAllUnitConfigurations(base), true);
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...base,
+      entityId: "prosecutors:6",
+      scope: { modelCount: 6 },
+    }),
+    false,
+  );
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...base,
+      entityId: "prosecutors:6",
+    }),
+    false,
+    "legacy numeric entity suffixes remain model-count scoped",
+  );
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...base,
+      entityType: "equipment",
+      entityId: "prosecutors:boltgun",
+    }),
+    false,
+  );
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...base,
+      entityType: "unit",
+    }),
+    true,
+  );
+});
+
+test("the builder selects an exportable model count around a scoped conflict", async () => {
+  const input: BuildRosterInput = {
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Scoped conflict regression",
+    requiredUnitIds: ["prosecutors"],
+  };
+  const baseline = buildRoster(input);
+  assert.equal(
+    baseline.ok,
+    true,
+    baseline.violations.map((issue) => issue.message).join("; "),
+  );
+  assert.ok(baseline.data);
+  const baselineSelection = baseline.data.units.find(
+    (selection) => selection.unitId === "prosecutors",
+  );
+  assert.ok(baselineSelection);
+  const conflict: DataConflict = {
+    id: "synthetic-prosecutors-model-count",
+    rootCauseKey: "synthetic-prosecutors-model-count",
+    factionId: "adeptus-custodes",
+    entityType: "points",
+    entityId: `prosecutors:${baselineSelection.modelCount}`,
+    entityName: "Prosecutors",
+    code: "POINTS_MISMATCH",
+    blocking: true,
+    message: `Synthetic conflict for ${baselineSelection.modelCount} Prosecutors.`,
+    rulesValue: baselineSelection.points,
+    newRecruitValue: baselineSelection.points + 5,
+    source: "bsdata",
+    scope: { modelCount: baselineSelection.modelCount },
+  };
+  const removeConflict = installSyntheticConflict(conflict);
+  try {
+    const built = buildRoster(input);
+    assert.equal(
+      built.ok,
+      true,
+      built.violations.map((issue) => issue.message).join("; "),
+    );
+    assert.ok(built.data);
+    const selected = built.data.units.filter(
+      (selection) => selection.unitId === "prosecutors",
+    );
+    assert.ok(selected.length > 0);
+    assert.ok(
+      selected.every(
+        (selection) =>
+          selection.modelCount !== baselineSelection.modelCount,
+      ),
+      "the beam must keep the unit and choose an unblocked model count",
+    );
+    assert.equal(
+      conflictsForRoster(built.data).some(
+        (item) => item.id === conflict.id,
+      ),
+      false,
+    );
+    const exported = await exportRoster(built.data, "rosz");
+    assert.equal(
+      exported.ok,
+      true,
+      exported.violations.map((issue) => issue.message).join("; "),
+    );
+  } finally {
+    removeConflict();
+  }
+});
+
+test("a required legal unit outranks exportability and fails only at export preflight", async () => {
+  const conflict: DataConflict = {
+    id: "synthetic-required-unit-conflict",
+    rootCauseKey: "synthetic-required-unit-conflict",
+    factionId: "adeptus-custodes",
+    entityType: "unit",
+    entityId: "prosecutors",
+    entityName: "Prosecutors",
+    code: "UNMAPPED",
+    blocking: true,
+    message: "Synthetic whole-unit New Recruit mapping conflict.",
+    source: "bsdata",
+  };
+  const removeConflict = installSyntheticConflict(conflict);
+  try {
+    const built = buildRoster({
+      playerFaction: "adeptus-custodes",
+      pointsLimit: 1000,
+      name: "Required mapping boundary",
+      requiredUnitIds: ["prosecutors"],
+    });
+    assert.equal(
+      built.ok,
+      true,
+      built.violations.map((issue) => issue.message).join("; "),
+    );
+    assert.ok(built.data);
+    assert.ok(
+      built.data.units.some(
+        (selection) => selection.unitId === "prosecutors",
+      ),
+    );
+    assert.ok(
+      built.warnings.some(
+        (warning) => warning.code === "DATA_SOURCE_CONFLICT",
+      ),
+    );
+    const exported = await exportRoster(built.data, "rosz");
+    assert.equal(exported.ok, false);
+    assert.equal(exported.data, null);
+    assert.ok(
+      exported.violations.some(
+        (issue) => issue.code === "NEW_RECRUIT_DATA_CONFLICT",
+      ),
+    );
+  } finally {
+    removeConflict();
+  }
+});
+
+test("a canonical faction name suppresses nested generic aliases", () => {
+  const deathGuard = buildRoster({
+    prompt: "Build a 1000 point Death Guard army.",
+    pointsLimit: 1000,
+  });
+  assert.equal(
+    deathGuard.ok,
+    true,
+    deathGuard.violations
+      .map((violation) => violation.message)
+      .join("; "),
+  );
+  assert.equal(deathGuard.data?.factionId, "death-guard");
+
+  const ambiguousOpponent = buildRoster({
+    prompt:
+      "Build a 1000 point Death Guard army against an unknown Orks list.",
+    pointsLimit: 1000,
+  });
+  assert.equal(ambiguousOpponent.ok, false);
+  assert.deepEqual(
+    ambiguousOpponent.violations.map((violation) => violation.code),
+    ["AMBIGUOUS_PLAYER_FACTION"],
+  );
+});
+
+test("honors prompt and structured hard unit constraints", () => {
+  const result = buildRoster({
+    prompt:
+      "Build a 1000 point Aeldari army. Must include Farseer Skyrunner. Do not select Warlock Skyrunners.",
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+    requiredWarlordUnitId: "farseer-skyrunner",
+  });
+  assert.equal(
+    result.ok,
+    true,
+    result.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.ok(result.data);
+  assert.ok(
+    result.data.units.some(
+      (unit) =>
+        unit.unitId === "farseer-skyrunner" && unit.isWarlord,
+    ),
+  );
+  assert.equal(
+    result.data.units.some(
+      (unit) => unit.unitId === "warlock-skyrunners",
+    ),
+    false,
+  );
+  assert.deepEqual(result.data.constraints.requiredUnitIds, [
+    "farseer-skyrunner",
+  ]);
+  assert.deepEqual(result.data.constraints.excludedUnitIds, [
+    "warlock-skyrunners",
+  ]);
+});
+
+test("rejects an ineligible Warlord and validates an eligible mapped one", () => {
+  const built = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+    requiredUnitIds: ["warlock-skyrunners"],
+    requiredWarlordUnitId: "farseer-skyrunner",
+  });
+  assert.ok(built.data);
+  const warlock = built.data.units.find(
+    (unit) => unit.unitId === "warlock-skyrunners",
+  );
+  assert.ok(warlock);
+  const invalid = modifyRoster(built.data, {
+    type: "set-warlord",
+    selectionId: warlock.selectionId,
+  });
+  assert.equal(invalid.ok, false);
+  assert.ok(
+    invalid.violations.some(
+      (violation) => violation.code === "WARLORD_INELIGIBLE",
+    ),
+  );
+  assert.equal(
+    validateRoster(built.data).warnings.some(
+      (warning) =>
+        warning.code === "NEW_RECRUIT_WARLORD_MAPPING_UNAVAILABLE",
+    ),
+    false,
+  );
+});
+
+test("retains a required named unit when a separate exportable Warlord is required", async () => {
+  const artemisMapping =
+    getNewRecruitFactionCatalogue("adeptus-astartes")?.units[
+      "watch-captain-artemis"
+    ];
+  assert.ok(artemisMapping);
+  assert.equal(artemisMapping.warlord, undefined);
+
+  const built = buildRoster({
+    playerFaction: "adeptus-astartes",
+    pointsLimit: 1000,
+    preferences: ["objective", "durability"],
+    allowNamedCharacters: true,
+    allowLegends: false,
+    requiredUnitIds: ["watch-captain-artemis"],
+    requiredWarlordUnitId: "captain-in-phobos-armour",
+  });
+  assert.equal(
+    built.ok,
+    true,
+    built.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.ok(built.data);
+  assert.ok(
+    built.data.units.some(
+      (unit) =>
+        unit.unitId === "watch-captain-artemis" &&
+        !unit.isWarlord,
+    ),
+  );
+  assert.ok(
+    built.data.units.some(
+      (unit) =>
+        unit.unitId === "captain-in-phobos-armour" &&
+        unit.isWarlord,
+    ),
+  );
+  assert.deepEqual(built.data.constraints.requiredUnitIds, [
+    "captain-in-phobos-armour",
+    "watch-captain-artemis",
+  ]);
+  const exported = await exportRoster(built.data, "rosz");
+  assert.equal(
+    exported.ok,
+    true,
+    exported.violations.map((violation) => violation.message).join("; "),
+  );
+});
+
+test("applies roster modifications atomically and validates the final draft", () => {
+  const built = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const removable = [...built.data.units]
+    .filter((unit) => !unit.isWarlord && unit.points >= 50)
+    .sort((left, right) => left.points - right.points)[0];
+  assert.ok(removable);
+  const result = modifyRosterBatch(built.data, [
+    { type: "add", unitId: "shadowseer" },
+    { type: "remove", selectionId: removable.selectionId },
+  ]);
+  assert.equal(
+    result.ok,
+    true,
+    result.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.ok(result.data?.units.some((unit) => unit.unitId === "shadowseer"));
+  assert.equal(
+    result.data?.units.some(
+      (unit) => unit.selectionId === removable.selectionId,
+    ),
+    false,
+  );
 });
 
 test("builds and validates every embedded faction at common game sizes", () => {
@@ -80,7 +575,7 @@ test("builds and validates every embedded faction at common game sizes", () => {
   }
 });
 
-test("exports any validated faction to HTML but fails closed on conflicted ROSZ", async () => {
+test("exports a validated Aeldari roster with an eligible mapped Warlord", async () => {
   const result = buildRoster({
     faction: "aeldari",
     pointsLimit: 1000,
@@ -94,11 +589,14 @@ test("exports any validated faction to HTML but fails closed on conflicted ROSZ"
   assert.match(String(html.data?.content), /Aeldari Rapid Strike/);
 
   const rosz = await exportRoster(result.data, "rosz");
-  assert.equal(rosz.ok, false);
-  assert.ok(
-    ["NEW_RECRUIT_DATA_CONFLICT", "NEW_RECRUIT_MAPPING_UNAVAILABLE"].includes(
-      rosz.violations[0]?.code ?? "",
-    ),
+  assert.equal(
+    rosz.ok,
+    true,
+    rosz.violations.map((item) => item.message).join("; "),
+  );
+  assert.equal(
+    result.data.units.find((unit) => unit.isWarlord)?.unitId,
+    "farseer-skyrunner",
   );
 });
 
@@ -148,7 +646,11 @@ test("checks all live source classes without changing the pinned build", async (
   const mockFetch = async (input: string | URL | Request) => {
     const url = String(input);
     if (url.includes("registry.npmjs.org")) {
-      return new Response(JSON.stringify({ version: "1.2.0" }));
+      return new Response(
+        JSON.stringify({
+          version: newRecruitCatalogue.sources.rules.version,
+        }),
+      );
     }
     if (url.includes("api.github.com")) {
       return new Response(
@@ -438,14 +940,18 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", async () =
         xml,
         /name="Allarus Custodians" entryId="9f10-d8db-a7b3-5784::c8a6-a4c5-703e-b717"/,
       );
-      assert.match(
-        xml,
-        /name="Agamatus Custodians" entryId="28a9-923b-c230-bc66::00ab-41c4-cf52-4ad2"/,
-      );
-      assert.match(
-        xml,
-        /name="Pallas Grav-attack" entryId="7b13-004f-1fb5-97f8::06df-2fb2-8dfa-2fce"/,
-      );
+      const mapping = getNewRecruitFactionCatalogue(built.data.factionId);
+      assert.ok(mapping);
+      for (const selection of built.data.units) {
+        const unitMapping = mapping.units[selection.unitId];
+        assert.ok(unitMapping, `${selection.name} should have a mapping`);
+        assert.match(
+          xml,
+          new RegExp(
+            `entryId="${unitMapping.entryId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+          ),
+        );
+      }
     }
     if (format === "rosz") {
       const entries = unzipSync(result.data.content as Uint8Array);
@@ -458,10 +964,6 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", async () =
       assert.match(
         xml,
         /name="Allarus Custodian \(Guardian Spear\)" entryId="9f10-d8db-a7b3-5784::b690-3f83-ec6a-401f"/,
-      );
-      assert.match(
-        xml,
-        /name="Agamatus Custodian \(Lastrum bolt cannon\)" entryId="28a9-923b-c230-bc66::de32-bd86-91c0-6d95"/,
       );
     }
     if (format === "html") {
@@ -630,8 +1132,17 @@ test("exports every browser prompt idea with real New Recruit references", async
     const [filename] = Object.keys(entries);
     const xml = strFromU8(entries[filename]);
     assert.doesNotMatch(xml, /\bentry(?:Group)?Id="rp-/);
+    const mapping = getNewRecruitFactionCatalogue(built.data.factionId);
+    assert.ok(mapping);
     for (const selection of built.data.units) {
-      assert.match(xml, new RegExp(`name="${selection.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+      const unitMapping = mapping.units[selection.unitId];
+      assert.ok(unitMapping, `${selection.name} should have a mapping`);
+      assert.match(
+        xml,
+        new RegExp(
+          `entryId="${unitMapping.entryId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+        ),
+      );
     }
   }
 });

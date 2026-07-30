@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/.certification/
 
 # next.js
 /.next/
@@ -52,3 +53,5 @@ next-env.d.ts
 /*-vs-*.html
 /*-matchup.html
 /*-matchup.json
+.rosterpilot-data-update-lock/
+.rosterpilot-data-update-transaction/

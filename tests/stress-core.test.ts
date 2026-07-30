@@ -5,8 +5,10 @@ import {
   analyzeMissionReadiness,
   assessMissionReadinessRevisionGuardrail,
   buildRoster,
+  conflictBlocksAllUnitConfigurations,
   exportRoster,
   generateFactionStressPortfolio,
+  previewFactionStressPortfolio,
   rosterExecutionFingerprint,
   rosterStructuralDistance,
   rosterStructuralFingerprint,
@@ -78,6 +80,54 @@ test("structural fingerprints ignore presentation fields and expose list changes
   assert.ok(rosterStructuralDistance(base, changed) > 0);
 });
 
+test("scoped point conflicts do not poison every configuration of a unit", () => {
+  const baseConflict = {
+    id: "scoped-points",
+    factionId: "test-faction",
+    entityType: "points" as const,
+    entityId: "test-unit",
+    entityName: "Test Unit",
+    code: "POINTS_MISMATCH" as const,
+    blocking: true,
+    message: "Only the six-model tier differs.",
+  };
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...baseConflict,
+      scope: { modelCount: 6 },
+    }),
+    false,
+  );
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...baseConflict,
+      scope: {
+        selectionScopes: [{ modelCount: 6 }],
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...baseConflict,
+      entityId: "test-unit:6",
+    }),
+    false,
+  );
+  assert.equal(
+    conflictBlocksAllUnitConfigurations(baseConflict),
+    true,
+  );
+  assert.equal(
+    conflictBlocksAllUnitConfigurations({
+      ...baseConflict,
+      entityType: "unit",
+      code: "UNMAPPED",
+    }),
+    true,
+  );
+});
+
 test("generates deterministic, exportable core and diverse faction portfolios", async () => {
   const first = generateFactionStressPortfolio({
     faction: "adeptus-custodes",
@@ -90,6 +140,7 @@ test("generates deterministic, exportable core and diverse faction portfolios", 
     suite: "core-3",
   });
   assert.equal(first.ok, true);
+  assert.equal(first.data?.generatorVersion, "faction-stress-v4");
   assert.equal(first.data?.coverage.intended, 3);
   assert.deepEqual(
     first.data?.items.map((item) => item.fingerprint),
@@ -146,6 +197,252 @@ test("generates deterministic, exportable core and diverse faction portfolios", 
       assert.ok((item.traits?.eliteHeavyPointsPercent ?? 0) >= 0.4);
     }
   }
+  assert.deepEqual(
+    diverse.data?.coverage.representedCells.map(
+      (cell) => cell.templateId,
+    ),
+    ready.map((item) => item.templateId),
+  );
+  assert.deepEqual(
+    diverse.data?.coverage.missingCells.map(
+      (cell) => cell.templateId,
+    ),
+    diverse.data?.items
+      .filter((item) => item.status === "unavailable")
+      .map((item) => item.templateId),
+  );
+});
+
+test("named-character specialist coverage is independent from core posture coverage", () => {
+  const aeldari = generateFactionStressPortfolio({
+    faction: "aeldari",
+    pointsLimit: 1000,
+    suite: "core-3",
+  });
+  assert.equal(aeldari.ok, true);
+  assert.ok(aeldari.data);
+  assert.equal(
+    aeldari.data.items.some(
+      (item) =>
+        item.status === "ready" &&
+        item.containsNamedCharacter === true,
+    ),
+    false,
+  );
+  assert.equal(
+    aeldari.data.coverage.namedCharacterCoverageStatus,
+    "included",
+  );
+  assert.equal(aeldari.data.coverage.namedCharacterCoverage, true);
+  assert.equal(aeldari.data.coverage.namedCharacterCoverageReason, null);
+  assert.match(
+    aeldari.data.coverage
+      .namedCharacterSpecialistStructuralFingerprint ?? "",
+    /^[0-9a-f]{64}$/,
+  );
+  assert.match(
+    aeldari.data.coverage
+      .namedCharacterSpecialistSimulationFingerprint ?? "",
+    /^[0-9a-f]{64}$/,
+  );
+  assert.equal(
+    aeldari.data.coverage.maximumResultStatus,
+    "complete",
+  );
+
+  const adeptusAstartes = generateFactionStressPortfolio({
+    faction: "adeptus-astartes",
+    pointsLimit: 1000,
+    suite: "core-3",
+  });
+  assert.equal(adeptusAstartes.ok, true);
+  assert.ok(adeptusAstartes.data);
+  assert.equal(
+    adeptusAstartes.data.coverage.namedCharacterCoverageStatus,
+    "included",
+  );
+  assert.equal(
+    adeptusAstartes.data.coverage.namedCharacterCoverage,
+    true,
+  );
+  assert.equal(
+    adeptusAstartes.data.coverage.namedCharacterCoverageReason,
+    null,
+  );
+  assert.match(
+    adeptusAstartes.data.coverage
+      .namedCharacterSpecialistStructuralFingerprint ?? "",
+    /^[0-9a-f]{64}$/,
+  );
+  assert.match(
+    adeptusAstartes.data.coverage
+      .namedCharacterSpecialistSimulationFingerprint ?? "",
+    /^[0-9a-f]{64}$/,
+  );
+  assert.equal(
+    adeptusAstartes.data.coverage.maximumResultStatus,
+    "complete",
+  );
+
+  const chaosKnights = generateFactionStressPortfolio({
+    faction: "chaos-knights",
+    pointsLimit: 1000,
+    suite: "core-3",
+  });
+  assert.ok(chaosKnights.data);
+  assert.equal(
+    chaosKnights.data.coverage.namedCharacterCoverageStatus,
+    "not-applicable",
+  );
+  assert.equal(
+    chaosKnights.data.coverage.namedCharacterCoverage,
+    true,
+  );
+  assert.match(
+    chaosKnights.data.coverage.namedCharacterCoverageReason ?? "",
+    /no legal named-character anchor/i,
+  );
+  assert.equal(
+    chaosKnights.data.coverage.maximumResultStatus,
+    "complete",
+  );
+});
+
+test("core portfolios require three unique postures and retain density evidence", async () => {
+  const preview = await previewFactionStressPortfolio({
+    faction: "orks",
+    pointsLimit: 1000,
+    suite: "core-3",
+    pointsTolerancePercent: 5,
+    allowLegends: false,
+  });
+  assert.equal(
+    preview.ok,
+    true,
+    preview.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.equal(preview.data?.gates.accepted, true);
+  assert.equal(preview.data?.gates.completeCoverage, true);
+  assert.equal(preview.data?.gates.maximumResultStatus, "complete");
+  const ready = preview.data?.portfolio.items.filter(
+    (item) => item.status === "ready",
+  );
+  assert.equal(ready?.length, 3);
+  assert.equal(
+    new Set(ready?.map((item) => item.simulationFingerprint)).size,
+    3,
+  );
+  assert.equal(
+    new Set(ready?.map((item) => item.posture)).size,
+    3,
+  );
+  assert.ok(ready?.every((item) => item.roster));
+  assert.ok(
+    ready?.every((item) =>
+      preview.data?.items.find(
+        (candidate) => candidate.templateId === item.templateId,
+      )?.exportable,
+    ),
+  );
+  assert.ok(
+    ready?.every(
+      (item) =>
+        item.compositionEvidence.length > 0 &&
+        (item.traits?.modelCount ?? 0) > 0,
+    ),
+  );
+  assert.deepEqual(preview.data?.gates.missingCompositions, []);
+});
+
+test("elite factions generate faction-feasible balanced, ranged, and assault core proxies", async () => {
+  for (const faction of [
+    "chaos-knights",
+    "grey-knights",
+    "imperial-knights",
+  ]) {
+    const preview = await previewFactionStressPortfolio({
+      faction,
+      pointsLimit: 1000,
+      suite: "core-3",
+      pointsTolerancePercent: 5,
+      allowLegends: false,
+    });
+    assert.equal(
+      preview.ok,
+      true,
+      `${faction}: ${preview.violations.map((violation) => violation.message).join("; ")}`,
+    );
+    assert.equal(preview.data?.gates.completeCoverage, true);
+    assert.equal(
+      preview.data?.gates.maximumResultStatus,
+      "complete",
+    );
+    assert.deepEqual(
+      preview.data?.gates.representedPostures,
+      [
+        "balanced-control",
+        "ranged-pressure",
+        "assault-pressure",
+      ],
+    );
+    assert.equal(
+      new Set(
+        preview.data?.items.map(
+          (item) => item.simulationFingerprint,
+        ),
+      ).size,
+      3,
+    );
+    assert.equal(
+      new Set(
+        preview.data?.portfolio.items.map(
+          (item) => item.composition,
+        ),
+      ).size,
+      1,
+      "repeated descriptive composition labels must not degrade core-3",
+    );
+    assert.deepEqual(preview.data?.gates.missingCompositions, []);
+  }
+});
+
+test("Custodes portfolios use feasible elite density and degrade truthfully", async () => {
+  const core = await previewFactionStressPortfolio({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    suite: "core-3",
+    pointsTolerancePercent: 5,
+    allowLegends: false,
+  });
+  assert.equal(
+    core.ok,
+    true,
+    core.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.equal(core.data?.gates.executionViable, true);
+  assert.equal(core.data?.gates.completeCoverage, true);
+  assert.equal(core.data?.gates.maximumResultStatus, "complete");
+  assert.ok(
+    core.data?.portfolio.items
+      .filter((item) => item.status === "ready")
+      .every(
+        (item) =>
+          (item.traits?.eliteHeavyPointsPercent ?? 0) >= 0.45,
+      ),
+  );
+
+  const diverse = await previewFactionStressPortfolio({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    suite: "diverse-9",
+    pointsTolerancePercent: 5,
+    allowLegends: false,
+  });
+  assert.equal(diverse.ok, true);
+  assert.equal(diverse.data?.gates.executionViable, true);
+  assert.equal(diverse.data?.gates.completeCoverage, false);
+  assert.equal(diverse.data?.gates.maximumResultStatus, "degraded");
+  assert.ok((diverse.data?.gates.missingCells.length ?? 0) > 0);
 });
 
 test("mission readiness uses scaled thresholds and structured provenance", () => {

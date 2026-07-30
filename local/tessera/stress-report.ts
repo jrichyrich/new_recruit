@@ -129,6 +129,12 @@ type StressTestView = {
   runId: string;
   generatedAt: string;
   status: string;
+  statusExplanation: string;
+  confidenceSummary: DisplayPair[];
+  integrity: DisplayPair[];
+  integrityIssues: string[];
+  recovery: DisplayPair[];
+  recoveryActions: string[];
   opponentFaction: string;
   suite: string;
   strategy: string;
@@ -489,6 +495,10 @@ function normalizePortfolioItems(report: UnknownRecord): PortfolioItemView[] {
       (representativeIds.has(itemId)
         ? textAt(report, ["deepDiveReport.status"], "selected")
         : "");
+    const screenStatusDisplay =
+      screenStatus === "confident"
+        ? "quantitative coverage complete"
+        : screenStatus;
     return {
       itemId,
       rosterName: textAt(
@@ -538,7 +548,10 @@ function normalizePortfolioItems(report: UnknownRecord): PortfolioItemView[] {
         ["status", "generationStatus", "validation.status"],
         "unknown",
       ),
-      stages: [screenStatus && `Screen: ${screenStatus}`, deepStatus && `Deep: ${deepStatus}`]
+      stages: [
+        screenStatusDisplay && `Screen: ${screenStatusDisplay}`,
+        deepStatus && `Deep: ${deepStatus}`,
+      ]
         .filter(Boolean)
         .join(" · ") || "Not started",
       representative:
@@ -689,7 +702,11 @@ function normalizeCoveragePoints(report: UnknownRecord): CoveragePointView[] {
         (coverage !== null && exposure !== null ? coverage - exposure : null),
       confidence: textAt(
         sample,
-        ["confidence", "coverageConfidence", "status"],
+        [
+          "evidenceConfidence",
+          "confidence",
+          "coverageConfidence",
+        ],
         "review",
       ),
     };
@@ -930,11 +947,70 @@ function normalizeStressTest(report: TesseraStressTestReport): StressTestView {
     "provenance",
     "player.sourceData",
   ]);
+  const legacyCoverage = textAt(
+    root,
+    ["robustness.confidence"],
+    "not recorded",
+  );
+  const coverageCompleteness = textAt(
+    root,
+    ["robustness.coverageCompleteness"],
+    legacyCoverage === "review" ? "degraded" : legacyCoverage,
+  );
+  const evidenceConfidence = textAt(
+    root,
+    ["robustness.evidenceConfidence"],
+    "not recorded",
+  );
+  const rawStatusExplanation = textAt(root, ["statusExplanation"]);
+  const statusExplanation =
+    evidenceConfidence !== "not recorded"
+      ? rawStatusExplanation.replace(
+          /\bconfident\b/gi,
+          "quantitatively complete",
+        )
+      : rawStatusExplanation;
   return {
     title: `${playerName} faction stress test`,
     runId: textAt(root, ["runId"]),
     generatedAt: textAt(root, ["generatedAt"]),
     status: textAt(root, ["status"], "unknown"),
+    statusExplanation,
+    confidenceSummary: [
+      {
+        label: "Quantitative coverage completeness",
+        value: coverageCompleteness,
+      },
+      {
+        label: "Evidence confidence",
+        value: evidenceConfidence,
+      },
+    ],
+    integrity: objectPairs(
+      first(root, ["integrity"]),
+      new Set(["issues"]),
+    ),
+    integrityIssues: records(first(root, ["integrity.issues"])).map(
+      (entry) =>
+        `[${textAt(entry, ["code"], "TESSERA_INTEGRITY")}] ${textAt(
+          entry,
+          ["message"],
+          "Simulation integrity requires review.",
+        )}`,
+    ),
+    recovery: objectPairs(
+      first(root, ["recovery"]),
+      new Set([
+        "nextActions",
+        "exhaustedTemplates",
+      ]),
+    ),
+    recoveryActions: [
+      ...stringArray(first(root, ["recovery.exhaustedTemplates"])).map(
+        (entry) => `Retry budget exhausted: ${entry}`,
+      ),
+      ...stringArray(first(root, ["recovery.nextActions"])),
+    ],
     opponentFaction: textAt(
       root,
       ["opponentFactionName", "opponentFactionId"],
@@ -1223,7 +1299,7 @@ function bandClass(value: string): string {
   if (/green|complete|high|improved|good/i.test(value)) {
     return "good";
   }
-  if (/red|failed|worse|low|partial|degraded|inconclusive|warn/i.test(value)) {
+  if (/red|failed|worse|low|partial|degraded|inconclusive|review|ambiguous|warn/i.test(value)) {
     return "warn";
   }
   return "";
@@ -1275,7 +1351,7 @@ function renderCoverageTable(points: CoveragePointView[]): string {
     return '<p class="empty">No usable screening samples were available.</p>';
   }
   return `<div class="table-scroll"><table>
-<thead><tr><th>Opponent</th><th>Phase</th><th>Offensive coverage</th><th>Threat exposure</th><th>Margin</th><th>Confidence</th></tr></thead>
+<thead><tr><th>Opponent</th><th>Phase</th><th>Offensive coverage</th><th>Threat exposure</th><th>Margin</th><th>Evidence confidence</th></tr></thead>
 <tbody>${points
     .map(
       (point) => `<tr><th scope="row">${escapeHtml(point.label)}</th>
@@ -1613,11 +1689,31 @@ export function renderTesseraStressTestReportHtml(
 <p><span class="badge ${bandClass(view.status)}">${escapeHtml(
     view.status,
   )}</span></p>
+${view.statusExplanation ? `<p>${escapeHtml(view.statusExplanation)}</p>` : ""}
+${renderPairs(
+    view.confidenceSummary,
+    "Coverage and evidence confidence were not recorded.",
+  )}
 <p class="caution"><strong>Directional combat robustness, not win probability.</strong> Unknown lists, terrain, missions, deployment, sequencing, and player decisions remain uncertain.</p>
 </header>`;
   const body = `<section aria-labelledby="coverage-heading"><h2 id="coverage-heading">Suite coverage</h2>
 ${renderPairs(view.suiteCoverage, "No suite coverage was recorded.")}
 ${renderPortfolio(view.items)}</section>
+<section aria-labelledby="reliability-heading"><h2 id="reliability-heading">Reliability and recovery</h2>
+<h3>Simulation integrity</h3>${renderPairs(
+    view.integrity,
+    "Simulation integrity was not evaluated.",
+  )}${renderList(
+    view.integrityIssues,
+    "No matrix-integrity issues were recorded.",
+  )}
+<h3>Resume state</h3>${renderPairs(
+    view.recovery,
+    "No recovery state was recorded.",
+  )}${renderList(
+    view.recoveryActions,
+    "No recovery action is required.",
+  )}</section>
 <section aria-labelledby="ranges-heading"><h2 id="ranges-heading">Robustness ranges</h2>
 <p class="meta">Worst, median, mean, best, and tail values summarize equal-weight usable opponents; missing simulations are never inferred.</p>
 ${renderRanges(view.ranges)}</section>

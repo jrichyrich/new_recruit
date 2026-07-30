@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "factionCatalogues": {
     "adepta-sororitas": "Imperium - Adepta Sororitas.json",
     "adeptus-astartes": "Imperium - Space Marines.json",
@@ -39,5 +39,9 @@
   },
   "unitAliases": {},
   "detachmentAliases": {},
-  "enhancementAliases": {}
+  "enhancementAliases": {},
+  "exactPathOverrides": {
+    "units": {},
+    "detachments": {}
+  }
 }

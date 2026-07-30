@@ -8,7 +8,11 @@ import { strToU8, zipSync } from "fflate";
 
 import {
   buildRoster,
+  compareNewRecruitCatalogueProvenance,
+  generateFactionStressPortfolio,
+  getNewRecruitFactionSummary,
   inspectEnrichedRosz,
+  newRecruitCatalogue,
   validateEnrichedRosz,
   type EnrichedRoszSummary,
   type NewRecruitDelivery,
@@ -54,6 +58,18 @@ function fixtureRosz(generatedBy = "https://newrecruit.eu"): Uint8Array {
   return zipSync({ "fixture.ros": strToU8(xml) });
 }
 
+function enrichedPointsFixture(selections: string): Uint8Array {
+  const xml = `<?xml version="1.0"?>
+<roster name="Points Fixture" generatedBy="https://newrecruit.eu">
+  <cost name="pts" value="999"/>
+  <forces><force name="Astra Militarum" catalogueName="Astra Militarum">
+    <selections>${selections}</selections>
+  </force></forces>
+  <profiles><profile name="Fixture" typeName="Unit"/></profiles>
+</roster>`;
+  return zipSync({ "points.ros": strToU8(xml) });
+}
+
 test("validates a New Recruit enriched roster and exact model multiset", () => {
   const summary = validateEnrichedRosz(fixtureRosz(), {
     name: "Fixture Army",
@@ -79,6 +95,127 @@ test("validates a New Recruit enriched roster and exact model multiset", () => {
         units: [{ name: "Blade Champion", modelCount: 1 }],
       }),
     /failed verification/i,
+  );
+});
+
+test("records only catalogue identity observed in a New Recruit enriched ROSZ", () => {
+  const xml = `<?xml version="1.0"?>
+<roster name="Observed" generatedBy="https://newrecruit.eu" gameSystemId="system-id" gameSystemName="Warhammer 40,000 11th Edition" gameSystemRevision="7">
+  <cost name="pts" value="100"/>
+  <forces><force name="Aeldari" catalogueId="catalogue-id" catalogueName="Aeldari" catalogueRevision="12"><selections>
+    <selection name="Farseer" number="1" type="model"/>
+  </selections></force></forces>
+  <profiles><profile name="Witchblade" typeName="Melee Weapons"/></profiles>
+</roster>`;
+  const summary = inspectEnrichedRosz(
+    zipSync({ "observed.ros": strToU8(xml) }),
+  );
+  assert.deepEqual(summary.observedNewRecruitCatalogue, {
+    source: "new-recruit-enriched-rosz",
+    gameSystem: {
+      id: "system-id",
+      name: "Warhammer 40,000 11th Edition",
+      revision: 7,
+    },
+    catalogues: [
+      { id: "catalogue-id", name: "Aeldari", revision: 12 },
+    ],
+  });
+  assert.equal(
+    inspectEnrichedRosz(fixtureRosz("RosterPilot"))
+      .observedNewRecruitCatalogue,
+    undefined,
+    "a RosterPilot source archive must not be presented as live New Recruit evidence",
+  );
+  assert.equal(
+    compareNewRecruitCatalogueProvenance(summary, {
+      releaseId: "fixture-release",
+      gameSystem: {
+        id: "system-id",
+        name: "Warhammer 40,000 11th Edition",
+        revision: 7,
+      },
+      catalogue: {
+        id: "catalogue-id",
+        name: "Aeldari",
+        revision: 12,
+      },
+    }).status,
+    "matched",
+  );
+  const drift = compareNewRecruitCatalogueProvenance(summary, {
+    releaseId: "fixture-release",
+    gameSystem: {
+      id: "system-id",
+      name: "Warhammer 40,000 11th Edition",
+      revision: 6,
+    },
+    catalogue: {
+      id: "catalogue-id",
+      name: "Aeldari",
+      revision: 11,
+    },
+  });
+  assert.equal(drift.status, "drift");
+  assert.deepEqual(
+    drift.mismatches.map((mismatch) => mismatch.field),
+    ["game-system-revision", "catalogue-revision"],
+  );
+});
+
+test("extracts enriched unit points once from direct or immediate aggregate costs", () => {
+  const summary = inspectEnrichedRosz(
+    enrichedPointsFixture(`
+      <selection id="direct" name="Direct Unit" number="1" type="unit">
+        <cost name="pts" value="100"/>
+        <selections>
+          <selection name="Direct Model" number="5" type="model">
+            <cost name="pts" value="80"/>
+            <selections>
+              <selection name="Nested Equipment" number="5" type="upgrade">
+                <cost name="pts" value="20"/>
+              </selection>
+            </selections>
+          </selection>
+        </selections>
+      </selection>
+      <selection id="fallback" name="Fallback Unit" number="1" type="unit">
+        <selections>
+          <selection name="Fallback Model A" number="2" type="model">
+            <cost name="pts" value="45"/>
+            <selections>
+              <selection name="Nested Equipment" number="2" type="upgrade">
+                <cost name="pts" value="10"/>
+              </selection>
+            </selections>
+          </selection>
+          <selection name="Fallback Model B" number="3" type="model">
+            <cost name="pts" value="55"/>
+          </selection>
+        </selections>
+      </selection>
+      <selection id="missing" name="Missing Cost Unit" number="1" type="unit">
+        <selections>
+          <selection name="Missing Model" number="1" type="model"/>
+        </selections>
+      </selection>
+    `),
+  );
+  assert.deepEqual(
+    summary.units.map((unit) => ({
+      name: unit.name,
+      modelCount: unit.modelCount,
+      points: unit.points,
+    })),
+    [
+      { name: "Direct Unit", modelCount: 5, points: 100 },
+      { name: "Fallback Unit", modelCount: 5, points: 100 },
+      {
+        name: "Missing Cost Unit",
+        modelCount: 1,
+        points: undefined,
+      },
+    ],
   );
 });
 
@@ -108,11 +245,27 @@ test("parses directional Tessera matrix metrics without inventing missing values
 });
 
 function fakeSummary(roster: RosterDraftV1): EnrichedRoszSummary {
+  const faction = getNewRecruitFactionSummary(roster.factionId)!;
   return {
     rosterName: roster.name,
     factionName: roster.factionName,
     totalPoints: roster.totalPoints,
     generatedBy: "https://newrecruit.eu",
+    observedNewRecruitCatalogue: {
+      source: "new-recruit-enriched-rosz",
+      gameSystem: {
+        id: newRecruitCatalogue.gameSystem.id,
+        name: newRecruitCatalogue.gameSystem.name,
+        revision: roster.sourceData.newRecruit.gameSystemRevision,
+      },
+      catalogues: [
+        {
+          id: faction.catalogue.id,
+          name: faction.catalogue.name,
+          revision: roster.sourceData.newRecruit.catalogueRevision,
+        },
+      ],
+    },
     profileCount: 2,
     weaponProfileCount: 1,
     units: roster.units.map((unit) => ({
@@ -162,7 +315,7 @@ function deliveryFor(
   };
 }
 
-test("prepares enriched handoff and writes a handoff-only matchup report", async () => {
+test("prepares enriched handoff and writes a prepare-only matchup report", async () => {
   const player = buildRoster({
     faction: "adeptus-custodes",
     pointsLimit: 1000,
@@ -197,13 +350,359 @@ test("prepares enriched handoff and writes a handoff-only matchup report", async
       { deliver },
     );
     assert.equal(report.ok, true);
-    assert.equal(report.data?.status, "partial");
-    assert.equal(report.data?.source, "handoff-only");
-    assert.match(
-      await readFile(report.data!.artifacts[0].written, "utf8"),
-      /not a game win probability/i,
+    assert.equal(report.data?.status, "prepared");
+    assert.equal(report.data?.simulation.status, "not-requested");
+    assert.equal(report.data?.source, "prepare-only");
+    const serialized = await readFile(
+      report.data!.artifacts[0].written,
+      "utf8",
+    );
+    assert.match(serialized, /not a game win probability/i);
+    const parsed = JSON.parse(serialized) as {
+      artifacts: Array<{ written: string }>;
+      preparation: { status: string };
+      simulation: { status: string };
+    };
+    assert.equal(parsed.preparation.status, "complete");
+    assert.equal(parsed.simulation.status, "not-requested");
+    assert.deepEqual(
+      parsed.artifacts.map((artifact) => artifact.written),
+      ["Player-matchup.json", "Player-matchup.html"],
     );
     assert.equal(inspectEnrichedRosz(fixtureRosz()).weaponProfileCount, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("catalogue drift retains verified preparation and stops before Tessera", async () => {
+  const player = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Drifted Player",
+  }).data!;
+  const faction = getNewRecruitFactionSummary(player.factionId)!;
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-catalogue-drift-"),
+  );
+  try {
+    const delivery = deliveryFor(player, directory);
+    delivery.data!.enrichedSummary!.observedNewRecruitCatalogue = {
+      source: "new-recruit-enriched-rosz",
+      gameSystem: {
+        id: newRecruitCatalogue.gameSystem.id,
+        name: newRecruitCatalogue.gameSystem.name,
+        revision: newRecruitCatalogue.gameSystem.revision + 1,
+      },
+      catalogues: [
+        {
+          id: faction.catalogue.id,
+          name: faction.catalogue.name,
+          revision: faction.catalogue.revision,
+        },
+      ],
+    };
+    const prepared = await prepareRosterForTessera(
+      player,
+      { outputDirectory: directory },
+      { deliver: async () => delivery },
+    );
+    assert.equal(prepared.ok, false);
+    assert.equal(
+      prepared.violations[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_DRIFT",
+    );
+    assert.equal(prepared.data?.catalogueProvenance?.status, "drift");
+    assert.equal(
+      prepared.data?.enrichedRoszPath,
+      path.join(directory, "enriched.rosz"),
+    );
+    assert.match(
+      prepared.violations[0]?.message ?? "",
+      /Tessera was not started/,
+    );
+    assert.doesNotMatch(
+      prepared.violations[0]?.message ?? "",
+      /backend commit is/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("direct matchup analysis retains a failed catalogue-provenance report", async () => {
+  const player = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Drifted Direct Player",
+  }).data!;
+  const opponent = buildRoster({
+    faction: "necrons",
+    pointsLimit: 1000,
+    name: "Unused Direct Opponent",
+  }).data!;
+  const faction = getNewRecruitFactionSummary(player.factionId)!;
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-direct-catalogue-drift-"),
+  );
+  try {
+    const delivery = deliveryFor(player, directory);
+    delivery.data!.enrichedSummary!.observedNewRecruitCatalogue = {
+      source: "new-recruit-enriched-rosz",
+      gameSystem: {
+        id: newRecruitCatalogue.gameSystem.id,
+        name: newRecruitCatalogue.gameSystem.name,
+        revision: newRecruitCatalogue.gameSystem.revision + 1,
+      },
+      catalogues: [
+        {
+          id: faction.catalogue.id,
+          name: faction.catalogue.name,
+          revision: faction.catalogue.revision,
+        },
+      ],
+    };
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        executionMode: "prepare-only",
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+      },
+      { deliver: async () => delivery },
+    );
+    assert.equal(analyzed.ok, false);
+    assert.equal(analyzed.data?.status, "failed");
+    assert.equal(analyzed.data?.preparation?.status, "failed");
+    assert.equal(
+      analyzed.data?.player.enrichedRoszPath,
+      path.join(directory, "enriched.rosz"),
+    );
+    assert.equal(
+      analyzed.data?.failures?.[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_DRIFT",
+    );
+    assert.equal(analyzed.data?.simulation.matrices.length, 0);
+    assert.equal(analyzed.data?.simulation.scenarios?.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("direct matchup retains the prepared player when opponent delivery fails", async () => {
+  const player = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Prepared Player",
+  }).data!;
+  const opponent = buildRoster({
+    faction: "necrons",
+    pointsLimit: 1000,
+    name: "Failed Opponent",
+  }).data!;
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-retained-player-"),
+  );
+  let deliveryCalls = 0;
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        executionMode: "prepare-only",
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+      },
+      {
+        deliver: async (
+          roster,
+          deliveryOptions: NewRecruitDeliveryOptions = {},
+        ) => {
+          deliveryCalls += 1;
+          if (deliveryCalls === 1) {
+            return deliveryFor(
+              roster,
+              deliveryOptions.outputDirectory ?? directory,
+            );
+          }
+          return {
+            ok: false,
+            data: null,
+            violations: [
+              {
+                code: "SYNTHETIC_OPPONENT_DELIVERY_FAILED",
+                message: "Synthetic opponent delivery failure.",
+                severity: "error",
+              },
+            ],
+            warnings: [],
+          };
+        },
+      },
+    );
+    assert.equal(analyzed.ok, false);
+    assert.equal(analyzed.data?.status, "failed");
+    assert.equal(analyzed.data?.player.rosterName, player.name);
+    assert.equal(analyzed.data?.opponents.length, 0);
+    assert.equal(
+      analyzed.data?.failures?.[0]?.code,
+      "SYNTHETIC_OPPONENT_DELIVERY_FAILED",
+    );
+    assert.equal(analyzed.data?.preparation?.status, "failed");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("direct faction analysis retains earlier opponents when a later proxy fails", async () => {
+  const player = buildRoster({
+    faction: "aeldari",
+    pointsLimit: 1000,
+    name: "Portfolio Retention Player",
+  }).data!;
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-retained-opponents-"),
+  );
+  let deliveryCalls = 0;
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      {
+        kind: "faction-archetypes",
+        factionId: "adeptus-custodes",
+      },
+      {
+        executionMode: "prepare-only",
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+      },
+      {
+        deliver: async (
+          roster,
+          deliveryOptions: NewRecruitDeliveryOptions = {},
+        ) => {
+          deliveryCalls += 1;
+          if (deliveryCalls <= 2) {
+            return deliveryFor(
+              roster,
+              deliveryOptions.outputDirectory ?? directory,
+            );
+          }
+          return {
+            ok: false,
+            data: null,
+            violations: [
+              {
+                code: "SYNTHETIC_PROXY_DELIVERY_FAILED",
+                message: "Synthetic later proxy delivery failure.",
+                severity: "error",
+              },
+            ],
+            warnings: [],
+          };
+        },
+      },
+    );
+    assert.equal(analyzed.ok, false);
+    assert.equal(analyzed.data?.status, "failed");
+    assert.equal(analyzed.data?.player.rosterName, player.name);
+    assert.equal(analyzed.data?.opponents.length, 1);
+    assert.equal(
+      analyzed.data?.failures?.[0]?.code,
+      "SYNTHETIC_PROXY_DELIVERY_FAILED",
+    );
+    assert.ok(deliveryCalls >= 3);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("missing live catalogue identity fails closed with prepared data", async () => {
+  const player = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Unverifiable Player",
+  }).data!;
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-catalogue-unverifiable-"),
+  );
+  try {
+    const delivery = deliveryFor(player, directory);
+    delete delivery.data!.enrichedSummary!.observedNewRecruitCatalogue;
+    const prepared = await prepareRosterForTessera(
+      player,
+      { outputDirectory: directory },
+      { deliver: async () => delivery },
+    );
+    assert.equal(prepared.ok, false);
+    assert.equal(
+      prepared.violations[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNVERIFIABLE",
+    );
+    assert.equal(
+      prepared.data?.catalogueProvenance?.status,
+      "unverifiable",
+    );
+    assert.equal(
+      prepared.data?.enrichedRoszPath,
+      path.join(directory, "enriched.rosz"),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("direct faction analysis reuses the shared portfolio payloads", async () => {
+  const player = buildRoster({
+    faction: "aeldari",
+    pointsLimit: 1000,
+    name: "Shared Portfolio Player",
+  }).data!;
+  const portfolio = generateFactionStressPortfolio({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    suite: "core-3",
+  });
+  assert.ok(portfolio.data);
+  const expected = portfolio.data.items
+    .filter((item) => item.status === "ready")
+    .map((item) => item.simulationFingerprint)
+    .sort();
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-shared-portfolio-"),
+  );
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      {
+        kind: "faction-archetypes",
+        factionId: "adeptus-custodes",
+      },
+      {
+        executionMode: "prepare-only",
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+      },
+      {
+        deliver: async (
+          roster,
+          deliveryOptions: NewRecruitDeliveryOptions = {},
+        ) =>
+          deliveryFor(
+            roster,
+            deliveryOptions.outputDirectory ?? directory,
+          ),
+      },
+    );
+    assert.equal(analyzed.ok, true);
+    assert.equal(analyzed.data?.status, "prepared");
+    assert.deepEqual(
+      analyzed.data?.opponents
+        .map((prepared) => prepared.fingerprint ?? null)
+        .sort(),
+      expected,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -239,9 +738,13 @@ test(
 <script>
 let imports = 0;
 let premium = false;
+const savedLists = [];
 function roster() {
+  const savedEntries = savedLists.map((name) =>
+    '<article><span>' + name + '</span><span>1 unit</span></article>'
+  ).join("");
   document.querySelector("main").innerHTML =
-    '<h1>Roster</h1><button id="import">Import .rosz</button><input id="file" hidden type="file"><button id="tactica">Tactica</button>';
+    '<h1>Roster</h1><button id="import">Import .rosz</button><input id="file" hidden type="file" accept=".rosz,application/zip"><section aria-label="Saved lists">' + savedEntries + '</section><button id="tactica">Tactica</button>';
   document.querySelector("#import").onclick = () => document.querySelector("#file").click();
   document.querySelector("#file").onchange = review;
   document.querySelector("#tactica").onclick = () => {
@@ -252,25 +755,25 @@ function roster() {
           '<h1>Unlock Premium</h1><input aria-label="Licence key"><button id="unlock" disabled>Unlock</button><button id="done">Done</button>';
         const key = document.querySelector('input[aria-label="Licence key"]');
         key.oninput = () => { document.querySelector("#unlock").disabled = !key.value; };
-        document.querySelector("#unlock").onclick = () => { premium = true; };
+        document.querySelector("#unlock").onclick = () => { premium = true; roster(); };
         document.querySelector("#done").onclick = roster;
         return;
       }
+      const options = savedLists.map((name) =>
+        '<option value="list:' + name + '">' + name + ' (1)</option>'
+      ).join("");
       document.querySelector("main").innerHTML =
         '<h1>Army vs Army</h1>' +
-        '<select aria-label="lista group"><option>Choose a list / faction…</option><option value="player">☰ Player (1)</option><option value="opponent">☰ Opponent (1)</option></select>' +
-        '<select aria-label="listb group"><option>Choose a list / faction…</option><option value="player">☰ Player (1)</option><option value="opponent">☰ Opponent (1)</option></select>' +
+        '<label for="army-a">Army A</label><select id="army-a"><option>Choose a list / faction…</option>' + options + '</select>' +
+        '<label for="army-b">Army B</label><select id="army-b"><option>Choose a list / faction…</option>' + options + '</select>' +
         '<button id="compare">⚔ Compare lists</button>';
       document.querySelector("#compare").onclick = () => {
         document.querySelector("main").insertAdjacentHTML(
           "beforeend",
           '<button id="forward" aria-pressed="true">A → B</button><button id="reverse" aria-pressed="false">B → A</button>' +
-          '<button aria-pressed="true">Shooting</button><button id="wiped" aria-pressed="false">P(wiped)</button>' +
+          '<button aria-pressed="true">Shooting</button><button id="wiped" aria-pressed="true">P(wiped)</button>' +
           '<table><tr><th>Attacker</th><th>Target</th></tr><tr><th>Player Unit</th><td>Kill 65% · 8.5 damage · 4.2 / 100</td></tr></table>',
         );
-        document.querySelector("#wiped").onclick = (event) => {
-          event.currentTarget.setAttribute("aria-pressed", "true");
-        };
         document.querySelector("#reverse").onclick = () => {
           document.querySelector("#forward").setAttribute("aria-pressed", "false");
           document.querySelector("#reverse").setAttribute("aria-pressed", "true");
@@ -282,9 +785,16 @@ function roster() {
   };
 }
 function review() {
+  const side = imports === 0 ? "Player" : "Opponent";
   document.querySelector("main").innerHTML =
-    '<h1>Review import</h1><p>1 warning</p><p>import metadata is unverified</p><button id="add">Add 1</button>';
-  document.querySelector("#add").onclick = () => { imports += 1; roster(); };
+    '<h1>Review import</h1><p>1 warning</p><p>import metadata is unverified</p>' +
+    '<label>Save to list (army name)<input aria-label="Save to list (army name)" value="' + side + '"></label>' +
+    '<button id="add">Add 1</button>';
+  document.querySelector("#add").onclick = () => {
+    savedLists.push(document.querySelector('input[aria-label="Save to list (army name)"]').value);
+    imports += 1;
+    roster();
+  };
 }
 function tactica() {
   document.querySelector("main").innerHTML =

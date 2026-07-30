@@ -6,9 +6,17 @@ import {
   NEW_RECRUIT_MY_LISTS,
   NEW_RECRUIT_ORIGIN,
   type BrokerCredentials,
-  type WorkerRequest,
+  type WorkerDeliveryRequest,
   type WorkerResult,
 } from "./contracts";
+import {
+  newRecruitUiIdentityFingerprint,
+} from "./ui-identity";
+
+export {
+  newRecruitUiIdentityFingerprint,
+  safeNewRecruitUiIdentity,
+} from "./ui-identity";
 
 export class NewRecruitAutomationError extends Error {
   constructor(
@@ -33,6 +41,37 @@ type ImportRosterResult = {
 };
 
 const listUrlPattern = /\/app\/Lists\//i;
+
+async function captureNewRecruitUiIdentity(
+  page: Page,
+): Promise<string | null> {
+  try {
+    const origin = new URL(page.url()).origin;
+    const versionMetadata = page
+      .locator('meta[name="version"], meta[name="app-version"]')
+      .first();
+    const declaredVersion =
+      (await versionMetadata.count()) > 0
+        ? await versionMetadata
+            .getAttribute("content")
+            .catch(() => null)
+        : null;
+    const scriptSources = await page
+      .locator("script[src]")
+      .evaluateAll((elements) =>
+        elements
+          .map((element) => element.getAttribute("src") ?? "")
+          .filter(Boolean),
+      );
+    return newRecruitUiIdentityFingerprint({
+      origin,
+      declaredVersion,
+      scriptSources,
+    });
+  } catch {
+    return null;
+  }
+}
 
 function normalized(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
@@ -195,6 +234,8 @@ export async function runNewRecruitAuthenticationCheck(
 ): Promise<{
   ok: boolean;
   sessionReused: boolean;
+  uiIdentity: string | null;
+  importControlVisible: boolean;
   code?: string;
   message?: string;
 }> {
@@ -217,11 +258,45 @@ export async function runNewRecruitAuthenticationCheck(
       dependencies.getCredentials,
       NEW_RECRUIT_ORIGIN,
     );
-    return { ok: true, sessionReused };
+    if (new URL(page.url()).origin !== NEW_RECRUIT_ORIGIN) {
+      throw new NewRecruitAutomationError(
+        "LOGIN_ORIGIN_REJECTED",
+        `New Recruit authentication completed at an unexpected origin: ${new URL(page.url()).origin}.`,
+      );
+    }
+    const importControl = page
+      .getByRole("button", { name: /import( list| roster)?/i })
+      .first()
+      .or(page.getByRole("link", { name: /import/i }).first());
+    const importControlVisible = await importControl
+      .isVisible()
+      .catch(() => false);
+    if (!importControlVisible) {
+      throw new NewRecruitAutomationError(
+        "NEW_RECRUIT_UI_CHANGED",
+        "The authenticated New Recruit page did not expose its semantic import control.",
+      );
+    }
+    const uiIdentity =
+      await captureNewRecruitUiIdentity(page);
+    if (!uiIdentity) {
+      throw new NewRecruitAutomationError(
+        "NEW_RECRUIT_UI_IDENTITY_MISSING",
+        "The authenticated New Recruit page did not expose a safe UI build identity.",
+      );
+    }
+    return {
+      ok: true,
+      sessionReused,
+      uiIdentity,
+      importControlVisible: true,
+    };
   } catch (error) {
     return {
       ok: false,
       sessionReused: false,
+      uiIdentity: null,
+      importControlVisible: false,
       code:
         error instanceof NewRecruitAutomationError
           ? error.code
@@ -342,7 +417,10 @@ async function importRoster(
   return { imported: false, listUrl: null };
 }
 
-async function verifyRoster(page: Page, expected: WorkerRequest["expected"]) {
+async function verifyRoster(
+  page: Page,
+  expected: WorkerDeliveryRequest["expected"],
+) {
   const body = normalized(await page.locator("body").innerText());
   const name = body.includes(normalized(expected.name));
   const faction = body.includes(normalized(expected.factionName));
@@ -485,7 +563,7 @@ async function downloadEnrichedRosz(
 }
 
 export async function runNewRecruitBrowserDelivery(
-  input: WorkerRequest,
+  input: WorkerDeliveryRequest,
   dependencies: BrowserDependencies,
 ): Promise<WorkerResult> {
   const baseUrl = dependencies.baseUrl ?? NEW_RECRUIT_MY_LISTS;
@@ -501,6 +579,7 @@ export async function runNewRecruitBrowserDelivery(
   let imported = false;
   let sessionReused = true;
   let listUrl: string | null = null;
+  let uiIdentity: string | null = null;
   let verification: WorkerResult["verification"] = null;
   try {
     const page = context.pages()[0] ?? (await context.newPage());
@@ -511,6 +590,22 @@ export async function runNewRecruitBrowserDelivery(
       dependencies.getCredentials,
       allowedOrigin,
     );
+    if (
+      new URL(page.url()).origin !== allowedOrigin ||
+      !(await isAuthenticatedSession(page))
+    ) {
+      throw new NewRecruitAutomationError(
+        "NEW_RECRUIT_AUTHENTICATED_ORIGIN_REJECTED",
+        "New Recruit did not expose authenticated My Lists at the expected origin.",
+      );
+    }
+    uiIdentity = await captureNewRecruitUiIdentity(page);
+    if (!uiIdentity) {
+      throw new NewRecruitAutomationError(
+        "NEW_RECRUIT_UI_IDENTITY_UNAVAILABLE",
+        "The authenticated New Recruit UI identity could not be captured before import.",
+      );
+    }
     const importResult = await importRoster(
       page,
       input.roszPath,
@@ -537,6 +632,7 @@ export async function runNewRecruitBrowserDelivery(
         ok: false,
         code: "VERIFICATION_FAILED",
         message: verification.mismatches.join(" "),
+        uiIdentity,
         imported,
         sessionReused,
         listUrl,
@@ -562,6 +658,7 @@ export async function runNewRecruitBrowserDelivery(
     }
     return {
       ok: true,
+      uiIdentity,
       imported,
       sessionReused,
       listUrl,
@@ -577,6 +674,7 @@ export async function runNewRecruitBrowserDelivery(
           ? error.code
           : "COMPANION_FAILED",
       message: error instanceof Error ? error.message : "Delivery failed.",
+      uiIdentity,
       imported,
       sessionReused,
       listUrl,

@@ -8,6 +8,7 @@ import {
   LOCAL_AGENT_PROTOCOL_VERSION,
   type LocalAgentDeliveryPayload,
   type LocalAgentDeliveryResult,
+  type LocalAgentNewRecruitProbeResult,
   type LocalAgentTesseraPayload,
   type LocalAgentTesseraResult,
   type LocalAgentTesseraSessionCloseResult,
@@ -237,6 +238,19 @@ export function deliverThroughLocalAgent(
       protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
       operation: "new-recruit.deliver",
       payload,
+    },
+    options,
+  );
+}
+
+export function probeNewRecruitThroughLocalAgent(
+  options?: LocalAgentClientOptions,
+): Promise<LocalAgentNewRecruitProbeResult> {
+  return request<LocalAgentNewRecruitProbeResult>(
+    {
+      id: randomUUID(),
+      protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
+      operation: "new-recruit.probe",
     },
     options,
   );

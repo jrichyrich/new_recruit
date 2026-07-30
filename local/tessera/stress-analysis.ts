@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import {
+  type TesseraConfidence,
   type TesseraMatchupReport,
   type TesseraScenarioCell,
   type TesseraScenarioResult,
@@ -24,6 +25,46 @@ type CoverageResult = {
 
 function finitePointValue(value: number | null): number {
   return value !== null && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+const CONFIDENCE_RANK: Record<TesseraConfidence, number> = {
+  ambiguous: 0,
+  review: 1,
+  high: 2,
+};
+
+function worstEvidenceConfidence(
+  values: TesseraConfidence[],
+): TesseraConfidence {
+  if (values.length === 0) return "ambiguous";
+  return values.reduce((worst, value) =>
+    CONFIDENCE_RANK[value] < CONFIDENCE_RANK[worst] ? value : worst,
+  "high");
+}
+
+function contributingEvidenceConfidence(
+  scenarios: TesseraScenarioResult[],
+): TesseraConfidence {
+  return worstEvidenceConfidence(
+    scenarios
+      .flatMap((scenario) => scenario.cells)
+      .filter(
+        (cell) =>
+          finitePointValue(cell.target.points) > 0 &&
+          cell.confidence !== "ambiguous" &&
+          cell.values.halfWipeProbability !== null,
+      )
+      .map((cell) => cell.confidence),
+  );
+}
+
+function capEvidenceConfidence(
+  desired: TesseraConfidence,
+  evidence: TesseraConfidence,
+): TesseraConfidence {
+  return CONFIDENCE_RANK[evidence] < CONFIDENCE_RANK[desired]
+    ? evidence
+    : desired;
 }
 
 function uniqueTargets(cells: TesseraScenarioCell[]): Map<string, TesseraScenarioCell["target"]> {
@@ -81,6 +122,7 @@ function scenariosFor(
 ): TesseraScenarioResult[] {
   return (report.simulation.scenarios ?? []).filter(
     (scenario) =>
+      scenario.status === "complete" &&
       scenario.opponentName === opponentName &&
       scenario.direction === direction &&
       (phase === undefined || scenario.phase === phase),
@@ -115,6 +157,8 @@ function sampleForItem(
     composition: item.composition,
     weight,
     status: "missing",
+    coverageCompleteness: "missing",
+    evidenceConfidence: "ambiguous",
     offensiveCoverage: null,
     threatExposure: null,
     coverageMargin: null,
@@ -125,7 +169,9 @@ function sampleForItem(
     playerPointCoverage: 0,
     opponentPointCoverage: 0,
     provisional: null,
-    warningRefs: [...item.warnings.map((warning) => warning.message)],
+    warningRefs: [
+      ...new Set(item.warnings.map((warning) => warning.message)),
+    ],
   };
   if (!opponent) return missing;
 
@@ -187,13 +233,19 @@ function sampleForItem(
     hasValues &&
     playerPointCoverage >= MIN_CONFIDENT_POINT_COVERAGE &&
     opponentPointCoverage >= MIN_CONFIDENT_POINT_COVERAGE;
+  const contributingScenarios = scenariosFor(
+    report,
+    opponent.rosterName,
+    "player-to-opponent",
+  ).concat(
+    scenariosFor(report, opponent.rosterName, "opponent-to-player"),
+  );
+  const evidenceConfidence = contributingEvidenceConfidence(
+    contributingScenarios,
+  );
   const warningRefs = [
     ...new Set(
-      scenariosFor(report, opponent.rosterName, "player-to-opponent")
-        .concat(
-          scenariosFor(report, opponent.rosterName, "opponent-to-player"),
-        )
-        .flatMap((scenario) => [
+      contributingScenarios.flatMap((scenario) => [
           ...scenario.warnings,
           ...scenario.cells.flatMap((cell) => cell.warningRefs),
         ]),
@@ -216,6 +268,12 @@ function sampleForItem(
   return {
     ...missing,
     status: confident ? "confident" : hasValues ? "ambiguous" : "missing",
+    coverageCompleteness: confident
+      ? "complete"
+      : hasValues
+        ? "partial"
+        : "missing",
+    evidenceConfidence,
     offensiveCoverage: confident ? estimate.offensiveCoverage : null,
     threatExposure: confident ? estimate.threatExposure : null,
     coverageMargin: confident ? estimate.coverageMargin : null,
@@ -272,6 +330,11 @@ function aggregate(
   return {
     sampleCount: usable.length,
     usableWeight: totalWeight,
+    evidenceConfidence: worstEvidenceConfidence(
+      usable.map(
+        (sample) => sample.evidenceConfidence ?? "ambiguous",
+      ),
+    ),
     worst:
       values.length === 0
         ? null
@@ -319,6 +382,7 @@ function unitRobustness(
     let weightedBreadth = 0;
     let exposedWeight = 0;
     const supportingTemplateIds: string[] = [];
+    const exposedTemplateIds: string[] = [];
     for (const sample of samples) {
       if (sample.status !== "confident") continue;
       const item = portfolio.items.find(
@@ -371,7 +435,10 @@ function unitRobustness(
             cell.confidence !== "ambiguous" &&
             (cell.values.halfWipeProbability ?? 0) >= HALF_WIPE_THRESHOLD,
         );
-      if (exposed) exposedWeight += sample.weight;
+      if (exposed) {
+        exposedWeight += sample.weight;
+        exposedTemplateIds.push(sample.templateId);
+      }
     }
     return {
       instanceId: unit.instanceId,
@@ -380,6 +447,7 @@ function unitRobustness(
       answerBreadth: weightedBreadth,
       exposedWeight,
       supportingTemplateIds,
+      exposedTemplateIds,
     };
   });
 }
@@ -401,12 +469,33 @@ export function computeStressRobustness(
       .filter((sample) => sample.status === "confident")
       .map((sample) => sample.posture),
   );
-  const confidence =
+  const degradedMinimum = Math.min(2, readyItems.length);
+  const degradedPostureMinimum = Math.min(
+    2,
+    new Set(readyItems.map((item) => item.posture)).size,
+  );
+  const legacyCoverageConfidence =
     confidentCount === portfolio.coverage.intended
       ? "complete"
-      : confidentCount >= 6 && representedPostures.size === 3
+      : (
+          portfolio.coverage.maximumResultStatus === "degraded" &&
+          confidentCount >= degradedMinimum &&
+          representedPostures.size >= degradedPostureMinimum
+        ) ||
+          (confidentCount >= 6 && representedPostures.size === 3)
         ? "review"
         : "insufficient";
+  const coverageCompleteness =
+    legacyCoverageConfidence === "complete"
+      ? "complete"
+      : legacyCoverageConfidence === "review"
+        ? "degraded"
+        : "insufficient";
+  const evidenceConfidence = worstEvidenceConfidence(
+    samples
+      .filter((sample) => sample.status === "confident")
+      .map((sample) => sample.evidenceConfidence ?? "ambiguous"),
+  );
   const warnings: string[] = [];
   if (confidentCount !== readyItems.length) {
     warnings.push(
@@ -415,13 +504,21 @@ export function computeStressRobustness(
       )}% non-ambiguous point coverage.`,
     );
   }
+  if (confidentCount > 0 && evidenceConfidence !== "high") {
+    warnings.push(
+      `Quantitative coverage includes ${confidentCount} complete proxy result(s), but aggregate evidence confidence is ${evidenceConfidence}; evidence confidence is capped by the lowest-confidence contributing simulation cell.`,
+    );
+  }
+  const offense = aggregate(samples, "offensiveCoverage", true);
+  const exposure = aggregate(samples, "threatExposure", false);
+  const margin = aggregate(samples, "coverageMargin", true);
   return {
     scoreDefinitionVersion: "stress-robustness-v2",
     halfWipeThreshold: HALF_WIPE_THRESHOLD,
     samples,
-    offense: aggregate(samples, "offensiveCoverage", true),
-    exposure: aggregate(samples, "threatExposure", false),
-    margin: aggregate(samples, "coverageMargin", true),
+    offense,
+    exposure,
+    margin,
     phaseDependence: {
       shootingCoverageMean: weightedMean(samples, "shootingCoverage"),
       fightCoverageMean: weightedMean(samples, "fightCoverage"),
@@ -429,7 +526,9 @@ export function computeStressRobustness(
       fightExposureMean: weightedMean(samples, "fightExposure"),
     },
     units: unitRobustness(report, portfolio, samples),
-    confidence,
+    confidence: legacyCoverageConfidence,
+    coverageCompleteness,
+    evidenceConfidence,
     warnings,
   };
 }
@@ -603,6 +702,8 @@ export function stressFindings(
   portfolio: TesseraStressPortfolio,
 ): TesseraStressFinding[] {
   const findings: TesseraStressFinding[] = [];
+  const evidenceConfidence =
+    robustness.evidenceConfidence ?? "ambiguous";
   const itemByTemplate = new Map(
     portfolio.items.map((item) => [item.templateId, item]),
   );
@@ -617,7 +718,7 @@ export function stressFindings(
         findingId: findingId("robust-answer", unit.instanceId),
         kind: "robust-answer",
         severity: "info",
-        confidence: "high",
+        confidence: capEvidenceConfidence("high", evidenceConfidence),
         summary: `${unit.label} provides meaningful half-wipe coverage across ${unit.supportingTemplateIds.length} faction proxies.`,
         templateIds: unit.supportingTemplateIds,
         supportingWeight: unit.answerBreadth,
@@ -628,7 +729,7 @@ export function stressFindings(
         findingId: findingId("conditional-answer", unit.instanceId),
         kind: "conditional-answer",
         severity: "info",
-        confidence: "review",
+        confidence: capEvidenceConfidence("review", evidenceConfidence),
         summary: `${unit.label} is useful into a narrower subset of the prepared faction portfolio.`,
         templateIds: unit.supportingTemplateIds,
         supportingWeight: unit.answerBreadth,
@@ -640,13 +741,11 @@ export function stressFindings(
         findingId: findingId("archetype-risk", unit.instanceId),
         kind: "archetype-risk",
         severity: "warn",
-        confidence: "review",
+        confidence: capEvidenceConfidence("review", evidenceConfidence),
         summary: `${unit.label} is materially exposed in ${Math.round(
           unit.exposedWeight * 100,
         )}% of the equal-weight prepared portfolio.`,
-        templateIds: robustness.samples
-          .filter((sample) => sample.status === "confident")
-          .map((sample) => sample.templateId),
+        templateIds: unit.exposedTemplateIds,
         supportingWeight: unit.exposedWeight,
         unitInstanceIds: [unit.instanceId],
       });
@@ -660,7 +759,10 @@ export function stressFindings(
       findingId: findingId("universal-gap", "offense"),
       kind: "universal-gap",
       severity: "warn",
-      confidence: robustness.confidence === "complete" ? "high" : "review",
+      confidence: capEvidenceConfidence(
+        robustness.confidence === "complete" ? "high" : "review",
+        evidenceConfidence,
+      ),
       summary:
         "No prepared proxy reaches 50% offensive point coverage under the screening threshold.",
       templateIds: robustness.samples.map((sample) => sample.templateId),
@@ -676,7 +778,7 @@ export function stressFindings(
       kind: "insufficient-confidence",
       severity: "warn",
       confidence: "ambiguous",
-      summary: `${sample.templateId} lacks enough non-ambiguous point coverage for a confident portfolio conclusion.`,
+      summary: `${sample.templateId} lacks enough non-ambiguous point coverage for a quantitatively complete portfolio conclusion.`,
       templateIds: [sample.templateId],
       supportingWeight: sample.weight,
       unitInstanceIds: [],

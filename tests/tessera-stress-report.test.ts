@@ -20,6 +20,21 @@ function stressReport(): TesseraStressTestReport {
     generatedAt: "2026-07-28T19:00:00.000Z",
     source: "tessera-ui",
     status: "degraded",
+    statusExplanation:
+      "Six unique proxies are confident with verified integrity.",
+    integrity: {
+      status: "verified",
+      issues: [],
+    },
+    recovery: {
+      manifest: "stress-manifest.json",
+      screeningAttempts: 6,
+      deepDiveAttempts: 3,
+      exhaustedTemplates: [],
+      nextActions: [],
+      verifiedPreparedPlayer: true,
+      verifiedPreparedOpponents: 6,
+    },
     player: {
       rosterId: "player",
       rosterName: "Auric & Bastion",
@@ -260,6 +275,8 @@ function stressReport(): TesseraStressTestReport {
           composition: "mixed",
           weight: 0.125,
           status: "confident",
+          coverageCompleteness: "complete",
+          evidenceConfidence: "review",
           offensiveCoverage: 0.68,
           threatExposure: 0.42,
           coverageMargin: 0.26,
@@ -275,6 +292,7 @@ function stressReport(): TesseraStressTestReport {
       offense: {
         sampleCount: 8,
         usableWeight: 1,
+        evidenceConfidence: "review",
         worst: 0.41,
         lowerTail: 0.44,
         median: 0.64,
@@ -284,6 +302,7 @@ function stressReport(): TesseraStressTestReport {
       exposure: {
         sampleCount: 8,
         usableWeight: 1,
+        evidenceConfidence: "review",
         worst: 0.67,
         lowerTail: 0.63,
         median: 0.44,
@@ -293,6 +312,7 @@ function stressReport(): TesseraStressTestReport {
       margin: {
         sampleCount: 8,
         usableWeight: 1,
+        evidenceConfidence: "review",
         worst: -0.22,
         lowerTail: -0.18,
         median: 0.18,
@@ -313,9 +333,12 @@ function stressReport(): TesseraStressTestReport {
           answerBreadth: 0.75,
           exposedWeight: 0.25,
           supportingTemplateIds: [maliciousTemplate],
+          exposedTemplateIds: [],
         },
       ],
       confidence: "review",
+      coverageCompleteness: "degraded",
+      evidenceConfidence: "review",
       warnings: [],
     },
     missionReadiness: {
@@ -374,7 +397,7 @@ function stressReport(): TesseraStressTestReport {
         findingId: "finding-1",
         kind: "robust-answer",
         severity: "info",
-        confidence: "high",
+        confidence: "review",
         summary:
           'Allarus remain effective.</script><script>alert("finding")</script>',
         templateIds: [maliciousTemplate],
@@ -408,6 +431,18 @@ test("renders a complete, safe faction stress-test report", () => {
   const html = renderTesseraStressTestReportHtml(stressReport());
 
   assert.match(html, /Suite coverage/);
+  assert.match(html, /Reliability and recovery/);
+  assert.match(
+    html,
+    /Six unique proxies are quantitatively complete with verified integrity/,
+  );
+  assert.match(html, /Quantitative coverage completeness/);
+  assert.match(html, /Evidence confidence/);
+  assert.doesNotMatch(html, /unique proxies are confident/i);
+  assert.match(
+    html,
+    /<td>combined<\/td>[\s\S]*?<span class="badge warn">review<\/span>/,
+  );
   assert.match(html, /Robustness ranges/);
   assert.match(html, /Coverage versus exposure/);
   assert.match(html, /Representative deep dives/);

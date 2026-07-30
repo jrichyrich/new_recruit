@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -13,14 +14,21 @@ import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 
 import {
+  analyzeMissionReadiness,
+  assessMissionReadinessRevisionGuardrail,
   buildRoster,
+  exportRoster,
+  getNewRecruitFactionSummary,
+  inspectEnrichedProfileRequirements,
   modifyRoster,
+  newRecruitCatalogue,
   validateRoster,
   type EnrichedRoszSummary,
   type NewRecruitDelivery,
   type ResultEnvelope,
   type RosterDraftV1,
   type TesseraDirection,
+  type TesseraFinding,
   type TesseraMetric,
   type TesseraPhase,
 } from "../lib/rosterpilot";
@@ -30,10 +38,18 @@ import type {
   TesseraBrowserResult,
   TesseraScenario,
 } from "../local/tessera/browser";
+import { TesseraAutomationError } from "../local/tessera/browser";
+import { missionReadinessIsNoWorse } from "../local/tessera/candidate-quality";
 import {
   analyzeRosterMatchup,
   compareRosterRevision,
 } from "../local/tessera/companion";
+import {
+  aggregateProfileRequirements,
+  ProfilePolicySchema,
+  profilePolicyScaffold,
+  validateProfilePolicy,
+} from "../local/tessera/profile-policy";
 
 function roster(
   faction: string,
@@ -56,12 +72,206 @@ function roster(
   return built.data;
 }
 
+test("profile policies preserve duplicate unit sizes and migrate unambiguous legacy entries", () => {
+  const requirements = [
+    {
+      faction: "orks",
+      unit: "Gork’s Ladz",
+      selectionId: "unit-10",
+      unitOccurrence: 1,
+      modelCount: 10,
+      weaponGroup: "Gork’s klaw",
+      phase: "fight" as const,
+      availableProfiles: ["Strike", "Sweep"],
+      activeCount: 10,
+      selectedProfile: null,
+    },
+    {
+      faction: "orks",
+      unit: "Gork’s Ladz",
+      selectionId: "unit-20",
+      unitOccurrence: 1,
+      modelCount: 20,
+      weaponGroup: "Gork’s klaw",
+      phase: "fight" as const,
+      availableProfiles: ["Strike", "Sweep"],
+      activeCount: 20,
+      selectedProfile: null,
+    },
+  ];
+  const scaffold = profilePolicyScaffold(requirements);
+  assert.deepEqual(
+    scaffold.entries.map((entry) => [
+      entry.modelCount,
+      entry.unitOccurrence,
+      entry.activeCount,
+    ]),
+    [
+      [10, 1, 10],
+      [20, 1, 20],
+    ],
+  );
+  const policy = {
+    ...scaffold,
+    entries: scaffold.entries.map((entry) => ({
+      ...entry,
+      unit: "Gork's Ladz",
+      weaponGroup: "Gork's klaw",
+      selectedProfile: entry.modelCount === 10 ? "Sweep" : "Strike",
+    })),
+  };
+  assert.equal(validateProfilePolicy(requirements, policy).valid, true);
+
+  const legacy = ProfilePolicySchema.parse({
+    schemaVersion: 1,
+    policyKind: "tessera-profile-policy",
+    entries: [
+      {
+        faction: "orks",
+        unit: "Gork's Ladz",
+        weaponGroup: "Gork's klaw",
+        phase: "fight",
+        selectedProfile: "Sweep",
+        activeCount: 10,
+      },
+    ],
+  });
+  assert.equal(
+    validateProfilePolicy([requirements[0]], legacy).valid,
+    true,
+  );
+  assert.equal(
+    validateProfilePolicy(requirements, legacy).valid,
+    false,
+  );
+});
+
+test("enriched profile inventory distinguishes same-name unit sizes and occurrences", () => {
+  const alternateUnit = (
+    id: string,
+    models: number,
+    apostrophe: "'" | "’",
+  ) => `
+    <selection id="${id}" name="Gork${apostrophe}s Ladz" number="1" type="unit">
+      <selections>
+        <selection id="${id}-models" name="Ladz" number="${models}" type="model"/>
+        <selection id="${id}-weapon" name="Gork${apostrophe}s klaw" number="${models}" type="upgrade">
+          <profiles>
+            <profile name="➤ Gork${apostrophe}s klaw - Strike" typeName="Melee Weapons"/>
+            <profile name="➤ Gork${apostrophe}s klaw - Sweep" typeName="Melee Weapons"/>
+          </profiles>
+        </selection>
+      </selections>
+    </selection>`;
+  const xml = `<?xml version="1.0"?>
+    <roster name="Duplicate Orks" generatedBy="https://newrecruit.eu">
+      <cost name="pts" value="1000"/>
+      <forces>
+        <force name="Orks" catalogueName="Orks">
+          <selections>
+            ${alternateUnit("unit-10", 10, "’")}
+            ${alternateUnit("unit-20", 20, "'")}
+            ${alternateUnit("unit-10b", 10, "'")}
+          </selections>
+        </force>
+      </forces>
+    </roster>`;
+  const requirements = inspectEnrichedProfileRequirements(
+    zipSync({ "duplicate-orks.ros": strToU8(xml) }),
+    "orks",
+  );
+  assert.deepEqual(
+    requirements.map((requirement) => [
+      requirement.modelCount,
+      requirement.unitOccurrence,
+      requirement.activeCount,
+    ]),
+    [
+      [10, 1, 10],
+      [10, 2, 10],
+      [20, 1, 20],
+    ],
+  );
+});
+
+test("enriched profile inventory accepts no-arrow sibling variants without treating ordinary hyphenated names as alternates", () => {
+  const xml = `<?xml version="1.0"?>
+    <roster name="No-arrow profiles" generatedBy="https://newrecruit.eu">
+      <cost name="pts" value="1000"/>
+      <forces>
+        <force name="Death Guard" catalogueName="Death Guard">
+          <selections>
+            <selection id="defiler-1" name="Defiler" number="1" type="unit">
+              <selections>
+                <selection id="models-1" name="Defiler" number="1" type="model"/>
+                <selection id="claws-1" name="Shearing claws" number="1" type="upgrade">
+                  <profiles>
+                    <profile name="Shearing claws - strike" typeName="Melee Weapons"/>
+                    <profile name="Shearing claws - sweep" typeName="Melee Weapons"/>
+                  </profiles>
+                </selection>
+                <selection id="ordinary-1" name="Star engines - port" number="1" type="upgrade">
+                  <profiles>
+                    <profile name="Star engines - port" typeName="Ranged Weapons"/>
+                  </profiles>
+                </selection>
+                <selection id="single-1" name="One-mode weapon" number="1" type="upgrade">
+                  <profiles>
+                    <profile name="One-mode weapon - standard" typeName="Ranged Weapons"/>
+                  </profiles>
+                </selection>
+              </selections>
+            </selection>
+          </selections>
+        </force>
+      </forces>
+    </roster>`;
+  const requirements = inspectEnrichedProfileRequirements(
+    zipSync({ "no-arrow.ros": strToU8(xml) }),
+    "death-guard",
+  );
+  assert.deepEqual(
+    requirements.map((requirement) => ({
+      unit: requirement.unit,
+      weaponGroup: requirement.weaponGroup,
+      phase: requirement.phase,
+      profiles: requirement.availableProfiles,
+      activeCount: requirement.activeCount,
+    })),
+    [
+      {
+        unit: "Defiler",
+        weaponGroup: "Shearing claws",
+        phase: "fight",
+        profiles: ["strike", "sweep"],
+        activeCount: 1,
+      },
+    ],
+  );
+});
+
 function summaryFor(roster: RosterDraftV1): EnrichedRoszSummary {
+  const faction = getNewRecruitFactionSummary(roster.factionId)!;
   return {
     rosterName: roster.name,
     factionName: roster.factionName,
     totalPoints: roster.totalPoints,
     generatedBy: "https://newrecruit.eu",
+    observedNewRecruitCatalogue: {
+      source: "new-recruit-enriched-rosz",
+      gameSystem: {
+        id: newRecruitCatalogue.gameSystem.id,
+        name: newRecruitCatalogue.gameSystem.name,
+        revision: roster.sourceData.newRecruit.gameSystemRevision,
+      },
+      catalogues: [
+        {
+          id: faction.catalogue.id,
+          name: faction.catalogue.name,
+          revision: roster.sourceData.newRecruit.catalogueRevision,
+        },
+      ],
+    },
     profileCount: 12,
     weaponProfileCount: 8,
     units: roster.units.map((unit) => ({
@@ -220,7 +430,7 @@ function occurrenceAt(
   return (
     roster.units
       .slice(0, index + 1)
-      .filter((unit) => unit.name === name).length - 1
+      .filter((unit) => unit.name === name).length
   );
 }
 
@@ -236,6 +446,22 @@ function rawScenario(
   const targets =
     direction === "player-to-opponent" ? opponent : player;
   const value = metricValue(metric, direction);
+  const cells = attackers.units.flatMap((attacker, attackerIndex) =>
+    targets.units.map((target, targetIndex) => ({
+      attacker: attacker.name,
+      target: target.name,
+      direction,
+      attackerIndex,
+      targetIndex,
+      attackerOccurrence: occurrenceAt(attackers, attackerIndex),
+      targetOccurrence: occurrenceAt(targets, targetIndex),
+      metricValue: value,
+      killProbability:
+        metric === "wipe-probability" ? value : null,
+      expectedDamage: metric === "mean-damage" ? value : null,
+      damagePer100Points: null,
+    })),
+  );
   return {
     id: `${phase}:${direction}:${metric}`,
     phase,
@@ -247,22 +473,16 @@ function rawScenario(
       Direction: direction,
     },
     iterations: 1_000,
-    cells: attackers.units.flatMap((attacker, attackerIndex) =>
-      targets.units.map((target, targetIndex) => ({
-        attacker: attacker.name,
-        target: target.name,
-        direction,
-        attackerIndex,
-        targetIndex,
-        attackerOccurrence: occurrenceAt(attackers, attackerIndex),
-        targetOccurrence: occurrenceAt(targets, targetIndex),
-        metricValue: value,
-        killProbability:
-          metric === "wipe-probability" ? value : null,
-        expectedDamage: metric === "mean-damage" ? value : null,
-        damagePer100Points: null,
-      })),
-    ),
+    cells,
+    matrixSha256: crypto
+      .createHash("sha256")
+      .update(JSON.stringify({ phase, metric, direction, cells }))
+      .digest("hex"),
+    integrity: {
+      status: "trusted",
+      issueCodes: [],
+      aliasedScenarioIds: [],
+    },
   };
 }
 
@@ -304,18 +524,49 @@ function fullBrowserResult(
 }
 
 test("consolidates a full 16-matrix run into four complete scenarios with stable duplicate labels", async () => {
-  const player = roster(
+  let player = roster(
     "adeptus-custodes",
     2_000,
     "Duplicate Unit Player",
     ["objective"],
   );
+  const removable = [...player.units]
+    .filter((unit) => !unit.isWarlord && unit.points >= 90)
+    .sort((left, right) => left.points - right.points)[0];
+  assert.ok(removable);
+  const removed = modifyRoster(player, {
+    type: "remove",
+    selectionId: removable.selectionId,
+  });
+  assert.ok(removed.data);
+  player = removed.data;
+  const existingProsecutors = player.units.filter(
+    (unit) => unit.name === "Prosecutors",
+  ).length;
+  for (
+    let duplicate = existingProsecutors;
+    duplicate < 2;
+    duplicate += 1
+  ) {
+    const added = modifyRoster(player, {
+      type: "add",
+      unitId: "prosecutors",
+    });
+    assert.ok(added.data);
+    player = added.data;
+  }
+  const toppedUp = modifyRoster(player, {
+    type: "add",
+    unitId: "vigilators",
+  });
+  assert.ok(toppedUp.data);
+  player = toppedUp.data;
   const opponent = roster("necrons", 2_000, "Core V2 Opponent", [
     "objective",
   ]);
-  assert.equal(
-    player.units.filter((unit) => unit.name === "Prosecutors").length,
-    2,
+  assert.ok(
+    player.units.filter((unit) => unit.name === "Prosecutors")
+      .length >= 2,
     "fixture must contain duplicate Prosecutors units",
   );
   const directory = await mkdtemp(
@@ -336,14 +587,30 @@ test("consolidates a full 16-matrix run into four complete scenarios with stable
         deliver: deliveryDependency(directory),
         runBrowser: async (input) => {
           browserInputs.push(input);
-          return fullBrowserResult(player, opponent);
+          const result = fullBrowserResult(player, opponent);
+          for (const scenario of result.scenarios) {
+            for (const cell of scenario.cells) {
+              // Tessera may reorder its rendered matrix. Canonical unit
+              // identity must come from the captured labels and occurrence,
+              // never these presentation indexes.
+              cell.attackerIndex += 100;
+              cell.targetIndex += 100;
+            }
+          }
+          return result;
         },
       },
     );
 
-    assert.equal(analyzed.ok, true);
+    assert.equal(
+      analyzed.ok,
+      true,
+      analyzed.violations
+        .map((violation) => `${violation.code}: ${violation.message}`)
+        .join("\n"),
+    );
     assert.ok(analyzed.data);
-    assert.equal(analyzed.data.schemaVersion, 2);
+    assert.equal(analyzed.data.schemaVersion, 3);
     assert.equal(analyzed.data.status, "complete");
     assert.equal(analyzed.data.comparisonClass, "matched");
     assert.deepEqual(analyzed.data.configuration?.phases, [
@@ -398,14 +665,24 @@ test("consolidates a full 16-matrix run into four complete scenarios with stable
           .map((cell) => [cell.attacker.instanceId, cell.attacker]),
       ).values(),
     ];
-    assert.equal(duplicateInstances.length, 2);
-    assert.equal(new Set(duplicateInstances.map((unit) => unit.label)).size, 2);
+    const expectedDuplicateUnits = player.units.filter(
+      (unit) => unit.name === "Prosecutors",
+    );
+    assert.equal(
+      duplicateInstances.length,
+      expectedDuplicateUnits.length,
+    );
+    assert.equal(
+      new Set(duplicateInstances.map((unit) => unit.label)).size,
+      expectedDuplicateUnits.length,
+    );
     assert.deepEqual(
       duplicateInstances.map((unit) => unit.label),
-      [
-        "Prosecutors — 6 models — 75 pts — Unit 1",
-        "Prosecutors — 10 models — 85 pts — Unit 2",
-      ],
+      expectedDuplicateUnits
+        .map(
+          (unit, index) =>
+            `Prosecutors — ${unit.modelCount} models — ${unit.points} pts — Unit ${index + 1}`,
+        ),
     );
 
     const findingKinds = new Set(
@@ -420,11 +697,37 @@ test("consolidates a full 16-matrix run into four complete scenarios with stable
     const candidates = analyzed.data.changeCandidates ?? [];
     assert.ok(candidates.length > 0);
     assert.ok(candidates.length <= 3);
+    const baselineReadiness = analyzeMissionReadiness(player);
+    assert.ok(baselineReadiness.data);
     for (const candidate of candidates) {
       const modified = modifyRoster(player, candidate.operation);
       assert.equal(modified.ok, true, candidate.title);
       assert.ok(modified.data);
       assert.equal(validateRoster(modified.data).ok, true, candidate.title);
+      assert.ok(
+        modified.data.totalPoints / modified.data.pointsLimit >= 0.98,
+        `${candidate.title} must use at least 98% of the points limit`,
+      );
+      const exported = await exportRoster(modified.data, "rosz");
+      assert.equal(exported.ok, true, candidate.title);
+      const revisedReadiness = analyzeMissionReadiness(modified.data);
+      assert.ok(revisedReadiness.data);
+      assert.equal(
+        assessMissionReadinessRevisionGuardrail(
+          baselineReadiness.data,
+          revisedReadiness.data,
+        ).accepted,
+        true,
+        candidate.title,
+      );
+      assert.equal(
+        missionReadinessIsNoWorse(
+          baselineReadiness.data,
+          revisedReadiness.data,
+        ),
+        true,
+        candidate.title,
+      );
       assert.equal(candidate.beforePoints, player.totalPoints);
       assert.equal(candidate.afterPoints, modified.data.totalPoints);
       assert.ok(
@@ -433,6 +736,426 @@ test("consolidates a full 16-matrix run into four complete scenarios with stable
             (finding) => finding.findingId === findingId,
           ),
         ),
+      );
+      for (const findingId of candidate.evidenceFindingIds) {
+        const citedFinding: TesseraFinding | undefined =
+          analyzed.data.findings?.find(
+          (entry) => entry.findingId === findingId,
+        );
+        assert.ok(citedFinding);
+        assert.equal(citedFinding.severity, "warn");
+        assert.notEqual(citedFinding.confidence, "ambiguous");
+        const selectionId =
+          "selectionId" in candidate.operation
+            ? candidate.operation.selectionId
+            : null;
+        assert.ok(
+          citedFinding.kind === "role-gap" ||
+            (selectionId !== null &&
+              (citedFinding.unitInstanceIds.includes(selectionId) ||
+                citedFinding.evidence.some((entry) => {
+                  const affectedPlayerId =
+                    entry.direction === "player-to-opponent"
+                      ? entry.attackerInstanceId
+                      : entry.targetInstanceId;
+                  return affectedPlayerId === selectionId;
+                }))),
+          `${candidate.title} must cite an affected unit or role gap`,
+        );
+      }
+      if (candidate.operation.type === "replace") {
+        const replacedSelectionId =
+          candidate.operation.selectionId;
+        assert.equal(
+          analyzed.data.findings?.some(
+            (finding) =>
+              finding.kind === "reliable-coverage" &&
+              finding.evidence.some(
+                (entry) =>
+                  entry.direction === "player-to-opponent" &&
+                  entry.attackerInstanceId ===
+                    replacedSelectionId,
+              ),
+          ),
+          false,
+          `${candidate.title} must not replace a reliable answer`,
+        );
+      }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("suppresses standalone findings and roster changes when captured evidence is aliased", async () => {
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Aliased Evidence Player",
+  );
+  const opponent = roster(
+    "aeldari",
+    1_000,
+    "Aliased Evidence Opponent",
+  );
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-aliased-evidence-v2-"),
+  );
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        experimental: true,
+        analysisMode: "full",
+        outputDirectory: path.join(directory, "report"),
+        allowOutsideRoot: true,
+      },
+      {
+        deliver: deliveryDependency(directory),
+        runBrowser: async () => {
+          const result = fullBrowserResult(player, opponent);
+          const aliased = result.scenarios.find(
+            (scenario) =>
+              scenario.phase === "shooting" &&
+              scenario.direction === "player-to-opponent" &&
+              scenario.metric === "wipe-probability",
+          );
+          assert.ok(aliased?.matrixSha256);
+          aliased.integrity = {
+            status: "aliased",
+            issueCodes: ["TESSERA_PHASE_MATRIX_ALIAS"],
+            aliasedScenarioIds: [
+              "fight:player-to-opponent:wipe-probability",
+            ],
+          };
+          result.integrityIssues = [
+            {
+              code: "TESSERA_PHASE_MATRIX_ALIAS",
+              scenarioIds: [
+                aliased.id,
+                "fight:player-to-opponent:wipe-probability",
+              ],
+              matrixSha256: aliased.matrixSha256,
+              message:
+                "Synthetic alias proves that partial standalone evidence must not produce claims.",
+            },
+          ];
+          result.warnings.push(
+            "[TESSERA_PHASE_MATRIX_ALIAS] Synthetic aliased matrix.",
+          );
+          return result;
+        },
+      },
+    );
+
+    assert.equal(analyzed.ok, false);
+    assert.ok(analyzed.data);
+    assert.equal(analyzed.data.status, "inconclusive");
+    assert.ok(
+      analyzed.data.simulation.scenarios?.some(
+        (scenario) => scenario.status === "partial",
+      ),
+    );
+    assert.deepEqual(analyzed.data.findings, []);
+    assert.deepEqual(analyzed.data.changeCandidates, []);
+    assert.deepEqual(analyzed.data.strengths, []);
+    assert.deepEqual(analyzed.data.weaknesses, []);
+    assert.deepEqual(analyzed.data.suggestions, []);
+    assert.match(
+      analyzed.data.warnings.join("\n"),
+      /findings and roster-change candidates were suppressed/i,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("requested simulation with zero matrices fails with retained preparation data", async () => {
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Strict Simulation Player",
+  );
+  const opponent = roster(
+    "necrons",
+    1_000,
+    "Strict Simulation Opponent",
+  );
+  const requirements = aggregateProfileRequirements([player, opponent]);
+  const profilePolicy = {
+    schemaVersion: 1 as const,
+    policyKind: "tessera-profile-policy" as const,
+    entries: requirements.map((requirement) => ({
+      faction: requirement.faction,
+      unit: requirement.unit,
+      weaponGroup: requirement.weaponGroup,
+      phase: requirement.phase,
+      selectedProfile: requirement.availableProfiles[0],
+      activeCount: requirement.activeCount,
+    })),
+  };
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-strict-failure-"),
+  );
+  const deliverFixture = deliveryDependency(directory);
+  let deliveryCalls = 0;
+  const deliver = async (
+    roster: RosterDraftV1,
+    options?: NewRecruitDeliveryOptions,
+  ) => {
+    deliveryCalls += 1;
+    return deliverFixture(roster, options);
+  };
+  const runBrowser = async () => {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      "The imported list did not hydrate in the selector.",
+    );
+  };
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        executionMode: "simulate",
+        fallbackMode: "baseline-damage-v1",
+        profilePolicy,
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+      },
+      {
+        deliver,
+        runBrowser,
+      },
+    );
+    assert.equal(analyzed.ok, false);
+    assert.ok(analyzed.data);
+    assert.equal(analyzed.data.status, "failed");
+    assert.equal(analyzed.data.source, "tessera-ui-failed");
+    assert.equal(analyzed.data.preparation?.status, "complete");
+    assert.equal(analyzed.data.simulation.status, "failed");
+    assert.equal(analyzed.data.simulation.matrices.length, 0);
+    assert.ok(
+      analyzed.data.failures?.some(
+        (failure) =>
+          failure.code === "TESSERA_LIST_SELECTION_MISMATCH",
+      ),
+    );
+    assert.equal(analyzed.data.artifacts.length, 3);
+    assert.equal(
+      analyzed.data.supplementalAnalyses?.[0]?.engine,
+      "baseline-damage-v1",
+    );
+    assert.equal(analyzed.data.status, "failed");
+    const serialized = JSON.parse(
+      await readFile(analyzed.data.artifacts[0].written, "utf8"),
+    ) as {
+      artifacts: unknown[];
+      status: string;
+      runtime: { buildId: string };
+      profilePolicyHash: string;
+      pinnedData: { releaseId: string };
+      failures: Array<{
+        stage: string;
+        code: string;
+        opponentName: string | null;
+        retryable: boolean;
+      }>;
+    };
+    assert.equal(serialized.status, "failed");
+    assert.equal(serialized.artifacts.length, 3);
+    assert.ok(serialized.runtime.buildId);
+    assert.match(serialized.profilePolicyHash, /^[0-9a-f]{64}$/);
+    assert.equal(
+      serialized.pinnedData.releaseId,
+      player.sourceData.releaseId,
+    );
+    assert.ok(
+      serialized.failures.some(
+        (failure) =>
+          failure.stage === "simulation" &&
+          failure.code === "TESSERA_LIST_SELECTION_MISMATCH" &&
+          failure.retryable,
+      ),
+    );
+    const deliveryCallsAfterFirstAttempt = deliveryCalls;
+    const retried = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        executionMode: "simulate",
+        fallbackMode: "baseline-damage-v1",
+        profilePolicy,
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        overwrite: true,
+      },
+      { deliver, runBrowser },
+    );
+    assert.equal(retried.ok, false);
+    assert.equal(retried.data?.status, "failed");
+    assert.equal(deliveryCalls, deliveryCallsAfterFirstAttempt);
+    assert.equal(retried.data?.preparation?.cacheReuses, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("strict direct simulation requires profile policy before delivery", async () => {
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Policy Preflight Player",
+  );
+  const opponent = roster(
+    "necrons",
+    1_000,
+    "Policy Preflight Opponent",
+  );
+  assert.ok(
+    aggregateProfileRequirements([player, opponent]).length > 0,
+  );
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-policy-preflight-"),
+  );
+  let deliveries = 0;
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        executionMode: "simulate",
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+      },
+      {
+        deliver: async () => {
+          deliveries += 1;
+          throw new Error("Delivery must not run before profile preflight.");
+        },
+      },
+    );
+    assert.equal(analyzed.ok, false);
+    assert.equal(analyzed.data, null);
+    assert.equal(
+      analyzed.violations[0]?.code,
+      "TESSERA_PROFILE_POLICY_REQUIRED",
+    );
+    assert.equal(deliveries, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("stale runtime identity blocks direct preparation before mutation", async () => {
+  const player = roster("adeptus-custodes", 1_000, "Runtime Player");
+  const opponent = roster("aeldari", 1_000, "Runtime Opponent");
+  let deliveries = 0;
+  const result = await analyzeRosterMatchup(
+    player,
+    { kind: "roster", roster: opponent },
+    {
+      executionMode: "prepare-only",
+      outputDirectory: "unused-runtime-test",
+    },
+    {
+      runtimeIssue: () => ({
+        code: "RUNTIME_RESTART_REQUIRED",
+        message: "Synthetic stale runtime.",
+      }),
+      deliver: async () => {
+        deliveries += 1;
+        throw new Error("Delivery must not start.");
+      },
+    },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.violations[0]?.code, "RUNTIME_RESTART_REQUIRED");
+  assert.equal(deliveries, 0);
+});
+
+test("rejects underfilled anti-Aeldari change candidates from the live roster shape", async () => {
+  const builtPlayer = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1_000,
+    name: "Adeptus Custodes 1000 vs Aeldari",
+    preferences: [
+      "mobility",
+      "durability",
+      "objective",
+      "shooting",
+      "melee",
+    ],
+    requiredUnitIds: ["agamatus-custodians"],
+  });
+  assert.ok(builtPlayer.data);
+  const player: RosterDraftV1 = {
+    ...builtPlayer.data,
+    constraints: {
+      ...builtPlayer.data.constraints,
+      requiredUnitIds: [],
+    },
+  };
+  assert.equal(validateRoster(player).ok, true);
+  assert.ok(
+    player.units.some(
+      (unit) => unit.unitId === "agamatus-custodians",
+    ),
+  );
+  assert.ok(player.totalPoints >= 950);
+  const opponent = roster("aeldari", 1_000, "Unknown Aeldari Proxy");
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-candidate-quality-v2-"),
+  );
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        experimental: true,
+        analysisMode: "full",
+        outputDirectory: path.join(directory, "report"),
+        allowOutsideRoot: true,
+      },
+      {
+        deliver: deliveryDependency(directory),
+        runBrowser: async () => {
+          const result = fullBrowserResult(player, opponent);
+          for (const scenario of result.scenarios ?? []) {
+            if (scenario.direction !== "player-to-opponent") continue;
+            if (scenario.metric === "wipe-probability") {
+              for (const cell of scenario.cells) {
+                cell.metricValue = 0.1;
+                cell.killProbability = 0.1;
+              }
+            }
+            if (scenario.metric === "half-wipe-probability") {
+              for (const cell of scenario.cells) {
+                cell.metricValue = 0.2;
+              }
+            }
+          }
+          return result;
+        },
+      },
+    );
+    assert.equal(
+      analyzed.ok,
+      true,
+      analyzed.violations
+        .map((violation) => `${violation.code}: ${violation.message}`)
+        .join("\n"),
+    );
+    assert.ok(analyzed.data);
+    for (const candidate of analyzed.data.changeCandidates ?? []) {
+      assert.ok(
+        candidate.afterPoints >= 980,
+        `${candidate.title} returned an underfilled ${candidate.afterPoints}-point roster`,
+      );
+      assert.doesNotMatch(
+        candidate.title,
+        /Replace Agamatus Custodians with (Prosecutors|Witchseekers|Knight-Centura)/,
       );
     }
   } finally {
@@ -694,9 +1417,13 @@ test("reruns an approved same-faction revision against the baseline scenarios", 
     );
     assert.equal(baseline.ok, true);
     assert.ok(baseline.data);
-    const candidate = baseline.data.changeCandidates?.[0];
-    assert.ok(candidate);
-    const modified = modifyRoster(player, candidate.operation);
+    const modified = buildRoster({
+      faction: "adeptus-custodes",
+      pointsLimit: 2_000,
+      name: "Approved Revision",
+      preferences: ["objective"],
+      excludedUnitIds: ["custodian-guard"],
+    });
     assert.equal(modified.ok, true);
     assert.ok(modified.data);
 
