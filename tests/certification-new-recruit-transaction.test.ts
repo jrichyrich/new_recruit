@@ -340,6 +340,7 @@ test("a lost local-agent response after dispatch is uncertain and durably blocks
               allowOutsideRoot: true,
               downloadEnrichedRosz: true,
               downloadPrettyHtml: false,
+              mutationReceiptMode: "external",
             },
             {
               platform: "darwin",

@@ -17,6 +17,8 @@ const supportedProfiles = new Set(["core", "mcp", "new-recruit", "tessera"]);
 const supportedRefreshModes = new Set(["skip", "check", "apply"]);
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const ensureCurrentNextStep =
+  'Run "npm run rosterpilot -- agent ensure-current" from this checkout.';
 
 export class SetupError extends Error {}
 
@@ -291,8 +293,8 @@ function runRosterPilot(action, dependencies) {
   );
 }
 
-function addResult(results, name, status, detail) {
-  results.push({ name, status, detail });
+function addResult(results, name, status, detail, nextSteps = []) {
+  results.push({ name, status, detail, nextSteps });
 }
 
 function printResults(results, dependencies) {
@@ -309,6 +311,16 @@ function printResults(results, dependencies) {
       dependencies.stdout,
       `  ${marker} ${result.name}: ${result.detail}`,
     );
+  }
+  const nextSteps = [
+    ...new Set(results.flatMap((result) => result.nextSteps ?? [])),
+  ];
+  if (nextSteps.length) {
+    outputLine(dependencies.stdout);
+    outputLine(dependencies.stdout, "Next steps");
+    for (const nextStep of nextSteps) {
+      outputLine(dependencies.stdout, `  • ${nextStep}`);
+    }
   }
 }
 
@@ -372,6 +384,7 @@ function configureMcp({ doctor, results }, dependencies) {
         "Codex MCP",
         "warning",
         `configuration is absent; run npm run setup -- --profile mcp`,
+        ['Run "npm run setup -- --profile mcp" to create the local Codex MCP configuration.'],
       );
     }
   } else if (dependencies.fs.exists(configPath)) {
@@ -640,6 +653,478 @@ async function handleFreshness(
   );
 }
 
+function diagnosticJson(label, result) {
+  let value = null;
+  if (result.stdout.trim()) {
+    try {
+      value = JSON.parse(result.stdout);
+    } catch {
+      if (!result.error && result.code === 0) {
+        return {
+          ok: false,
+          detail: `${label} returned invalid JSON.`,
+          value: null,
+        };
+      }
+    }
+  }
+  if (result.error || result.code !== 0) {
+    return {
+      ok: false,
+      detail: commandFailure(label, result).message,
+      value,
+    };
+  }
+  return {
+    ok: true,
+    detail: "",
+    value,
+  };
+}
+
+function diagnoseCommand(
+  results,
+  {
+    name,
+    label,
+    result,
+    readyDetail,
+    nextSteps,
+  },
+) {
+  if (result.error || result.code !== 0) {
+    addResult(
+      results,
+      name,
+      "error",
+      commandFailure(label, result).message,
+      nextSteps,
+    );
+    return false;
+  }
+  addResult(results, name, "ready", readyDetail);
+  return true;
+}
+
+function diagnoseLocalAutomation(profile, dependencies, results) {
+  if (dependencies.platform !== "darwin") {
+    addResult(
+      results,
+      "Local automation platform",
+      "error",
+      `${profile} readiness requires macOS; this host reports ${dependencies.platform}`,
+      ["Use the core or mcp profile on this host."],
+    );
+    return;
+  }
+
+  const swiftReady = dependencies.fs.isExecutable("/usr/bin/swiftc");
+  addResult(
+    results,
+    "Swift toolchain",
+    swiftReady ? "ready" : "error",
+    swiftReady
+      ? "Apple Swift compiler is available"
+      : "Swift is unavailable, so the Keychain broker cannot be built",
+    swiftReady
+      ? []
+      : [
+          "Install the Apple command-line developer tools, then rerun Doctor.",
+        ],
+  );
+  const browserReady = dependencies.fs.isExecutable(chromePath);
+  addResult(
+    results,
+    "Google Chrome",
+    browserReady ? "ready" : "error",
+    browserReady
+      ? `${chromePath} is executable`
+      : `Chrome is not executable at ${chromePath}`,
+    browserReady
+      ? []
+      : ["Install Google Chrome in /Applications, then rerun Doctor."],
+  );
+
+  const agentResponse = diagnosticJson(
+    "RosterPilot local-agent status",
+    runRosterPilot(["agent", "status"], dependencies),
+  );
+  if (!agentResponse.ok && !agentResponse.value) {
+    addResult(
+      results,
+      "Local agent",
+      "error",
+      agentResponse.detail,
+      [ensureCurrentNextStep],
+    );
+  } else {
+    const agent = agentResponse.value;
+    const agentReady = agent.ok === true && agent.running === true;
+    const buildId = agent.status?.runtime?.buildId;
+    addResult(
+      results,
+      "Local agent",
+      agentReady ? "ready" : "error",
+      agentReady
+        ? `running from the current checkout${buildId ? ` (build ${buildId})` : ""}`
+        : `${agent.code ?? "LOCAL_AGENT_UNAVAILABLE"}: ${agent.message ?? "the installed agent is not current and ready"}`,
+      agentReady
+        ? []
+        : agent.nextSteps?.length
+          ? agent.nextSteps
+          : [ensureCurrentNextStep],
+    );
+    if (agent.status) {
+      addResult(
+        results,
+        "Keychain broker",
+        agent.status.brokerAvailable ? "ready" : "error",
+        agent.status.brokerAvailable
+          ? "the installed broker responds for local providers"
+          : `${agent.status.brokerStatusCode ?? "BROKER_UNAVAILABLE"}: the installed broker is unavailable`,
+        agent.status.brokerAvailable
+          ? []
+          : [
+              'Run "npm run rosterpilot -- agent ensure-current"; reauthorize the broker if macOS prompts.',
+            ],
+      );
+    }
+  }
+
+  const newRecruitResponse = diagnosticJson(
+    "New Recruit status",
+    runRosterPilot(["new-recruit", "status"], dependencies),
+  );
+  if (!newRecruitResponse.ok) {
+    addResult(
+      results,
+      "New Recruit",
+      "error",
+      newRecruitResponse.detail,
+      [
+        'Run "npm run rosterpilot -- new-recruit status" after repairing the local agent.',
+      ],
+    );
+  } else {
+    const status = newRecruitResponse.value.data;
+    const ready =
+      newRecruitResponse.value.ok === true && status?.available === true;
+    const localAutomationBroken =
+      status?.agentAvailable === false ||
+      status?.protocolCompatible === false ||
+      status?.installationCurrent === false ||
+      status?.runtimeCompatible === false ||
+      status?.browserAvailable === false ||
+      status?.brokerAvailable === false;
+    addResult(
+      results,
+      "New Recruit",
+      ready ? "ready" : "error",
+      ready
+        ? "browser automation and the Keychain credential are ready"
+        : `automation is unavailable${status?.credentialState ? `; credential state is ${status.credentialState}` : ""}`,
+      ready
+        ? []
+        : [
+            localAutomationBroken || status?.credentialsConfigured
+              ? ensureCurrentNextStep
+              : 'Run "npm run rosterpilot -- new-recruit configure" to securely configure the credential.',
+          ],
+    );
+  }
+
+  if (profile !== "tessera") return;
+  const tesseraResponse = diagnosticJson(
+    "Tessera status",
+    runRosterPilot(["tessera", "status"], dependencies),
+  );
+  if (!tesseraResponse.ok) {
+    addResult(
+      results,
+      "Tessera",
+      "error",
+      tesseraResponse.detail,
+      [
+        'Run "npm run rosterpilot -- tessera status" after repairing the local agent.',
+      ],
+    );
+    return;
+  }
+  const status = tesseraResponse.value.data;
+  const ready =
+    tesseraResponse.value.ok === true && status?.available === true;
+  const localAutomationBroken =
+    status?.agentAvailable === false ||
+    status?.protocolCompatible === false ||
+    status?.installationCurrent === false ||
+    status?.runtimeCompatible === false ||
+    status?.browserAvailable === false ||
+    status?.brokerAvailable === false;
+  addResult(
+    results,
+    "Tessera",
+    ready ? "ready" : "error",
+    ready
+      ? "browser automation and the Tessera licence key are ready"
+      : `automation is unavailable${status?.credentialState ? `; credential state is ${status.credentialState}` : ""}`,
+    ready
+      ? []
+      : [
+          localAutomationBroken || status?.credentialsConfigured
+            ? ensureCurrentNextStep
+            : 'Run "npm run rosterpilot -- tessera configure" to securely configure the licence key.',
+        ],
+  );
+}
+
+async function diagnoseRemoteFreshness(options, dependencies, results) {
+  if (options.refresh === "skip") {
+    addResult(
+      results,
+      "Remote data freshness",
+      "warning",
+      "live upstream check skipped; all local diagnostics still ran",
+      [
+        'Run "npm run rosterpilot -- freshness" when internet access is available.',
+      ],
+    );
+    return;
+  }
+  const response = diagnosticJson(
+    "Live freshness check",
+    runRosterPilot(["freshness"], dependencies),
+  );
+  if (!response.ok) {
+    addResult(
+      results,
+      "Remote data freshness",
+      "warning",
+      `${response.detail} Local readiness results remain valid for the pinned release.`,
+      [
+        'Retry "npm run rosterpilot -- freshness" when internet access is available.',
+      ],
+    );
+    return;
+  }
+  const state = response.value.data?.state ?? "unknown";
+  const action = freshnessAction(state);
+  addResult(
+    results,
+    "Remote data freshness",
+    action === "current" ? "ready" : "warning",
+    action === "current"
+      ? "the committed release matches the checked upstream sources"
+      : action === "offer-update"
+        ? `upstream state is ${state}; no update was applied`
+        : "one or more upstream sources could not be checked; local diagnostics are unaffected",
+    action === "current"
+      ? []
+      : action === "offer-update"
+        ? ['Run "npm run setup -- --refresh apply" after reviewing the update.']
+        : [
+            'Retry "npm run rosterpilot -- freshness" when internet access is available.',
+          ],
+  );
+}
+
+function diagnosePinnedSourceSynchronization(
+  options,
+  dependencies,
+  results,
+) {
+  if (options.refresh === "skip") {
+    addResult(
+      results,
+      "Remote pinned-source check",
+      "warning",
+      "network-backed BSData synchronization check skipped; committed data was still validated locally",
+      [
+        'Run "npm run data:sync-check" when internet access is available.',
+      ],
+    );
+    return;
+  }
+  const result = runNpmScript(
+    "data:sync-check",
+    [],
+    dependencies,
+    true,
+  );
+  if (result.error || result.code !== 0) {
+    addResult(
+      results,
+      "Remote pinned-source check",
+      "warning",
+      "the pinned BSData checkout could not be fetched; committed data was still validated locally",
+      [
+        'Retry "npm run data:sync-check" when internet access is available.',
+      ],
+    );
+    return;
+  }
+  addResult(
+    results,
+    "Remote pinned-source check",
+    "ready",
+    "generated data matches a freshly fetched pinned BSData checkout",
+  );
+}
+
+async function runDoctor(options, dependencies, results) {
+  const git = dependencies.run("git", ["--version"], {
+    capture: true,
+    cwd: dependencies.projectRoot,
+  });
+  diagnoseCommand(results, {
+    name: "Git",
+    label: "Git prerequisite",
+    result: git,
+    readyDetail: git.stdout.trim(),
+    nextSteps: ["Install Git, then rerun Doctor."],
+  });
+
+  const loaderPath = path.join(
+    dependencies.projectRoot,
+    "node_modules",
+    "tsx",
+    "dist",
+    "loader.mjs",
+  );
+  const dependenciesReady = dependencies.fs.exists(loaderPath);
+  addResult(
+    results,
+    "Dependencies",
+    dependenciesReady ? "ready" : "error",
+    dependenciesReady
+      ? "installed lockfile dependencies found"
+      : "lockfile dependencies are not installed",
+    dependenciesReady
+      ? []
+      : ['Run "npm ci", then rerun Doctor.'],
+  );
+
+  if (options.profile === "new-recruit" || options.profile === "tessera") {
+    if (dependenciesReady) {
+      diagnoseLocalAutomation(options.profile, dependencies, results);
+    } else {
+      const browserReady =
+        dependencies.platform === "darwin" &&
+        dependencies.fs.isExecutable(chromePath);
+      addResult(
+        results,
+        "Google Chrome",
+        browserReady ? "ready" : "error",
+        browserReady
+          ? `${chromePath} is executable`
+          : "Chrome or the required macOS host is unavailable",
+        browserReady
+          ? []
+          : ["Install Google Chrome in /Applications on macOS."],
+      );
+      addResult(
+        results,
+        "Local agent",
+        "error",
+        "agent diagnostics require the installed lockfile dependencies",
+        ['Run "npm ci", then rerun Doctor.'],
+      );
+    }
+  }
+
+  if (dependenciesReady) {
+    diagnoseCommand(results, {
+      name: "Roster data validation",
+      label: "Roster data validation",
+      result: runNpmScript("data:check", [], dependencies, true),
+      readyDetail: "committed roster data passes validation",
+      nextSteps: [
+        'Run "npm run data:check" and address the reported validation error.',
+      ],
+    });
+    const statusResponse = diagnosticJson(
+      "RosterPilot status",
+      runRosterPilot(["status"], dependencies),
+    );
+    if (
+      statusResponse.ok &&
+      statusResponse.value.ok &&
+      statusResponse.value.data
+    ) {
+      addResult(
+        results,
+        "Roster engine",
+        "ready",
+        `release ${statusResponse.value.data.sources.releaseId} validated`,
+      );
+    } else {
+      addResult(
+        results,
+        "Roster engine",
+        "error",
+        statusResponse.ok
+          ? "RosterPilot status did not report a ready data release."
+          : statusResponse.detail,
+        ['Run "npm run rosterpilot -- status" and resolve the reported data issue.'],
+      );
+    }
+  } else {
+    for (const name of [
+      "Roster data validation",
+      "Roster engine",
+    ]) {
+      addResult(
+        results,
+        name,
+        "error",
+        "check skipped because lockfile dependencies are missing",
+        ['Run "npm ci", then rerun Doctor.'],
+      );
+    }
+  }
+
+  if (profileIncludesMcp(options.profile)) {
+    configureMcp({ doctor: true, results }, dependencies);
+  }
+  if (dependenciesReady) {
+    diagnosePinnedSourceSynchronization(
+      options,
+      dependencies,
+      results,
+    );
+    await diagnoseRemoteFreshness(options, dependencies, results);
+  } else {
+    addResult(
+      results,
+      "Remote pinned-source check",
+      "warning",
+      "network-backed synchronization check skipped because lockfile dependencies are missing",
+      [
+        'Run "npm ci", then retry "npm run data:sync-check" when online.',
+      ],
+    );
+    addResult(
+      results,
+      "Remote data freshness",
+      "warning",
+      "live check skipped because lockfile dependencies are missing; local file checks above remain authoritative",
+      [
+        'Run "npm ci", then retry "npm run rosterpilot -- freshness" when online.',
+      ],
+    );
+  }
+
+  printResults(results, dependencies);
+  const nextSteps = [
+    ...new Set(results.flatMap((result) => result.nextSteps ?? [])),
+  ];
+  return {
+    ok: !results.some((result) => result.status === "error"),
+    options,
+    results,
+    nextSteps,
+  };
+}
+
 export async function runSetup(rawOptions, overrides = {}) {
   const dependencies = {
     ask: overrides.ask,
@@ -682,6 +1167,9 @@ export async function runSetup(rawOptions, overrides = {}) {
     }
   }
   options.refresh ??= "check";
+  if (options.doctor) {
+    return runDoctor(options, dependencies, results);
+  }
   if (options.profile === "new-recruit" || options.profile === "tessera") {
     ensureNewRecruitPrerequisites(dependencies);
   }
@@ -763,7 +1251,7 @@ export async function runSetup(rawOptions, overrides = {}) {
     dependencies,
   );
   printResults(results, dependencies);
-  return { ok: true, options, results };
+  return { ok: true, options, results, nextSteps: [] };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -774,7 +1262,8 @@ export async function main(argv = process.argv.slice(2)) {
       outputLine(process.stdout, usage(options.doctor));
       return;
     }
-    await runSetup(options);
+    const result = await runSetup(options);
+    if (!result.ok) process.exitCode = 2;
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown setup failure.";

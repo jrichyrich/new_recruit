@@ -225,6 +225,7 @@ test("delivery publishes the validated source ROSZ when the local agent is unava
         allowOutsideRoot: true,
         downloadEnrichedRosz: true,
         downloadPrettyHtml: false,
+        mutationReceiptMode: "external",
       },
       {
         platform: "darwin",
@@ -322,6 +323,7 @@ test("New Recruit catalogue drift stops before an external mutation", async () =
       allowOutsideRoot: true,
       downloadEnrichedRosz: true,
       downloadPrettyHtml: false,
+      mutationReceiptMode: "external",
     },
     {
       platform: "darwin",
@@ -356,6 +358,7 @@ test("an imported list with an invalid enriched archive is an uncertain non-retr
         allowOutsideRoot: true,
         downloadEnrichedRosz: true,
         downloadPrettyHtml: false,
+        mutationReceiptMode: "external",
       },
       {
         platform: "darwin",

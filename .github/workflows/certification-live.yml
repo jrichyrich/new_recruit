@@ -35,10 +35,12 @@ jobs:
       }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        faction:
-          - adeptus-custodes
-          - aeldari
+        canary:
+          - custodes-vs-adaptive-nine-aeldari-2000
+          - death-guard-vs-orks-exact-1000
+          - uploaded-multiprofile-exact-paired-revision
     runs-on:
       - self-hosted
       - macOS
@@ -52,23 +54,26 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run rosterpilot -- agent restart
+      - run: npm run rosterpilot -- agent ensure-current
       - name: Run live canary
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"
-          PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
-        run: |
-          args=(--tier live --faction "${{ matrix.faction }}" --out-dir ".certification/live/${{ matrix.faction }}")
-          if [[ -n "${PROFILE_POLICY_PATH}" ]]; then
-            args+=(--profile-policy "${PROFILE_POLICY_PATH}")
-          fi
-          npm run certify -- "${args[@]}"
+          ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
+          ROSTERPILOT_CANARY_MULTIPROFILE_ROSZ_PATH: ${{ vars.ROSTERPILOT_CANARY_MULTIPROFILE_ROSZ_PATH }}
+          ROSTERPILOT_CANARY_MULTIPROFILE_CONTEXT_PATH: ${{ vars.ROSTERPILOT_CANARY_MULTIPROFILE_CONTEXT_PATH }}
+          ROSTERPILOT_CANARY_PLAYER_ROSTER_PATH: ${{ vars.ROSTERPILOT_CANARY_PLAYER_ROSTER_PATH }}
+          ROSTERPILOT_CANARY_REVISED_ROSTER_PATH: ${{ vars.ROSTERPILOT_CANARY_REVISED_ROSTER_PATH }}
+        run: >-
+          npm run certify:canary --
+          --canary "${{ matrix.canary }}"
+          --out-dir .certification/live-canaries
+          --require-live
 
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-canary-${{ matrix.faction }}
-          path: .certification/live/${{ matrix.faction }}
+          name: live-canary-${{ matrix.canary }}
+          path: .certification/live-canaries/${{ matrix.canary }}
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 30
@@ -107,7 +112,7 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run rosterpilot -- agent restart
+      - run: npm run rosterpilot -- agent ensure-current
       - name: Run faction rotation
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"
@@ -201,7 +206,7 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run rosterpilot -- agent restart
+      - run: npm run rosterpilot -- agent ensure-current
       - name: Run release matrix and live certification
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"

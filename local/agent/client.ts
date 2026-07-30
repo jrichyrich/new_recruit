@@ -11,6 +11,7 @@ import {
   type LocalAgentNewRecruitProbeResult,
   type LocalAgentTesseraPayload,
   type LocalAgentTesseraResult,
+  type LocalAgentTesseraRunStartResult,
   type LocalAgentTesseraSessionCloseResult,
   type LocalAgentRequest,
   type LocalAgentResponse,
@@ -281,6 +282,22 @@ export function closeTesseraLocalAgentSession(
       protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
       operation: "tessera.session.close",
       payload: { sessionId },
+    },
+    { ...options, timeoutMs: options?.timeoutMs ?? 10_000 },
+  );
+}
+
+export function startTesseraRunThroughLocalAgent(
+  jobPath: string,
+  workerToken: string,
+  options?: LocalAgentClientOptions,
+): Promise<LocalAgentTesseraRunStartResult> {
+  return request<LocalAgentTesseraRunStartResult>(
+    {
+      id: randomUUID(),
+      protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
+      operation: "tessera.run.start",
+      payload: { jobPath, workerToken },
     },
     { ...options, timeoutMs: options?.timeoutMs ?? 10_000 },
   );

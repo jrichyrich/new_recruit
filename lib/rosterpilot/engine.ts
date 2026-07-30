@@ -35,6 +35,7 @@ import {
   type ExportFormat,
   type FactionSummary,
   type ModifyRosterOperation,
+  type OpponentThreatProfile,
   type PreferenceTag,
   type ResultEnvelope,
   type RosterDraftV1,
@@ -1157,7 +1158,9 @@ function mergeBuildInput(input: BuildRosterInput): Required<
   const parsed = input.prompt
     ? parseRosterPrompt(input.prompt, {
         playerFaction: input.playerFaction ?? input.faction,
-        opponentFaction: input.opponentContext?.factionId,
+        opponentFaction: opponentContextFactionId(
+          input.opponentContext,
+        ),
       })
     : {};
   return {
@@ -1220,20 +1223,161 @@ function mergeBuildInput(input: BuildRosterInput): Required<
   };
 }
 
-type OpponentBuildProfile = {
-  factionId: string;
-  eliteShare: number;
-  hordeShare: number;
-  mobilityShare: number;
-  vehicleMonsterShare: number;
-};
+type OpponentBuildProfile = OpponentThreatProfile;
+
+function opponentContextFactionId(
+  context: BuildRosterInput["opponentContext"],
+): string | undefined {
+  if (!context) return undefined;
+  return context.kind === "known-roster"
+    ? context.roster.factionId
+    : context.factionId;
+}
+
+function opponentRosterFingerprint(roster: RosterDraftV1): string {
+  return deterministicId([
+    roster.gameSystem,
+    roster.factionId,
+    roster.pointsLimit,
+    roster.totalPoints,
+    roster.detachmentId,
+    roster.forceDispositionId,
+    JSON.stringify(roster.sourceData),
+    ...roster.units
+      .map((unit) =>
+        JSON.stringify({
+          unitId: unit.unitId,
+          modelCount: unit.modelCount,
+          points: unit.points,
+          isWarlord: unit.isWarlord,
+          enhancementId: unit.enhancementId,
+          equipment: unit.equipment
+            .map((entry) => ({
+              itemId: entry.itemId,
+              count: entry.count,
+            }))
+            .sort((left, right) =>
+              left.itemId.localeCompare(right.itemId),
+            ),
+        }),
+      )
+      .sort(),
+  ]);
+}
 
 function opponentBuildProfile(
   context: BuildRosterInput["opponentContext"],
 ): OpponentBuildProfile | null {
   if (!context) return null;
-  const opponent = resolveFaction(context.factionId);
+  const factionId = opponentContextFactionId(context);
+  const opponent = resolveFaction(factionId);
   if (!opponent) return null;
+  if (context.kind === "known-roster") {
+    const selected = context.roster.units.flatMap((selection) => {
+      const unit = resolveUnit(selection.unitId, context.roster.factionId);
+      return unit ? [{ selection, unit }] : [];
+    });
+    if (selected.length === 0) return null;
+    const totalModels = selected.reduce(
+      (sum, entry) => sum + entry.selection.modelCount,
+      0,
+    );
+    const totalPoints = selected.reduce(
+      (sum, entry) => sum + entry.selection.points,
+      0,
+    );
+    const modelShare = (predicate: (unit: UnitView) => boolean) =>
+      selected.reduce(
+        (sum, entry) =>
+          sum +
+          (predicate(entry.unit) ? entry.selection.modelCount : 0),
+        0,
+      ) / Math.max(1, totalModels);
+    const pointsShare = (predicate: (unit: UnitView) => boolean) =>
+      selected.reduce(
+        (sum, entry) =>
+          sum +
+          (predicate(entry.unit) ? entry.selection.points : 0),
+        0,
+      ) / Math.max(1, totalPoints);
+    const durabilityBand = (
+      unit: UnitView,
+    ): "light" | "medium" | "heavy" => {
+      const profile = unit.profileAt();
+      const toughness = Number(profile?.T ?? 0);
+      const wounds = Number(profile?.W ?? 0);
+      const save = Number(profile?.Sv ?? 7);
+      if (toughness >= 9 || wounds >= 7 || save <= 2) return "heavy";
+      if (toughness >= 5 || wounds >= 3 || save <= 3) return "medium";
+      return "light";
+    };
+    const keyTargetProfiles = [...selected]
+      .sort(
+        (left, right) =>
+          right.selection.points - left.selection.points ||
+          left.selection.name.localeCompare(right.selection.name),
+      )
+      .slice(0, 5)
+      .map(({ selection, unit }) => {
+        const profile = unit.profileAt();
+        return {
+          unitId: selection.unitId,
+          name: selection.name,
+          modelCount: selection.modelCount,
+          points: selection.points,
+          toughness: Number(profile?.T ?? 0),
+          wounds: Number(profile?.W ?? 0),
+          save: Number(profile?.Sv ?? 0),
+        };
+      });
+    return {
+      schemaVersion: 1,
+      factionId: opponent.id,
+      rosterFingerprint: opponentRosterFingerprint(context.roster),
+      bodyCount: totalModels,
+      averagePointsPerModel: totalPoints / Math.max(1, totalModels),
+      eliteShare: pointsShare((unit) =>
+        unitTags(unit).includes("elite"),
+      ),
+      hordeShare: modelShare((unit) =>
+        unitTags(unit).includes("horde"),
+      ),
+      mobilityShare: pointsShare((unit) =>
+        unitTags(unit).includes("mobility"),
+      ),
+      vehicleMonsterShare: pointsShare((unit) => {
+        const keywords = normalizedKeywords(unit);
+        return (
+          keywords.includes("vehicle") ||
+          keywords.includes("monster")
+        );
+      }),
+      rangedShare: pointsShare((unit) =>
+        unitTags(unit).includes("shooting"),
+      ),
+      meleeShare: pointsShare((unit) =>
+        unitTags(unit).includes("melee"),
+      ),
+      objectiveShare: modelShare((unit) =>
+        unitTags(unit).includes("objective"),
+      ),
+      durabilityShare: pointsShare((unit) =>
+        unitTags(unit).includes("durability"),
+      ),
+      durabilityBands: {
+        light: pointsShare(
+          (unit) => durabilityBand(unit) === "light",
+        ),
+        medium: pointsShare(
+          (unit) => durabilityBand(unit) === "medium",
+        ),
+        heavy: pointsShare(
+          (unit) => durabilityBand(unit) === "heavy",
+        ),
+      },
+      keyTargetProfiles,
+    };
+  }
   const pool = factionUnits(opponent.id);
   if (pool.length === 0) return null;
   const datasheetShare = (predicate: (unit: UnitView) => boolean) =>
@@ -1257,8 +1401,23 @@ function opponentBuildProfile(
         sum + (predicate(unit) ? modelWeight(unit) : 0),
       0,
     ) / Math.max(1, totalModelWeight);
+  const durabilityBand = (
+    unit: UnitView,
+  ): "light" | "medium" | "heavy" => {
+    const profile = unit.profileAt();
+    const toughness = Number(profile?.T ?? 0);
+    const wounds = Number(profile?.W ?? 0);
+    const save = Number(profile?.Sv ?? 7);
+    if (toughness >= 9 || wounds >= 7 || save <= 2) return "heavy";
+    if (toughness >= 5 || wounds >= 3 || save <= 3) return "medium";
+    return "light";
+  };
   return {
+    schemaVersion: 1,
     factionId: opponent.id,
+    rosterFingerprint: null,
+    bodyCount: null,
+    averagePointsPerModel: null,
     // Model-density threats must be model-weighted. Counting each datasheet
     // equally makes character- and vehicle-rich catalogues look almost
     // entirely elite even when they support credible mass armies.
@@ -1275,6 +1434,58 @@ function opponentBuildProfile(
       const keywords = normalizedKeywords(unit);
       return keywords.includes("vehicle") || keywords.includes("monster");
     }),
+    rangedShare: datasheetShare((unit) =>
+      unitTags(unit).includes("shooting"),
+    ),
+    meleeShare: datasheetShare((unit) =>
+      unitTags(unit).includes("melee"),
+    ),
+    objectiveShare: modelWeightedShare((unit) =>
+      unitTags(unit).includes("objective"),
+    ),
+    durabilityShare: modelWeightedShare((unit) =>
+      unitTags(unit).includes("durability"),
+    ),
+    durabilityBands: {
+      light: datasheetShare(
+        (unit) => durabilityBand(unit) === "light",
+      ),
+      medium: datasheetShare(
+        (unit) => durabilityBand(unit) === "medium",
+      ),
+      heavy: datasheetShare(
+        (unit) => durabilityBand(unit) === "heavy",
+      ),
+    },
+    keyTargetProfiles: [...pool]
+      .sort(
+        (left, right) =>
+          Math.max(
+            ...availableModelCounts(right).map(
+              (count) => baseUnitPoints(right.raw, count, 1),
+            ),
+          ) -
+            Math.max(
+              ...availableModelCounts(left).map(
+                (count) => baseUnitPoints(left.raw, count, 1),
+              ),
+            ) ||
+          left.name.localeCompare(right.name),
+      )
+      .slice(0, 5)
+      .map((unit) => {
+        const modelCount = availableModelCounts(unit)[0] ?? 1;
+        const profile = unit.profileAt();
+        return {
+          unitId: unit.id,
+          name: unit.name,
+          modelCount,
+          points: baseUnitPoints(unit.raw, modelCount, 1),
+          toughness: Number(profile?.T ?? 0),
+          wounds: Number(profile?.W ?? 0),
+          save: Number(profile?.Sv ?? 0),
+        };
+      }),
   };
 }
 
@@ -1300,6 +1511,30 @@ function opponentContextScore(
   }
   if (profile.vehicleMonsterShare >= 0.25) {
     if (tags.includes("elite")) score += 12;
+    if (tags.includes("shooting")) score += 8;
+  }
+  if (profile.rangedShare >= 0.5) {
+    if (tags.includes("durability")) score += 12;
+    if (tags.includes("mobility")) score += 8;
+  }
+  if (profile.meleeShare >= 0.45) {
+    if (tags.includes("shooting")) score += 12;
+    if (tags.includes("mobility")) score += 6;
+  }
+  if (profile.objectiveShare >= 0.45) {
+    if (tags.includes("objective")) score += 10;
+    if (tags.includes("horde")) score += 6;
+  }
+  if (profile.durabilityShare >= 0.45) {
+    if (tags.includes("elite")) score += 8;
+    if (tags.includes("shooting")) score += 8;
+  }
+  if (profile.durabilityBands.heavy >= 0.35) {
+    if (tags.includes("elite")) score += 10;
+    if (tags.includes("shooting")) score += 10;
+  }
+  if (profile.durabilityBands.light >= 0.45) {
+    if (tags.includes("horde")) score += 6;
     if (tags.includes("shooting")) score += 8;
   }
   return score;
@@ -1363,6 +1598,94 @@ function selectedWeapons(
       ? [{ selection, weapon }]
       : [];
   });
+}
+
+export type RosterUnitThreatProperties = {
+  infantry: boolean;
+  vehicle: boolean;
+  monster: boolean;
+  movement: number;
+  mobilityPressure: number;
+  rangedPressure: number;
+  meleePressure: number;
+};
+
+/**
+ * Read the actual selected datasheet and weapon profiles behind one roster
+ * entry. Stress portfolios use this instead of treating broad catalogue tags
+ * as a substitute for ranged, melee, mobility, or unit-type pressure.
+ */
+export function inspectRosterUnitThreatProperties(
+  factionId: string,
+  unitId: string,
+  equipment: EquipmentSelection[],
+): RosterUnitThreatProperties | null {
+  const unit = resolveUnit(unitId, factionId);
+  if (!unit) return null;
+  const keywords = new Set(normalizedKeywords(unit));
+  const movement = expectedProfileValue(unit.profileAt()?.M);
+  const mobilityPressure =
+    movement +
+    (keywords.has("fly") ? 3 : 0) +
+    ((unit.raw.ability_ids ?? []).includes("deep-strike")
+      ? 3
+      : 0);
+  const profileScore = (profile: {
+    stats: Record<string, unknown>;
+  }): number => {
+    const attacks = Math.max(
+      0,
+      expectedProfileValue(profile.stats.A),
+    );
+    const strength = Math.max(
+      0,
+      expectedProfileValue(profile.stats.S),
+    );
+    const armourPenetration = Math.abs(
+      Math.min(
+        0,
+        expectedProfileValue(profile.stats.AP),
+      ),
+    );
+    const damage = Math.max(
+      0,
+      expectedProfileValue(profile.stats.D),
+    );
+    return (
+      attacks *
+      Math.max(1, damage) *
+      (1 + strength / 10) *
+      (1 + armourPenetration * 0.15)
+    );
+  };
+  let rangedPressure = 0;
+  let meleePressure = 0;
+  for (const { selection, weapon } of selectedWeapons(
+    unit,
+    equipment,
+  )) {
+    const rangedProfiles = weapon.raw.profiles.filter(
+      (profile) => profile.range !== "Melee",
+    );
+    const meleeProfiles = weapon.raw.profiles.filter(
+      (profile) => profile.range === "Melee",
+    );
+    rangedPressure +=
+      selection.count *
+      Math.max(0, ...rangedProfiles.map(profileScore));
+    meleePressure +=
+      selection.count *
+      Math.max(0, ...meleeProfiles.map(profileScore));
+  }
+  return {
+    infantry: keywords.has("infantry"),
+    vehicle: keywords.has("vehicle"),
+    monster: keywords.has("monster"),
+    movement,
+    mobilityPressure,
+    rangedPressure,
+    meleePressure,
+  };
 }
 
 function equipmentContextScore(
@@ -1526,6 +1849,44 @@ function candidateScore(
 export function buildRoster(
   rawInput: BuildRosterInput,
 ): ResultEnvelope<RosterDraftV1> {
+  if (rawInput.opponentContext?.kind === "known-roster") {
+    const opponentValidation = validateRoster(
+      rawInput.opponentContext.roster,
+    );
+    if (!opponentValidation.ok) {
+      return envelope<RosterDraftV1>(
+        null,
+        [
+          issue(
+            "OPPONENT_ROSTER_INVALID",
+            "The known opponent roster must validate before it can influence roster construction.",
+          ),
+          ...opponentValidation.violations,
+        ],
+        opponentValidation.warnings,
+      );
+    }
+    const opponentPin =
+      rawInput.opponentContext.roster.sourceData;
+    const currentPin = currentRosterSourceData(
+      rawInput.opponentContext.roster.factionId,
+    );
+    if (
+      opponentPin.edition !== currentPin.edition ||
+      opponentPin.version !== currentPin.version ||
+      (
+        "releaseId" in opponentPin &&
+        opponentPin.releaseId !== currentPin.releaseId
+      )
+    ) {
+      return envelope<RosterDraftV1>(null, [
+        issue(
+          "OPPONENT_DATA_PIN_MISMATCH",
+          "The known opponent roster uses a different pinned rules release. Rebuild or migrate it before constructing a counter-roster.",
+        ),
+      ]);
+    }
+  }
   const explicitFactionQueries = [
     rawInput.playerFaction,
     rawInput.faction,
@@ -1554,8 +1915,11 @@ export function buildRoster(
   }
   let normalizedInput = rawInput;
   if (explicitFactionIds.length === 0 && rawInput.prompt) {
-    const opponentFactionId = rawInput.opponentContext
-      ? resolveFaction(rawInput.opponentContext.factionId)?.id
+    const opponentFactionQuery = opponentContextFactionId(
+      rawInput.opponentContext,
+    );
+    const opponentFactionId = opponentFactionQuery
+      ? resolveFaction(opponentFactionQuery)?.id
       : undefined;
     const mentions = factionMentions(rawInput.prompt).filter(
       (factionId) => factionId !== opponentFactionId,
@@ -1592,6 +1956,50 @@ export function buildRoster(
   }
   const requiredUnitIds = new Set(input.requiredUnitIds ?? []);
   const excludedUnitIds = new Set(input.excludedUnitIds ?? []);
+  const ownedCollectionProfile =
+    input.collectionProfile?.mode === "owned"
+      ? input.collectionProfile
+      : null;
+  const ownedCollection =
+    ownedCollectionProfile
+      ? new Map(
+          ownedCollectionProfile.units.map((entry) => [
+            entry.unitId,
+            entry,
+          ]),
+        )
+      : null;
+  if (
+    ownedCollection &&
+    ownedCollection.size !== ownedCollectionProfile!.units.length
+  ) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "COLLECTION_PROFILE_DUPLICATE_UNIT",
+        "Each owned collection unit must appear exactly once.",
+      ),
+    ]);
+  }
+  const legacyCollection = input.collectionUnitIds
+    ? new Set(input.collectionUnitIds)
+    : null;
+  if (
+    ownedCollection &&
+    legacyCollection &&
+    (
+      ownedCollection.size !== legacyCollection.size ||
+      [...ownedCollection.keys()].some(
+        (unitId) => !legacyCollection.has(unitId),
+      )
+    )
+  ) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "COLLECTION_PROFILE_CONFLICT",
+        "collectionUnitIds and collectionProfile describe different available units.",
+      ),
+    ]);
+  }
   const overlap = [...requiredUnitIds].filter((unitId) =>
     excludedUnitIds.has(unitId),
   );
@@ -1636,10 +2044,13 @@ export function buildRoster(
       ),
     ]);
   }
+  const collectionUnitIds = ownedCollection
+    ? new Set(ownedCollection.keys())
+    : legacyCollection;
   if (
-    input.collectionUnitIds &&
+    collectionUnitIds &&
     [...requiredUnitIds].some(
-      (unitId) => !input.collectionUnitIds!.includes(unitId),
+      (unitId) => !collectionUnitIds.has(unitId),
     )
   ) {
     return envelope<RosterDraftV1>(null, [
@@ -1720,9 +2131,7 @@ export function buildRoster(
     selectedDetachment.force_dispositions?.[0] ??
     "purge-the-foe";
 
-  const collection = input.collectionUnitIds
-    ? new Set(input.collectionUnitIds)
-    : null;
+  const collection = collectionUnitIds;
   const factionKeywords = new Set(faction.raw.keywords ?? []);
   const detachmentRestrictions = selectedDetachment.restrictions;
   const unitAllowedByDetachment = (unit: UnitView) => {
@@ -1765,6 +2174,36 @@ export function buildRoster(
     .filter((unit) => unit.raw.attachment_role !== "support")
     .filter(unitAllowedByDetachment)
     .filter((unit) => availableModelCounts(unit, 1).length > 0);
+
+  const selectionFitsCollection = (
+    currentSelections: DraftUnit[],
+    unitId: string,
+    modelCount: number,
+  ): boolean => {
+    const limit = ownedCollection?.get(unitId);
+    if (!limit) return ownedCollection === null;
+    const selected = currentSelections.filter(
+      (selection) => selection.unitId === unitId,
+    );
+    if (
+      limit.maxUnits !== undefined &&
+      selected.length + 1 > limit.maxUnits
+    ) {
+      return false;
+    }
+    if (
+      limit.maxModels !== undefined &&
+      selected.reduce(
+        (sum, selection) => sum + selection.modelCount,
+        0,
+      ) +
+        modelCount >
+        limit.maxModels
+    ) {
+      return false;
+    }
+    return true;
+  };
 
   const unavailableRequired = [...requiredUnitIds].filter(
     (unitId) => !factionUnitPool.some((unit) => unit.id === unitId),
@@ -1928,6 +2367,13 @@ export function buildRoster(
       ),
     )
     .filter((candidate) =>
+      selectionFitsCollection(
+        [],
+        candidate.unit.id,
+        candidate.modelCount,
+      ),
+    )
+    .filter((candidate) =>
       equipmentLoadoutIsLegal(
         candidate.unit,
         candidate.modelCount,
@@ -2047,6 +2493,11 @@ export function buildRoster(
       )
       .filter(
         (candidate) =>
+          selectionFitsCollection(
+            selections,
+            unit.id,
+            candidate.modelCount,
+          ) &&
           equipmentLoadoutIsLegal(
             unit,
             candidate.modelCount,
@@ -2438,8 +2889,15 @@ export function buildRoster(
       }> = [];
       for (const unit of buildUnitPool) {
         const currentCopies = state.copies.get(unit.id) ?? 0;
-        const maximumCopies =
+        const rulesMaximumCopies =
           isNamedCharacter(unit) || isCharacterUnit(unit) ? 1 : 3;
+        const collectionMaximumCopies =
+          ownedCollection?.get(unit.id)?.maxUnits ??
+          rulesMaximumCopies;
+        const maximumCopies = Math.min(
+          rulesMaximumCopies,
+          collectionMaximumCopies,
+        );
         if (currentCopies >= maximumCopies) continue;
         const ordinal = currentCopies + 1;
         for (const modelCount of availableModelCounts(unit, ordinal)) {
@@ -2458,6 +2916,15 @@ export function buildRoster(
               null,
             );
             if (points <= 0 || points > remaining) continue;
+            if (
+              !selectionFitsCollection(
+                state.selections,
+                unit.id,
+                modelCount,
+              )
+            ) {
+              continue;
+            }
             const selection = makeSelection(
               unit,
               modelCount,
@@ -2650,10 +3117,14 @@ export function buildRoster(
       allowNamedCharacters: input.allowNamedCharacters,
       allowLegends: input.allowLegends,
       collectionUnitIds: input.collectionUnitIds ?? null,
+      collectionProfile: input.collectionProfile ?? null,
       requiredUnitIds: [...requiredUnitIds].sort(),
       excludedUnitIds: [...excludedUnitIds].sort(),
       requiredWarlordUnitId: input.requiredWarlordUnitId ?? null,
       opponentFactionId: opponentProfile?.factionId ?? null,
+      opponentRosterFingerprint:
+        opponentProfile?.rosterFingerprint ?? null,
+      opponentThreatProfile: opponentProfile,
     },
     units: selections,
     createdAt: timestamp,
@@ -3304,10 +3775,20 @@ type RosterExplanation = {
     }>;
     targetProfileCoverage: {
       opponentFactionId: string;
+      opponentRosterFingerprint: string | null;
+      bodyCount: number | null;
+      averagePointsPerModel: number | null;
       eliteShare: number;
       hordeShare: number;
       mobilityShare: number;
       vehicleMonsterShare: number;
+      rangedShare: number;
+      meleeShare: number;
+      objectiveShare: number;
+      durabilityShare: number;
+      durabilityBands: OpponentThreatProfile["durabilityBands"];
+      keyTargetProfiles:
+        OpponentThreatProfile["keyTargetProfiles"];
       selectedCoverageScore: number;
       selectedProfileEvidence: string[];
     } | null;
@@ -3340,12 +3821,16 @@ export function explainRoster(
   const preferenceText = draft.preferences.length
     ? draft.preferences.join(", ")
     : "general-purpose play";
-  const opponentProfile = draft.constraints.opponentFactionId
-    ? opponentBuildProfile({
-        kind: "known-faction",
-        factionId: draft.constraints.opponentFactionId,
-      })
-    : null;
+  const opponentProfile =
+    draft.constraints.opponentThreatProfile ??
+    (
+      draft.constraints.opponentFactionId
+        ? opponentBuildProfile({
+            kind: "known-faction",
+            factionId: draft.constraints.opponentFactionId,
+          })
+        : null
+    );
   const choices = draft.units.map((selection) => {
     const matching = selection.tags.filter((tag) => draft.preferences.includes(tag));
     const unit = resolveUnit(selection.unitId, draft.factionId);
@@ -3427,11 +3912,23 @@ export function explainRoster(
         targetProfileCoverage: opponentProfile
           ? {
               opponentFactionId: opponentProfile.factionId,
+              opponentRosterFingerprint:
+                opponentProfile.rosterFingerprint,
+              bodyCount: opponentProfile.bodyCount,
+              averagePointsPerModel:
+                opponentProfile.averagePointsPerModel,
               eliteShare: opponentProfile.eliteShare,
               hordeShare: opponentProfile.hordeShare,
               mobilityShare: opponentProfile.mobilityShare,
               vehicleMonsterShare:
                 opponentProfile.vehicleMonsterShare,
+              rangedShare: opponentProfile.rangedShare,
+              meleeShare: opponentProfile.meleeShare,
+              objectiveShare: opponentProfile.objectiveShare,
+              durabilityShare: opponentProfile.durabilityShare,
+              durabilityBands: opponentProfile.durabilityBands,
+              keyTargetProfiles:
+                opponentProfile.keyTargetProfiles,
               selectedCoverageScore: selectedCandidates.reduce(
                 (sum, candidate) =>
                   sum + candidate.components.opponentCoverage,

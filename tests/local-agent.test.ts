@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   access,
   chmod,
+  mkdir,
   mkdtemp,
   readFile,
   rename,
@@ -25,6 +27,7 @@ import {
   LocalAgentError,
   probeNewRecruitThroughLocalAgent,
   runTesseraThroughLocalAgent,
+  startTesseraRunThroughLocalAgent,
 } from "../local/agent/client";
 import { FrameDecoder, encodeFrame } from "../local/agent/framing";
 import { renderLaunchAgent } from "../local/agent/lifecycle";
@@ -178,9 +181,9 @@ test("local agent reports providers through a user-only transport", async () => 
     assert.equal(spoolStat.mode & 0o777, 0o700);
     const status = await getLocalAgentStatus({ spoolDirectory });
     assert.equal(status.available, true);
-    assert.equal(LOCAL_AGENT_PROTOCOL_VERSION, 9);
+    assert.equal(LOCAL_AGENT_PROTOCOL_VERSION, 10);
     assert.equal(status.protocolVersion, LOCAL_AGENT_PROTOCOL_VERSION);
-    assert.equal(LOCAL_AGENT_VERSION, "1.8.0");
+    assert.equal(LOCAL_AGENT_VERSION, "1.9.0");
     assert.equal(status.version, LOCAL_AGENT_VERSION);
     assert.match(status.runtime?.buildId ?? "", /^[0-9a-f]{20}$/);
     assert.equal(status.runtime?.stale, false);
@@ -226,6 +229,87 @@ test("local agent reports providers through a user-only transport", async () => 
       status.providers.find((provider) => provider.providerId === "tessera")
         ?.credentialMode,
       "keychain",
+    );
+  } finally {
+    await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("local agent owns detached Tessera run-worker launches", async () => {
+  const directory = await mkdtemp(
+    path.join("/private/tmp", "rosterpilot-agent-run-worker-"),
+  );
+  const spoolDirectory = path.join(directory, "spool");
+  const jobDirectory = path.join(directory, "run-fixture");
+  const jobPath = path.join(jobDirectory, "tessera-run.json");
+  const workerPath = path.join(directory, "job-worker.mjs");
+  const markerPath = path.join(directory, "worker-marker.json");
+  const workerToken = "local-agent-owned-worker";
+  const workerTokenSha256 = createHash("sha256")
+    .update(workerToken)
+    .digest("hex");
+  await mkdir(jobDirectory, { recursive: true });
+  await writeFile(
+    jobPath,
+    `${JSON.stringify({
+      jobKind: "rosterpilot-tessera-run",
+      requestPath: jobPath,
+      workerTokenSha256,
+    })}\n`,
+  );
+  await writeFile(
+    workerPath,
+    `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+  jobPath: process.argv[2],
+  workerToken: process.argv[3],
+  pid: process.pid
+}));
+`,
+  );
+  const running = await startLocalAgent({
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath: path.join(directory, "missing-broker"),
+    tesseraJobWorkerPath: workerPath,
+  });
+  try {
+    const launched = await startTesseraRunThroughLocalAgent(
+      jobPath,
+      workerToken,
+      { spoolDirectory },
+    );
+    assert.equal(launched.accepted, true);
+    assert.ok(launched.workerPid > 0);
+    await waitForCondition(async () => {
+      try {
+        await access(markerPath);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const marker = JSON.parse(
+      await readFile(markerPath, "utf8"),
+    ) as {
+      jobPath: string;
+      workerToken: string;
+      pid: number;
+    };
+    assert.equal(marker.jobPath, jobPath);
+    assert.equal(marker.workerToken, workerToken);
+    assert.equal(marker.pid, launched.workerPid);
+    await assert.rejects(
+      startTesseraRunThroughLocalAgent(
+        jobPath,
+        "wrong-token",
+        { spoolDirectory },
+      ),
+      (error: unknown) =>
+        error instanceof LocalAgentError &&
+        error.code === "TESSERA_WORKER_IDENTITY_MISMATCH",
     );
   } finally {
     await running.close();

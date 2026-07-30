@@ -19,13 +19,16 @@ capabilities:
 | New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
 | Tessera handoff and experimental matchup matrix | Verified New Recruit-enriched rosters | Local temporary browser adapter |
 | Known-faction stress testing | A validated player roster plus deterministic legal, exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, local New Recruit enrichment, and local Tessera adapter |
+| Exact-aware roster construction | A validated canonical opponent roster plus player build constraints and optional owned-model quantities | Shared roster engine, exact opponent threat profile, deterministic repair, and exact Tessera adapter |
+| Durable Tessera jobs | Exact, stress, build-and-stress, and build-and-analyze requests on local CLI or stdio MCP | Persistent job document, local-agent-owned detached worker, retained result bundle, and stress manifest where applicable |
 
 ### Workflow composition
 
 Capabilities compose, but user workflows never continue implicitly. A legal
 canonical roster can be the final result, an input to a file export, an input
 to an explicitly requested New Recruit delivery, the player side of an exact
-Tessera comparison, or the player side of a known-faction stress test.
+Tessera comparison, the player side of a known-faction stress test, or the
+opponent-aware input to an explicitly requested counter-build.
 
 ```mermaid
 flowchart LR
@@ -36,6 +39,7 @@ flowchart LR
     deliver["Explicit New Recruit delivery"]
     enrich["Verified profile-rich ROSZ"]
     compare["Explicit Tessera comparison"]
+    counter["Explicit build against exact roster"]
     stress["Explicit known-faction stress test"]
     portfolio["Frozen deterministic proxy portfolio"]
     report["JSON and interactive HTML reports"]
@@ -47,6 +51,8 @@ flowchart LR
     deliver --> enrich
     enrich -. "optional simulation request" .-> compare
     compare --> report
+    validate -. "optional exact counter-build request" .-> counter
+    counter --> compare
     validate -. "optional stress-test request" .-> stress
     stress --> portfolio
     portfolio -->|"verified enrichment and simulation"| report
@@ -55,8 +61,9 @@ flowchart LR
 The dotted edges are explicit choices, not automatic transitions. Tessera has
 a technical dependency on New Recruit enrichment, but creating or exporting a
 roster does not trigger that dependency. Exact comparison and faction stress
-testing are also separate explicit choices. Comparison suggestions never
-mutate a canonical roster.
+testing are also separate explicit choices. Counter-building uses the supplied
+canonical opponent rather than silently reducing it to a faction heuristic.
+Comparison suggestions never mutate a canonical roster.
 
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation
@@ -119,6 +126,30 @@ session-scoped Tessera worker may retrieve the dedicated Keychain item. The key
 stays only in that worker's memory, and the worker enters it only after
 verifying the exact Tessera origin and locating its visible Licence key field.
 
+Opponent scope selects one of three non-overlapping routes:
+
+- exact comparison accepts one canonical opponent roster or one `.rosz`;
+- known-faction stress freezes deterministic legal proxies for an unknown
+  exact list;
+- exact-aware construction derives a versioned threat profile from one
+  validated canonical opponent's selected model counts, points, tags, and
+  vehicle/monster keywords, fingerprints its complete payload, builds and
+  repairs the player roster, then invokes exact comparison.
+
+The exact route does not accept faction archetypes. A CLI request that supplies
+only `--opponent-faction` to exact analysis fails with
+`OPPONENT_SCOPE_REQUIRED` and directs the caller to stress testing. No route
+guesses a faction when both exact and faction scope are absent.
+
+Exact-aware construction defaults to a collection profile of
+`{ "mode": "open-catalog" }`, which leaves the full eligible build-supported
+player catalogue available under the ordinary build constraints and is labeled
+as such in the result. An `owned` profile is a closed allow-list of unit IDs
+with optional `maxUnits` and aggregate `maxModels` limits. Units omitted from
+it are unavailable. The readiness gate requires 98% points utilization and a
+non-red overall mission-readiness band unless the caller explicitly accepts
+the warning. Candidate revisions remain authorization-gated suggestions.
+
 An exact-list full analysis captures 16 raw scenarios per opponent: two phases,
 four metrics, and both directions. Quick mode captures Shooting wipe
 probability in both directions. The adapter confirms each visible phase and
@@ -139,17 +170,21 @@ browser work. `core-3` is posture-first: it requires distinct
 balanced-control, ranged-pressure, and assault-pressure proxies. Their
 composition labels describe the generated rosters and help maximize feasible
 diversity, but repeated labels do not reduce core coverage. `diverse-9` crosses
-those three postures with mixed, mass, and elite-heavy compositions. Proxies must be legal,
-New Recruit-exportable, within the same 5% points tolerance, and distinct by a
-simulation-payload fingerprint over units, models, equipment, enhancements, and
-only modeled rules. Detachment-only differences do not count. `core-3` requires
-three unique simulation fingerprints and all three postures. `diverse-9` targets nine but may proceed
-with six to eight unique proxies only when all postures remain represented;
-weights are renormalized and the status is capped at `degraded`. Mixed, mass,
-and elite-heavy compositions have explicit role, body-share, elite-share, and
-model-count bounds. Named anchors are deliberately evaluated where legal.
-Available proxies have equal analytical weight; they are coverage cases, not an
-empirical distribution of tournament lists.
+those three postures with the stable `mixed`, `mass`, and `elite-heavy` wire
+labels. These are release-bound faction- and posture-relative threat lenses
+rather than universal composition quotas. The v6 generator measures model
+density, points per model, Infantry and Vehicle/Monster share, selected-weapon
+ranged/melee pressure, mobility, role breadth, and largest-unit concentration.
+Each portfolio hashes the observed faction/posture ranges and records whether
+they are generated-pending-review or human-reviewed against that exact data
+release; horde-tag share is context, not a gate. Proxies must be legal, New
+Recruit-exportable, within the same 5%
+points tolerance, and distinct by a simulation-payload fingerprint over units,
+models, equipment, enhancements, and only modeled rules. Detachment-only
+differences do not count. `core-3` requires three unique simulation
+fingerprints and all three postures. Available proxies have equal analytical
+weight; they are coverage cases, not an empirical distribution of tournament
+lists.
 
 The portfolio preview surface runs this construction and exportability
 preflight locally and exposes fingerprints, composition evidence, coverage
@@ -191,13 +226,14 @@ Tessera simulation requires `executionMode: "simulate"`; prepare-only returns
 verified handoffs with `status: prepared` and no inferred cells. The legacy
 `experimental` option is a deprecated compatibility alias.
 
-Stress report schema v3 and manifest schema v2 record the player fingerprint and data
-pin, profile-policy hash, opponent faction, frozen portfolio, configuration,
+Stress report schema v3 and manifest schema v3 record the player fingerprint and data
+pin, profile-policy hash, opponent faction, the complete frozen portfolio and
+its canonical SHA-256, configuration,
 prepared-artifact hashes, representative selection, and every stage's status,
 attempt count and history, timestamps, structured error, retryability, next
 action, report path, and content hash. Resume revalidates identity, requested
-cells, exact profile policy, and hashes. V1 manifests are migrated in memory
-and rewritten as v2 only on resume. V1 paired baselines without exact profile
+cells, exact profile policy, and hashes. V1 and V2 manifests are migrated in
+memory and rewritten as v3 on resume. V1 paired baselines without exact profile
 provenance are rejected. Transient entries receive at most three automatic
 attempts with one- and three-second backoff and five lifetime attempts through
 explicit resume; terminal errors require an explicit forced retry within that
@@ -218,6 +254,38 @@ manifest, run ID, and empty simulation stages. A restart carries forward the
 frozen portfolio, policy, and only those prepared New Recruit artifacts whose
 identities and hashes still verify; the source manifest is never rewritten.
 Resume and restart are mutually exclusive.
+
+For client calls that cannot remain open, the local durable-job layer writes a
+`tessera-run.json` document before asking the current local agent to launch a
+detached worker. It supports exact, stress, build-and-stress,
+build-and-analyze, exact paired revision, and stress paired revision requests
+and exposes
+queued, running, needs-input, complete, degraded, inconclusive, failed, and
+cancelled states. Status can include the retained result. Profile resolution
+is allowed only while stopped, freezes a validated policy in the job bundle,
+and requires a subsequent resume. External stress-manifest v1/v2/v3 recovery
+is copied into the run bundle, verified, and migrated to portable v3 before it
+is adopted; subsequent recovery uses only the shared durable job. Exact jobs
+freeze and reverify prepared player and
+opponent archives for zero-redelivery resume; `restart-from` copies those
+archives into the new run but starts simulation evidence from a clean stage.
+Exact simulation remains one analytical stage rather than claiming the stress
+workflow's per-opponent screening/deep-dive checkpoints. The job manifest freezes
+request, data-pin, policy, runtime, artifact, and per-attempt provenance.
+Runtime evidence records the observed macOS, Node, Chrome/Playwright and broker
+versions, the required local-agent protocol/version, the actual status
+response and observed launchd process identity, MCP source build identity, and
+pinned data release/freshness
+timestamps; unavailable observations remain `null`. Its
+first three attempts are automatically scheduled for retryable failures by
+the outer job coordinator. Stress stages make at most one attempt per outer
+attempt, so attempts four and five require explicit resume. Five is the
+lifetime ceiling.
+Explicit restart-from opens a new run and simulation stage using only
+hash-verified frozen inputs; it never carries prior simulation evidence.
+Cancellation stops the local-agent-owned worker
+without deleting job state, artifacts, inventory entries, or remote New
+Recruit lists.
 
 Matchups at or below a 5% difference relative to the player's points limit are
 classified as matched. Exact opponents outside that inclusive tolerance fail
@@ -243,10 +311,11 @@ improved, worsened, unchanged, or ambiguous cell deltas.
 Faction stress reports are schema v3. `prepared` means external preparation
 completed without a simulation request. `failed` means requested simulation
 did not produce trusted evidence. `inconclusive` means some evidence exists
-but confidence or integrity is insufficient. `degraded` permits at least two
-unique exportable proxies across two postures when other requested composition
-cells are genuinely unavailable; only full requested coverage can be
-`complete`. Missing estimates are `null`, while below-threshold
+but confidence or integrity is insufficient. `degraded` permits at least six
+execution-distinct exportable proxies across all three postures only when every
+other requested composition cell is in the faction's release-bound
+reviewed-not-applicable contract; only all nine cells can be `complete`.
+Missing estimates are `null`, while below-threshold
 observations live in a separate `provisional` structure with explicit point
 coverage. Reports summarize directional combat robustness, never whole-game
 win probability. Mission readiness remains separate.
@@ -303,6 +372,11 @@ Reproducibility and freshness are separate checks. An army is always built from
 the exact pinned release; a live source check never changes points in the
 middle of a build.
 
+- Doctor runs local prerequisites, agent/browser status, committed-data
+  validation, and engine status independently. With `--refresh skip` it makes
+  no network-backed source check. With `--refresh check`, pinned-source
+  synchronization and live freshness are separate warning-class results, so
+  an offline source cannot hide a local readiness failure.
 - MCP and authenticated REST builds check the npm package, BSData branch head,
   and official points app through a 15-minute cache.
 - The browser checks the same server-side freshness endpoint on startup and
@@ -593,7 +667,9 @@ Security invariants:
 | Companion orchestrator | Validation, collisions, local-agent requests, and artifact publication | `local/new-recruit/companion.ts` |
 | Browser adapter | Authentication, import, verification, Pretty export | `local/new-recruit/browser.ts` |
 | Tessera orchestrator | Exact matchups, matched-points policy, scenario consolidation, findings, candidates, and exact-list revision deltas | `local/tessera/companion.ts` |
+| Exact-aware build loop | Validate an exact opponent, build and repair from its threat profile, enforce readiness, and invoke exact analysis | `local/tessera/exact-full-loop.ts`, `lib/rosterpilot/build-and-analyze.ts` |
 | Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
+| Durable Tessera jobs | Persist requests and results; ask the local agent to start workers; inspect, resume, resolve profiles, and cancel background runs | `local/tessera/jobs.ts`, `local/agent/server.ts` |
 | Tessera UI and reports | Visible simulator control/extraction plus exact-matchup and faction-stress HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts`, `local/tessera/stress-report.ts` |
 | Isolated workers | Hold credentials in memory and return sanitized results; New Recruit is job-scoped and Tessera is session-scoped | `local/new-recruit/worker.ts`, `local/tessera/worker.ts` |
 | Keychain broker | Native secure configuration and restricted credential access | `native/NewRecruitKeychainBroker.swift` |
@@ -606,7 +682,7 @@ Security invariants:
 | --- | --- | --- |
 | Core engine, CLI, and stdio MCP | Complete Git checkout plus locked Node dependencies | Supported on macOS, Linux, and Windows; direct dependencies and package scripts must remain platform-neutral |
 | Hosted website, REST, and HTTP MCP | Validated Cloudflare-compatible build | Uses only credential-free core capabilities and never imports local automation modules into a hosted tool contract |
-| New Recruit and Tessera automation | Per-user macOS LaunchAgent, installed broker, and one complete checkout | Setup records the exact checkout and Node executable; status rejects a running agent from another checkout or protocol version |
+| New Recruit and Tessera automation | Per-user macOS LaunchAgent, installed broker, and one complete checkout | Setup records the exact checkout and Node executable; status verifies checkout, protocol, build provenance, and runtime freshness |
 | Roster and report artifacts | Caller-selected directory | Writes stay inside the current directory by default and never overwrite without explicit approval |
 
 The LaunchAgent intentionally runs reviewed worker code from the checkout that
@@ -614,7 +690,9 @@ installed it, while the native broker is copied into per-user application
 support. Moving the repository or changing the Node installation requires
 rerunning the selected setup profile. Protocol and checkout identity checks
 turn that condition into an actionable failure instead of allowing a newer CLI
-to call stale background code.
+to call stale background code. `agent ensure-current` also compares build
+provenance and runtime staleness, then uses the existing restart or installation
+lifecycle and returns both the original issues and the repair actions.
 
 The repository CI verifies the locked install on macOS, Linux, and Windows and
 runs lint, tests, a production build, rendered-output checks, and deterministic
@@ -625,8 +703,13 @@ catalogue regeneration before changes are considered ready.
 The companion fails closed:
 
 - invalid rosters stop before Chrome opens;
-- a local agent installed from another checkout or protocol version is rejected
-  with a reinstall instruction;
+- a local agent from another checkout, protocol, build, or stale runtime is
+  rejected with an `agent ensure-current` instruction;
+- exact analysis rejects faction-only input with `OPPONENT_SCOPE_REQUIRED`
+  instead of silently selecting proxy lists;
+- exact-aware construction validates the opponent before building and labels
+  an unconstrained result `open-catalog`; an `owned` profile is enforced as a
+  quantity-aware closed allow-list;
 - missing companion, browser, or credential stops before import;
 - unverified authentication stops before import;
 - changed selectors or import failures return explicit error codes;
@@ -655,6 +738,8 @@ The companion fails closed:
 - file collisions never overwrite existing artifacts unless explicitly
   authorized;
 - failed imports are never automatically deleted or retried as mutations.
+- durable-job profile choices cannot change while a worker is active, and
+  cancellation retains artifacts, inventory records, and remote lists.
 
 Normal CI uses fake brokers and a local fixture site. Real-site end-to-end
 testing is opt-in and must never contain a real credential.

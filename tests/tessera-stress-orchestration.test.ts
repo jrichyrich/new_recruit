@@ -14,13 +14,20 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { strToU8, zipSync } from "fflate";
+import {
+  strFromU8,
+  strToU8,
+  unzipSync,
+  zipSync,
+} from "fflate";
 
 import {
   buildRoster,
+  exportRoster,
   generateFactionStressPortfolio,
   getNewRecruitFactionSummary,
   newRecruitCatalogue,
+  previewFactionStressPortfolio,
   repairRosterDeterministically,
   rosterProfileRequirements,
   setCachedDataFreshness,
@@ -50,6 +57,10 @@ import {
 import {
   buildAndStressRosterAgainstFaction,
 } from "../local/tessera/full-loop";
+import {
+  startTesseraRun,
+  type TesseraRunRequest,
+} from "../local/tessera/jobs";
 
 function roster(
   faction: string,
@@ -64,6 +75,26 @@ function roster(
   );
   assert.ok(built.data);
   return built.data;
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalValue(entry));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function portfolioContentHash(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalValue(value)))
+    .digest("hex");
 }
 
 function summaryFor(candidate: RosterDraftV1): EnrichedRoszSummary {
@@ -108,75 +139,125 @@ function xmlAttribute(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function enrichedFixture(
+async function enrichedFixture(
   candidate: RosterDraftV1,
   additionalRequirements: TesseraProfileRequirement[] = [],
-): Uint8Array {
+): Promise<Uint8Array> {
   const requirements = [
     ...rosterProfileRequirements(candidate),
     ...additionalRequirements,
   ];
-  const selections = candidate.units
-    .map((unit) => {
-      const profileSelections = requirements
-        .filter(
-          (requirement) =>
-            requirement.selectionId === unit.selectionId,
-        )
-        .map(
-          (requirement, index) => `
-          <selection id="${xmlAttribute(
-            `${unit.selectionId}-profile-${index}`,
-          )}" name="${xmlAttribute(
-            requirement.weaponGroup,
-          )}" number="${requirement.activeCount}" type="upgrade">
-            <profiles>${requirement.availableProfiles
-              .map(
-                (profile) =>
-                  `<profile name="${xmlAttribute(
-                    `➤ ${requirement.weaponGroup} - ${profile}`,
-                  )}" typeName="${
-                    requirement.phase === "shooting"
-                      ? "Ranged Weapons"
-                      : "Melee Weapons"
-                  }"/>`,
-              )
-              .join("")}</profiles>
-          </selection>`,
-        )
-        .join("");
-      return `
-      <selection id="${xmlAttribute(unit.selectionId)}" name="${xmlAttribute(
-        unit.name,
-      )}" number="1" type="unit">
-        <cost name="pts" value="${unit.points}"/>
-        <selections>
-          <selection name="${xmlAttribute(
-            unit.name,
-          )}" number="${unit.modelCount}" type="model"/>
-          ${profileSelections}
-        </selections>
-      </selection>`;
-    })
-    .join("");
-  const xml = `<?xml version="1.0"?>
-<roster name="${xmlAttribute(
-    candidate.name,
-  )}" generatedBy="https://newrecruit.eu">
-  <cost name="pts" value="${candidate.totalPoints}"/>
-  <forces>
-    <force name="${xmlAttribute(
-      candidate.factionName,
-    )}" catalogueName="${xmlAttribute(candidate.factionName)}">
-      <selections>${selections}</selections>
-    </force>
-  </forces>
-  <profiles>
-    <profile name="Fixture model" typeName="Unit"/>
-    <profile name="Fixture weapon" typeName="Ranged Weapons"/>
-  </profiles>
-</roster>`;
-  return zipSync({ "fixture.ros": strToU8(xml) });
+  const exported = await exportRoster(candidate, "rosz");
+  assert.ok(exported.ok && exported.data);
+  assert.notEqual(typeof exported.data.content, "string");
+  const entries = unzipSync(exported.data.content as Uint8Array);
+  const [filename, content] = Object.entries(entries)[0];
+  let xml = strFromU8(content).replace(
+    'generatedBy="RosterPilot"',
+    'generatedBy="https://newrecruit.eu"',
+  );
+  const insertions = new Map<number, string[]>();
+  const selectionTokens = [
+    ...xml.matchAll(/<selection\b[^>]*>|<\/selection>/g),
+  ];
+  const stack: Array<{ unitIndex: number | null }> = [];
+  const unitRootInsertion = new Map<number, number>();
+  let nextUnitIndex = 0;
+  const matchedRequirements = new Set<TesseraProfileRequirement>();
+  for (const tokenMatch of selectionTokens) {
+    const token = tokenMatch[0];
+    if (token === "</selection>") {
+      stack.pop();
+      continue;
+    }
+    const name = token.match(/\bname="([^"]*)"/)?.[1] ?? "";
+    const type = token.match(/\btype="([^"]*)"/)?.[1] ?? "";
+    let unitIndex = stack[0]?.unitIndex ?? null;
+    if (
+      stack.length === 0 &&
+      (type === "unit" || type === "model")
+    ) {
+      const candidateIndex = candidate.units.findIndex(
+        (unit, index) =>
+          index >= nextUnitIndex &&
+          xmlAttribute(unit.name) === name,
+      );
+      if (candidateIndex >= 0) {
+        unitIndex = candidateIndex;
+        nextUnitIndex = candidateIndex + 1;
+      }
+    }
+    const insertionIndex =
+      (tokenMatch.index ?? 0) + token.length;
+    if (stack.length === 0 && unitIndex !== null) {
+      unitRootInsertion.set(unitIndex, insertionIndex);
+      insertions.set(insertionIndex, [
+        ...(insertions.get(insertionIndex) ?? []),
+        '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/></profiles>',
+      ]);
+    }
+    if (unitIndex !== null) {
+      const matching = requirements.filter(
+        (requirement) =>
+          requirement.selectionId ===
+            candidate.units[unitIndex!].selectionId &&
+          xmlAttribute(requirement.weaponGroup) === name,
+      );
+      for (const requirement of matching) {
+        matchedRequirements.add(requirement);
+        insertions.set(insertionIndex, [
+          ...(insertions.get(insertionIndex) ?? []),
+          `<profiles>${requirement.availableProfiles
+            .map(
+              (profile) =>
+                `<profile name="${xmlAttribute(
+                  `➤ ${requirement.weaponGroup} - ${profile}`,
+                )}" typeName="${
+                  requirement.phase === "shooting"
+                    ? "Ranged Weapons"
+                    : "Melee Weapons"
+                }"/>`,
+            )
+            .join("")}</profiles>`,
+        ]);
+      }
+    }
+    if (!token.endsWith("/>")) stack.push({ unitIndex });
+  }
+  for (const [unitIndex, unit] of candidate.units.entries()) {
+    const unmatched = requirements.filter(
+      (requirement) =>
+        requirement.selectionId === unit.selectionId &&
+        !matchedRequirements.has(requirement),
+    );
+    if (unmatched.length === 0) continue;
+    const insertionIndex = unitRootInsertion.get(unitIndex);
+    if (insertionIndex === undefined) continue;
+    insertions.set(insertionIndex, [
+      ...(insertions.get(insertionIndex) ?? []),
+      ...unmatched.map(
+        (requirement) =>
+          `<profiles>${requirement.availableProfiles
+            .map(
+              (profile) =>
+                `<profile name="${xmlAttribute(
+                  `➤ ${requirement.weaponGroup} - ${profile}`,
+                )}" typeName="${
+                  requirement.phase === "shooting"
+                    ? "Ranged Weapons"
+                    : "Melee Weapons"
+                }"/>`,
+            )
+            .join("")}</profiles>`,
+      ),
+    ]);
+  }
+  for (const [index, additions] of [...insertions.entries()].sort(
+    ([left], [right]) => right - left,
+  )) {
+    xml = `${xml.slice(0, index)}${additions.join("")}${xml.slice(index)}`;
+  }
+  return zipSync({ [filename]: strToU8(xml) });
 }
 
 function occurrenceAt(
@@ -304,6 +385,7 @@ function browserResult(
     ),
   );
   return {
+    uiIdentity: "fixture-tessera-ui-v1",
     settings: { iterations: "1000" },
     cells: scenarios[0]?.cells ?? [],
     scenarios,
@@ -467,7 +549,23 @@ test("default stress outputs are unique and recovery paths fail closed", async (
       reservedDirectory,
       "stress-manifest.json",
     );
-    await readFile(manifestPath);
+    const seededManifest = JSON.parse(
+      await readFile(manifestPath, "utf8"),
+    ) as {
+      schemaVersion: number;
+      portfolioSha256: string;
+      portfolio: unknown;
+    };
+    assert.equal(seededManifest.schemaVersion, 3);
+    assert.match(seededManifest.portfolioSha256, /^[0-9a-f]{64}$/);
+    assert.equal(
+      seededManifest.portfolioSha256,
+      portfolioContentHash(seededManifest.portfolio),
+    );
+    assert.equal(
+      seeded.data.portfolioSha256,
+      seededManifest.portfolioSha256,
+    );
 
     const attemptsBeforeCollision = deliveryAttempts;
     const collision = await runRosterStressTest(
@@ -527,6 +625,55 @@ test("default stress outputs are unique and recovery paths fail closed", async (
     );
     assert.equal(manifestsAfterResume.length, 1);
 
+    const tamperedManifestPath = path.join(
+      reservedDirectory,
+      "tampered-stress-manifest.json",
+    );
+    const tamperedManifest = structuredClone(seededManifest) as {
+      portfolio: {
+        items: Array<{
+          roster: { name: string } | null;
+        }>;
+      };
+    };
+    const tamperedRoster = tamperedManifest.portfolio.items.find(
+      (item) => item.roster !== null,
+    )?.roster;
+    assert.ok(tamperedRoster);
+    tamperedRoster.name = `${tamperedRoster.name} tampered`;
+    await writeFile(
+      tamperedManifestPath,
+      `${JSON.stringify(tamperedManifest, null, 2)}\n`,
+    );
+    const attemptsBeforeTamperedResume = deliveryAttempts;
+    const tamperedResume = await runRosterStressTest(
+      player,
+      {
+        kind: "faction",
+        factionId: "aeldari",
+      },
+      {
+        profilePolicyPath: policyPath,
+        resumeManifestPath: tamperedManifestPath,
+        rootDir: directory,
+      },
+      { deliver: failDelivery },
+    );
+    assert.equal(tamperedResume.ok, false);
+    assert.equal(
+      tamperedResume.violations[0]?.code,
+      "TESSERA_STRESS_RESUME_UNREADABLE",
+    );
+    assert.match(
+      tamperedResume.violations[0]?.message ?? "",
+      /portfolioSha256/,
+    );
+    assert.equal(
+      deliveryAttempts,
+      attemptsBeforeTamperedResume,
+      "portfolio hash drift must stop before delivery",
+    );
+
     const restarted = await runRosterStressTest(
       player,
       {
@@ -560,6 +707,300 @@ test("default stress outputs are unique and recovery paths fail closed", async (
   }
 });
 
+test("unreviewed diverse portfolio gaps stop before New Recruit delivery", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-portfolio-contract-"),
+  );
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Portfolio Contract Player",
+  );
+  let deliveryCalls = 0;
+  try {
+    const generated = await previewFactionStressPortfolio({
+      faction: "adeptus-custodes",
+      pointsLimit: 1_000,
+      suite: "diverse-9",
+    });
+    assert.ok(generated.data);
+    const incompletePreview = structuredClone(generated.data);
+    const missing = incompletePreview.portfolio.items.find(
+      (item) => item.templateId === "ranged-pressure:mass",
+    );
+    assert.ok(missing);
+    missing.status = "unavailable";
+    missing.roster = null;
+    missing.fingerprint = null;
+    missing.simulationFingerprint = null;
+    missing.omissionReason =
+      "Synthetic unreviewed portfolio gap.";
+    missing.warnings = [
+      {
+        code: "STRESS_TEMPLATE_UNREVIEWED",
+        message:
+          "This synthetic missing cell has not been reviewed.",
+        severity: "warn",
+      },
+    ];
+    const result = await runRosterStressTest(
+      player,
+      {
+        kind: "faction",
+        factionId: "adeptus-custodes",
+      },
+      {
+        suite: "diverse-9",
+        rootDir: directory,
+        portfolioPreview: incompletePreview,
+      },
+      {
+        deliver: async () => {
+          deliveryCalls += 1;
+          throw new Error(
+            "Delivery must not run for an invalid portfolio.",
+          );
+        },
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.violations[0]?.code,
+      "PORTFOLIO_CONTRACT_UNMET",
+    );
+    assert.equal(deliveryCalls, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable jobs adopt verified stress manifests v1, v2, and v3", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-stress-job-adoption-"),
+  );
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Durable adoption player",
+  );
+  const rostersByName = new Map<string, RosterDraftV1>([
+    [player.name, player],
+  ]);
+  const deliver = async (
+    candidate: RosterDraftV1,
+    options: NewRecruitDeliveryOptions = {},
+  ): Promise<ResultEnvelope<NewRecruitDelivery>> => {
+    rostersByName.set(candidate.name, candidate);
+    const outputDirectory =
+      options.outputDirectory ?? directory;
+    await mkdir(outputDirectory, { recursive: true });
+    const source = path.join(outputDirectory, "source.rosz");
+    const enriched = path.join(
+      outputDirectory,
+      "enriched.rosz",
+    );
+    const content = await enrichedFixture(candidate);
+    await Promise.all([
+      writeFile(source, content),
+      writeFile(enriched, content),
+    ]);
+    return {
+      ok: true,
+      data: {
+        rosterId: candidate.id,
+        rosterName: candidate.name,
+        listUrl: null,
+        imported: true,
+        sessionReused: true,
+        verification: null,
+        enrichedSummary: summaryFor(candidate),
+        artifacts: [
+          {
+            format: "rosterpilot-source-rosz",
+            filename: "source.rosz",
+            mimeType: "application/zip",
+            written: source,
+          },
+          {
+            format: "new-recruit-enriched-rosz",
+            filename: "enriched.rosz",
+            mimeType: "application/zip",
+            written: enriched,
+          },
+        ],
+      },
+      violations: [],
+      warnings: [],
+    };
+  };
+  const runBrowser = async (
+    input: TesseraBrowserInput,
+  ): Promise<TesseraBrowserResult> => {
+    const playerRoster = rostersByName.get(input.playerName);
+    const opponentRoster = rostersByName.get(
+      input.opponentName,
+    );
+    assert.ok(playerRoster);
+    assert.ok(opponentRoster);
+    return browserResult(
+      input,
+      playerRoster,
+      opponentRoster,
+    );
+  };
+  const portfolio = generateFactionStressPortfolio({
+    faction: "aeldari",
+    pointsLimit: 1_000,
+    suite: "core-3",
+  });
+  assert.ok(portfolio.data);
+  const requirements = aggregateProfileRequirements([
+    player,
+    ...portfolio.data.items.flatMap((item) =>
+      item.roster ? [item.roster] : [],
+    ),
+  ]);
+  const policyPath = path.join(directory, "profiles.json");
+  await writeFile(
+    policyPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      policyKind: "tessera-profile-policy",
+      entries: requirements.map((requirement) => ({
+        faction: requirement.faction,
+        unit: requirement.unit,
+        weaponGroup: requirement.weaponGroup,
+        phase: requirement.phase,
+        selectedProfile: requirement.availableProfiles[0],
+        activeCount: requirement.activeCount,
+      })),
+    }, null, 2)}\n`,
+  );
+  const baseline = await runRosterStressTest(
+    player,
+    { kind: "faction", factionId: "aeldari" },
+    {
+      suite: "core-3",
+      analysisStrategy: "staged",
+      executionMode: "simulate",
+      profilePolicyPath: policyPath,
+      outputDirectory: "baseline",
+      rootDir: directory,
+    },
+    { deliver, runBrowser },
+  );
+  assert.ok(baseline.ok && baseline.data);
+  const manifestArtifact = baseline.data.artifacts.find(
+    (artifact) => artifact.format === "stress-manifest",
+  );
+  assert.ok(manifestArtifact);
+  const baselineDirectory = path.join(directory, "baseline");
+  const manifestPath = path.resolve(
+    baselineDirectory,
+    manifestArtifact.written,
+  );
+  const current = JSON.parse(
+    await readFile(manifestPath, "utf8"),
+  );
+  for (const version of [1, 2, 3] as const) {
+    const legacy = structuredClone(current);
+    legacy.schemaVersion = version;
+    if (version < 3) delete legacy.portfolioSha256;
+    const candidatePath = path.join(
+      baselineDirectory,
+      `stress-manifest-v${version}.json`,
+    );
+    await writeFile(
+      candidatePath,
+      `${JSON.stringify(legacy, null, 2)}\n`,
+    );
+    const job = await startTesseraRun(
+      {
+        kind: "stress",
+        playerRoster: player,
+        factionId: "aeldari",
+        options: {
+          resumeManifestPath: candidatePath,
+          executionMode: "simulate",
+          rootDir: directory,
+        },
+      },
+      {
+        outputDirectory: path.join(directory, "runs"),
+        rootDir: directory,
+        launch: false,
+      },
+    );
+    const document = JSON.parse(
+      await readFile(job.requestPath, "utf8"),
+    ) as { request: TesseraRunRequest };
+    assert.equal(document.request.kind, "stress");
+    if (document.request.kind !== "stress") {
+      throw new Error("Expected an adopted stress job.");
+    }
+    const adopted =
+      document.request.options?.resumeManifestPath;
+    assert.ok(adopted);
+    const migrated = JSON.parse(
+      await readFile(adopted, "utf8"),
+    );
+    assert.equal(migrated.schemaVersion, 3);
+    assert.match(migrated.portfolioSha256, /^[0-9a-f]{64}$/);
+  }
+  const baselineReportArtifact = baseline.data.artifacts.find(
+    (artifact) => artifact.format === "stress-json",
+  );
+  assert.ok(baselineReportArtifact);
+  const baselineReportPath = path.resolve(
+    baselineDirectory,
+    baselineReportArtifact.written,
+  );
+  const revisionJob = await startTesseraRun(
+    {
+      kind: "stress-revision",
+      baselineReportPath,
+      revisedRoster: {
+        ...player,
+        name: "Durable adoption revision",
+      },
+      options: { executionMode: "simulate" },
+    },
+    {
+      outputDirectory: path.join(directory, "runs"),
+      rootDir: directory,
+      launch: false,
+    },
+  );
+  const revisionDocument = JSON.parse(
+    await readFile(revisionJob.requestPath, "utf8"),
+  ) as { request: TesseraRunRequest };
+  assert.equal(
+    revisionDocument.request.kind,
+    "stress-revision",
+  );
+  if (revisionDocument.request.kind !== "stress-revision") {
+    throw new Error("Expected a stress-revision job.");
+  }
+  assert.ok(
+    revisionDocument.request.baselineReportPath.startsWith(
+      path.join(revisionJob.jobDirectory, "inputs"),
+    ),
+  );
+  const frozenBaseline = JSON.parse(
+    await readFile(
+      revisionDocument.request.baselineReportPath,
+      "utf8",
+    ),
+  ) as {
+    artifacts: Array<{ format: string; written: string }>;
+  };
+  const frozenManifest = frozenBaseline.artifacts.find(
+    (artifact) => artifact.format === "stress-manifest",
+  )?.written;
+  assert.ok(frozenManifest);
+  assert.ok(frozenManifest.startsWith(revisionJob.jobDirectory));
+});
+
 test("runs, resumes, and pairs a staged faction stress test without duplicate list delivery", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "tessera-stress-orchestration-"),
@@ -576,6 +1017,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
   const browserInputs: TesseraBrowserInput[] = [];
   let driftMeanDamageScenario = false;
   let omitFightBrowserRuns = 0;
+  let terminalRevisionFailure = false;
   const deliver = async (
     candidate: RosterDraftV1,
     options: NewRecruitDeliveryOptions = {},
@@ -587,7 +1029,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     await mkdir(outputDirectory, { recursive: true });
     const source = path.join(outputDirectory, "source.rosz");
     const enriched = path.join(outputDirectory, "enriched.rosz");
-    const content = enrichedFixture(candidate);
+    const content = await enrichedFixture(candidate);
     await Promise.all([
       writeFile(source, content),
       writeFile(enriched, content),
@@ -629,6 +1071,12 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const opponentRoster = rostersByName.get(input.opponentName);
     assert.ok(playerRoster, input.playerName);
     assert.ok(opponentRoster, input.opponentName);
+    if (terminalRevisionFailure) {
+      throw new TesseraAutomationError(
+        "TESSERA_UI_CHANGED",
+        "Synthetic terminal revision UI mismatch.",
+      );
+    }
     const result = browserResult(
       input,
       playerRoster,
@@ -754,7 +1202,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     assert.equal(
       baseline.data.portfolio.coverage
         .namedCharacterCoverageStatus,
-      "included",
+      "buildable-not-simulated",
     );
     assert.equal(
       baseline.data.portfolio.items.some(
@@ -991,6 +1439,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
       await readFile(manifestPath, "utf8"),
     );
     legacyManifest.schemaVersion = 1;
+    delete legacyManifest.portfolioSha256;
     delete legacyManifest.profilePolicy;
     delete legacyManifest.profilePolicyHash;
     delete legacyManifest.configuration.profilePolicyHash;
@@ -1023,6 +1472,55 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
       legacyManifestPath,
       `${JSON.stringify(legacyManifest, null, 2)}\n`,
     );
+    const adoptedLegacyJob = await startTesseraRun(
+      {
+        kind: "stress",
+        playerRoster: player,
+        factionId: "aeldari",
+        options: {
+          resumeManifestPath: legacyManifestPath,
+          executionMode: "simulate",
+          rootDir: directory,
+        },
+      },
+      {
+        outputDirectory: path.join(
+          directory,
+          "durable-adoption-runs",
+        ),
+        rootDir: directory,
+        launch: false,
+      },
+    );
+    const adoptedLegacyDocument = JSON.parse(
+      await readFile(adoptedLegacyJob.requestPath, "utf8"),
+    ) as { request: TesseraRunRequest };
+    assert.equal(adoptedLegacyDocument.request.kind, "stress");
+    if (adoptedLegacyDocument.request.kind !== "stress") {
+      throw new Error("Expected a durable stress adoption.");
+    }
+    const adoptedLegacyManifest =
+      adoptedLegacyDocument.request.options
+        ?.resumeManifestPath;
+    assert.ok(adoptedLegacyManifest);
+    assert.ok(
+      adoptedLegacyManifest.startsWith(
+        adoptedLegacyJob.jobDirectory,
+      ),
+    );
+    const adoptedLegacyManifestJson = JSON.parse(
+      await readFile(adoptedLegacyManifest, "utf8"),
+    );
+    assert.equal(adoptedLegacyManifestJson.schemaVersion, 3);
+    assert.match(
+      adoptedLegacyManifestJson.portfolioSha256,
+      /^[0-9a-f]{64}$/,
+    );
+    assert.equal(
+      JSON.parse(await readFile(legacyManifestPath, "utf8"))
+        .schemaVersion,
+      1,
+    );
     const migratedResume = await runRosterStressTest(
       player,
       { kind: "faction", factionId: "aeldari" },
@@ -1036,11 +1534,19 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
       },
       { deliver, runBrowser },
     );
-    assert.equal(migratedResume.ok, true);
+    assert.equal(
+      migratedResume.ok,
+      true,
+      JSON.stringify(migratedResume.violations, null, 2),
+    );
     const rewrittenManifest = JSON.parse(
       await readFile(legacyManifestPath, "utf8"),
     );
-    assert.equal(rewrittenManifest.schemaVersion, 2);
+    assert.equal(rewrittenManifest.schemaVersion, 3);
+    assert.equal(
+      rewrittenManifest.portfolioSha256,
+      portfolioContentHash(rewrittenManifest.portfolio),
+    );
     assert.match(
       rewrittenManifest.profilePolicyHash,
       /^[0-9a-f]{64}$/,
@@ -1048,7 +1554,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     assert.equal(
       rewrittenManifest.portfolio.coverage
         .namedCharacterCoverageStatus,
-      "unavailable-after-evaluation",
+      "buildable-not-simulated",
     );
     assert.ok(
       Array.isArray(
@@ -1059,6 +1565,83 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
       Array.isArray(
         rewrittenManifest.portfolio.coverage.missingCells,
       ),
+    );
+    assert.equal(delivered.length, 4);
+    assert.equal(browserInputs.length, 6);
+
+    const legacyV2ManifestPath = path.join(
+      path.dirname(manifestPath),
+      "legacy-v2-stress-manifest.json",
+    );
+    const legacyV2Manifest = structuredClone(
+      frozenExecutionManifest,
+    );
+    legacyV2Manifest.schemaVersion = 2;
+    delete legacyV2Manifest.portfolioSha256;
+    await writeFile(
+      legacyV2ManifestPath,
+      `${JSON.stringify(legacyV2Manifest, null, 2)}\n`,
+    );
+    const adoptedV2Job = await startTesseraRun(
+      {
+        kind: "stress",
+        playerRoster: player,
+        factionId: "aeldari",
+        options: {
+          restartManifestPath: legacyV2ManifestPath,
+          executionMode: "simulate",
+          rootDir: directory,
+        },
+      },
+      {
+        outputDirectory: path.join(
+          directory,
+          "durable-adoption-runs",
+        ),
+        rootDir: directory,
+        launch: false,
+      },
+    );
+    const adoptedV2Document = JSON.parse(
+      await readFile(adoptedV2Job.requestPath, "utf8"),
+    ) as { request: TesseraRunRequest };
+    assert.equal(adoptedV2Document.request.kind, "stress");
+    if (adoptedV2Document.request.kind !== "stress") {
+      throw new Error("Expected a durable v2 stress adoption.");
+    }
+    const adoptedV2Manifest =
+      adoptedV2Document.request.options
+        ?.restartManifestPath;
+    assert.ok(adoptedV2Manifest);
+    assert.equal(
+      JSON.parse(await readFile(adoptedV2Manifest, "utf8"))
+        .schemaVersion,
+      3,
+    );
+    const migratedV2Resume = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        experimental: true,
+        resumeManifestPath: legacyV2ManifestPath,
+        rootDir: directory,
+      },
+      { deliver, runBrowser },
+    );
+    assert.equal(
+      migratedV2Resume.ok,
+      true,
+      JSON.stringify(migratedV2Resume.violations, null, 2),
+    );
+    const rewrittenV2Manifest = JSON.parse(
+      await readFile(legacyV2ManifestPath, "utf8"),
+    );
+    assert.equal(rewrittenV2Manifest.schemaVersion, 3);
+    assert.equal(
+      rewrittenV2Manifest.portfolioSha256,
+      portfolioContentHash(rewrittenV2Manifest.portfolio),
     );
     assert.equal(delivered.length, 4);
     assert.equal(browserInputs.length, 6);
@@ -1260,7 +1843,11 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     assert.equal(delivered.length, 5);
     // Incomplete per-proxy evidence does not masquerade as a global
     // readiness outage; each frozen proxy gets its bounded attempt.
-    assert.equal(browserInputs.length, 12);
+    assert.equal(
+      browserInputs.length,
+      12,
+      JSON.stringify(incompleteRevision, null, 2),
+    );
 
     driftMeanDamageScenario = true;
     const settingsMismatch = await compareRosterStressRevision(
@@ -1421,7 +2008,11 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     assert.equal(changedPortfolioResume.ok, false);
     assert.equal(
       changedPortfolioResume.violations[0]?.code,
-      "TESSERA_STRESS_RESUME_PORTFOLIO_CHANGED",
+      "TESSERA_STRESS_RESUME_UNREADABLE",
+    );
+    assert.match(
+      changedPortfolioResume.violations[0]?.message ?? "",
+      /portfolioSha256/,
     );
     assert.equal(delivered.length, 7);
     assert.equal(browserInputs.length, 22);
@@ -1461,6 +2052,39 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     );
     assert.equal(delivered.length, 7);
     assert.equal(browserInputs.length, 22);
+
+    await writeFile(manifestPath, stableManifestContent);
+    terminalRevisionFailure = true;
+    const terminalRevision = await compareRosterStressRevision(
+      revisedBaselinePath,
+      revised,
+      {
+        experimental: true,
+        outputDirectory: "terminal-revision",
+        rootDir: directory,
+      },
+      { deliver, runBrowser },
+    );
+    assert.equal(terminalRevision.ok, false);
+    assert.equal(
+      terminalRevision.violations[0]?.code,
+      "TESSERA_UI_CHANGED",
+      JSON.stringify(terminalRevision.violations, null, 2),
+    );
+    assert.match(
+      terminalRevision.violations[0]?.message ?? "",
+      /Revised screening failed.*Synthetic terminal revision UI mismatch/,
+    );
+    assert.equal(
+      terminalRevision.violations.some(
+        (violation) =>
+          violation.code ===
+          "TESSERA_STRESS_REVISION_INCOMPLETE",
+      ),
+      false,
+    );
+    assert.equal(delivered.length, 8);
+    assert.equal(browserInputs.length, 23);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -1519,7 +2143,7 @@ test("manifest-seeded child reports count New Recruit reuse without remote mutat
     await mkdir(outputDirectory, { recursive: true });
     const source = path.join(outputDirectory, "source.rosz");
     const enriched = path.join(outputDirectory, "enriched.rosz");
-    const content = enrichedFixture(candidate);
+    const content = await enrichedFixture(candidate);
     await Promise.all([
       writeFile(source, content),
       writeFile(enriched, content),
@@ -1642,8 +2266,9 @@ test("manifest-seeded child reports count New Recruit reuse without remote mutat
         .join("\n"),
     );
     assert.equal(resumed.data?.status, "complete");
-    assert.equal(resumed.data?.preparation.remoteMutations, 0);
-    assert.equal(resumed.data?.preparation.cacheReuses, 4);
+    assert.ok(resumed.data?.preparation);
+    assert.equal(resumed.data.preparation.remoteMutations, 0);
+    assert.equal(resumed.data.preparation.cacheReuses, 4);
     assert.equal(deliveryCalls, 4);
     assert.equal(browserCalls, 12);
 
@@ -1745,7 +2370,7 @@ test("enriched-only profile decisions stop before Tessera and resume without red
     await mkdir(outputDirectory, { recursive: true });
     const source = path.join(outputDirectory, "source.rosz");
     const enriched = path.join(outputDirectory, "enriched.rosz");
-    const content = enrichedFixture(
+    const content = await enrichedFixture(
       candidate,
       candidate.id === player.id ? [extraRequirement] : [],
     );
@@ -1968,7 +2593,7 @@ test("build-and-stress keeps roster creation independent and returns a prepare-o
       outputDirectory,
       "enriched.rosz",
     );
-    const content = enrichedFixture(candidate);
+    const content = await enrichedFixture(candidate);
     await Promise.all([
       writeFile(source, content),
       writeFile(enriched, content),
@@ -2105,7 +2730,7 @@ test("bounds transient retries and does not loop terminal failures", async () =>
     await mkdir(outputDirectory, { recursive: true });
     const source = path.join(outputDirectory, "source.rosz");
     const enriched = path.join(outputDirectory, "enriched.rosz");
-    const content = enrichedFixture(candidate);
+    const content = await enrichedFixture(candidate);
     await Promise.all([
       writeFile(source, content),
       writeFile(enriched, content),
@@ -2140,6 +2765,36 @@ test("bounds transient retries and does not loop terminal failures", async () =>
     };
   };
   try {
+    let durableCalls = 0;
+    const durableAttempt = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        executionMode: "simulate",
+        profilePolicyPath,
+        outputDirectory: "durable-attempt-one",
+        rootDir: directory,
+        retryOwner: "durable-job",
+        durableAttemptNumber: 1,
+      },
+      {
+        deliver,
+        wait: async () => undefined,
+        runBrowser: async () => {
+          durableCalls += 1;
+          throw new TesseraAutomationError(
+            "TESSERA_PREMIUM_UNLOCK_TIMEOUT",
+            "Synthetic durable-attempt timeout.",
+          );
+        },
+      },
+    );
+    assert.equal(durableAttempt.ok, false);
+    assert.equal(durableCalls, 1);
+    deliveryCalls = 0;
+
     let transientCalls = 0;
     const transient = await runRosterStressTest(
       player,
@@ -2424,6 +3079,7 @@ test("bounds transient retries and does not loop terminal failures", async () =>
           !path.isAbsolute(filename) &&
           filename.startsWith("artifacts/sha256/"),
       ),
+      JSON.stringify(reportRoszPaths, null, 2),
     );
     await Promise.all(
       reportRoszPaths.map((filename) =>

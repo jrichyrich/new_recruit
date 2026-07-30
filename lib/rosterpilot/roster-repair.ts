@@ -151,9 +151,16 @@ export async function repairRosterDeterministically(
     .sort();
   const mapping = getNewRecruitFactionCatalogue(factionId);
   const blocked = knownBlockedUnitIds(factionId);
-  const requestedCollection = initial.data.constraints.collectionUnitIds
-    ? new Set(initial.data.constraints.collectionUnitIds)
-    : null;
+  const requestedCollection =
+    initial.data.constraints.collectionProfile?.mode === "owned"
+      ? new Set(
+          initial.data.constraints.collectionProfile.units.map(
+            (entry) => entry.unitId,
+          ),
+        )
+      : initial.data.constraints.collectionUnitIds
+        ? new Set(initial.data.constraints.collectionUnitIds)
+        : null;
   const exportableCollection = Object.keys(mapping?.units ?? {})
     .filter((unitId) => !blocked.has(unitId))
     .filter((unitId) => !requestedCollection || requestedCollection.has(unitId))
@@ -172,7 +179,21 @@ export async function repairRosterDeterministically(
         allowNamedCharacters:
           initial.data.constraints.allowNamedCharacters,
         allowLegends: initial.data.constraints.allowLegends,
-        collectionUnitIds: exportableCollection,
+        collectionUnitIds:
+          initial.data.constraints.collectionProfile?.mode === "owned"
+            ? undefined
+            : exportableCollection,
+        collectionProfile:
+          initial.data.constraints.collectionProfile?.mode === "owned"
+            ? {
+                mode: "owned",
+                units:
+                  initial.data.constraints.collectionProfile.units.filter(
+                    (entry) =>
+                      exportableCollection.includes(entry.unitId),
+                  ),
+              }
+            : buildInput.collectionProfile,
         requiredUnitIds:
           initial.data.constraints.requiredUnitIds ??
           buildInput.requiredUnitIds,

@@ -12,3 +12,4 @@ export * from "./roster-repair";
 export * from "./baseline-damage";
 export * from "./stress-summary";
 export * from "./build-and-stress";
+export * from "./build-and-analyze";

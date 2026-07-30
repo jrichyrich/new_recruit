@@ -1,6 +1,7 @@
 import {
   access,
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -12,6 +13,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import {
   spawn,
   type ChildProcessWithoutNullStreams,
@@ -31,6 +33,8 @@ import {
   type LocalAgentNewRecruitProbeResult,
   type LocalAgentTesseraPayload,
   type LocalAgentTesseraResult,
+  type LocalAgentTesseraRunStartPayload,
+  type LocalAgentTesseraRunStartResult,
   type LocalAgentRequest,
   type LocalAgentResponse,
   type LocalAgentStatus,
@@ -59,6 +63,12 @@ const tesseraWorkerPath = path.join(
   "local",
   "tessera",
   "worker.ts",
+);
+const tesseraJobWorkerPath = path.join(
+  projectRoot,
+  "local",
+  "tessera",
+  "job-worker.ts",
 );
 const maximumQueuedJobs = 4;
 const transientTesseraSessionCodes = new Set([
@@ -96,6 +106,7 @@ type LocalAgentServerOptions = {
   workerPath?: string;
   tesseraWorkerPath?: string;
   tesseraPersistentWorkerPath?: string;
+  tesseraJobWorkerPath?: string;
   tesseraSessionTtlMs?: number;
   tesseraSessionCleanupIntervalMs?: number;
 };
@@ -382,6 +393,8 @@ export async function startLocalAgent(
     options.tesseraWorkerPath ?? tesseraWorkerPath;
   const configuredPersistentTesseraWorkerPath =
     options.tesseraPersistentWorkerPath ?? tesseraWorkerPath;
+  const configuredTesseraJobWorkerPath =
+    options.tesseraJobWorkerPath ?? tesseraJobWorkerPath;
   const useInjectedOneShotTesseraWorker =
     options.tesseraWorkerPath !== undefined;
   let activeJob = false;
@@ -962,6 +975,87 @@ export async function startLocalAgent(
     return task;
   }
 
+  async function startTesseraRunWorker(
+    payload: LocalAgentTesseraRunStartPayload,
+  ): Promise<LocalAgentTesseraRunStartResult> {
+    if (
+      !path.isAbsolute(payload.jobPath) ||
+      path.basename(payload.jobPath) !== "tessera-run.json"
+    ) {
+      throw Object.assign(
+        new Error(
+          "The Tessera run manifest must be an absolute tessera-run.json path.",
+        ),
+        { code: "TESSERA_JOB_PATH_INVALID" },
+      );
+    }
+    const metadata = await lstat(payload.jobPath);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw Object.assign(
+        new Error(
+          "The Tessera run manifest must be a regular, non-symlink file.",
+        ),
+        { code: "TESSERA_JOB_PATH_INVALID" },
+      );
+    }
+    const document = JSON.parse(
+      await readFile(payload.jobPath, "utf8"),
+    ) as {
+      jobKind?: unknown;
+      requestPath?: unknown;
+      workerTokenSha256?: unknown;
+    };
+    const tokenSha256 = createHash("sha256")
+      .update(payload.workerToken)
+      .digest("hex");
+    if (
+      document.jobKind !== "rosterpilot-tessera-run" ||
+      typeof document.requestPath !== "string" ||
+      path.resolve(document.requestPath) !==
+        path.resolve(payload.jobPath) ||
+      document.workerTokenSha256 !== tokenSha256
+    ) {
+      throw Object.assign(
+        new Error(
+          "The Tessera run manifest does not match this launch request.",
+        ),
+        { code: "TESSERA_WORKER_IDENTITY_MISMATCH" },
+      );
+    }
+    const worker = spawn(
+      nodeExecutable,
+      [
+        "--import",
+        "tsx",
+        configuredTesseraJobWorkerPath,
+        payload.jobPath,
+        payload.workerToken,
+      ],
+      {
+        cwd: projectRoot,
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+    await new Promise<void>((resolve, reject) => {
+      worker.once("spawn", resolve);
+      worker.once("error", reject);
+    });
+    if (!worker.pid) {
+      throw Object.assign(
+        new Error(
+          "The local agent could not assign a process identity to the Tessera run worker.",
+        ),
+        { code: "TESSERA_RUN_SPAWN_FAILED" },
+      );
+    }
+    worker.unref();
+    return {
+      accepted: true,
+      workerPid: worker.pid,
+    };
+  }
+
   async function handle(request: LocalAgentRequest): Promise<LocalAgentResponse> {
     if (request.protocolVersion !== LOCAL_AGENT_PROTOCOL_VERSION) {
       return {
@@ -982,11 +1076,13 @@ export async function startLocalAgent(
             ? await queuedDelivery(request.payload)
             : request.operation === "new-recruit.probe"
               ? await queuedNewRecruitProbe()
-              : request.operation === "tessera.analyze"
+            : request.operation === "tessera.analyze"
                 ? await queuedTessera(request.payload)
-                : await queuedTesseraSessionClose(
-                    request.payload.sessionId,
-                  );
+                : request.operation === "tessera.session.close"
+                  ? await queuedTesseraSessionClose(
+                      request.payload.sessionId,
+                    )
+                  : await startTesseraRunWorker(request.payload);
       return {
         id: request.id,
         ok: true,

@@ -58,7 +58,7 @@ test("changed-only sees committed certification changes in a clean checkout", as
     assert.deepEqual(
       certificationRelevantChanges({
         cwd: directory,
-        environment: {},
+        environment: { NODE_ENV: "test" },
       }),
       ["lib/rosterpilot/example.ts"],
     );
@@ -90,7 +90,7 @@ test("changed-only skips an established clean commit with no relevant paths", as
     assert.deepEqual(
       certificationRelevantChanges({
         cwd: directory,
-        environment: {},
+        environment: { NODE_ENV: "test" },
       }),
       [],
     );
@@ -107,7 +107,7 @@ test("changed-only runs fail-safe when no Git comparison base is available", asy
     assert.deepEqual(
       certificationRelevantChanges({
         cwd: directory,
-        environment: {},
+        environment: { NODE_ENV: "test" },
       }),
       ["<change-base-unavailable>"],
     );

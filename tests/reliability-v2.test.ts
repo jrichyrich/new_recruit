@@ -75,10 +75,11 @@ test("opponent target language does not become a player composition preference",
       opponentFaction: "orks",
     },
   );
-  assert.equal(parsed.preferences.includes("horde"), false);
-  assert.equal(parsed.preferences.includes("elite"), false);
-  assert.equal(parsed.preferences.includes("durability"), true);
-  assert.equal(parsed.preferences.includes("shooting"), true);
+  const preferences = parsed.preferences ?? [];
+  assert.equal(preferences.includes("horde"), false);
+  assert.equal(preferences.includes("elite"), false);
+  assert.equal(preferences.includes("durability"), true);
+  assert.equal(preferences.includes("shooting"), true);
 });
 
 test("an exact known-opponent request receives mission-safe defaults", async () => {
@@ -401,7 +402,27 @@ test("New Recruit cache verifies hashes and exact enriched summaries", async () 
     const legacyReceipt = JSON.parse(
       await readFile(receiptPath, "utf8"),
     ) as Record<string, unknown>;
+    assert.equal(legacyReceipt.schemaVersion, 3);
+    assert.match(
+      String(legacyReceipt.integritySha256),
+      /^[0-9a-f]{64}$/,
+    );
+    const sealedReceipt = structuredClone(legacyReceipt);
+    legacyReceipt.listUrl =
+      "https://www.newrecruit.eu/app/Lists/tampered";
+    await writeFile(
+      receiptPath,
+      `${JSON.stringify(legacyReceipt, null, 2)}\n`,
+    );
+    assert.equal(
+      await loadNewRecruitCache(renamed.data),
+      null,
+      "a changed v3 receipt must fail its integrity seal",
+    );
+    Object.assign(legacyReceipt, sealedReceipt);
+    legacyReceipt.schemaVersion = 2;
     delete legacyReceipt.uiIdentity;
+    delete legacyReceipt.integritySha256;
     await writeFile(
       receiptPath,
       `${JSON.stringify(legacyReceipt, null, 2)}\n`,

@@ -676,6 +676,7 @@ export function classifyNamedCharacterSpecialistCapability(
   expected: NamedCharacterSpecialistExpectation,
   observed:
     | "included"
+    | "buildable-not-simulated"
     | "not-applicable"
     | "unavailable-after-evaluation",
 ): {
@@ -698,6 +699,17 @@ export function classifyNamedCharacterSpecialistCapability(
   }
   if (observed === "included") {
     return { status: "pass", code: null };
+  }
+  if (observed === "buildable-not-simulated") {
+    return expected === "review-pending"
+      ? {
+          status: "degraded",
+          code: "CERTIFICATION_NAMED_SPECIALIST_REVIEW_REQUIRED",
+        }
+      : {
+          status: "pass",
+          code: null,
+        };
   }
   if (observed === "not-applicable") {
     return expected === "review-pending"
@@ -897,6 +909,61 @@ const RuntimeProvenanceSchema = z
     sourceFingerprintNow: z.string().min(1),
     buildId: z.string().min(1),
     stale: z.boolean(),
+    nodeVersion: z.string().min(1).optional(),
+    platform: z.string().min(1).optional(),
+    architecture: z.string().min(1).optional(),
+    chromeVersion: z.string().min(1).nullable().optional(),
+    playwrightVersion: z.string().min(1).nullable().optional(),
+    brokerBuildId: z.string().min(1).nullable().optional(),
+    macOsVersion: z.string().min(1).nullable().optional(),
+    localAgentExpectedProtocolVersion:
+      z.number().int().nonnegative().optional(),
+    localAgentExpectedVersion: z.string().min(1).optional(),
+    localAgentObservedStatus: z
+      .object({
+        available: z.boolean(),
+        version: z.string().min(1).nullable(),
+        protocolVersion: z
+          .number()
+          .int()
+          .nonnegative()
+          .nullable(),
+        protocolCompatible: z.boolean(),
+        projectDirectory: z.string().min(1).nullable(),
+        nodeExecutable: z.string().min(1).nullable(),
+        browserAvailable: z.boolean().nullable(),
+        brokerAvailable: z.boolean().nullable(),
+        runtimeBuildId: z.string().min(1).nullable(),
+        runtimeSourceFingerprint:
+          z.string().min(1).nullable(),
+        statusErrorCode: z.string().min(1).nullable(),
+      })
+      .strict()
+      .optional(),
+    localAgentProcessIdentity: z
+      .object({
+        label: z.string().min(1),
+        pid: z.number().int().positive().nullable(),
+        state: z.string().min(1).nullable(),
+        program: z.string().min(1).nullable(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    mcpBuildId: z.string().min(1).nullable().optional(),
+    runtimeProcessIdentity: z
+      .object({
+        pid: z.number().int().positive(),
+        executable: z.string().min(1),
+      })
+      .strict()
+      .optional(),
+    dataReleaseId: z.string().min(1).optional(),
+    dataFreshnessCheckedAt:
+      z.string().datetime().nullable().optional(),
+    dataGeneratedAt: z.string().datetime({
+      offset: true,
+    }).nullable().optional(),
   })
   .strict();
 

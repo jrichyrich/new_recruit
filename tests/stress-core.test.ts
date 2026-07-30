@@ -6,15 +6,18 @@ import {
   assessMissionReadinessRevisionGuardrail,
   buildRoster,
   conflictBlocksAllUnitConfigurations,
+  evaluateTesseraStressPortfolioContract,
   exportRoster,
   generateFactionStressPortfolio,
   previewFactionStressPortfolio,
   rosterExecutionFingerprint,
+  rosterSimulationDistance,
   rosterStructuralDistance,
   rosterStructuralFingerprint,
   validateRoster,
   type RosterDraftV1,
   type TesseraMissionReadinessReport,
+  type TesseraStressPortfolioItem,
 } from "../lib/rosterpilot";
 
 function roster(
@@ -68,6 +71,11 @@ test("structural fingerprints ignore presentation fields and expose list changes
     rosterExecutionFingerprint(base),
     rosterExecutionFingerprint(dispositionChanged),
   );
+  assert.equal(
+    rosterSimulationDistance(base, dispositionChanged),
+    0,
+    "detachment/disposition-only changes are not execution-payload diversity",
+  );
 
   const changed: RosterDraftV1 = {
     ...base,
@@ -78,6 +86,17 @@ test("structural fingerprints ignore presentation fields and expose list changes
     rosterStructuralFingerprint(changed),
   );
   assert.ok(rosterStructuralDistance(base, changed) > 0);
+  assert.equal(rosterSimulationDistance(base, changed), 0);
+
+  const payloadChanged: RosterDraftV1 = {
+    ...base,
+    units: base.units.map((unit, index) =>
+      index === 0
+        ? { ...unit, points: unit.points + 5 }
+        : unit,
+    ),
+  };
+  assert.ok(rosterSimulationDistance(base, payloadChanged) > 0);
 });
 
 test("scoped point conflicts do not poison every configuration of a unit", () => {
@@ -140,7 +159,7 @@ test("generates deterministic, exportable core and diverse faction portfolios", 
     suite: "core-3",
   });
   assert.equal(first.ok, true);
-  assert.equal(first.data?.generatorVersion, "faction-stress-v4");
+  assert.equal(first.data?.generatorVersion, "faction-stress-v6");
   assert.equal(first.data?.coverage.intended, 3);
   assert.deepEqual(
     first.data?.items.map((item) => item.fingerprint),
@@ -163,20 +182,15 @@ test("generates deterministic, exportable core and diverse faction portfolios", 
   assert.equal(diverse.ok, true);
   assert.equal(diverse.data?.coverage.intended, 9);
   assert.equal(diverse.data?.items.length, 9);
-  assert.ok(
-    diverse.data?.items.some(
-      (item) =>
-        item.composition === "mass" &&
-        item.status === "unavailable" &&
-        item.omissionReason,
-    ),
-  );
   const ready = diverse.data?.items.filter(
     (item) => item.status === "ready",
   );
   assert.ok(ready);
+  assert.equal(ready.length, 9);
   assert.equal(
-    new Set(ready.map((item) => item.fingerprint)).size,
+    new Set(
+      ready.map((item) => item.simulationFingerprint),
+    ).size,
     ready.length,
   );
   for (const item of ready) {
@@ -193,9 +207,10 @@ test("generates deterministic, exportable core and diverse faction portfolios", 
         item.roster.pointsLimit *
           (1 - (diverse.data?.pointsTolerancePercent ?? 5) / 100),
     );
-    if (item.composition === "elite-heavy") {
-      assert.ok((item.traits?.eliteHeavyPointsPercent ?? 0) >= 0.4);
-    }
+    assert.match(
+      item.compositionEvidence[0] ?? "",
+      /adaptive lens/i,
+    );
   }
   assert.deepEqual(
     diverse.data?.coverage.representedCells.map(
@@ -231,10 +246,13 @@ test("named-character specialist coverage is independent from core posture cover
   );
   assert.equal(
     aeldari.data.coverage.namedCharacterCoverageStatus,
-    "included",
+    "buildable-not-simulated",
   );
-  assert.equal(aeldari.data.coverage.namedCharacterCoverage, true);
-  assert.equal(aeldari.data.coverage.namedCharacterCoverageReason, null);
+  assert.equal(aeldari.data.coverage.namedCharacterCoverage, false);
+  assert.match(
+    aeldari.data.coverage.namedCharacterCoverageReason ?? "",
+    /not one of the simulated core-3 portfolio payloads/i,
+  );
   assert.match(
     aeldari.data.coverage
       .namedCharacterSpecialistStructuralFingerprint ?? "",
@@ -259,15 +277,16 @@ test("named-character specialist coverage is independent from core posture cover
   assert.ok(adeptusAstartes.data);
   assert.equal(
     adeptusAstartes.data.coverage.namedCharacterCoverageStatus,
-    "included",
+    "buildable-not-simulated",
   );
   assert.equal(
     adeptusAstartes.data.coverage.namedCharacterCoverage,
-    true,
+    false,
   );
-  assert.equal(
-    adeptusAstartes.data.coverage.namedCharacterCoverageReason,
-    null,
+  assert.match(
+    adeptusAstartes.data.coverage
+      .namedCharacterCoverageReason ?? "",
+    /not one of the simulated core-3 portfolio payloads/i,
   );
   assert.match(
     adeptusAstartes.data.coverage
@@ -406,7 +425,7 @@ test("elite factions generate faction-feasible balanced, ranged, and assault cor
   }
 });
 
-test("Custodes portfolios use feasible elite density and degrade truthfully", async () => {
+test("Custodes portfolios use feasible faction-relative density", async () => {
   const core = await previewFactionStressPortfolio({
     faction: "adeptus-custodes",
     pointsLimit: 1000,
@@ -440,9 +459,226 @@ test("Custodes portfolios use feasible elite density and degrade truthfully", as
   });
   assert.equal(diverse.ok, true);
   assert.equal(diverse.data?.gates.executionViable, true);
-  assert.equal(diverse.data?.gates.completeCoverage, false);
-  assert.equal(diverse.data?.gates.maximumResultStatus, "degraded");
-  assert.ok((diverse.data?.gates.missingCells.length ?? 0) > 0);
+  assert.equal(diverse.data?.gates.completeCoverage, true);
+  assert.equal(diverse.data?.gates.maximumResultStatus, "complete");
+  assert.equal(diverse.data?.gates.minimumUniqueRequired, 6);
+  assert.equal(diverse.data?.gates.uniqueSimulationPayloads, 9);
+  assert.deepEqual(diverse.data?.gates.missingCells, []);
+});
+
+test("Aeldari 2000 produces nine payload-distinct adaptive stress proxies", async () => {
+  const preview = await previewFactionStressPortfolio({
+    faction: "aeldari",
+    pointsLimit: 2000,
+    suite: "diverse-9",
+    pointsTolerancePercent: 5,
+    allowLegends: false,
+  });
+  assert.equal(
+    preview.ok,
+    true,
+    preview.violations.map((violation) => violation.message).join("; "),
+  );
+  const previewData = preview.data;
+  assert.ok(previewData);
+  assert.equal(previewData.gates.completeCoverage, true);
+  assert.equal(previewData.gates.maximumResultStatus, "complete");
+  assert.equal(previewData.gates.minimumUniqueRequired, 6);
+  assert.equal(previewData.gates.uniqueSimulationPayloads, 9);
+  assert.equal(previewData.gates.exportable, 9);
+  assert.deepEqual(previewData.gates.missingCells, []);
+  assert.equal(
+    previewData.portfolio.contract?.lensDefinition?.metricVersion,
+    "roster-threat-properties-v1",
+  );
+  assert.equal(
+    previewData.portfolio.contract?.lensDefinition?.reviewStatus,
+    "generated-pending-review",
+  );
+  assert.deepEqual(
+    previewData.portfolio.contract?.lensDefinition?.metrics,
+    [
+      "model-density",
+      "points-per-model",
+      "infantry-share",
+      "vehicle-monster-share",
+      "ranged-pressure",
+      "melee-pressure",
+      "mobility",
+      "unit-concentration",
+    ],
+  );
+  assert.equal(
+    previewData.portfolio.contract?.lensDefinition?.postures.length,
+    3,
+  );
+  assert.equal(
+    new Set(
+      previewData.items.map(
+        (item) => item.simulationFingerprint,
+      ),
+    ).size,
+    9,
+  );
+
+  for (const posture of [
+    "balanced-control",
+    "ranged-pressure",
+    "assault-pressure",
+  ] as const) {
+    const postureItems: TesseraStressPortfolioItem[] =
+      previewData.portfolio.items.filter(
+        (item) => item.posture === posture,
+      );
+    const mass = postureItems.find(
+      (item) => item.composition === "mass",
+    );
+    const mixed = postureItems.find(
+      (item) => item.composition === "mixed",
+    );
+    const elite = postureItems.find(
+      (item) => item.composition === "elite-heavy",
+    );
+    assert.equal(mass?.status, "ready");
+    assert.equal(mixed?.status, "ready");
+    assert.equal(elite?.status, "ready");
+    assert.ok(
+      (mass?.traits?.modelCount ?? 0) >=
+        (mixed?.traits?.modelCount ?? 0),
+    );
+    assert.ok(
+      (mixed?.traits?.modelCount ?? 0) >=
+        (elite?.traits?.modelCount ?? 0),
+    );
+    assert.match(
+      mass?.compositionEvidence.join(" ") ?? "",
+      /horde-tagged points \(context only; not a gate\)/i,
+    );
+  }
+  assert.equal(
+    previewData.gates.namedCharacterCoverageStatus,
+    "buildable-not-simulated",
+  );
+  assert.equal(previewData.gates.namedCharacterCoverage, false);
+});
+
+test("diverse-9 expands a constrained faction pool until every cell has a unique payload", async () => {
+  const preview = await previewFactionStressPortfolio({
+    faction: "chaos-knights",
+    pointsLimit: 1000,
+    suite: "diverse-9",
+    pointsTolerancePercent: 5,
+    allowLegends: false,
+  });
+  assert.equal(preview.ok, true);
+  assert.ok(preview.data);
+  assert.equal(preview.data.gates.minimumUniqueRequired, 6);
+  assert.equal(preview.data.gates.executionViable, true);
+  assert.equal(preview.data.gates.completeCoverage, true);
+  assert.equal(preview.data.gates.allPosturesRepresented, true);
+  assert.equal(preview.data.gates.accepted, true);
+  assert.equal(preview.data.gates.uniqueSimulationPayloads, 9);
+  const unavailable = preview.data.portfolio.items.filter(
+    (item) => item.status === "unavailable",
+  );
+  assert.equal(unavailable.length, 0);
+});
+
+test("shared portfolio contract requires three core postures and release-bound diverse exceptions", () => {
+  const generatedCore = generateFactionStressPortfolio({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    suite: "core-3",
+  });
+  assert.ok(generatedCore.data);
+  const incompleteCore = structuredClone(generatedCore.data);
+  const removedCore = incompleteCore.items[0];
+  removedCore.status = "unavailable";
+  removedCore.roster = null;
+  removedCore.simulationFingerprint = null;
+  const coreContract =
+    evaluateTesseraStressPortfolioContract(incompleteCore);
+  assert.equal(coreContract.accepted, false);
+  assert.equal(coreContract.minimumUniqueRequired, 3);
+  assert.equal(
+    coreContract.violation?.code,
+    "PORTFOLIO_CONTRACT_UNMET",
+  );
+
+  const generatedDiverse = generateFactionStressPortfolio({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    suite: "diverse-9",
+  });
+  assert.ok(generatedDiverse.data);
+  const reviewed = structuredClone(generatedDiverse.data);
+  for (const item of reviewed.items.filter(
+    (candidate) => candidate.composition === "mass",
+  )) {
+    item.status = "unavailable";
+    item.roster = null;
+    item.simulationFingerprint = null;
+    item.omissionReason =
+      "Reviewed fixture exception for this exact cell.";
+    item.warnings = [
+      {
+        code: "STRESS_TEMPLATE_NOT_APPLICABLE",
+        message:
+          "This exact faction cell was reviewed and is not applicable.",
+        severity: "warn",
+      },
+    ];
+  }
+  const degraded =
+    evaluateTesseraStressPortfolioContract(reviewed);
+  assert.equal(degraded.accepted, false);
+  assert.equal(degraded.maximumResultStatus, null);
+  assert.equal(degraded.uniqueSimulationPayloads, 6);
+  assert.equal(degraded.minimumPosturesRequired, 3);
+  assert.equal(
+    degraded.reviewedNotApplicableTemplateIds.length,
+    0,
+  );
+  assert.equal(
+    degraded.unreviewedMissingTemplateIds.length,
+    3,
+  );
+  assert.equal(
+    degraded.violation?.code,
+    "PORTFOLIO_CONTRACT_UNMET",
+  );
+
+  reviewed.items.find(
+    (item) =>
+      item.status === "unavailable" &&
+      item.composition === "mass",
+  )!.warnings = [
+    {
+      code: "STRESS_TEMPLATE_UNREVIEWED",
+      message: "This missing cell has not been reviewed.",
+      severity: "warn",
+    },
+  ];
+  const unreviewed =
+    evaluateTesseraStressPortfolioContract(reviewed);
+  assert.equal(unreviewed.accepted, false);
+  assert.equal(
+    unreviewed.violation?.code,
+    "PORTFOLIO_CONTRACT_UNMET",
+  );
+  assert.equal(unreviewed.unreviewedMissingTemplateIds.length, 3);
+
+  const tamperedLens = structuredClone(generatedDiverse.data);
+  assert.ok(tamperedLens.contract?.lensDefinition);
+  tamperedLens.contract.lensDefinition.postures[0].ranges.modelCount[0] +=
+    1;
+  const tamperedContract =
+    evaluateTesseraStressPortfolioContract(tamperedLens);
+  assert.equal(tamperedContract.accepted, false);
+  assert.equal(
+    tamperedContract.violation?.code,
+    "PORTFOLIO_CONTRACT_UNMET",
+  );
 });
 
 test("mission readiness uses scaled thresholds and structured provenance", () => {

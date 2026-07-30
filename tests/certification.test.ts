@@ -30,7 +30,10 @@ import {
   exportRoster,
   validateRoster,
 } from "../lib/rosterpilot/engine";
-import { buildExportableRosterCandidate } from "../lib/rosterpilot/stress-portfolio";
+import {
+  buildExportableRosterCandidate,
+  rosterExecutionFingerprint,
+} from "../lib/rosterpilot/stress-portfolio";
 import type { RosterDraftV1 } from "../lib/rosterpilot/types";
 import {
   sanitizeConnectorFixture,
@@ -746,6 +749,31 @@ test("deterministic certification validates a complete faction contract", async 
   );
 });
 
+test("keeps the 2,000-point T’au representative stable across repeated builds", () => {
+  const faction = manifest.factions.find(
+    (candidate) => candidate.id === "tau-empire",
+  );
+  assert.ok(faction);
+  const contract = faction.representativeRosters.find(
+    (candidate) => candidate.id === "core-2000",
+  );
+  assert.ok(contract?.goldenEvidence);
+
+  const fingerprints = Array.from({ length: 16 }, () =>
+    rosterExecutionFingerprint(
+      buildCertificationRepresentative({
+        manifest,
+        faction,
+        contract,
+      }).roster,
+    ),
+  );
+  assert.deepEqual(
+    [...new Set(fingerprints)],
+    [contract.goldenEvidence.executionFingerprint],
+  );
+});
+
 test("a legal representative selection change fails its pinned golden contract", async () => {
   const focused = structuredClone(manifest);
   const faction = focused.factions.find(
@@ -1269,6 +1297,23 @@ test("named-character specialist capability is reported separately from core pos
       "included",
     ),
     { status: "pass", code: null },
+  );
+  assert.deepEqual(
+    classifyNamedCharacterSpecialistCapability(
+      "required",
+      "buildable-not-simulated",
+    ),
+    { status: "pass", code: null },
+  );
+  assert.deepEqual(
+    classifyNamedCharacterSpecialistCapability(
+      "review-pending",
+      "buildable-not-simulated",
+    ),
+    {
+      status: "degraded",
+      code: "CERTIFICATION_NAMED_SPECIALIST_REVIEW_REQUIRED",
+    },
   );
   assert.deepEqual(
     classifyNamedCharacterSpecialistCapability(

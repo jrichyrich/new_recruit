@@ -61,6 +61,72 @@ export const DraftUnitSchema = z
 
 export type DraftUnit = z.infer<typeof DraftUnitSchema>;
 
+export const CollectionProfileSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      mode: z.literal("open-catalog"),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("owned"),
+      units: z.array(
+        z
+          .object({
+            unitId: z.string().min(1),
+            maxUnits: z.number().int().positive().optional(),
+            maxModels: z.number().int().positive().optional(),
+          })
+          .strict(),
+      ),
+    })
+    .strict(),
+]);
+
+export type CollectionProfile = z.infer<typeof CollectionProfileSchema>;
+
+export const OpponentThreatProfileSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    factionId: z.string().min(1),
+    rosterFingerprint: z.string().min(1).nullable(),
+    bodyCount: z.number().int().nonnegative().nullable(),
+    averagePointsPerModel: z.number().nonnegative().nullable(),
+    eliteShare: z.number().min(0).max(1),
+    hordeShare: z.number().min(0).max(1),
+    mobilityShare: z.number().min(0).max(1),
+    vehicleMonsterShare: z.number().min(0).max(1),
+    rangedShare: z.number().min(0).max(1),
+    meleeShare: z.number().min(0).max(1),
+    objectiveShare: z.number().min(0).max(1),
+    durabilityShare: z.number().min(0).max(1),
+    durabilityBands: z
+      .object({
+        light: z.number().min(0).max(1),
+        medium: z.number().min(0).max(1),
+        heavy: z.number().min(0).max(1),
+      })
+      .strict(),
+    keyTargetProfiles: z.array(
+      z
+        .object({
+          unitId: z.string().min(1),
+          name: z.string().min(1),
+          modelCount: z.number().int().positive(),
+          points: z.number().int().nonnegative(),
+          toughness: z.number().nonnegative(),
+          wounds: z.number().nonnegative(),
+          save: z.number().nonnegative(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type OpponentThreatProfile = z.infer<
+  typeof OpponentThreatProfileSchema
+>;
+
 export const RosterConstraintsSchema = z
   .object({
     allowNamedCharacters: z.boolean(),
@@ -70,6 +136,10 @@ export const RosterConstraintsSchema = z
     excludedUnitIds: z.array(z.string().min(1)).optional(),
     requiredWarlordUnitId: z.string().min(1).nullable().optional(),
     opponentFactionId: z.string().min(1).nullable().optional(),
+    collectionProfile: CollectionProfileSchema.nullable().optional(),
+    opponentRosterFingerprint: z.string().min(1).nullable().optional(),
+    opponentThreatProfile:
+      OpponentThreatProfileSchema.nullable().optional(),
   })
   .strict();
 
@@ -156,15 +226,21 @@ export type BuildRosterInput = {
   allowNamedCharacters?: boolean;
   allowLegends?: boolean;
   collectionUnitIds?: string[];
+  collectionProfile?: CollectionProfile;
   requiredUnitIds?: string[];
   excludedUnitIds?: string[];
   requiredWarlordUnitId?: string;
   detachmentId?: string;
   forceDispositionId?: string;
-  opponentContext?: {
-    kind: "known-faction";
-    factionId: string;
-  };
+  opponentContext?:
+    | {
+        kind: "known-faction";
+        factionId: string;
+      }
+    | {
+        kind: "known-roster";
+        roster: RosterDraftV1;
+      };
   mixedThreatIntent?: boolean;
   /**
    * Internal retry contract used by portfolio generation. These exclusions
@@ -576,6 +652,8 @@ export type TesseraPreparedRoster = {
   listUrl: string | null;
   sourceRoszPath: string;
   enrichedRoszPath: string;
+  sourceRoszSha256?: string;
+  enrichedRoszSha256?: string;
   summary: EnrichedRoszSummary;
   fingerprint?: string;
   units?: TesseraUnitInstance[];
@@ -630,7 +708,10 @@ export type TesseraMatchupReport = {
     kind: "roster" | "rosz" | "faction-archetype";
     archetype?: TesseraArchetype;
     rosterName: string;
+    sourceRoszPath?: string;
     enrichedRoszPath: string;
+    sourceRoszSha256?: string;
+    enrichedRoszSha256?: string;
     summary: EnrichedRoszSummary;
     fingerprint?: string;
     units?: TesseraUnitInstance[];
@@ -690,7 +771,11 @@ export type TesseraMatchupReport = {
     warnings: string[];
   }>;
   artifacts: Array<{
-    format: "matchup-json" | "matchup-html" | "baseline-json";
+    format:
+      | "matchup-json"
+      | "matchup-html"
+      | "matchup-receipt"
+      | "baseline-json";
     written: string;
   }>;
 };
@@ -725,6 +810,22 @@ export type TesseraRevisionDelta = {
   classification: "improved" | "worsened" | "unchanged" | "ambiguous";
 };
 
+export type TesseraRevisionAggregate = {
+  metric: TesseraMetric;
+  direction: TesseraDirection;
+  opponentNames: string[];
+  phases: TesseraPhase[];
+  expectedScenarios: number;
+  applicableScenarios: number;
+  baselineCells: number;
+  revisedCells: number;
+  before: number | null;
+  after: number | null;
+  directionalChange: number | null;
+  materialityThreshold: number | null;
+  classification: "improved" | "worsened" | "unchanged" | "ambiguous";
+};
+
 export type TesseraRevisionComparisonReport = {
   schemaVersion: 2;
   runId: string;
@@ -734,11 +835,27 @@ export type TesseraRevisionComparisonReport = {
   revisedRosterFingerprint: string;
   revisedReports: TesseraMatchupReport[];
   deltas: TesseraRevisionDelta[];
+  /**
+   * Trusted roster-level aggregates used for the conclusion. Cell deltas are
+   * retained as compatibility and drill-down evidence only.
+   */
+  aggregates?: TesseraRevisionAggregate[];
   summary: {
+    /** Compatibility counts for the cell-level `deltas` collection. */
     improved: number;
     worsened: number;
     unchanged: number;
     ambiguous: number;
+    aggregateCounts?: {
+      improved: number;
+      worsened: number;
+      unchanged: number;
+      ambiguous: number;
+      applicable: number;
+      total: number;
+    };
+    conclusionBasis?: "trusted-roster-aggregates";
+    conclusion?: "improved" | "worsened" | "mixed" | "unchanged";
   };
   limitations: string[];
   warnings: string[];
@@ -758,6 +875,7 @@ export type TesseraStressPortfolioItemStatus = "ready" | "unavailable";
 
 export type TesseraNamedCharacterCoverageStatus =
   | "included"
+  | "buildable-not-simulated"
   | "not-applicable"
   | "unavailable-after-evaluation";
 
@@ -785,6 +903,22 @@ export type TesseraStressPortfolioTraits = {
   unitCount: number;
   roleCount: number;
   pointsUtilization: number;
+  /** Present on adaptive-threat-lenses-v2 portfolios. */
+  pointsPerModel?: number;
+  /** Share of roster points carried by actual INFANTRY datasheets. */
+  infantryPointsPercent?: number;
+  /** Share of roster points carried by actual VEHICLE datasheets. */
+  vehiclePointsPercent?: number;
+  /** Share of roster points carried by actual MONSTER datasheets. */
+  monsterPointsPercent?: number;
+  /** Normalized selected-weapon pressure within this roster. */
+  rangedPressurePercent?: number;
+  /** Normalized selected-weapon pressure within this roster. */
+  meleePressurePercent?: number;
+  /** Points-weighted movement/deployment pressure, normalized to 0..1. */
+  mobilityPressurePercent?: number;
+  /** Largest single unit's share of roster points. */
+  unitConcentrationPercent?: number;
   hordeModelCount: number;
   hordePoints: number;
   hordePointsPercent: number;
@@ -815,6 +949,47 @@ export type TesseraStressPortfolioItem = {
 export type TesseraStressPortfolio = {
   schemaVersion: 1;
   generatorVersion: string;
+  contract?: {
+    schemaVersion: 1;
+    methodology: "adaptive-threat-lenses-v1";
+    sourceReleaseId: string;
+    reviewedNotApplicableTemplateIds: string[];
+    /**
+     * New v5 portfolios bind the faction-relative property ranges used by
+     * every lens. Older persisted portfolios omit this field and are migrated
+     * by the stress-manifest reader.
+     */
+    lensDefinition?: {
+      schemaVersion: 1;
+      metricVersion: "roster-threat-properties-v1";
+      reviewStatus: "generated-pending-review" | "reviewed";
+      metrics: Array<
+        | "model-density"
+        | "points-per-model"
+        | "infantry-share"
+        | "vehicle-monster-share"
+        | "ranged-pressure"
+        | "melee-pressure"
+        | "mobility"
+        | "unit-concentration"
+      >;
+      postures: Array<{
+        posture: TesseraArchetype;
+        candidateCount: number;
+        ranges: {
+          modelCount: [number, number];
+          pointsPerModel: [number, number];
+          infantryPointsPercent: [number, number];
+          vehicleMonsterPointsPercent: [number, number];
+          rangedPressurePercent: [number, number];
+          meleePressurePercent: [number, number];
+          mobilityPressurePercent: [number, number];
+          unitConcentrationPercent: [number, number];
+        };
+      }>;
+    };
+    fingerprint: string;
+  };
   suite: TesseraStressSuite;
   factionId: string;
   factionName: string;
@@ -1254,6 +1429,7 @@ export type TesseraStressTestReport = {
   opponentFactionId: string;
   configuration: TesseraStressConfiguration;
   suite: TesseraStressSuite;
+  portfolioSha256: string;
   portfolio: TesseraStressPortfolio;
   frozenOpponentArtifacts: TesseraStressFrozenOpponentArtifact[];
   stageProvenance: {
@@ -1346,6 +1522,7 @@ export type TesseraStressPreparationFailureReport = {
   opponentFactionId: string;
   configuration: TesseraStressConfiguration;
   suite: TesseraStressSuite;
+  portfolioSha256: string;
   portfolio: TesseraStressPortfolio;
   stageProvenance: {
     screening: null;
@@ -1442,6 +1619,42 @@ export type RuntimeProvenance = {
   sourceFingerprintNow: string;
   buildId: string;
   stale: boolean;
+  nodeVersion?: string;
+  platform?: string;
+  architecture?: string;
+  chromeVersion?: string | null;
+  playwrightVersion?: string | null;
+  brokerBuildId?: string | null;
+  macOsVersion?: string | null;
+  localAgentExpectedProtocolVersion?: number;
+  localAgentExpectedVersion?: string;
+  localAgentObservedStatus?: {
+    available: boolean;
+    version: string | null;
+    protocolVersion: number | null;
+    protocolCompatible: boolean;
+    projectDirectory: string | null;
+    nodeExecutable: string | null;
+    browserAvailable: boolean | null;
+    brokerAvailable: boolean | null;
+    runtimeBuildId: string | null;
+    runtimeSourceFingerprint: string | null;
+    statusErrorCode: string | null;
+  };
+  localAgentProcessIdentity?: {
+    label: string;
+    pid: number | null;
+    state: string | null;
+    program: string | null;
+  } | null;
+  mcpBuildId?: string | null;
+  runtimeProcessIdentity?: {
+    pid: number;
+    executable: string;
+  };
+  dataReleaseId?: string;
+  dataFreshnessCheckedAt?: string | null;
+  dataGeneratedAt?: string | null;
 };
 
 export type DataStatus = {

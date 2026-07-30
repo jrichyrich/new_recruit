@@ -36,8 +36,8 @@ type RevisionOptions = {
 };
 
 type StressOptions = {
-  suite: TesseraStressSuite;
-  analysisStrategy: TesseraStressAnalysisStrategy;
+  suite?: TesseraStressSuite;
+  analysisStrategy?: TesseraStressAnalysisStrategy;
   resumeManifestPath?: string;
   outputDirectory?: string;
   overwrite: boolean;
@@ -244,12 +244,12 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       }
     ).properties;
     assert.deepEqual(stressProperties.suite.enum, ["core-3", "diverse-9"]);
-    assert.equal(stressProperties.suite.default, "diverse-9");
+    assert.equal(stressProperties.suite.default, undefined);
     assert.deepEqual(stressProperties.analysisStrategy.enum, [
       "staged",
       "full-all",
     ]);
-    assert.equal(stressProperties.analysisStrategy.default, "staged");
+    assert.equal(stressProperties.analysisStrategy.default, undefined);
     assert.equal(stressProperties.outputDirectory.default, undefined);
     assert.equal(stressProperties.responseDetail.default, "compact");
 
@@ -342,8 +342,8 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       rosterId: built.data.id,
       factionId: "aeldari",
       options: {
-        suite: "diverse-9",
-        analysisStrategy: "staged",
+        suite: undefined,
+        analysisStrategy: undefined,
         resumeManifestPath: undefined,
         restartManifestPath: undefined,
         profilePolicyPath: undefined,

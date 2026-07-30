@@ -890,6 +890,41 @@ function revisionControls(
 </form>`;
 }
 
+function revisionAggregateTable(
+  report: TesseraRevisionComparisonReport,
+): string {
+  const aggregates = report.aggregates ?? [];
+  if (aggregates.length === 0) {
+    return "";
+  }
+  return `<section aria-labelledby="aggregate-heading"><h2 id="aggregate-heading">Trusted roster aggregates</h2>
+<p>Each row gives equal weight to every applicable frozen scenario for that metric and direction. Positive directional change favors the revised player roster.</p>
+<div class="table-scroll"><table>
+<thead><tr><th>Metric</th><th>Direction</th><th>Before</th><th>After</th><th>Directional change</th><th>Threshold</th><th>Scenarios</th><th>Result</th></tr></thead>
+<tbody>${aggregates
+    .map(
+      (aggregate) => `<tr>
+<td>${escapeHtml(safeText(aggregate.metric))}</td>
+<td>${escapeHtml(safeText(aggregate.direction))}</td>
+<td>${escapeHtml(displayNumber(safeNumber(aggregate.before)))}</td>
+<td>${escapeHtml(displayNumber(safeNumber(aggregate.after)))}</td>
+<td>${escapeHtml(displayNumber(safeNumber(aggregate.directionalChange)))}</td>
+<td>${escapeHtml(displayNumber(safeNumber(aggregate.materialityThreshold)))}</td>
+<td>${escapeHtml(
+        displayNumber(safeNumber(aggregate.applicableScenarios)),
+      )}/${escapeHtml(
+        displayNumber(safeNumber(aggregate.expectedScenarios)),
+      )}</td>
+<td><span class="badge ${escapeHtml(
+        safeText(aggregate.classification),
+      )}">${escapeHtml(
+        safeText(aggregate.classification),
+      )}</span></td>
+</tr>`,
+    )
+    .join("")}</tbody></table></div></section>`;
+}
+
 export function renderTesseraRevisionComparisonHtml(
   report: TesseraRevisionComparisonReport,
 ): string {
@@ -921,13 +956,25 @@ export function renderTesseraRevisionComparisonHtml(
   )}</p>
 <p class="caution"><strong>Directional combat math only.</strong> Improvements and regressions are not changes in game win probability.</p>
 </header>`;
+  const aggregateCounts = report.summary.aggregateCounts;
   const summary = `<section aria-labelledby="delta-summary-heading"><h2 id="delta-summary-heading">Delta summary</h2>
+${aggregateCounts ? `<p><strong>Roster conclusion:</strong> ${escapeHtml(
+    safeText(report.summary.conclusion, "unchanged"),
+  )}. This conclusion uses trusted roster aggregates; cell deltas do not vote.</p>
+<div class="delta-grid">
+<div class="delta-stat improved"><strong>${aggregateCounts.improved}</strong>Aggregate improved</div>
+<div class="delta-stat worsened"><strong>${aggregateCounts.worsened}</strong>Aggregate worsened</div>
+<div class="delta-stat"><strong>${aggregateCounts.unchanged}</strong>Aggregate unchanged</div>
+<div class="delta-stat ambiguous"><strong>${aggregateCounts.ambiguous}</strong>Aggregate ambiguous</div>
+</div>
+<h3>Cell-level drill-down</h3>` : ""}
 <div class="delta-grid">
 <div class="delta-stat improved"><strong>${report.summary.improved}</strong>Improved</div>
 <div class="delta-stat worsened"><strong>${report.summary.worsened}</strong>Worsened</div>
 <div class="delta-stat"><strong>${report.summary.unchanged}</strong>Unchanged</div>
 <div class="delta-stat ambiguous"><strong>${report.summary.ambiguous}</strong>Ambiguous</div>
 </div></section>
+${revisionAggregateTable(report)}
 <section id="before" aria-labelledby="before-heading"><h2 id="before-heading">Before</h2>
 <p>Baseline run <code>${escapeHtml(safeText(report.baselineRunId))}</code> from <code>${escapeHtml(
     safeText(report.baselineReportPath).split(/[\\/]/).pop() ?? "baseline report",

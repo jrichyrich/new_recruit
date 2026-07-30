@@ -1,8 +1,11 @@
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 
 import {
   buildRoster,
   checkDataFreshness,
+  CollectionProfileSchema,
+  compactBuildAndAnalyzeResult,
   compactBuildAndStressResult,
   compactStressResult,
   compareFactions,
@@ -19,6 +22,9 @@ import {
   type ExportFormat,
   type ModifyRosterOperation,
   type PreferenceTag,
+  type TesseraStressAnalysisStrategy,
+  type TesseraStressPortfolioPreview,
+  type TesseraStressSuite,
 } from "../lib/rosterpilot/index";
 import {
   readRosterDraft,
@@ -32,6 +38,7 @@ import {
   getNewRecruitConnectionStatus,
 } from "../local/new-recruit/companion";
 import {
+  ensureCurrentLocalAgent,
   getLocalAgentLifecycleStatus,
   installLocalAgent,
   restartLocalAgent,
@@ -39,20 +46,28 @@ import {
 } from "../local/agent/lifecycle";
 import {
   analyzeRosterMatchup,
-  compareRosterRevision,
   configureTesseraCredentials,
   forgetTesseraCredentials,
   getTesseraConnectionStatus,
   prepareRosterForTessera,
   type TesseraOpponentInput,
 } from "../local/tessera/companion";
-import {
-  compareRosterStressRevision,
-  runRosterStressTest,
-} from "../local/tessera/stress";
+import { runRosterStressTest } from "../local/tessera/stress";
 import {
   buildAndStressRosterAgainstFaction,
 } from "../local/tessera/full-loop";
+import {
+  buildAndAnalyzeRosterMatchup,
+} from "../local/tessera/exact-full-loop";
+import {
+  cancelTesseraRun,
+  getTesseraRunStatus,
+  resolveTesseraRunProfiles,
+  resumeTesseraRun,
+  startTesseraRun,
+  type TesseraRunRequest,
+} from "../local/tessera/jobs";
+import { ProfilePolicySchema } from "../local/tessera/profile-policy";
 
 type Args = Record<string, string | boolean | string[]>;
 
@@ -101,6 +116,29 @@ function progress(message: string): void {
   process.stderr.write(`[RosterPilot] ${message}\n`);
 }
 
+function shouldStartDurableTesseraRun(
+  executionMode: string | undefined,
+  experimental: boolean,
+  recoveryRequested = false,
+): boolean {
+  return (
+    recoveryRequested ||
+    executionMode === "simulate" ||
+    (executionMode === undefined && experimental)
+  );
+}
+
+function printStartedTesseraRun(
+  job: Awaited<ReturnType<typeof startTesseraRun>>,
+): void {
+  print({
+    status: "in-progress",
+    runId: job.runId,
+    manifestPath: job.manifestPath,
+    job,
+  });
+}
+
 function compactPortfolioPreview(
   result: Awaited<ReturnType<typeof previewFactionStressPortfolio>>,
 ): Record<string, unknown> {
@@ -142,6 +180,33 @@ function compactPortfolioPreview(
   };
 }
 
+async function readPortfolioPreview(
+  filename: string,
+): Promise<TesseraStressPortfolioPreview> {
+  const parsed = JSON.parse(
+    await readFile(path.resolve(filename), "utf8"),
+  ) as unknown;
+  const candidate =
+    parsed &&
+    typeof parsed === "object" &&
+    "data" in parsed &&
+    parsed.data &&
+    typeof parsed.data === "object"
+      ? parsed.data
+      : parsed;
+  if (
+    !candidate ||
+    typeof candidate !== "object" ||
+    !("previewKind" in candidate) ||
+    candidate.previewKind !== "tessera-stress-portfolio"
+  ) {
+    throw new Error(
+      "The portfolio preview file must contain the full successful preview payload produced by preview-portfolio --full-json.",
+    );
+  }
+  return candidate as TesseraStressPortfolioPreview;
+}
+
 function help(): void {
   process.stdout.write(`RosterPilot deterministic army builder
 
@@ -162,6 +227,7 @@ Usage:
   rosterpilot export --file roster.json --format rosz --out roster.rosz [--overwrite]
   rosterpilot agent install
   rosterpilot agent status
+  rosterpilot agent ensure-current
   rosterpilot agent restart
   rosterpilot agent uninstall
   rosterpilot new-recruit configure
@@ -173,11 +239,17 @@ Usage:
   rosterpilot tessera configure
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera]
-  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz | --opponent-roster enemy.json | --opponent-faction necrons) [--archetypes balanced-control,ranged-pressure,assault-pressure] [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates] [--experimental]
+  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates] [--experimental]
   rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite] [--experimental]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
   rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json] [--experimental]
-  rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite] [--experimental]
+  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--portfolio-preview preview.json]
+  rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
+  rosterpilot tessera run-resume --job exports/tessera/runs/run-.../tessera-run.json [--restart-from] [--out-dir exports/tessera]
+  rosterpilot tessera resolve-profiles --job ... --profile-policy profiles.json
+  rosterpilot tessera run-cancel --job exports/tessera/runs/run-.../tessera-run.json
+  rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--profile-policy profiles.json] [--out-dir exports/tessera]
   rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite] [--experimental]
   rosterpilot mcp
 
@@ -265,7 +337,7 @@ async function main(): Promise<void> {
             setupProfile: "tessera",
             requires: [
               "validated player roster",
-              "one opponent roster, .rosz, or faction proxy",
+              "one exact opponent roster or .rosz",
               "New Recruit-enriched profiles",
               "macOS local automation and a Tessera licence key",
             ],
@@ -312,6 +384,8 @@ async function main(): Promise<void> {
         ? await installLocalAgent()
         : action === "status"
           ? await getLocalAgentLifecycleStatus()
+          : action === "ensure-current"
+            ? await ensureCurrentLocalAgent()
           : action === "restart"
             ? await restartLocalAgent()
             : action === "uninstall"
@@ -390,6 +464,285 @@ async function main(): Promise<void> {
       if (!result.ok) process.exitCode = 2;
       return;
     }
+    if (action === "run-status") {
+      const jobPath = value(args, "job");
+      if (!jobPath) {
+        throw new Error("Tessera run-status requires --job.");
+      }
+      print(
+        await getTesseraRunStatus(
+          path.resolve(jobPath),
+          flag(args, "full-json"),
+        ),
+      );
+      return;
+    }
+    if (action === "run-resume") {
+      const jobPath = value(args, "job");
+      if (!jobPath) {
+        throw new Error("Tessera run-resume requires --job.");
+      }
+      print(
+        await resumeTesseraRun(path.resolve(jobPath), {
+          restartFrom: flag(args, "restart-from"),
+          outputDirectory: value(args, "out-dir"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+        }),
+      );
+      return;
+    }
+    if (action === "run-cancel") {
+      const jobPath = value(args, "job");
+      if (!jobPath) {
+        throw new Error("Tessera run-cancel requires --job.");
+      }
+      print(await cancelTesseraRun(path.resolve(jobPath)));
+      return;
+    }
+    if (action === "resolve-profiles") {
+      const jobPath = value(args, "job");
+      const policyPath = value(args, "profile-policy");
+      if (!jobPath || !policyPath) {
+        throw new Error(
+          "Tessera resolve-profiles requires --job and --profile-policy.",
+        );
+      }
+      const policy = ProfilePolicySchema.parse(
+        JSON.parse(await readFile(path.resolve(policyPath), "utf8")),
+      );
+      print(
+        await resolveTesseraRunProfiles(
+          path.resolve(jobPath),
+          policy,
+        ),
+      );
+      return;
+    }
+    if (action === "start-run") {
+      const runKind = value(args, "run-kind");
+      const executionMode = value(args, "execution-mode");
+      if (
+        executionMode &&
+        executionMode !== "prepare-only" &&
+        executionMode !== "simulate"
+      ) {
+        throw new Error(
+          `Unknown Tessera execution mode "${executionMode}".`,
+        );
+      }
+      const suite = value(args, "suite") as
+        | TesseraStressSuite
+        | undefined;
+      if (
+        suite &&
+        suite !== "core-3" &&
+        suite !== "diverse-9"
+      ) {
+        throw new Error(`Unknown Tessera suite "${suite}".`);
+      }
+      const analysisStrategy = value(args, "analysis") as
+        | TesseraStressAnalysisStrategy
+        | undefined;
+      if (
+        analysisStrategy &&
+        analysisStrategy !== "staged" &&
+        analysisStrategy !== "full-all"
+      ) {
+        throw new Error(
+          `Unknown Tessera analysis strategy "${analysisStrategy}".`,
+        );
+      }
+      let request: TesseraRunRequest;
+      if (runKind === "exact") {
+        const playerFile = value(args, "file");
+        const opponentRosterFile = value(args, "opponent-roster");
+        const opponentRoszFile = value(args, "opponent-file");
+        const opponentContextFile = value(
+          args,
+          "opponent-context",
+        );
+        if (!playerFile) {
+          throw new Error(
+            "An exact start-run requires --file.",
+          );
+        }
+        const selectedOpponents =
+          Number(Boolean(opponentRosterFile)) +
+          Number(Boolean(opponentRoszFile));
+        if (selectedOpponents === 0) {
+          throw Object.assign(
+            new Error(
+              "OPPONENT_SCOPE_REQUIRED: provide --opponent-roster or --opponent-file, or use a stress run when only the opponent faction is known.",
+            ),
+            { code: "OPPONENT_SCOPE_REQUIRED" },
+          );
+        }
+        if (selectedOpponents > 1) {
+          throw new Error(
+            "An exact start-run accepts exactly one of --opponent-roster or --opponent-file.",
+          );
+        }
+        if (opponentContextFile && !opponentRoszFile) {
+          throw new Error(
+            "An exact start-run accepts --opponent-context only with --opponent-file.",
+          );
+        }
+        request = {
+          kind: "exact",
+          playerRoster: await readRosterDraft(
+            path.resolve(playerFile),
+          ),
+          opponent: opponentRosterFile
+            ? {
+                kind: "roster",
+                roster: await readRosterDraft(
+                  path.resolve(opponentRosterFile),
+                ),
+              }
+            : {
+                kind: "rosz",
+                path: path.resolve(opponentRoszFile!),
+              },
+          options: {
+            executionMode: executionMode as
+              | "prepare-only"
+              | "simulate"
+              | undefined,
+            profilePolicyPath: value(args, "profile-policy"),
+            opponentRosterContext: opponentContextFile
+              ? await readRosterDraft(
+                  path.resolve(opponentContextFile),
+                )
+              : undefined,
+          },
+        };
+      } else if (runKind === "stress") {
+        const playerFile = value(args, "file");
+        const factionId =
+          value(args, "against-faction") ??
+          value(args, "opponent-faction");
+        if (!playerFile || !factionId) {
+          throw new Error(
+            "A stress start-run requires --file and --against-faction.",
+          );
+        }
+        const portfolioPreviewPath = value(
+          args,
+          "portfolio-preview",
+        );
+        request = {
+          kind: "stress",
+          playerRoster: await readRosterDraft(
+            path.resolve(playerFile),
+          ),
+          factionId,
+          options: {
+            suite,
+            analysisStrategy,
+            executionMode: executionMode as
+              | "prepare-only"
+              | "simulate"
+              | undefined,
+            profilePolicyPath: value(args, "profile-policy"),
+            portfolioPreview: portfolioPreviewPath
+              ? await readPortfolioPreview(
+                  portfolioPreviewPath,
+                )
+              : undefined,
+          },
+        };
+      } else if (runKind === "build-and-stress") {
+        const prompt = value(args, "prompt");
+        const againstFaction = value(args, "against-faction");
+        if (!prompt || !againstFaction) {
+          throw new Error(
+            "A build-and-stress start-run requires --prompt and --against-faction.",
+          );
+        }
+        request = {
+          kind: "build-and-stress",
+          input: {
+            prompt,
+            playerFaction: value(args, "player-faction"),
+            againstFaction,
+            pointsLimit: value(args, "points")
+              ? Number(value(args, "points"))
+              : undefined,
+            requiredUnitIds: list(args, "required-unit"),
+            excludedUnitIds: list(args, "exclude-unit"),
+            requiredWarlordUnitId:
+              value(args, "required-warlord"),
+            suite,
+            analysisStrategy,
+            executionMode: executionMode as
+              | "prepare-only"
+              | "simulate"
+              | undefined,
+            profilePolicyPath: value(args, "profile-policy"),
+            allowReadinessWarnings: flag(
+              args,
+              "allow-readiness-warnings",
+            ),
+          },
+        };
+      } else if (runKind === "build-and-analyze") {
+        const prompt = value(args, "prompt");
+        const opponentRosterFile = value(args, "opponent-roster");
+        if (!prompt || !opponentRosterFile) {
+          throw new Error(
+            "A build-and-analyze start-run requires --prompt and --opponent-roster.",
+          );
+        }
+        const collectionPath = value(args, "collection");
+        request = {
+          kind: "build-and-analyze",
+          input: {
+            prompt,
+            playerFaction: value(args, "player-faction"),
+            pointsLimit: value(args, "points")
+              ? Number(value(args, "points"))
+              : undefined,
+            opponentRoster: await readRosterDraft(
+              path.resolve(opponentRosterFile),
+            ),
+            collectionProfile: collectionPath
+              ? CollectionProfileSchema.parse(
+                  JSON.parse(
+                    await readFile(
+                      path.resolve(collectionPath),
+                      "utf8",
+                    ),
+                  ),
+                )
+              : undefined,
+            requiredUnitIds: list(args, "required-unit"),
+            excludedUnitIds: list(args, "exclude-unit"),
+            requiredWarlordUnitId:
+              value(args, "required-warlord"),
+            executionMode: executionMode as
+              | "prepare-only"
+              | "simulate"
+              | undefined,
+            profilePolicyPath: value(args, "profile-policy"),
+            allowReadinessWarnings: flag(
+              args,
+              "allow-readiness-warnings",
+            ),
+          },
+        };
+      } else {
+        throw new Error(
+          "Tessera start-run requires --run-kind exact, stress, build-and-stress, or build-and-analyze.",
+        );
+      }
+      print(
+        await startTesseraRun(request, {
+          outputDirectory: value(args, "out-dir"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+        }),
+      );
+      return;
+    }
     if (action === "preview-portfolio") {
       const againstFaction =
         value(args, "against-faction") ??
@@ -399,8 +752,14 @@ async function main(): Promise<void> {
           "Tessera preview-portfolio requires --against-faction.",
         );
       }
-      const suite = value(args, "suite") ?? "diverse-9";
-      if (suite !== "core-3" && suite !== "diverse-9") {
+      const suite = value(args, "suite") as
+        | TesseraStressSuite
+        | undefined;
+      if (
+        suite &&
+        suite !== "core-3" &&
+        suite !== "diverse-9"
+      ) {
         throw new Error(`Unknown Tessera portfolio suite "${suite}".`);
       }
       progress("Building a local-only opponent portfolio preview.");
@@ -429,12 +788,21 @@ async function main(): Promise<void> {
           "Tessera build-and-stress requires --prompt and --against-faction.",
         );
       }
-      const suite = value(args, "suite") ?? "diverse-9";
-      if (suite !== "core-3" && suite !== "diverse-9") {
+      const suite = value(args, "suite") as
+        | TesseraStressSuite
+        | undefined;
+      if (
+        suite &&
+        suite !== "core-3" &&
+        suite !== "diverse-9"
+      ) {
         throw new Error(`Unknown Tessera portfolio suite "${suite}".`);
       }
-      const analysisStrategy = value(args, "analysis") ?? "staged";
+      const analysisStrategy = value(args, "analysis") as
+        | TesseraStressAnalysisStrategy
+        | undefined;
       if (
+        analysisStrategy &&
         analysisStrategy !== "staged" &&
         analysisStrategy !== "full-all"
       ) {
@@ -471,6 +839,58 @@ async function main(): Promise<void> {
         throw new Error(
           "Choose either --resume or --restart-from, not both.",
         );
+      }
+      if (
+        shouldStartDurableTesseraRun(
+          executionMode,
+          flag(args, "experimental"),
+          Boolean(resumeManifestPath || restartManifest),
+        )
+      ) {
+        const job = await startTesseraRun(
+          {
+            kind: "build-and-stress",
+            input: {
+              prompt,
+              playerFaction: value(args, "player-faction"),
+              againstFaction,
+              pointsLimit: value(args, "points")
+                ? Number(value(args, "points"))
+                : undefined,
+              requiredUnitIds: list(args, "required-unit"),
+              excludedUnitIds: list(args, "exclude-unit"),
+              requiredWarlordUnitId:
+                value(args, "required-warlord"),
+              suite,
+              analysisStrategy,
+              profilePolicyPath:
+                value(args, "profile-policy"),
+              outputDirectory,
+              resumeManifestPath,
+              restartManifestPath: restartManifest
+                ? path.resolve(restartManifest)
+                : undefined,
+              allowReadinessWarnings: flag(
+                args,
+                "allow-readiness-warnings",
+              ),
+              forceRetry: flag(args, "force-retry"),
+              executionMode: "simulate",
+              experimental: false,
+            },
+            options: {
+              outputDirectory,
+              executionMode: "simulate",
+              experimental: false,
+            },
+          },
+          {
+            outputDirectory,
+            allowOutsideRoot: flag(args, "allow-outside-root"),
+          },
+        );
+        printStartedTesseraRun(job);
+        return;
       }
       progress("Building and deterministically repairing the roster.");
       progress(
@@ -533,6 +953,108 @@ async function main(): Promise<void> {
       if (!result.ok) process.exitCode = 2;
       return;
     }
+    if (action === "build-and-analyze") {
+      const prompt = value(args, "prompt");
+      const opponentRosterFile = value(args, "opponent-roster");
+      if (!prompt || !opponentRosterFile) {
+        throw new Error(
+          "Tessera build-and-analyze requires --prompt and --opponent-roster.",
+        );
+      }
+      const executionMode = value(args, "execution-mode");
+      if (
+        executionMode &&
+        executionMode !== "prepare-only" &&
+        executionMode !== "simulate"
+      ) {
+        throw new Error(
+          `Unknown Tessera execution mode "${executionMode}".`,
+        );
+      }
+      const collectionPath = value(args, "collection");
+      const outputDirectory =
+        value(args, "out-dir") ?? "exports/tessera";
+      const opponentRoster = await readRosterDraft(
+        path.resolve(opponentRosterFile),
+      );
+      const collectionProfile = collectionPath
+        ? CollectionProfileSchema.parse(
+            JSON.parse(
+              await readFile(
+                path.resolve(collectionPath),
+                "utf8",
+              ),
+            ),
+          )
+        : undefined;
+      const buildInput = {
+        prompt,
+        playerFaction: value(args, "player-faction"),
+        pointsLimit: value(args, "points")
+          ? Number(value(args, "points"))
+          : undefined,
+        opponentRoster,
+        collectionProfile,
+        requiredUnitIds: list(args, "required-unit"),
+        excludedUnitIds: list(args, "exclude-unit"),
+        requiredWarlordUnitId:
+          value(args, "required-warlord"),
+        allowReadinessWarnings: flag(
+          args,
+          "allow-readiness-warnings",
+        ),
+        profilePolicyPath: value(args, "profile-policy"),
+        outputDirectory,
+        executionMode: executionMode as
+          | "prepare-only"
+          | "simulate"
+          | undefined,
+        experimental: flag(args, "experimental"),
+      };
+      if (
+        shouldStartDurableTesseraRun(
+          executionMode,
+          flag(args, "experimental"),
+        )
+      ) {
+        const job = await startTesseraRun(
+          {
+            kind: "build-and-analyze",
+            input: {
+              ...buildInput,
+              executionMode: "simulate",
+              experimental: false,
+            },
+            options: {
+              outputDirectory,
+              executionMode: "simulate",
+              experimental: false,
+            },
+          },
+          {
+            outputDirectory,
+            allowOutsideRoot: flag(args, "allow-outside-root"),
+          },
+        );
+        printStartedTesseraRun(job);
+        return;
+      }
+      const result = await buildAndAnalyzeRosterMatchup(
+        buildInput,
+        {
+          outputDirectory,
+          overwrite: flag(args, "overwrite"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+        },
+      );
+      print(
+        flag(args, "full-json")
+          ? result
+          : compactBuildAndAnalyzeResult(result),
+      );
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
     if (action === "compare-revision") {
       const baselineReport = value(args, "baseline-report");
       const revisedRosterFile = value(args, "revised-roster");
@@ -544,18 +1066,27 @@ async function main(): Promise<void> {
       const revisedRoster = await readRosterDraft(
         path.resolve(revisedRosterFile),
       );
-      const result = await compareRosterRevision(
-        path.resolve(baselineReport),
-        revisedRoster,
+      const outputDirectory =
+        value(args, "out-dir") ?? "exports/tessera";
+      const job = await startTesseraRun(
         {
-          outputDirectory: value(args, "out-dir") ?? "exports/tessera",
-          overwrite: flag(args, "overwrite"),
+          kind: "exact-revision",
+          baselineReportPath: path.resolve(baselineReport),
+          revisedRoster,
+          options: {
+            outputDirectory,
+            profilePolicyPath:
+              value(args, "profile-policy"),
+            executionMode: "simulate",
+            experimental: false,
+          },
+        },
+        {
+          outputDirectory,
           allowOutsideRoot: flag(args, "allow-outside-root"),
-          experimental: flag(args, "experimental"),
         },
       );
-      print(result);
-      if (!result.ok) process.exitCode = 2;
+      printStartedTesseraRun(job);
       return;
     }
     if (action === "compare-stress-revision") {
@@ -569,18 +1100,25 @@ async function main(): Promise<void> {
       const revisedRoster = await readRosterDraft(
         path.resolve(revisedRosterFile),
       );
-      const result = await compareRosterStressRevision(
-        path.resolve(baselineReport),
-        revisedRoster,
+      const outputDirectory =
+        value(args, "out-dir") ?? "exports/tessera";
+      const job = await startTesseraRun(
         {
-          outputDirectory: value(args, "out-dir") ?? "exports/tessera",
-          overwrite: flag(args, "overwrite"),
+          kind: "stress-revision",
+          baselineReportPath: path.resolve(baselineReport),
+          revisedRoster,
+          options: {
+            outputDirectory,
+            executionMode: "simulate",
+            experimental: false,
+          },
+        },
+        {
+          outputDirectory,
           allowOutsideRoot: flag(args, "allow-outside-root"),
-          experimental: flag(args, "experimental"),
         },
       );
-      print(result);
-      if (!result.ok) process.exitCode = 2;
+      printStartedTesseraRun(job);
       return;
     }
     const inputFile = value(args, "file");
@@ -617,14 +1155,26 @@ async function main(): Promise<void> {
           "Tessera stress-test requires --against-faction.",
         );
       }
-      const suite = value(args, "suite") ?? "diverse-9";
-      if (suite !== "core-3" && suite !== "diverse-9") {
+      const suite = value(args, "suite") as
+        | TesseraStressSuite
+        | undefined;
+      if (
+        suite !== undefined &&
+        suite !== "core-3" &&
+        suite !== "diverse-9"
+      ) {
         throw new Error(
           `Unknown Tessera stress-test suite "${suite}". Expected core-3 or diverse-9.`,
         );
       }
-      const analysisStrategy = value(args, "analysis") ?? "staged";
-      if (analysisStrategy !== "staged" && analysisStrategy !== "full-all") {
+      const analysisStrategy = value(args, "analysis") as
+        | TesseraStressAnalysisStrategy
+        | undefined;
+      if (
+        analysisStrategy &&
+        analysisStrategy !== "staged" &&
+        analysisStrategy !== "full-all"
+      ) {
         throw new Error(
           `Unknown Tessera stress-test analysis strategy "${analysisStrategy}". Expected staged or full-all.`,
         );
@@ -656,6 +1206,40 @@ async function main(): Promise<void> {
         throw new Error(
           "Choose either --resume or --restart-from, not both.",
         );
+      }
+      if (
+        shouldStartDurableTesseraRun(
+          executionMode,
+          flag(args, "experimental"),
+          Boolean(resumeManifestPath || restartManifest),
+        )
+      ) {
+        const job = await startTesseraRun(
+          {
+            kind: "stress",
+            playerRoster: roster,
+            factionId: opponentFaction,
+            options: {
+              suite,
+              analysisStrategy,
+              resumeManifestPath,
+              restartManifestPath: restartManifest
+                ? path.resolve(restartManifest)
+                : undefined,
+              profilePolicyPath: value(args, "profile-policy"),
+              forceRetry: flag(args, "force-retry"),
+              outputDirectory,
+              executionMode: "simulate",
+              experimental: false,
+            },
+          },
+          {
+            outputDirectory,
+            allowOutsideRoot: flag(args, "allow-outside-root"),
+          },
+        );
+        printStartedTesseraRun(job);
+        return;
       }
       progress(
         restartManifest
@@ -702,18 +1286,42 @@ async function main(): Promise<void> {
     if (action === "analyze") {
       const opponentFile = value(args, "opponent-file");
       const opponentRosterFile = value(args, "opponent-roster");
+      const opponentContextFile = value(args, "opponent-context");
+      if (opponentContextFile && !opponentFile) {
+        throw new Error(
+          "Tessera --opponent-context is valid only with --opponent-file.",
+        );
+      }
       const opponentFaction = value(args, "opponent-faction");
+      if (opponentFaction) {
+        throw Object.assign(
+          new Error(
+            "OPPONENT_SCOPE_REQUIRED: use tessera stress-test --against-faction for a known faction with an unknown list.",
+          ),
+          { code: "OPPONENT_SCOPE_REQUIRED" },
+        );
+      }
       const selected = [
         Boolean(opponentFile),
         Boolean(opponentRosterFile),
-        Boolean(opponentFaction),
       ].filter(Boolean).length;
-      if (selected !== 1) {
-        throw new Error(
-          "Tessera analyze requires exactly one of --opponent-file, --opponent-roster, or --opponent-faction.",
+      if (selected === 0) {
+        throw Object.assign(
+          new Error(
+            "OPPONENT_SCOPE_REQUIRED: provide --opponent-file or --opponent-roster, or use tessera stress-test when only the faction is known.",
+          ),
+          { code: "OPPONENT_SCOPE_REQUIRED" },
         );
       }
-      let opponent: TesseraOpponentInput;
+      if (selected > 1) {
+        throw new Error(
+          "Tessera analyze accepts exactly one of --opponent-file or --opponent-roster.",
+        );
+      }
+      let opponent: Exclude<
+        TesseraOpponentInput,
+        { kind: "faction-archetypes" }
+      >;
       if (opponentFile) {
         opponent = { kind: "rosz", path: path.resolve(opponentFile) };
       } else if (opponentRosterFile) {
@@ -722,34 +1330,11 @@ async function main(): Promise<void> {
           roster: await readRosterDraft(path.resolve(opponentRosterFile)),
         };
       } else {
-        const allowedArchetypes = [
-          "balanced-control",
-          "ranged-pressure",
-          "assault-pressure",
-        ] as const;
-        const requestedArchetypes = list(args, "archetypes");
-        const invalidArchetypes = requestedArchetypes.filter(
-          (item) =>
-            !allowedArchetypes.includes(
-              item as (typeof allowedArchetypes)[number],
-            ),
-        );
-        if (invalidArchetypes.length) {
-          throw new Error(
-            `Unknown Tessera archetype: ${invalidArchetypes.join(", ")}.`,
-          );
-        }
-        opponent = {
-          kind: "faction-archetypes",
-          factionId: opponentFaction!,
-          archetypes: requestedArchetypes.length
-            ? (requestedArchetypes as Array<
-                "balanced-control" | "ranged-pressure" | "assault-pressure"
-              >)
-            : undefined,
-        };
+        throw new Error("An exact opponent is required.");
       }
-      const analysisMode = value(args, "analysis-mode") ?? "full";
+      const analysisMode = (
+        value(args, "analysis-mode") ?? "full"
+      ) as "quick" | "full";
       if (analysisMode !== "quick" && analysisMode !== "full") {
         throw new Error(
           `Unknown Tessera analysis mode "${analysisMode}". Expected quick or full.`,
@@ -765,7 +1350,9 @@ async function main(): Promise<void> {
           `Unknown Tessera execution mode "${executionMode}".`,
         );
       }
-      const fallbackMode = value(args, "fallback") ?? "none";
+      const fallbackMode = (
+        value(args, "fallback") ?? "none"
+      ) as "none" | "baseline-damage-v1";
       if (
         fallbackMode !== "none" &&
         fallbackMode !== "baseline-damage-v1"
@@ -801,7 +1388,10 @@ async function main(): Promise<void> {
           `Unknown Tessera metric: ${invalidMetrics.join(", ")}.`,
         );
       }
-      const result = await analyzeRosterMatchup(roster, opponent, {
+      const opponentRosterContext = opponentContextFile
+        ? await readRosterDraft(path.resolve(opponentContextFile))
+        : undefined;
+      const analysisOptions = {
         outputDirectory,
         overwrite: flag(args, "overwrite"),
         allowOutsideRoot: flag(args, "allow-outside-root"),
@@ -826,7 +1416,38 @@ async function main(): Promise<void> {
           : undefined,
         allowPointMismatch: flag(args, "allow-point-mismatch"),
         includeChangeCandidates: !flag(args, "no-change-candidates"),
-      });
+        opponentRosterContext,
+      };
+      if (
+        shouldStartDurableTesseraRun(
+          executionMode,
+          flag(args, "experimental"),
+        )
+      ) {
+        const job = await startTesseraRun(
+          {
+            kind: "exact",
+            playerRoster: roster,
+            opponent,
+            options: {
+              ...analysisOptions,
+              executionMode: "simulate",
+              experimental: false,
+            },
+          },
+          {
+            outputDirectory,
+            allowOutsideRoot: flag(args, "allow-outside-root"),
+          },
+        );
+        printStartedTesseraRun(job);
+        return;
+      }
+      const result = await analyzeRosterMatchup(
+        roster,
+        opponent,
+        analysisOptions,
+      );
       print(result);
       if (!result.ok) process.exitCode = 2;
       return;

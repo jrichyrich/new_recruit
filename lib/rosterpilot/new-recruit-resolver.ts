@@ -96,6 +96,58 @@ type EquipmentGroup = {
   }>;
 };
 
+const MAX_GROUP_LOADOUT_RECURSIVE_CANDIDATES = 512;
+
+function groupLoadoutSearchIsTooComplex(
+  models:
+    | ReadonlyArray<{
+        name: string;
+      }>
+    | undefined,
+  options: ReadonlyArray<{
+    replacement?: readonly string[];
+    replacement_choice?: ReadonlyArray<readonly string[]>;
+    model_constraint?: {
+      model_name?: string | null;
+    } | null;
+  }>,
+): boolean {
+  if (!models || models.length === 0) return false;
+  let recursiveCandidateUpperBound = 0;
+  for (const model of models) {
+    let rowCandidateUpperBound = 1;
+    for (const option of options) {
+      const modelName =
+        option.model_constraint?.model_name ?? null;
+      if (modelName !== null && modelName !== model.name) {
+        continue;
+      }
+      const transformations =
+        (option.replacement?.length ?? 0) > 0
+          ? 1
+          : (option.replacement_choice ?? []).filter(
+              (branch) => branch.length > 0,
+            ).length;
+      if (transformations === 0) continue;
+      rowCandidateUpperBound *= transformations + 1;
+      if (
+        rowCandidateUpperBound >
+        MAX_GROUP_LOADOUT_RECURSIVE_CANDIDATES
+      ) {
+        return true;
+      }
+    }
+    recursiveCandidateUpperBound += rowCandidateUpperBound;
+    if (
+      recursiveCandidateUpperBound >
+      MAX_GROUP_LOADOUT_RECURSIVE_CANDIDATES
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 type ModelCandidate = {
   model: CatalogueModelReference;
   nameRank: number;
@@ -245,19 +297,45 @@ function equipmentGroups(
     ]),
   );
   const composition = dataset.unitCompositionOf(unit.raw);
+  const aggregateFallback = (): EquipmentGroup[] | null => {
+    if ((composition?.models.length ?? 0) > 1) return null;
+    const model =
+      composition?.models.length === 1
+        ? composition.models[0]
+        : null;
+    return [
+      {
+        modelName: model?.name ?? null,
+        isLeaderModel: model?.is_leader_model ?? null,
+        count: selection.modelCount,
+        equipment: positiveEquipment,
+      },
+    ];
+  };
+  const options = dataset.wargearOptionsOf(unit.raw);
+  if (
+    groupLoadoutSearchIsTooComplex(
+      composition?.models,
+      options,
+    )
+  ) {
+    return aggregateFallback();
+  }
   let groups: ReturnType<typeof groupLoadout>;
   try {
     groups = groupLoadout(
       unit.raw,
       selection.modelCount,
-      dataset.wargearOptionsOf(unit.raw),
+      options,
       composition?.models,
       counts,
     );
   } catch {
-    // Malformed or combinatorially explosive upstream composition data must
-    // block this mapping without terminating roster generation or export.
-    return null;
+    // A homogeneous composition has an exact aggregate fallback. Use it when
+    // malformed upstream data still defeats the bounded search. Multi-row
+    // compositions remain fail-closed because their equipment cannot be
+    // attributed safely without a successful per-model decomposition.
+    return aggregateFallback();
   }
   if (groups) {
     const resolved: EquipmentGroup[] = [];
@@ -286,21 +364,7 @@ function equipmentGroups(
     }
     return resolved;
   }
-  if ((composition?.models.length ?? 0) > 1) return null;
-
-  const modelName =
-    composition?.models.length === 1 ? composition.models[0].name : null;
-  return [
-    {
-      modelName,
-      isLeaderModel:
-        composition?.models.length === 1
-          ? composition.models[0].is_leader_model ?? null
-          : null,
-      count: selection.modelCount,
-      equipment: positiveEquipment,
-    },
-  ];
+  return aggregateFallback();
 }
 
 function candidateForGroup(

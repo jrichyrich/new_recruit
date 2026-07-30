@@ -1,9 +1,12 @@
+import { readFile } from "node:fs/promises";
+
 import {
   buildRoster,
   previewFactionStressPortfolio,
   repairRosterDeterministically,
   type BuildAndStressRosterInput,
   type BuildAndStressRosterResult,
+  type BuildRosterInput,
   type DeterministicRosterRepairResult,
   type ResultEnvelope,
   type RosterIssue,
@@ -183,10 +186,28 @@ export async function buildAndStressRosterAgainstFaction(
       warnings: uniqueIssues(repaired.warnings),
     };
   }
+  let suite = input.suite;
+  const recoveryManifestPath =
+    input.resumeManifestPath ?? input.restartManifestPath;
+  if (!suite && recoveryManifestPath) {
+    try {
+      const persisted = JSON.parse(
+        await readFile(recoveryManifestPath, "utf8"),
+      ) as {
+        configuration?: {
+          suite?: "core-3" | "diverse-9";
+        };
+      };
+      suite = persisted.configuration?.suite;
+    } catch {
+      // The stress coordinator returns the structured unreadable-manifest
+      // failure; preview keeps its normal default only for this preflight.
+    }
+  }
   const preview = await previewFactionStressPortfolio({
     faction: opponentSeed.data.factionId,
     pointsLimit,
-    suite: input.suite ?? "diverse-9",
+    suite: suite ?? "diverse-9",
     pointsTolerancePercent: 5,
     allowLegends: false,
   });
@@ -224,14 +245,15 @@ export async function buildAndStressRosterAgainstFaction(
     {
       ...options,
       outputDirectory,
-      suite: input.suite ?? "diverse-9",
-      analysisStrategy: input.analysisStrategy ?? "staged",
+      suite,
+      analysisStrategy: input.analysisStrategy,
       profilePolicyPath: input.profilePolicyPath,
       resumeManifestPath: input.resumeManifestPath,
       restartManifestPath: input.restartManifestPath,
       forceRetry: input.forceRetry,
       executionMode: input.executionMode,
       experimental: input.experimental,
+      portfolioPreview: preview.data,
     },
     dependencies,
   );

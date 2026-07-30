@@ -1,11 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type {
+  StartTesseraRunOptions,
+  TesseraRunJob,
+  TesseraRunRequest,
+  TesseraRunResult,
+} from "../local/tessera/jobs";
 
 import {
   buildRoster,
   bytesToBase64,
   checkDataFreshness,
   compactBuildAndStressResult,
+  compactBuildAndAnalyzeResult,
   compactStressResult,
   compactStressRevisionResult,
   compareFactions,
@@ -22,12 +29,15 @@ import {
   setCachedDataFreshness,
   validateRoster,
   addFreshnessWarnings,
+  CollectionProfileSchema,
   ModifyRosterOperationSchema,
   RosterDraftSchema,
   type ExportArtifact,
   type ExportFormat,
   type BuildAndStressRosterInput,
   type BuildAndStressRosterResult,
+  type BuildAndAnalyzeRosterInput,
+  type BuildAndAnalyzeRosterResult,
   type LiveDataFreshness,
   type ModifyRosterOperation,
   type NewRecruitConnectionStatus,
@@ -37,7 +47,6 @@ import {
   type ResultEnvelope,
   type RosterDraftV1,
   type RuntimeProvenance,
-  type TesseraArchetype,
   type TesseraConnectionStatus,
   type TesseraMatchupReport,
   type TesseraMetric,
@@ -91,12 +100,7 @@ type ServerOptions = {
       playerRoster: RosterDraftV1,
       opponent:
         | { kind: "roster"; roster: RosterDraftV1 }
-        | { kind: "rosz"; path: string }
-        | {
-            kind: "faction-archetypes";
-            factionId: string;
-            archetypes?: TesseraArchetype[];
-          },
+        | { kind: "rosz"; path: string },
       options: {
         outputDirectory: string;
         overwrite: boolean;
@@ -109,6 +113,7 @@ type ServerOptions = {
         metrics?: TesseraMetric[];
         allowPointMismatch: boolean;
         includeChangeCandidates: boolean;
+        opponentRosterContext?: RosterDraftV1;
       },
     ) => Promise<ResultEnvelope<TesseraMatchupReport>>;
     compare?: (
@@ -117,9 +122,18 @@ type ServerOptions = {
       options: {
         outputDirectory: string;
         overwrite: boolean;
+        profilePolicyPath?: string;
+        executionMode?: "simulate";
         experimental: boolean;
       },
     ) => Promise<ResultEnvelope<TesseraRevisionComparisonReport>>;
+    buildAndAnalyze?: (
+      input: BuildAndAnalyzeRosterInput,
+      options: {
+        outputDirectory?: string;
+        overwrite: boolean;
+      },
+    ) => Promise<ResultEnvelope<BuildAndAnalyzeRosterResult>>;
     stressTest?: (
       playerRoster: RosterDraftV1,
       opponent: {
@@ -127,8 +141,8 @@ type ServerOptions = {
         factionId: string;
       },
       options: {
-        suite: TesseraStressSuite;
-        analysisStrategy: TesseraStressAnalysisStrategy;
+        suite?: TesseraStressSuite;
+        analysisStrategy?: TesseraStressAnalysisStrategy;
         resumeManifestPath?: string;
         restartManifestPath?: string;
         profilePolicyPath?: string;
@@ -142,7 +156,7 @@ type ServerOptions = {
     previewPortfolio?: (input: {
       faction: string;
       pointsLimit: number;
-      suite: TesseraStressSuite;
+      suite?: TesseraStressSuite;
       pointsTolerancePercent: number;
       allowLegends: boolean;
     }) => Promise<ResultEnvelope<TesseraStressPortfolioPreview>>;
@@ -159,9 +173,48 @@ type ServerOptions = {
       options: {
         outputDirectory?: string;
         overwrite: boolean;
+        executionMode?: "simulate";
         experimental: boolean;
       },
     ) => Promise<ResultEnvelope<TesseraStressRevisionReport>>;
+  };
+  tesseraRunJobs?: {
+    start: (
+      request: TesseraRunRequest,
+      options?: StartTesseraRunOptions,
+    ) => Promise<TesseraRunJob>;
+    status: (
+      jobPath: string,
+      includeResult?: boolean,
+    ) => Promise<{
+      job: TesseraRunJob;
+      result: TesseraRunResult | null;
+    }>;
+    resume: (
+      jobPath: string,
+      options?: {
+        restartFrom?: boolean;
+        outputDirectory?: string;
+      },
+    ) => Promise<TesseraRunJob>;
+    resolveProfiles: (
+      jobPath: string,
+      policy: {
+        schemaVersion: 1;
+        policyKind: "tessera-profile-policy";
+        entries: Array<{
+          faction: string;
+          unit: string;
+          unitOccurrence?: number;
+          modelCount?: number;
+          weaponGroup: string;
+          phase: TesseraPhase;
+          selectedProfile: string;
+          activeCount: number;
+        }>;
+      },
+    ) => Promise<TesseraRunJob>;
+    cancel: (jobPath: string) => Promise<TesseraRunJob>;
   };
   freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
   freshnessCacheMs?: number;
@@ -178,6 +231,56 @@ function resultContent<T>(result: ResultEnvelope<T>) {
     structuredContent: normalized,
     isError: !result.ok,
   };
+}
+
+function opponentScopeRequired() {
+  return {
+    ok: false,
+    data: null,
+    violations: [
+      {
+        code: "OPPONENT_SCOPE_REQUIRED",
+        message:
+          "Provide an exact opponent roster or .rosz, or use the faction stress workflow when only the opponent faction is known.",
+        severity: "error" as const,
+      },
+    ],
+    warnings: [],
+  };
+}
+
+function valueContent(value: unknown) {
+  const normalized = serializable(value) as Record<string, unknown>;
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(normalized, null, 2),
+      },
+    ],
+    structuredContent: normalized,
+  };
+}
+
+function shouldStartDurableTesseraRun(
+  executionMode: "prepare-only" | "simulate" | undefined,
+  experimental: boolean,
+  recoveryRequested = false,
+): boolean {
+  return (
+    recoveryRequested ||
+    executionMode === "simulate" ||
+    (executionMode === undefined && experimental)
+  );
+}
+
+function inProgressJobContent(job: TesseraRunJob) {
+  return valueContent({
+    status: "in-progress",
+    runId: job.runId,
+    manifestPath: job.manifestPath,
+    job,
+  });
 }
 
 function detailedResultContent<T>(
@@ -795,11 +898,6 @@ export function createRosterPilotMcpServer(
         ),
     );
 
-    const archetypeSchema = z.enum([
-      "balanced-control",
-      "ranged-pressure",
-      "assault-pressure",
-    ]);
     const tesseraPhaseSchema = z.enum(["shooting", "fight"]);
     const tesseraMetricSchema = z.enum([
       "wipe-probability",
@@ -815,21 +913,19 @@ export function createRosterPilotMcpServer(
           "Prepare New Recruit-enriched player and opponent rosters and optionally run Tessera's experimental Army vs Army UI. Results are directional combat math, not game win probability.",
         inputSchema: {
           playerRoster: RosterDraftSchema,
-          opponent: z.union([
-            z.object({
-              kind: z.literal("roster"),
-              roster: RosterDraftSchema,
-            }),
-            z.object({
-              kind: z.literal("rosz"),
-              path: z.string().min(1),
-            }),
-            z.object({
-              kind: z.literal("faction-archetypes"),
-              factionId: z.string().min(1),
-              archetypes: z.array(archetypeSchema).max(3).optional(),
-            }),
-          ]),
+          opponent: z
+            .union([
+              z.object({
+                kind: z.literal("roster"),
+                roster: RosterDraftSchema,
+              }),
+              z.object({
+                kind: z.literal("rosz"),
+                path: z.string().min(1),
+                rosterContext: RosterDraftSchema.optional(),
+              }),
+            ])
+            .optional(),
           outputDirectory: z.string().default("exports/tessera"),
           overwrite: z.boolean().default(false),
           executionMode: z
@@ -867,18 +963,64 @@ export function createRosterPilotMcpServer(
         metrics,
         allowPointMismatch,
         includeChangeCandidates,
-      }) =>
-        resultContent(
+      }) => {
+        if (!opponent) {
+          return resultContent(opponentScopeRequired());
+        }
+        const normalizedPlayer = playerRoster as RosterDraftV1;
+        const normalizedOpponent = opponent as
+          | { kind: "roster"; roster: RosterDraftV1 }
+          | {
+              kind: "rosz";
+              path: string;
+              rosterContext?: RosterDraftV1;
+            };
+        const opponentRosterContext =
+          normalizedOpponent.kind === "rosz"
+            ? normalizedOpponent.rosterContext
+            : undefined;
+        const executionOpponent =
+          normalizedOpponent.kind === "rosz"
+            ? {
+                kind: "rosz" as const,
+                path: normalizedOpponent.path,
+              }
+            : normalizedOpponent;
+        if (
+          options.tesseraRunJobs &&
+          shouldStartDurableTesseraRun(
+            executionMode,
+            experimental,
+          )
+        ) {
+          const job = await options.tesseraRunJobs.start(
+            {
+              kind: "exact",
+              playerRoster: normalizedPlayer,
+              opponent: executionOpponent,
+              options: {
+                outputDirectory,
+                overwrite,
+                executionMode: "simulate",
+                fallbackMode,
+                profilePolicyPath,
+                experimental: false,
+                analysisMode,
+                phases,
+                metrics,
+                allowPointMismatch,
+                includeChangeCandidates,
+                opponentRosterContext,
+              },
+            },
+            { outputDirectory },
+          );
+          return inProgressJobContent(job);
+        }
+        return resultContent(
           await options.tesseraCompanion!.analyze(
-            playerRoster as RosterDraftV1,
-            opponent as
-              | { kind: "roster"; roster: RosterDraftV1 }
-              | { kind: "rosz"; path: string }
-              | {
-                  kind: "faction-archetypes";
-                  factionId: string;
-                  archetypes?: TesseraArchetype[];
-                },
+            normalizedPlayer,
+            executionOpponent,
             {
               outputDirectory,
               overwrite,
@@ -891,10 +1033,134 @@ export function createRosterPilotMcpServer(
               metrics,
               allowPointMismatch,
               includeChangeCandidates,
+              ...(opponentRosterContext
+                ? { opponentRosterContext }
+                : {}),
             },
           ),
-        ),
+        );
+      },
     );
+
+    if (options.tesseraCompanion.buildAndAnalyze) {
+      server.registerTool(
+        "build_and_analyze_roster_matchup",
+        {
+          title: "Build and analyze against an exact roster",
+          description:
+            "Build and deterministically repair a player roster against the supplied validated opponent roster, enforce readiness, then run the exact Tessera workflow. It never applies suggested changes.",
+          inputSchema: {
+            prompt: z.string().min(1),
+            playerFaction: z.string().min(1).optional(),
+            pointsLimit: z.number().int().min(100).max(5000).optional(),
+            opponentRoster: RosterDraftSchema,
+            collectionProfile: CollectionProfileSchema.optional(),
+            requiredUnitIds: z.array(z.string().min(1)).optional(),
+            excludedUnitIds: z.array(z.string().min(1)).optional(),
+            requiredWarlordUnitId: z.string().min(1).optional(),
+            allowReadinessWarnings: z.boolean().default(false),
+            profilePolicyPath: z.string().min(1).optional(),
+            outputDirectory: z.string().min(1).optional(),
+            executionMode: z
+              .enum(["prepare-only", "simulate"])
+              .optional(),
+            responseDetail: z
+              .enum(["compact", "full"])
+              .default("compact"),
+            overwrite: z.boolean().default(false),
+            experimental: z.boolean().default(false),
+          },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: true,
+          },
+        },
+        async ({
+          prompt,
+          playerFaction,
+          pointsLimit,
+          opponentRoster,
+          collectionProfile,
+          requiredUnitIds,
+          excludedUnitIds,
+          requiredWarlordUnitId,
+          allowReadinessWarnings,
+          profilePolicyPath,
+          outputDirectory,
+          executionMode,
+          responseDetail,
+          overwrite,
+          experimental,
+        }) => {
+          if (
+            options.tesseraRunJobs &&
+            shouldStartDurableTesseraRun(
+              executionMode,
+              experimental,
+            )
+          ) {
+            const job = await options.tesseraRunJobs.start(
+              {
+                kind: "build-and-analyze",
+                input: {
+                  prompt,
+                  playerFaction,
+                  pointsLimit,
+                  opponentRoster:
+                    opponentRoster as RosterDraftV1,
+                  collectionProfile,
+                  requiredUnitIds,
+                  excludedUnitIds,
+                  requiredWarlordUnitId,
+                  allowReadinessWarnings,
+                  profilePolicyPath,
+                  outputDirectory,
+                  executionMode: "simulate",
+                  experimental: false,
+                },
+                options: {
+                  outputDirectory,
+                  overwrite,
+                  executionMode: "simulate",
+                  experimental: false,
+                },
+              },
+              { outputDirectory },
+            );
+            return inProgressJobContent(job);
+          }
+          const freshness = await currentFreshness();
+          const result = addFreshnessWarnings(
+            await options.tesseraCompanion!.buildAndAnalyze!(
+              {
+                prompt,
+                playerFaction,
+                pointsLimit,
+                opponentRoster: opponentRoster as RosterDraftV1,
+                collectionProfile,
+                requiredUnitIds,
+                excludedUnitIds,
+                requiredWarlordUnitId,
+                allowReadinessWarnings,
+                profilePolicyPath,
+                outputDirectory,
+                executionMode,
+                experimental,
+              },
+              { outputDirectory, overwrite },
+            ),
+            freshness,
+          );
+          return detailedResultContent(
+            result,
+            responseDetail,
+            compactBuildAndAnalyzeResult,
+          );
+        },
+      );
+    }
 
     if (options.tesseraCompanion.compare) {
       server.registerTool(
@@ -908,6 +1174,10 @@ export function createRosterPilotMcpServer(
             revisedRoster: RosterDraftSchema,
             outputDirectory: z.string().default("exports/tessera"),
             overwrite: z.boolean().default(false),
+            profilePolicyPath: z.string().min(1).optional(),
+            executionMode: z
+              .enum(["simulate"])
+              .optional(),
             experimental: z.boolean().default(false),
           },
           annotations: {
@@ -922,15 +1192,46 @@ export function createRosterPilotMcpServer(
           revisedRoster,
           outputDirectory,
           overwrite,
+          profilePolicyPath,
+          executionMode,
           experimental,
-        }) =>
-          resultContent(
+        }) => {
+          if (options.tesseraRunJobs) {
+            const job = await options.tesseraRunJobs.start(
+              {
+                kind: "exact-revision",
+                baselineReportPath,
+                revisedRoster:
+                  revisedRoster as RosterDraftV1,
+                options: {
+                  outputDirectory,
+                  profilePolicyPath,
+                  executionMode: "simulate",
+                  experimental: false,
+                },
+              },
+              { outputDirectory },
+            );
+            return inProgressJobContent(job);
+          }
+          return resultContent(
             await options.tesseraCompanion!.compare!(
               baselineReportPath,
               revisedRoster as RosterDraftV1,
-              { outputDirectory, overwrite, experimental },
+              {
+                outputDirectory,
+                overwrite,
+                ...(profilePolicyPath
+                  ? { profilePolicyPath }
+                  : {}),
+                ...(executionMode
+                  ? { executionMode }
+                  : {}),
+                experimental,
+              },
             ),
-          ),
+          );
+        },
       );
     }
 
@@ -938,13 +1239,13 @@ export function createRosterPilotMcpServer(
       server.registerTool(
         "preview_faction_stress_portfolio",
         {
-          title: "Preview an unknown-faction stress portfolio",
+          title: "Preview a known-faction unknown-list portfolio",
           description:
             "Build and validate a local-only opponent portfolio preview with simulation fingerprints, pairwise diversity, composition evidence, profile requirements, named-character coverage, and New Recruit exportability. This performs no external mutation.",
           inputSchema: {
             factionId: z.string().min(1),
             pointsLimit: z.number().int().min(100).max(5000).default(1000),
-            suite: z.enum(["core-3", "diverse-9"]).default("diverse-9"),
+            suite: z.enum(["core-3", "diverse-9"]).optional(),
           },
           annotations: {
             readOnlyHint: true,
@@ -970,7 +1271,7 @@ export function createRosterPilotMcpServer(
       server.registerTool(
         "build_and_stress_roster_against_faction",
         {
-          title: "Build and stress-test against an unknown faction list",
+          title: "Build and stress-test against a known faction's unknown list",
           description:
             "Build and deterministically repair a roster, enforce mission-readiness and portfolio gates, prepare verified artifacts, then run the staged Tessera stress workflow. It never applies post-simulation roster changes.",
           inputSchema: {
@@ -981,10 +1282,10 @@ export function createRosterPilotMcpServer(
             requiredUnitIds: z.array(z.string().min(1)).optional(),
             excludedUnitIds: z.array(z.string().min(1)).optional(),
             requiredWarlordUnitId: z.string().min(1).optional(),
-            suite: z.enum(["core-3", "diverse-9"]).default("diverse-9"),
+            suite: z.enum(["core-3", "diverse-9"]).optional(),
             analysisStrategy: z
               .enum(["staged", "full-all"])
-              .default("staged"),
+              .optional(),
             profilePolicyPath: z.string().min(1).optional(),
             resumeManifestPath: z.string().min(1).optional(),
             restartManifestPath: z.string().min(1).optional(),
@@ -1028,6 +1329,50 @@ export function createRosterPilotMcpServer(
           overwrite,
           experimental,
         }) => {
+          if (
+            options.tesseraRunJobs &&
+            shouldStartDurableTesseraRun(
+              executionMode,
+              experimental,
+              Boolean(
+                resumeManifestPath ||
+                restartManifestPath,
+              ),
+            )
+          ) {
+            const job = await options.tesseraRunJobs.start(
+              {
+                kind: "build-and-stress",
+                input: {
+                  prompt,
+                  playerFaction,
+                  againstFaction,
+                  pointsLimit,
+                  requiredUnitIds,
+                  excludedUnitIds,
+                  requiredWarlordUnitId,
+                  suite,
+                  analysisStrategy,
+                  profilePolicyPath,
+                  resumeManifestPath,
+                  restartManifestPath,
+                  outputDirectory,
+                  allowReadinessWarnings,
+                  forceRetry,
+                  executionMode: "simulate",
+                  experimental: false,
+                },
+                options: {
+                  outputDirectory,
+                  overwrite,
+                  executionMode: "simulate",
+                  experimental: false,
+                },
+              },
+              { outputDirectory },
+            );
+            return inProgressJobContent(job);
+          }
           const freshness = await currentFreshness();
           const result = addFreshnessWarnings(
             await options.tesseraCompanion!.buildAndStress!(
@@ -1077,10 +1422,10 @@ export function createRosterPilotMcpServer(
           inputSchema: {
             playerRoster: RosterDraftSchema,
             factionId: z.string().min(1),
-            suite: z.enum(["core-3", "diverse-9"]).default("diverse-9"),
+            suite: z.enum(["core-3", "diverse-9"]).optional(),
             analysisStrategy: z
               .enum(["staged", "full-all"])
-              .default("staged"),
+              .optional(),
             resumeManifestPath: z.string().min(1).optional(),
             restartManifestPath: z.string().min(1).optional(),
             profilePolicyPath: z.string().min(1).optional(),
@@ -1117,6 +1462,40 @@ export function createRosterPilotMcpServer(
           overwrite,
           experimental,
         }) => {
+          if (
+            options.tesseraRunJobs &&
+            shouldStartDurableTesseraRun(
+              executionMode,
+              experimental,
+              Boolean(
+                resumeManifestPath ||
+                restartManifestPath,
+              ),
+            )
+          ) {
+            const job = await options.tesseraRunJobs.start(
+              {
+                kind: "stress",
+                playerRoster:
+                  playerRoster as RosterDraftV1,
+                factionId,
+                options: {
+                  suite,
+                  analysisStrategy,
+                  resumeManifestPath,
+                  restartManifestPath,
+                  profilePolicyPath,
+                  forceRetry,
+                  executionMode: "simulate",
+                  outputDirectory,
+                  overwrite,
+                  experimental: false,
+                },
+              },
+              { outputDirectory },
+            );
+            return inProgressJobContent(job);
+          }
           const freshness = await currentFreshness();
           const result = addFreshnessWarnings(
             await options.tesseraCompanion!.stressTest!(
@@ -1162,6 +1541,9 @@ export function createRosterPilotMcpServer(
               .enum(["compact", "full"])
               .default("compact"),
             overwrite: z.boolean().default(false),
+            executionMode: z
+              .enum(["simulate"])
+              .optional(),
             experimental: z.boolean().default(false),
           },
           annotations: {
@@ -1177,14 +1559,39 @@ export function createRosterPilotMcpServer(
           outputDirectory,
           responseDetail,
           overwrite,
+          executionMode,
           experimental,
         }) => {
+          if (options.tesseraRunJobs) {
+            const job = await options.tesseraRunJobs.start(
+              {
+                kind: "stress-revision",
+                baselineReportPath,
+                revisedRoster:
+                  revisedRoster as RosterDraftV1,
+                options: {
+                  outputDirectory,
+                  executionMode: "simulate",
+                  experimental: false,
+                },
+              },
+              { outputDirectory },
+            );
+            return inProgressJobContent(job);
+          }
           const freshness = await currentFreshness();
           const result = addFreshnessWarnings(
             await options.tesseraCompanion!.compareStressRevision!(
               baselineReportPath,
               revisedRoster as RosterDraftV1,
-              { outputDirectory, overwrite, experimental },
+              {
+                outputDirectory,
+                overwrite,
+                ...(executionMode
+                  ? { executionMode }
+                  : {}),
+                experimental,
+              },
             ),
             freshness,
           );
@@ -1200,6 +1607,352 @@ export function createRosterPilotMcpServer(
         },
       );
     }
+  }
+
+  if (options.tesseraRunJobs) {
+    const jobProfilePolicySchema = z.object({
+      schemaVersion: z.literal(1),
+      policyKind: z.literal("tessera-profile-policy"),
+      entries: z.array(
+        z.object({
+          faction: z.string().min(1),
+          unit: z.string().min(1),
+          unitOccurrence: z.number().int().positive().optional(),
+          modelCount: z.number().int().positive().optional(),
+          weaponGroup: z.string().min(1),
+          phase: z.enum(["shooting", "fight"]),
+          selectedProfile: z.string().min(1),
+          activeCount: z.number().int().positive(),
+        }),
+      ),
+    });
+    const jobExecutionModeSchema = z
+      .enum(["prepare-only", "simulate"])
+      .optional();
+    const jobRequestSchema = z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("exact"),
+        playerRoster: RosterDraftSchema,
+        opponent: z
+          .union([
+            z.object({
+              kind: z.literal("roster"),
+              roster: RosterDraftSchema,
+            }),
+            z.object({
+              kind: z.literal("rosz"),
+              path: z.string().min(1),
+              rosterContext: RosterDraftSchema.optional(),
+            }),
+          ])
+          .optional(),
+        executionMode: jobExecutionModeSchema,
+        profilePolicyPath: z.string().min(1).optional(),
+        analysisMode: z.enum(["quick", "full"]).default("full"),
+        allowPointMismatch: z.boolean().default(false),
+      }),
+      z.object({
+        kind: z.literal("stress"),
+        playerRoster: RosterDraftSchema,
+        factionId: z.string().min(1),
+        suite: z.enum(["core-3", "diverse-9"]).optional(),
+        analysisStrategy: z
+          .enum(["staged", "full-all"])
+          .optional(),
+        portfolioPreview: z.unknown().optional(),
+        executionMode: jobExecutionModeSchema,
+        profilePolicyPath: z.string().min(1).optional(),
+        resumeManifestPath: z.string().min(1).optional(),
+        restartManifestPath: z.string().min(1).optional(),
+      }),
+      z.object({
+        kind: z.literal("build-and-stress"),
+        prompt: z.string().min(1),
+        playerFaction: z.string().min(1).optional(),
+        againstFaction: z.string().min(1),
+        pointsLimit: z.number().int().min(100).max(5000).optional(),
+        requiredUnitIds: z.array(z.string().min(1)).optional(),
+        excludedUnitIds: z.array(z.string().min(1)).optional(),
+        requiredWarlordUnitId: z.string().min(1).optional(),
+        suite: z.enum(["core-3", "diverse-9"]).optional(),
+        analysisStrategy: z
+          .enum(["staged", "full-all"])
+          .optional(),
+        executionMode: jobExecutionModeSchema,
+        profilePolicyPath: z.string().min(1).optional(),
+        allowReadinessWarnings: z.boolean().default(false),
+        resumeManifestPath: z.string().min(1).optional(),
+        restartManifestPath: z.string().min(1).optional(),
+      }),
+      z.object({
+        kind: z.literal("build-and-analyze"),
+        prompt: z.string().min(1),
+        playerFaction: z.string().min(1).optional(),
+        pointsLimit: z.number().int().min(100).max(5000).optional(),
+        opponentRoster: RosterDraftSchema,
+        collectionProfile: CollectionProfileSchema.optional(),
+        requiredUnitIds: z.array(z.string().min(1)).optional(),
+        excludedUnitIds: z.array(z.string().min(1)).optional(),
+        requiredWarlordUnitId: z.string().min(1).optional(),
+        executionMode: jobExecutionModeSchema,
+        profilePolicyPath: z.string().min(1).optional(),
+        allowReadinessWarnings: z.boolean().default(false),
+      }),
+      z.object({
+        kind: z.literal("exact-revision"),
+        baselineReportPath: z.string().min(1),
+        revisedRoster: RosterDraftSchema,
+        profilePolicyPath: z.string().min(1).optional(),
+      }),
+      z.object({
+        kind: z.literal("stress-revision"),
+        baselineReportPath: z.string().min(1),
+        revisedRoster: RosterDraftSchema,
+      }),
+    ]);
+
+    server.registerTool(
+      "start_tessera_run",
+      {
+        title: "Start a durable Tessera run",
+        description:
+          "Reserve a run bundle and start exact, stress, or build-and-analyze work in a background worker. Returns immediately with a durable job path.",
+        inputSchema: {
+          request: jobRequestSchema,
+          outputDirectory: z.string().min(1).optional(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({ request, outputDirectory }) => {
+        let normalized: TesseraRunRequest;
+        if (request.kind === "exact") {
+          if (!request.opponent) {
+            return resultContent(opponentScopeRequired());
+          }
+          normalized = {
+            kind: "exact",
+            playerRoster: request.playerRoster as RosterDraftV1,
+            opponent:
+              request.opponent.kind === "roster"
+                ? {
+                    kind: "roster",
+                    roster:
+                      request.opponent.roster as RosterDraftV1,
+                  }
+                : request.opponent,
+            options: {
+              executionMode: request.executionMode,
+              profilePolicyPath: request.profilePolicyPath,
+              analysisMode: request.analysisMode,
+              allowPointMismatch: request.allowPointMismatch,
+              opponentRosterContext:
+                request.opponent.kind === "rosz"
+                  ? (
+                      request.opponent
+                        .rosterContext as RosterDraftV1 | undefined
+                    )
+                  : undefined,
+            },
+          };
+        } else if (request.kind === "stress") {
+          normalized = {
+            kind: "stress",
+            playerRoster: request.playerRoster as RosterDraftV1,
+            factionId: request.factionId,
+            options: {
+              suite: request.suite,
+              analysisStrategy: request.analysisStrategy,
+              portfolioPreview:
+                request.portfolioPreview as
+                  | TesseraStressPortfolioPreview
+                  | undefined,
+              executionMode: request.executionMode,
+              profilePolicyPath: request.profilePolicyPath,
+              resumeManifestPath: request.resumeManifestPath,
+              restartManifestPath:
+                request.restartManifestPath,
+            },
+          };
+        } else if (request.kind === "build-and-stress") {
+          normalized = {
+            kind: "build-and-stress",
+            input: {
+              prompt: request.prompt,
+              playerFaction: request.playerFaction,
+              againstFaction: request.againstFaction,
+              pointsLimit: request.pointsLimit,
+              requiredUnitIds: request.requiredUnitIds,
+              excludedUnitIds: request.excludedUnitIds,
+              requiredWarlordUnitId:
+                request.requiredWarlordUnitId,
+              suite: request.suite,
+              analysisStrategy: request.analysisStrategy,
+              executionMode: request.executionMode,
+              profilePolicyPath: request.profilePolicyPath,
+              allowReadinessWarnings:
+                request.allowReadinessWarnings,
+              resumeManifestPath: request.resumeManifestPath,
+              restartManifestPath:
+                request.restartManifestPath,
+            },
+          };
+        } else if (request.kind === "build-and-analyze") {
+          normalized = {
+            kind: "build-and-analyze",
+            input: {
+              prompt: request.prompt,
+              playerFaction: request.playerFaction,
+              pointsLimit: request.pointsLimit,
+              opponentRoster:
+                request.opponentRoster as RosterDraftV1,
+              collectionProfile: request.collectionProfile,
+              requiredUnitIds: request.requiredUnitIds,
+              excludedUnitIds: request.excludedUnitIds,
+              requiredWarlordUnitId:
+                request.requiredWarlordUnitId,
+              executionMode: request.executionMode,
+              profilePolicyPath: request.profilePolicyPath,
+              allowReadinessWarnings:
+                request.allowReadinessWarnings,
+            },
+          };
+        } else if (request.kind === "exact-revision") {
+          normalized = {
+            kind: "exact-revision",
+            baselineReportPath: request.baselineReportPath,
+            revisedRoster:
+              request.revisedRoster as RosterDraftV1,
+            options: {
+              executionMode: "simulate",
+              experimental: false,
+              profilePolicyPath: request.profilePolicyPath,
+            },
+          };
+        } else {
+          normalized = {
+            kind: "stress-revision",
+            baselineReportPath: request.baselineReportPath,
+            revisedRoster:
+              request.revisedRoster as RosterDraftV1,
+            options: {
+              executionMode: "simulate",
+              experimental: false,
+            },
+          };
+        }
+        return valueContent(
+          await options.tesseraRunJobs!.start(normalized, {
+            outputDirectory,
+          }),
+        );
+      },
+    );
+
+    server.registerTool(
+      "get_tessera_run_status",
+      {
+        title: "Get Tessera run status",
+        description:
+          "Read a durable background Tessera job without changing it.",
+        inputSchema: {
+          jobPath: z.string().min(1),
+          includeResult: z.boolean().default(false),
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ jobPath, includeResult }) =>
+        valueContent(
+          await options.tesseraRunJobs!.status(
+            jobPath,
+            includeResult,
+          ),
+        ),
+    );
+
+    server.registerTool(
+      "resume_tessera_run",
+      {
+        title: "Resume a Tessera run",
+        description:
+          "Resume a stopped durable run using its frozen request, manifest, artifacts, and profile policy.",
+        inputSchema: {
+          jobPath: z.string().min(1),
+          restartFrom: z.boolean().default(false),
+          outputDirectory: z.string().min(1).optional(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      async ({ jobPath, restartFrom, outputDirectory }) =>
+        valueContent(
+          await options.tesseraRunJobs!.resume(jobPath, {
+            restartFrom,
+            outputDirectory,
+          }),
+        ),
+    );
+
+    server.registerTool(
+      "resolve_tessera_profiles",
+      {
+        title: "Resolve Tessera profile choices",
+        description:
+          "Freeze explicit structured weapon-profile choices into a stopped durable run before resuming it.",
+        inputSchema: {
+          jobPath: z.string().min(1),
+          policy: jobProfilePolicySchema,
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ jobPath, policy }) =>
+        valueContent(
+          await options.tesseraRunJobs!.resolveProfiles(
+            jobPath,
+            policy,
+          ),
+        ),
+    );
+
+    server.registerTool(
+      "cancel_tessera_run",
+      {
+        title: "Cancel a Tessera run",
+        description:
+          "Stop the local worker while retaining manifests, prepared artifacts, and the New Recruit inventory. It never deletes remote lists.",
+        inputSchema: {
+          jobPath: z.string().min(1),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ jobPath }) =>
+        valueContent(
+          await options.tesseraRunJobs!.cancel(jobPath),
+        ),
+    );
   }
 
   return server;

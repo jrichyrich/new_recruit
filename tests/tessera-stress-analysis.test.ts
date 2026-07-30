@@ -9,6 +9,7 @@ import type {
   TesseraStressPortfolio,
   TesseraUnitInstance,
 } from "../lib/rosterpilot";
+import { buildRoster } from "../lib/rosterpilot";
 import {
   computeStressRobustness,
   stressFindings,
@@ -154,6 +155,24 @@ function report(
   };
 }
 
+const fixtureRosterResult = buildRoster({
+  faction: "aeldari",
+  pointsLimit: 1000,
+  name: "Opponent",
+});
+if (!fixtureRosterResult.data) {
+  throw new Error("The stress-analysis fixture roster did not build.");
+}
+const fixtureRoster = fixtureRosterResult.data;
+
+function executionRoster(name: string, index: number) {
+  return {
+    ...structuredClone(fixtureRoster),
+    name,
+    detachmentId: `${fixtureRoster.detachmentId}-fixture-${index}`,
+  };
+}
+
 function portfolio(): TesseraStressPortfolio {
   return {
     schemaVersion: 1,
@@ -163,16 +182,14 @@ function portfolio(): TesseraStressPortfolio {
     factionName: "Aeldari",
     pointsLimit: 100,
     pointsTolerancePercent: 5,
-    sourceData: {} as TesseraStressPortfolio["sourceData"],
+    sourceData: fixtureRoster.sourceData,
     items: [
       {
         templateId: "balanced-control:mixed",
         posture: "balanced-control",
         composition: "mixed",
         status: "ready",
-        roster: {
-          name: "Opponent",
-        } as TesseraStressPortfolio["items"][number]["roster"],
+        roster: executionRoster("Opponent", 0),
         fingerprint: "opponent",
         simulationFingerprint: "opponent",
         structuralDistance: 1,
@@ -208,6 +225,41 @@ function portfolio(): TesseraStressPortfolio {
       maximumResultStatus: "complete",
     },
   };
+}
+
+function completeCorePortfolio(): TesseraStressPortfolio {
+  const frozen = portfolio();
+  const item = frozen.items[0];
+  frozen.items = (
+    [
+      ["balanced-control:mixed", "balanced-control"],
+      ["ranged-pressure:mixed", "ranged-pressure"],
+      ["assault-pressure:mixed", "assault-pressure"],
+    ] as const
+  ).map(([templateId, posture], index) => ({
+    ...item,
+    templateId,
+    posture,
+    roster: executionRoster("Opponent", index),
+    fingerprint: `opponent-${index}`,
+    simulationFingerprint: `opponent-${index}`,
+  }));
+  frozen.coverage.intended = 3;
+  frozen.coverage.ready = 3;
+  frozen.coverage.uniqueSimulationPayloads = 3;
+  frozen.coverage.representedPostures = [
+    "balanced-control",
+    "ranged-pressure",
+    "assault-pressure",
+  ];
+  frozen.coverage.representedCells = frozen.items.map(
+    (candidate) => ({
+      templateId: candidate.templateId,
+      posture: candidate.posture,
+      composition: candidate.composition,
+    }),
+  );
+  return frozen;
 }
 
 test("stress confidence requires independent shooting and fight coverage", () => {
@@ -307,7 +359,7 @@ test("complete quantitative coverage retains review-grade evidence confidence", 
       }),
   );
 
-  const frozenPortfolio = portfolio();
+  const frozenPortfolio = completeCorePortfolio();
   const robustness = computeStressRobustness(
     report(playerUnits, opponentUnits, scenarios),
     frozenPortfolio,
@@ -334,6 +386,42 @@ test("complete quantitative coverage retains review-grade evidence confidence", 
     frozenPortfolio,
   ).find((finding) => finding.kind === "universal-gap");
   assert.equal(universalGap?.confidence, "review");
+});
+
+test("an invalid portfolio contract cannot report complete analytical coverage", () => {
+  const playerUnits = [unit("player-1", "player", 100)];
+  const opponentUnits = [unit("opponent-1", "opponent", 100)];
+  const scenarios = (["shooting", "fight"] as const).flatMap(
+    (phase) =>
+      (
+        [
+          "player-to-opponent",
+          "opponent-to-player",
+        ] as const
+      ).map((direction) =>
+        scenario(
+          phase,
+          direction,
+          playerUnits,
+          opponentUnits,
+        ),
+      ),
+  );
+  const robustness = computeStressRobustness(
+    report(playerUnits, opponentUnits, scenarios),
+    portfolio(),
+  );
+
+  assert.equal(robustness.samples[0]?.status, "confident");
+  assert.equal(robustness.confidence, "insufficient");
+  assert.equal(
+    robustness.coverageCompleteness,
+    "insufficient",
+  );
+  assert.match(
+    robustness.warnings.join("\n"),
+    /PORTFOLIO_CONTRACT_UNMET|portfolio contract is unmet/i,
+  );
 });
 
 test("archetype risks cite only exposed templates and preserve equal-weight metadata", () => {
@@ -428,8 +516,7 @@ test("archetype risks cite only exposed templates and preserve equal-weight meta
       ...itemTemplate,
       templateId: "balanced-control:mixed",
       roster: {
-        ...itemTemplate.roster!,
-        name: "Opponent A",
+        ...executionRoster("Opponent A", 0),
       },
       fingerprint: "opponent-a",
       simulationFingerprint: "opponent-a",
@@ -439,8 +526,7 @@ test("archetype risks cite only exposed templates and preserve equal-weight meta
       templateId: "ranged-pressure:mixed",
       posture: "ranged-pressure",
       roster: {
-        ...itemTemplate.roster!,
-        name: "Opponent B",
+        ...executionRoster("Opponent B", 1),
       },
       fingerprint: "opponent-b",
       simulationFingerprint: "opponent-b",
@@ -517,18 +603,7 @@ test("distinct proxy payloads may legitimately produce identical matrix values",
         },
       ],
     }));
-  const frozenPortfolio = portfolio();
-  const first = frozenPortfolio.items[0];
-  frozenPortfolio.items.push({
-    ...first,
-    templateId: "ranged-pressure:mixed",
-    posture: "ranged-pressure",
-    fingerprint: "opponent-two",
-    simulationFingerprint: "opponent-two",
-  });
-  frozenPortfolio.coverage.ready = 2;
-  frozenPortfolio.coverage.intended = 2;
-  frozenPortfolio.coverage.uniqueSimulationPayloads = 2;
+  const frozenPortfolio = completeCorePortfolio();
   const integrity = assessScreeningIntegrity(
     new Map([
       [
@@ -547,6 +622,14 @@ test("distinct proxy payloads may legitimately produce identical matrix values",
           withHashes("b".repeat(64)),
         ),
       ],
+      [
+        "assault-pressure:mixed",
+        report(
+          playerUnits,
+          opponentUnits,
+          withHashes("c".repeat(64)),
+        ),
+      ],
     ]),
     frozenPortfolio,
     true,
@@ -554,6 +637,49 @@ test("distinct proxy payloads may legitimately produce identical matrix values",
 
   assert.equal(integrity.status, "verified");
   assert.deepEqual(integrity.issues, []);
+});
+
+test("core screening evidence requires all three frozen postures", () => {
+  const playerUnits = [unit("player-1", "player", 100)];
+  const opponentUnits = [unit("opponent-1", "opponent", 100)];
+  const frozenPortfolio = completeCorePortfolio();
+  const completeScenarios = (["shooting", "fight"] as const).flatMap(
+    (phase) =>
+      (
+        [
+          "player-to-opponent",
+          "opponent-to-player",
+        ] as const
+      ).map((direction) =>
+        scenario(
+          phase,
+          direction,
+          playerUnits,
+          opponentUnits,
+        ),
+      ),
+  );
+  const integrity = assessScreeningIntegrity(
+    new Map(
+      frozenPortfolio.items.slice(0, 2).map((item) => [
+        item.templateId,
+        report(
+          playerUnits,
+          opponentUnits,
+          completeScenarios,
+        ),
+      ]),
+    ),
+    frozenPortfolio,
+    true,
+  );
+
+  assert.equal(integrity.status, "inconclusive");
+  assert.ok(
+    integrity.issues.some(
+      (entry) => entry.code === "TESSERA_EVIDENCE_INCOMPLETE",
+    ),
+  );
 });
 
 test("requested screening with no complete matrices is inconclusive", () => {

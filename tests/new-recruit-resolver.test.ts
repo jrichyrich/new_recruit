@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import vm from "node:vm";
+import v8 from "node:v8";
 
 import { newRecruitCatalogueMappings } from "../lib/rosterpilot/catalogue";
 import {
@@ -84,4 +86,88 @@ test("fails closed when the exact Sergeant mapping lacks required equipment", ()
     resolved.reason,
     /no model entry for 1 Eliminator Sergeant model with the selected equipment/,
   );
+});
+
+test("bounds combinatorial loadout resolution consistently across forced GC", () => {
+  const mapping =
+    newRecruitCatalogueMappings.factions["tau-empire"].units[
+      "broadside-battlesuits"
+    ];
+  assert.ok(mapping);
+  const selection: NewRecruitUnitInput = {
+    unitId: "broadside-battlesuits",
+    name: "Broadside Battlesuits",
+    modelCount: 3,
+    equipment: [
+      {
+        itemId: "crushing-bulk",
+        name: "Crushing bulk",
+        count: 3,
+      },
+      {
+        itemId: "heavy-rail-rifle",
+        name: "Heavy rail rifle",
+        count: 3,
+      },
+    ],
+  };
+
+  v8.setFlagsFromString("--expose-gc");
+  const forceGc = vm.runInNewContext("gc") as () => void;
+  try {
+    const outcomes = Array.from({ length: 24 }, () => {
+      forceGc();
+      const resolved = resolveNewRecruitUnit(mapping, selection);
+      return resolved.ok
+        ? resolved.models.map((model) => ({
+            name: model.reference.name,
+            count: model.count,
+          }))
+        : resolved.reason;
+    });
+    assert.deepEqual(
+      [...new Set(outcomes.map((outcome) => JSON.stringify(outcome)))],
+      [
+        JSON.stringify([
+          { name: "Broadside Shas’vre", count: 3 },
+        ]),
+      ],
+    );
+
+    const multiRowMapping =
+      newRecruitCatalogueMappings.factions["adeptus-astartes"].units[
+        "devastator-squad"
+      ];
+    assert.ok(multiRowMapping);
+    const multiRowSelection: NewRecruitUnitInput = {
+      unitId: "devastator-squad",
+      name: "Devastator Squad",
+      modelCount: 6,
+      equipment: [
+        { itemId: "bolt-pistol", name: "Bolt pistol", count: 6 },
+        { itemId: "boltgun", name: "Boltgun", count: 6 },
+        {
+          itemId: "close-combat-weapon-devastator-squad",
+          name: "Close combat weapon",
+          count: 6,
+        },
+      ],
+    };
+    const multiRowOutcomes = Array.from({ length: 24 }, () => {
+      forceGc();
+      const resolved = resolveNewRecruitUnit(
+        multiRowMapping,
+        multiRowSelection,
+      );
+      return resolved.ok ? "resolved" : resolved.reason;
+    });
+    assert.deepEqual(
+      [...new Set(multiRowOutcomes)],
+      [
+        "The legal Devastator Squad loadout could not be decomposed into New Recruit model selections.",
+      ],
+    );
+  } finally {
+    v8.setFlagsFromString("--no-expose-gc");
+  }
 });

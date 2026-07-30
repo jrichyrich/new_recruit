@@ -24,6 +24,16 @@ import {
 import {
   buildAndStressRosterAgainstFaction,
 } from "../local/tessera/full-loop";
+import {
+  buildAndAnalyzeRosterMatchup,
+} from "../local/tessera/exact-full-loop";
+import {
+  cancelTesseraRun,
+  getTesseraRunStatus,
+  resolveTesseraRunProfiles,
+  resumeTesseraRun,
+  startTesseraRun,
+} from "../local/tessera/jobs";
 import { getRuntimeProvenance } from "../local/runtime-provenance";
 import { createRosterPilotMcpServer } from "./server";
 
@@ -44,6 +54,8 @@ const server = createRosterPilotMcpServer({
       prepareRosterForTessera(roster, options),
     analyze: (playerRoster, opponent, options) =>
       analyzeRosterMatchup(playerRoster, opponent, options),
+    buildAndAnalyze: (input, options) =>
+      buildAndAnalyzeRosterMatchup(input, options),
     compare: (baselineReportPath, revisedRoster, options) =>
       compareRosterRevision(baselineReportPath, revisedRoster, options),
     stressTest: (playerRoster, opponent, options) =>
@@ -58,6 +70,13 @@ const server = createRosterPilotMcpServer({
         revisedRoster,
         options,
       ),
+  },
+  tesseraRunJobs: {
+    start: startTesseraRun,
+    status: getTesseraRunStatus,
+    resume: resumeTesseraRun,
+    resolveProfiles: resolveTesseraRunProfiles,
+    cancel: cancelTesseraRun,
   },
 });
 

@@ -33,9 +33,15 @@ function outputBuffer() {
 }
 
 function setupHarness(options: {
+  agentStatusCode?: number;
+  agentStatus?: Record<string, unknown>;
   configExists?: boolean;
   credentialsConfigured?: boolean;
+  dataSyncFailure?: boolean;
+  freshnessFailure?: boolean;
   freshnessState?: string;
+  newRecruitAgentAvailable?: boolean;
+  newRecruitAvailable?: boolean;
   platform?: string;
   tesseraCredentialsConfigured?: boolean;
   trackedChanges?: string;
@@ -72,16 +78,25 @@ function setupHarness(options: {
         stderr: "",
       };
     }
+    if (args.includes("data:sync-check") && options.dataSyncFailure) {
+      return {
+        code: 1,
+        stdout: "",
+        stderr: "pinned data fixture does not match\n",
+      };
+    }
     if (args.some((entry) => entry.endsWith("cli/rosterpilot.ts"))) {
       const action = args.at(-1);
       if (args.includes("agent")) {
         return {
-          code: 0,
-          stdout: JSON.stringify({
-            ok: true,
-            installed: true,
-            running: true,
-          }),
+          code: options.agentStatusCode ?? 0,
+          stdout: JSON.stringify(
+            options.agentStatus ?? {
+              ok: true,
+              installed: true,
+              running: true,
+            },
+          ),
           stderr: "",
         };
       }
@@ -91,7 +106,9 @@ function setupHarness(options: {
           stdout: JSON.stringify({
             ok: true,
             data: {
-              available: true,
+              available: options.newRecruitAvailable ?? true,
+              agentAvailable:
+                options.newRecruitAgentAvailable ?? true,
               credentialsConfigured: options.credentialsConfigured ?? false,
             },
           }),
@@ -127,6 +144,13 @@ function setupHarness(options: {
         };
       }
       if (action === "freshness") {
+        if (options.freshnessFailure) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "network unavailable\n",
+          };
+        }
         return {
           code: 0,
           stdout: JSON.stringify({
@@ -302,8 +326,170 @@ test("doctor verifies dependencies without installing or mutating data", async (
     ),
     false,
   );
-  assert.ok(
+  assert.equal(
     harness.calls.some((call) => call.args.includes("data:sync-check")),
+    false,
+  );
+});
+
+test("doctor keeps local diagnostics usable when remote freshness is offline", async () => {
+  const harness = setupHarness({
+    credentialsConfigured: true,
+    freshnessFailure: true,
+  });
+  const result = await runSetup(
+    {
+      doctor: true,
+      help: false,
+      nonInteractive: true,
+      profile: "new-recruit",
+      refresh: "check",
+    },
+    harness.dependencies,
+  );
+
+  assert.equal(result.ok, true);
+  assert.ok(
+    harness.calls.some(
+      (call) =>
+        call.args.includes("agent") && call.args.at(-1) === "status",
+    ),
+  );
+  assert.ok(
+    harness.calls.some(
+      (call) =>
+        call.args.includes("new-recruit") &&
+        call.args.at(-1) === "status",
+    ),
+  );
+  assert.deepEqual(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "Remote data freshness",
+    )?.status,
+    "warning",
+  );
+  assert.match(
+    harness.stdout.chunks.join(""),
+    /Local readiness results remain valid for the pinned release/,
+  );
+});
+
+test("doctor treats an unavailable remote pinned-source check as non-blocking", async () => {
+  const harness = setupHarness({
+    credentialsConfigured: true,
+    dataSyncFailure: true,
+  });
+  const result = await runSetup(
+    {
+      doctor: true,
+      help: false,
+      nonInteractive: true,
+      profile: "new-recruit",
+      refresh: "check",
+    },
+    harness.dependencies,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "Remote pinned-source check",
+    )?.status,
+    "warning",
+  );
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) => entry.name === "Local agent",
+    )?.status,
+    "ready",
+  );
+  assert.ok(
+    harness.calls.some((call) => call.args.at(-1) === "freshness"),
+  );
+  assert.ok(
+    result.nextSteps.some((step: string) =>
+      step.includes("data:sync-check"),
+    ),
+  );
+});
+
+test("doctor preserves a stale-agent mismatch and recommends ensure-current", async () => {
+  const harness = setupHarness({
+    agentStatusCode: 2,
+    agentStatus: {
+      ok: false,
+      installed: true,
+      running: true,
+      code: "LOCAL_AGENT_BUILD_MISMATCH",
+      message: "running build old does not match checkout build new",
+      nextSteps: [
+        'Run "npm run rosterpilot -- agent ensure-current" from this checkout.',
+      ],
+    },
+    credentialsConfigured: true,
+  });
+  const result = await runSetup(
+    {
+      doctor: true,
+      help: false,
+      nonInteractive: true,
+      profile: "new-recruit",
+      refresh: "skip",
+    },
+    harness.dependencies,
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(
+    result.results.find(
+      (entry: { name: string }) => entry.name === "Local agent",
+    )?.detail ?? "",
+    /LOCAL_AGENT_BUILD_MISMATCH/,
+  );
+  assert.ok(
+    result.nextSteps.some((step: string) =>
+      step.includes("agent ensure-current"),
+    ),
+  );
+});
+
+test("fresh-Mac doctor repairs the agent before recommending credential setup", async () => {
+  const harness = setupHarness({
+    agentStatusCode: 2,
+    agentStatus: {
+      ok: false,
+      installed: false,
+      running: false,
+      code: "LOCAL_AGENT_NOT_INSTALLED",
+      message: "the local agent is not installed",
+    },
+    newRecruitAgentAvailable: false,
+    newRecruitAvailable: false,
+  });
+  const result = await runSetup(
+    {
+      doctor: true,
+      help: false,
+      nonInteractive: true,
+      profile: "new-recruit",
+      refresh: "skip",
+    },
+    harness.dependencies,
+  );
+
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.nextSteps.some((step: string) =>
+      step.includes("agent ensure-current"),
+    ),
+  );
+  assert.equal(
+    result.nextSteps.some((step: string) =>
+      step.includes("new-recruit configure"),
+    ),
+    false,
   );
 });
 

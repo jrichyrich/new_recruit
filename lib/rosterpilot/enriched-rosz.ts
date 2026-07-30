@@ -39,6 +39,15 @@ export type EnrichedRoszGameplayIdentity = {
   presentationAliasAccepted: boolean;
 };
 
+export type EnrichedUnitProfileCoverage = {
+  selectionId: string | null;
+  name: string;
+  modelCount: number;
+  unitProfileCount: number;
+  weaponProfileCount: number;
+  complete: boolean;
+};
+
 function decodeXml(value: string): string {
   return value
     .replaceAll("&quot;", '"')
@@ -247,6 +256,84 @@ function topLevelUnits(xml: string): EnrichedRoszSummary["units"] {
     }
   }
   return units.filter((unit) => unit.name && unit.modelCount > 0);
+}
+
+/**
+ * Reports whether every top-level unit has its own embedded model and weapon
+ * profiles. Aggregate archive counts are insufficient: one profiled unit must
+ * not make an otherwise partial upload appear simulation-ready.
+ */
+export function inspectEnrichedUnitProfileCoverage(
+  content: Uint8Array,
+): EnrichedUnitProfileCoverage[] {
+  const xml = rosterXml(content);
+  const units = topLevelUnits(xml);
+  const coverage: Array<{
+    unitProfileCount: number;
+    weaponProfileCount: number;
+  }> = [];
+  const stack: Array<{
+    type: string;
+    coverageIndex: number | null;
+  }> = [];
+  const tokens =
+    xml.match(
+      /<selection\b[^>]*>|<\/selection>|<profile\b[^>]*>|<\/profile>/g,
+    ) ?? [];
+
+  for (const token of tokens) {
+    if (token === "</selection>") {
+      stack.pop();
+      continue;
+    }
+    if (token === "</profile>") continue;
+    if (token.startsWith("<selection")) {
+      const attrs = attributes(token);
+      const isTopLevelUnit =
+        stack.length === 0 &&
+        (attrs.type === "unit" || attrs.type === "model");
+      const coverageIndex = isTopLevelUnit
+        ? coverage.push({
+            unitProfileCount: 0,
+            weaponProfileCount: 0,
+          }) - 1
+        : (stack[0]?.coverageIndex ?? null);
+      stack.push({
+        type: attrs.type ?? "",
+        coverageIndex,
+      });
+      if (token.endsWith("/>")) stack.pop();
+      continue;
+    }
+    if (!token.startsWith("<profile")) continue;
+    const coverageIndex = stack[0]?.coverageIndex ?? null;
+    if (coverageIndex === null) continue;
+    const profile = attributes(token);
+    if (profile.typeName === "Unit") {
+      coverage[coverageIndex].unitProfileCount += 1;
+    } else if (
+      profile.typeName === "Ranged Weapons" ||
+      profile.typeName === "Melee Weapons"
+    ) {
+      coverage[coverageIndex].weaponProfileCount += 1;
+    }
+  }
+
+  return units.map((unit, index) => {
+    const observed = coverage[index] ?? {
+      unitProfileCount: 0,
+      weaponProfileCount: 0,
+    };
+    return {
+      selectionId: unit.selectionId ?? null,
+      name: unit.name,
+      modelCount: unit.modelCount,
+      ...observed,
+      complete:
+        observed.unitProfileCount > 0 &&
+        observed.weaponProfileCount > 0,
+    };
+  });
 }
 
 function multiset(

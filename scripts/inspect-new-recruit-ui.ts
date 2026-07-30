@@ -39,8 +39,8 @@ try {
         name: element.getAttribute("name"),
         placeholder: element.getAttribute("placeholder"),
         visible: Boolean(
-          element.offsetWidth ||
-            element.offsetHeight ||
+          (element as HTMLElement).offsetWidth ||
+            (element as HTMLElement).offsetHeight ||
             element.getClientRects().length,
         ),
       })),
@@ -49,8 +49,8 @@ try {
       elements
         .filter((element) =>
           Boolean(
-            element.offsetWidth ||
-              element.offsetHeight ||
+            (element as HTMLElement).offsetWidth ||
+              (element as HTMLElement).offsetHeight ||
               element.getClientRects().length,
           ),
         )
@@ -70,8 +70,8 @@ try {
       elements
         .filter((element) =>
           Boolean(
-            element.offsetWidth ||
-              element.offsetHeight ||
+            (element as HTMLElement).offsetWidth ||
+              (element as HTMLElement).offsetHeight ||
               element.getClientRects().length,
           ),
         )
@@ -232,8 +232,8 @@ try {
         .filter(
           (button) =>
             Boolean(
-              button.offsetWidth ||
-                button.offsetHeight ||
+              (button as HTMLElement).offsetWidth ||
+                (button as HTMLElement).offsetHeight ||
                 button.getClientRects().length,
             ),
         )
@@ -336,8 +336,8 @@ try {
           .filter(
             (element) =>
               Boolean(
-                element.offsetWidth ||
-                  element.offsetHeight ||
+                (element as HTMLElement).offsetWidth ||
+                  (element as HTMLElement).offsetHeight ||
                   element.getClientRects().length,
               ),
           )
@@ -359,8 +359,8 @@ try {
           .filter(
             (element) =>
               Boolean(
-                element.offsetWidth ||
-                  element.offsetHeight ||
+                (element as HTMLElement).offsetWidth ||
+                  (element as HTMLElement).offsetHeight ||
                   element.getClientRects().length,
               ),
           )

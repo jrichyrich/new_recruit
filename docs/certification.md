@@ -66,10 +66,13 @@ faction without expanding to the ordered opponent matrix; data-update staging
 uses this deterministic, browser-free gate.
 
 `core-3` always means three unique, exportable payloads representing balanced,
-ranged, and assault postures. Model density and the `mixed`, `mass`, and
-`elite-heavy` labels are supporting evidence; they are not universal required
-cells. The manifest records expert-reviewed composition exceptions, such as
-the absence of a conventional mass posture for Knights and Grey Knights.
+ranged, and assault postures. The `mixed`, `mass`, and `elite-heavy` wire
+labels are evaluated with release-bound faction-relative ranges over model
+density, points per model, unit-type share, selected-weapon pressure, mobility,
+and concentration. Generated ranges are explicitly pending until expert review
+is rebound to the current data and faction contract. The manifest separately
+records expert-reviewed not-applicable exceptions; pending assertions never
+authorize degraded coverage.
 
 Named-character coverage is a separate specialist case. An unavailable named
 specialist may degrade that specialist result, but it cannot reduce a complete
@@ -116,6 +119,11 @@ browser/control canary; it is not opponent-posture evidence. Unsupported
 export, delivery, and trusted-simulation capabilities have distinct codes and
 stop before their respective external mutation. An imported-but-unverified New
 Recruit outcome is marked uncertain and is not considered retryable.
+
+The renamed-mirror tier remains useful for broad connector certification, but
+it does not satisfy any of the source-backed matchup canaries below. In
+particular, renaming a copy of the player archive is never evidence for a
+distinct-faction exact matchup.
 
 `--profile-policy <path>` accepts the canonical v1 Tessera policy format. The
 source and canonical hashes are frozen into the report, while the policy
@@ -174,6 +182,72 @@ file. Leaving it unset is intentionally fail-closed for a roster that exposes
 alternate profiles; the resulting bundle contains the scaffold needed for a
 reviewed rerun.
 
+## Rotating source-backed live canaries
+
+The daily workflow routes three named canaries through the durable Tessera job
+coordinator. These are separate from deterministic fixture acceptance and from
+the renamed-mirror faction certification tier:
+
+| Canary | Required live evidence |
+| --- | --- |
+| `custodes-vs-adaptive-nine-aeldari-2000` | One frozen, complete adaptive-nine Aeldari portfolio; nine execution-distinct proxies across all three postures; a forced client-timeout boundary; same-run resume; nine screening runs; three representative deep dives; no duplicate New Recruit delivery; portable hash-verified artifacts |
+| `death-guard-vs-orks-exact-1000` | Two independently built, points-matched canonical rosters from different factions and a complete exact Tessera scenario contract; a renamed mirror cannot satisfy this canary |
+| `uploaded-multiprofile-exact-paired-revision` | A locally inspected uploaded ROSZ with at least one explicit alternate weapon-profile decision, matching canonical opponent context, a complete exact baseline, and a paired revision that preserves opponent, policy, scenario, source-pin, and Tessera UI evidence |
+
+Run one canary directly with:
+
+```bash
+ROSTERPILOT_CERTIFICATION_LIVE=1 \
+ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH=/path/to/canary-policy.json \
+  npm run certify:canary -- \
+  --canary custodes-vs-adaptive-nine-aeldari-2000 \
+  --out-dir .certification/live-canaries \
+  --require-live
+```
+
+The uploaded-roster canary also requires four runner-local fixture paths:
+
+```text
+ROSTERPILOT_CANARY_MULTIPROFILE_ROSZ_PATH
+ROSTERPILOT_CANARY_MULTIPROFILE_CONTEXT_PATH
+ROSTERPILOT_CANARY_PLAYER_ROSTER_PATH
+ROSTERPILOT_CANARY_REVISED_ROSTER_PATH
+```
+
+The context, player, and revised files are current canonical roster JSON. The
+baseline and revised player rosters must have distinct execution fingerprints,
+while all three canonical rosters must share the edition, release, and points
+contract. The ROSZ must match the opponent context's faction, units, models,
+points, and embedded catalogue identity. The same canary-specific profile
+policy must exactly resolve both the baseline and revision inventories.
+The configured source policy may cover the whole rotation; before mutation the
+runner writes and hashes an exact canary-scoped subset, then freezes that file
+inside the durable job.
+
+Readiness is local-first and non-mutating. The runner checks the live opt-in,
+macOS runtime, current local-agent build and protocol, Chrome, Keychain broker,
+New Recruit readiness, Tessera licence readiness, profile policy, and required
+fixtures before starting a durable job. An absent credential, policy, browser,
+or fixture produces a structured `unavailable` report with `livePass: false`.
+`--require-live` makes that outcome fail the workflow. A configured but invalid
+fixture or policy is also unavailable; a portfolio, execution, provenance, or
+analytical assertion failure is a failed canary. Neither outcome is reported as
+a live pass.
+
+Every attempt writes a JSON report and detached SHA-256 file. A live pass
+requires every definition assertion to pass from real connector receipts.
+Reports retain the durable run ID and manifest path so an interrupted external
+client can inspect or resume the job. The Custodes/Aeldari canary deliberately
+stops its own client wait briefly, verifies that `resume` returns the same
+active run and attempt, and only then follows the background job to completion.
+The canary never deletes the New Recruit lists it creates or reuses.
+
+`tests/release-acceptance-custodes-aeldari.test.ts` and
+`tests/live-canaries.test.ts` remain deterministic fixture acceptance. They
+prove portfolio, routing, timeout/resume, report, and unavailable-state
+behavior without credentials. Their success is not a live certification pass
+and must never be presented as one.
+
 ## Fixture recording
 
 Connector recordings must be sanitized before they enter `tests/fixtures/`:
@@ -195,8 +269,10 @@ values are not stored in reports.
 
 - Pull requests run the full deterministic faction set in four shards and the
   recorded browser suite on macOS.
-- A daily self-hosted canary exercises one stable and one multi-profile
-  faction when `ROSTERPILOT_LIVE_RUNNER_ENABLED` is configured.
+- A daily self-hosted serial rotation runs the three source-backed canaries
+  above when `ROSTERPILOT_LIVE_RUNNER_ENABLED` is configured. Missing
+  credentials or fixtures remain explicit unavailable failures under
+  `--require-live`.
 - The weekly self-hosted rotation shards all factions; declared unsupported
   capabilities remain visible and create no remote list.
 - The release workflow adds the complete ordered local opponent matrix and

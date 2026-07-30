@@ -10,6 +10,7 @@ import {
   validateEnrichedRosz,
   validateRoster,
   type ExportArtifact,
+  type ConnectorEvent,
   type NewRecruitConnectionStatus,
   type NewRecruitDelivery,
   type ResultEnvelope,
@@ -36,6 +37,13 @@ import {
   getRuntimeProvenance,
   runtimeRestartIssue,
 } from "../runtime-provenance";
+import {
+  beginNewRecruitMutationReceipt,
+  beginNewRecruitRoszMutationReceipt,
+  newRecruitRoszMutationSubject,
+  type NewRecruitMutationFinalization,
+  type NewRecruitMutationTransaction,
+} from "./cache";
 import { safeNewRecruitUiIdentity } from "./ui-identity";
 
 const projectRoot = path.resolve(
@@ -49,6 +57,18 @@ export type NewRecruitDeliveryOptions = WriteOptions & {
   downloadEnrichedRosz?: boolean;
   downloadPrettyHtml?: boolean;
   outputDirectory?: string;
+  /** Internal durable-run identity for mutation receipts and inventory. */
+  mutationRunId?: string;
+  /**
+   * Exact/Tessera coordinators that already own a mutation transaction must
+   * opt out so the public companion does not create a nested receipt.
+   */
+  mutationReceiptMode?: "managed" | "external";
+  /**
+   * When enriching an uploaded ROSZ for a canonical roster, bind the receipt
+   * to that roster instead of the content-addressed uploaded-file subject.
+   */
+  mutationSubjectRoster?: RosterDraftV1;
 };
 
 export type NewRecruitCompanionDependencies = {
@@ -416,6 +436,120 @@ function enrichedFilename(roszFilename: string): string {
   return roszFilename.replace(/\.rosz$/i, "-new-recruit-enriched.rosz");
 }
 
+function mutationRunId(
+  options: NewRecruitDeliveryOptions,
+  prefix: string,
+): string {
+  return (
+    options.mutationRunId?.trim() ||
+    `${prefix}-${crypto.randomUUID()}`
+  );
+}
+
+function mutationEvent(input: {
+  eventId: string;
+  recordedAt: string;
+  imported: boolean;
+  remoteOutcomeUnknown?: boolean;
+  workerOk: boolean;
+  remoteId: string | null;
+  contentSha256: string;
+  verified?: boolean;
+}): ConnectorEvent {
+  const mayHaveCreated =
+    input.imported || input.remoteOutcomeUnknown === true;
+  return {
+    schemaVersion: 1,
+    eventId: input.eventId,
+    recordedAt: input.recordedAt,
+    provider: "new-recruit",
+    action: "prepare",
+    origin: mayHaveCreated ? "new-remote" : "in-memory",
+    outcome: input.verified
+      ? input.imported
+        ? "verified"
+        : "reused"
+      : input.workerOk && !mayHaveCreated
+        ? "reused"
+        : mayHaveCreated
+          ? "uncertain"
+          : "failed",
+    remoteId: input.remoteId,
+    contentSha256: input.contentSha256,
+  };
+}
+
+function mutationFinalization(
+  event: ConnectorEvent,
+  message: string,
+): NewRecruitMutationFinalization {
+  if (
+    event.origin === "new-remote" &&
+    event.outcome === "verified"
+  ) {
+    return {
+      outcome: "created",
+      connectorEvent: event,
+      message,
+    };
+  }
+  if (
+    event.outcome === "reused" ||
+    (event.outcome === "verified" &&
+      event.origin !== "new-remote")
+  ) {
+    return {
+      outcome: "reused",
+      connectorEvent: {
+        ...event,
+        outcome: "reused",
+      },
+      message,
+    };
+  }
+  if (
+    event.outcome === "failed" &&
+    event.origin !== "new-remote"
+  ) {
+    return {
+      outcome: "not-created",
+      connectorEvent: event,
+      message,
+    };
+  }
+  return {
+    outcome: "uncertain",
+    connectorEvent: {
+      ...event,
+      outcome: "uncertain",
+    },
+    message,
+  };
+}
+
+function mutationReceiptViolation(
+  error: unknown,
+): {
+  code: string;
+  message: string;
+  severity: "error";
+} {
+  return {
+    code:
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : "NEW_RECRUIT_MUTATION_RECEIPT_FAILED",
+    message:
+      error instanceof Error
+        ? error.message
+        : "The durable New Recruit mutation receipt could not be written.",
+    severity: "error",
+  };
+}
+
 async function preserveRejectedEnrichedRosz(
   content: Uint8Array,
   sourceFilename: string,
@@ -652,7 +786,49 @@ export async function deliverRosterToNewRecruit(
       },
     ];
   };
+  let mutationTransaction: NewRecruitMutationTransaction | null =
+    null;
+  if (options.mutationReceiptMode !== "external") {
+    try {
+      mutationTransaction =
+        await beginNewRecruitMutationReceipt({
+          roster: draft,
+          runId: mutationRunId(
+            options,
+            "direct-new-recruit",
+          ),
+          expectedSourceRoszSha256: sourceRoszSha256,
+        });
+    } catch (error) {
+      return {
+        ok: false,
+        data: null,
+        violations: [mutationReceiptViolation(error)],
+        warnings: validation.warnings,
+      };
+    }
+  }
   let agentDispatchStarted = false;
+  let workerResponseReceived = false;
+  let mutationFinalizationAttempted = false;
+  let observedMutationEvent: ConnectorEvent | null = null;
+  const observeMutationEvent = async (
+    event: ConnectorEvent,
+  ): Promise<void> => {
+    observedMutationEvent = event;
+    delivery.connectorEvents = [event];
+    await mutationTransaction?.observeConnectorEvidence(event);
+  };
+  const finalizeMutationEvent = async (
+    event: ConnectorEvent,
+    message: string,
+  ): Promise<void> => {
+    if (!mutationTransaction) return;
+    mutationFinalizationAttempted = true;
+    await mutationTransaction.finalize(
+      mutationFinalization(event, message),
+    );
+  };
   try {
     agentDispatchStarted = true;
     const agent = await (
@@ -673,33 +849,32 @@ export async function deliverRosterToNewRecruit(
       },
     });
     const worker = agent.worker;
+    workerResponseReceived = true;
     delivery.uiIdentity =
       safeNewRecruitUiIdentity(worker.uiIdentity);
     delivery.listUrl = worker.listUrl;
     delivery.imported = worker.imported;
     delivery.sessionReused = worker.sessionReused;
     delivery.verification = worker.verification;
+    const initialMutationEvent = mutationEvent({
+      eventId: connectorEventId,
+      recordedAt: connectorEventRecordedAt,
+      imported: worker.imported,
+      remoteOutcomeUnknown: worker.remoteOutcomeUnknown,
+      workerOk: worker.ok,
+      remoteId: worker.listUrl,
+      contentSha256: sourceRoszSha256,
+    });
+    await observeMutationEvent(initialMutationEvent);
     if (!worker.ok) {
-      const externalOutcomeUncertain =
-        worker.imported ||
-        worker.remoteOutcomeUnknown === true;
-      delivery.connectorEvents = [
-        {
-          schemaVersion: 1,
-          eventId: connectorEventId,
-          recordedAt: connectorEventRecordedAt,
-          provider: "new-recruit",
-          action: "prepare",
-          origin: externalOutcomeUncertain
-            ? "new-remote"
-            : "in-memory",
-          outcome: externalOutcomeUncertain
-            ? "uncertain"
-            : "failed",
-          remoteId: worker.listUrl,
-          contentSha256: sourceRoszSha256,
-        },
-      ];
+      await finalizeMutationEvent(
+        initialMutationEvent,
+        worker.message ??
+          (worker.imported ||
+          worker.remoteOutcomeUnknown === true
+            ? "The New Recruit worker could not prove whether its remote import completed."
+            : "The New Recruit worker proved that no remote import occurred."),
+      );
       await publishSource();
       return {
         ok: false,
@@ -734,19 +909,22 @@ export async function deliverRosterToNewRecruit(
           })),
         });
       } catch (error) {
-        delivery.connectorEvents = [
-          {
-            schemaVersion: 1,
-            eventId: connectorEventId,
-            recordedAt: connectorEventRecordedAt,
-            provider: "new-recruit",
-            action: "prepare",
-            origin: worker.imported ? "new-remote" : "in-memory",
-            outcome: worker.imported ? "uncertain" : "failed",
-            remoteId: worker.listUrl,
-            contentSha256: sourceRoszSha256,
-          },
-        ];
+        const failedVerificationEvent = mutationEvent({
+          eventId: connectorEventId,
+          recordedAt: connectorEventRecordedAt,
+          imported: worker.imported,
+          remoteOutcomeUnknown: worker.remoteOutcomeUnknown,
+          workerOk: worker.ok,
+          remoteId: worker.listUrl,
+          contentSha256: sourceRoszSha256,
+        });
+        delivery.connectorEvents = [failedVerificationEvent];
+        await finalizeMutationEvent(
+          failedVerificationEvent,
+          worker.imported
+            ? "New Recruit reported a remote import, but the enriched ROSZ failed gameplay-identity verification."
+            : "New Recruit did not import a new list; the returned enriched ROSZ failed gameplay-identity verification.",
+        );
         let diagnosticWarning: {
           code: string;
           message: string;
@@ -830,22 +1008,26 @@ export async function deliverRosterToNewRecruit(
       includeEnriched && artifacts[1]
         ? artifacts[1].content
         : rosz.content;
-    delivery.connectorEvents = [
-      {
-        schemaVersion: 1,
-        eventId: connectorEventId,
-        recordedAt: connectorEventRecordedAt,
-        provider: "new-recruit",
-        action: "prepare",
-        origin: worker.imported ? "new-remote" : "in-memory",
-        outcome: "verified",
-        remoteId: worker.listUrl,
-        contentSha256: crypto
-          .createHash("sha256")
-          .update(verifiedContent)
-          .digest("hex"),
-      },
-    ];
+    const verifiedMutationEvent = mutationEvent({
+      eventId: connectorEventId,
+      recordedAt: connectorEventRecordedAt,
+      imported: worker.imported,
+      remoteOutcomeUnknown: worker.remoteOutcomeUnknown,
+      workerOk: worker.ok,
+      remoteId: worker.listUrl,
+      contentSha256: crypto
+        .createHash("sha256")
+        .update(verifiedContent)
+        .digest("hex"),
+      verified: true,
+    });
+    delivery.connectorEvents = [verifiedMutationEvent];
+    await finalizeMutationEvent(
+      verifiedMutationEvent,
+      worker.imported
+        ? "New Recruit created and verified a remote roster list."
+        : "New Recruit reused an existing roster state; no import occurred.",
+    );
     return {
       ok: true,
       data: delivery,
@@ -853,26 +1035,38 @@ export async function deliverRosterToNewRecruit(
       warnings: validation.warnings,
     };
   } catch (error) {
-    if (!delivery.connectorEvents?.length) {
-      const externalOutcomeUncertain =
-        agentDispatchStarted || delivery.imported;
-      delivery.connectorEvents = [
-        {
-          schemaVersion: 1,
+    let receiptFailure: unknown = null;
+    if (!mutationFinalizationAttempted) {
+      const fallbackEvent =
+        observedMutationEvent ??
+        mutationEvent({
           eventId: connectorEventId,
           recordedAt: connectorEventRecordedAt,
-          provider: "new-recruit",
-          action: "prepare",
-          origin: externalOutcomeUncertain
-            ? "new-remote"
-            : "in-memory",
-          outcome: externalOutcomeUncertain
-            ? "uncertain"
-            : "failed",
+          imported: delivery.imported,
+          remoteOutcomeUnknown:
+            agentDispatchStarted && !workerResponseReceived,
+          workerOk: false,
           remoteId: delivery.listUrl,
           contentSha256: sourceRoszSha256,
-        },
-      ];
+        });
+      delivery.connectorEvents = [fallbackEvent];
+      try {
+        if (!observedMutationEvent) {
+          await mutationTransaction?.observeConnectorEvidence(
+            fallbackEvent,
+          );
+        }
+        await finalizeMutationEvent(
+          fallbackEvent,
+          fallbackEvent.outcome === "reused"
+            ? "New Recruit proved that no import occurred before the local delivery failed."
+            : fallbackEvent.outcome === "failed"
+              ? "The delivery failed before New Recruit could create a remote list."
+              : "The delivery was dispatched, but its remote outcome could not be fully verified.",
+        );
+      } catch (finalizationError) {
+        receiptFailure = finalizationError;
+      }
     }
     let fallbackWarning = null;
     if (!delivery.artifacts.length) {
@@ -901,6 +1095,9 @@ export async function deliverRosterToNewRecruit(
           message: error instanceof Error ? error.message : "Delivery failed.",
           severity: "error",
         },
+        ...(receiptFailure
+          ? [mutationReceiptViolation(receiptFailure)]
+          : []),
       ],
       warnings: fallbackWarning
         ? [...validation.warnings, fallbackWarning]
@@ -912,14 +1109,34 @@ export async function deliverRosterToNewRecruit(
 export async function enrichRoszThroughNewRecruit(
   sourcePath: string,
   options: NewRecruitDeliveryOptions = {},
+  dependencies: NewRecruitCompanionDependencies = {},
 ): Promise<
   ResultEnvelope<{
     listUrl: string | null;
+    imported: boolean;
+    sessionReused: boolean;
+    connectorEvents: ConnectorEvent[];
     enrichedRoszPath: string;
     summary: ReturnType<typeof inspectEnrichedRosz>;
   }>
 > {
-  if (process.platform !== "darwin" || !(await exists(chromePath))) {
+  const restartIssue = dependencies.runtimeIssue
+    ? dependencies.runtimeIssue()
+    : dependencies.agentDeliver
+      ? null
+      : runtimeRestartIssue();
+  if (restartIssue) {
+    return {
+      ok: false,
+      data: null,
+      violations: [{ ...restartIssue, severity: "error" }],
+      warnings: [],
+    };
+  }
+  const platform = dependencies.platform ?? process.platform;
+  const browserAvailable =
+    dependencies.browserAvailable ?? (await exists(chromePath));
+  if (platform !== "darwin" || !browserAvailable) {
     return {
       ok: false,
       data: null,
@@ -958,7 +1175,102 @@ export async function enrichRoszThroughNewRecruit(
     .replace(/[^\p{L}\p{N}._-]+/gu, "-");
   const filename = `${basename}-new-recruit-enriched.rosz`;
   try {
-    const agent = await deliverThroughLocalAgent({
+    await resolveExportArtifactTargets(
+      [
+        {
+          format: "rosz",
+          filename,
+          mimeType: "application/zip",
+          encoding: "binary",
+          content: new Uint8Array(),
+        },
+      ],
+      outputDirectory,
+      options,
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "FILE_COLLISION",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Output path rejected.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
+
+  const sourceRoszSha256 = crypto
+    .createHash("sha256")
+    .update(source)
+    .digest("hex");
+  const eventId = crypto.randomUUID();
+  const eventRecordedAt = new Date().toISOString();
+  let transaction: NewRecruitMutationTransaction | null = null;
+  if (options.mutationReceiptMode !== "external") {
+    try {
+      const runId = mutationRunId(
+        options,
+        "uploaded-rosz-new-recruit",
+      );
+      transaction = options.mutationSubjectRoster
+        ? await beginNewRecruitMutationReceipt({
+            roster: options.mutationSubjectRoster,
+            runId,
+            expectedSourceRoszSha256: sourceRoszSha256,
+          })
+        : await beginNewRecruitRoszMutationReceipt({
+            subject: newRecruitRoszMutationSubject({
+              content: source,
+              rosterName: expected.rosterName,
+            }),
+            runId,
+          });
+    } catch (error) {
+      return {
+        ok: false,
+        data: null,
+        violations: [mutationReceiptViolation(error)],
+        warnings: [],
+      };
+    }
+  }
+
+  let agentDispatchStarted = false;
+  let workerResponse:
+    | Awaited<
+        ReturnType<typeof deliverThroughLocalAgent>
+      >["worker"]
+    | null = null;
+  let observedEvent: ConnectorEvent | null = null;
+  let finalizationAttempted = false;
+  const observe = async (
+    event: ConnectorEvent,
+  ): Promise<void> => {
+    observedEvent = event;
+    await transaction?.observeConnectorEvidence(event);
+  };
+  const finalize = async (
+    event: ConnectorEvent,
+    message: string,
+  ): Promise<void> => {
+    if (!transaction) return;
+    finalizationAttempted = true;
+    await transaction.finalize(
+      mutationFinalization(event, message),
+    );
+  };
+  try {
+    agentDispatchStarted = true;
+    const agent = await (
+      dependencies.agentDeliver ?? deliverThroughLocalAgent
+    )({
       sourceFilename: path.basename(sourcePath),
       sourceRoszBase64: source.toString("base64"),
       downloadEnrichedRosz: true,
@@ -971,7 +1283,26 @@ export async function enrichRoszThroughNewRecruit(
       },
     });
     const worker = agent.worker;
+    workerResponse = worker;
+    const initialEvent = mutationEvent({
+      eventId,
+      recordedAt: eventRecordedAt,
+      imported: worker.imported,
+      remoteOutcomeUnknown: worker.remoteOutcomeUnknown,
+      workerOk: worker.ok,
+      remoteId: worker.listUrl,
+      contentSha256: sourceRoszSha256,
+    });
+    await observe(initialEvent);
     if (!worker.ok) {
+      await finalize(
+        initialEvent,
+        worker.message ??
+          (worker.imported ||
+          worker.remoteOutcomeUnknown === true
+            ? "The New Recruit worker could not prove whether uploaded-roster enrichment created a list."
+            : "The New Recruit worker proved that uploaded-roster enrichment did not create a list."),
+      );
       return {
         ok: false,
         data: null,
@@ -1008,10 +1339,32 @@ export async function enrichRoszThroughNewRecruit(
       path.join(outputDirectory, filename),
       options,
     );
+    const connectorEvent = mutationEvent({
+      eventId,
+      recordedAt: eventRecordedAt,
+      imported: worker.imported,
+      remoteOutcomeUnknown: worker.remoteOutcomeUnknown,
+      workerOk: worker.ok,
+      remoteId: worker.listUrl,
+      contentSha256: crypto
+        .createHash("sha256")
+        .update(content)
+        .digest("hex"),
+      verified: true,
+    });
+    await finalize(
+      connectorEvent,
+      worker.imported
+        ? "New Recruit created and verified a remote list while enriching the uploaded ROSZ."
+        : "New Recruit reused an existing roster state while enriching the uploaded ROSZ; no import occurred.",
+    );
     return {
       ok: true,
       data: {
         listUrl: worker.listUrl,
+        imported: worker.imported,
+        sessionReused: worker.sessionReused,
+        connectorEvents: [connectorEvent],
         enrichedRoszPath: written,
         summary,
       },
@@ -1019,6 +1372,39 @@ export async function enrichRoszThroughNewRecruit(
       warnings: [],
     };
   } catch (error) {
+    let receiptFailure: unknown = null;
+    if (!finalizationAttempted) {
+      const fallbackEvent =
+        observedEvent ??
+        mutationEvent({
+          eventId,
+          recordedAt: eventRecordedAt,
+          imported: workerResponse?.imported ?? false,
+          remoteOutcomeUnknown:
+            workerResponse?.remoteOutcomeUnknown ??
+            agentDispatchStarted,
+          workerOk: workerResponse?.ok ?? false,
+          remoteId: workerResponse?.listUrl ?? null,
+          contentSha256: sourceRoszSha256,
+        });
+      try {
+        if (!observedEvent) {
+          await transaction?.observeConnectorEvidence(
+            fallbackEvent,
+          );
+        }
+        await finalize(
+          fallbackEvent,
+          fallbackEvent.outcome === "reused"
+            ? "New Recruit proved that no import occurred before uploaded-roster enrichment failed locally."
+            : fallbackEvent.outcome === "failed"
+              ? "Uploaded-roster enrichment failed before New Recruit could create a list."
+              : "Uploaded-roster enrichment reached New Recruit, but its remote outcome could not be fully verified.",
+        );
+      } catch (finalizationError) {
+        receiptFailure = finalizationError;
+      }
+    }
     return {
       ok: false,
       data: null,
@@ -1034,6 +1420,9 @@ export async function enrichRoszThroughNewRecruit(
               : "The enriched .rosz could not be verified.",
           severity: "error",
         },
+        ...(receiptFailure
+          ? [mutationReceiptViolation(receiptFailure)]
+          : []),
       ],
       warnings: [],
     };

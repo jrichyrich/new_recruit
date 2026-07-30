@@ -2,6 +2,7 @@ import {
   buildRoster,
   exportRoster,
   factionHasLegalNamedAnchor,
+  inspectRosterUnitThreatProperties,
   listDetachments,
   rosterHasNamedCharacter,
   rosterProfileRequirements,
@@ -36,7 +37,7 @@ import type {
   TesseraStressPortfolioPreview,
 } from "./types";
 
-export const TESSERA_STRESS_GENERATOR_VERSION = "faction-stress-v4";
+export const TESSERA_STRESS_GENERATOR_VERSION = "faction-stress-v6";
 
 const POSTURES: TesseraArchetype[] = [
   "balanced-control",
@@ -114,6 +115,26 @@ function structuralTokens(roster: RosterDraftV1): Map<string, number> {
         "unit",
         unit.unitId,
         unit.modelCount,
+        unit.enhancementId ?? "-",
+        sortedEquipmentSignature(unit),
+      ].join(":"),
+    );
+  }
+  return tokens;
+}
+
+function simulationTokens(roster: RosterDraftV1): Map<string, number> {
+  const tokens = new Map<string, number>();
+  const add = (token: string) =>
+    tokens.set(token, (tokens.get(token) ?? 0) + 1);
+  for (const unit of roster.units) {
+    add(
+      [
+        "unit",
+        unit.unitId,
+        unit.modelCount,
+        unit.points,
+        unit.isWarlord ? "warlord" : "not-warlord",
         unit.enhancementId ?? "-",
         sortedEquipmentSignature(unit),
       ].join(":"),
@@ -259,6 +280,312 @@ export function rosterExecutionFingerprint(
   );
 }
 
+export type TesseraStressPortfolioContractEvaluation = {
+  accepted: boolean;
+  maximumResultStatus: "complete" | "degraded" | null;
+  minimumUniqueRequired: number;
+  completeUniqueRequired: number;
+  minimumPosturesRequired: 3;
+  usable: number;
+  uniqueSimulationPayloads: number;
+  representedPostures: TesseraArchetype[];
+  missingPostures: TesseraArchetype[];
+  allPosturesRepresented: boolean;
+  executionViable: boolean;
+  completeCoverage: boolean;
+  missingTemplateIds: string[];
+  reviewedNotApplicableTemplateIds: string[];
+  unreviewedMissingTemplateIds: string[];
+  violation: RosterIssue | null;
+};
+
+type DiversePortfolioReviewContract = {
+  sourceReleaseId: string;
+  reviewedNotApplicableTemplateIds: readonly string[];
+  threatLensesReviewed?: boolean;
+};
+
+/**
+ * Human review is bound to the exact pinned data release. A missing cell never
+ * becomes acceptable merely because an unavailable item carries a warning.
+ * The registry is intentionally empty until a faction review records a real
+ * exception against a concrete release.
+ */
+const REVIEWED_NOT_APPLICABLE_DIVERSE_CELLS: Readonly<
+  Record<string, DiversePortfolioReviewContract>
+> = {};
+
+function expectedDiversePortfolioContract(
+  factionId: string,
+  sourceReleaseId: string,
+  lensDefinition?: NonNullable<
+    TesseraStressPortfolio["contract"]
+  >["lensDefinition"],
+): NonNullable<TesseraStressPortfolio["contract"]> {
+  const reviewed = REVIEWED_NOT_APPLICABLE_DIVERSE_CELLS[factionId];
+  const reviewedNotApplicableTemplateIds =
+    reviewed?.sourceReleaseId === sourceReleaseId
+      ? [...reviewed.reviewedNotApplicableTemplateIds].sort()
+      : [];
+  const binding = {
+    schemaVersion: 1 as const,
+    methodology: "adaptive-threat-lenses-v1" as const,
+    sourceReleaseId,
+    reviewedNotApplicableTemplateIds,
+    ...(lensDefinition
+      ? {
+          lensDefinition: {
+            ...lensDefinition,
+            reviewStatus:
+              reviewed?.sourceReleaseId === sourceReleaseId &&
+              reviewed.threatLensesReviewed === true
+                ? ("reviewed" as const)
+                : ("generated-pending-review" as const),
+          },
+        }
+      : {}),
+  };
+  return {
+    ...binding,
+    fingerprint: stableFingerprint(JSON.stringify(binding)),
+  };
+}
+
+function portfolioReviewContractMatchesRegistry(
+  portfolio: TesseraStressPortfolio,
+): boolean {
+  if (portfolio.suite !== "diverse-9" || !portfolio.contract) {
+    return false;
+  }
+  const expected = expectedDiversePortfolioContract(
+    portfolio.factionId,
+    portfolio.sourceData.releaseId,
+    portfolio.contract.lensDefinition,
+  );
+  const requiresLensDefinition =
+    portfolio.generatorVersion ===
+    TESSERA_STRESS_GENERATOR_VERSION;
+  return (
+    portfolio.contract.schemaVersion === expected.schemaVersion &&
+    portfolio.contract.methodology === expected.methodology &&
+    portfolio.contract.sourceReleaseId === expected.sourceReleaseId &&
+    portfolio.contract.fingerprint === expected.fingerprint &&
+    (
+      !requiresLensDefinition ||
+      (
+        portfolio.contract.lensDefinition !== undefined &&
+        portfolio.contract.lensDefinition.postures.length ===
+          POSTURES.length
+      )
+    ) &&
+    JSON.stringify(
+      [...portfolio.contract.reviewedNotApplicableTemplateIds].sort(),
+    ) ===
+      JSON.stringify(expected.reviewedNotApplicableTemplateIds)
+  );
+}
+
+/**
+ * One fail-closed contract for every portfolio consumer. Callers performing an
+ * additional capability check, such as .rosz export, can restrict the usable
+ * set without mutating the frozen portfolio.
+ */
+export function evaluateTesseraStressPortfolioContract(
+  portfolio: TesseraStressPortfolio,
+  options: {
+    usableTemplateIds?: ReadonlySet<string>;
+  } = {},
+): TesseraStressPortfolioContractEvaluation {
+  const isDiverse = portfolio.suite === "diverse-9";
+  const minimumUniqueRequired = isDiverse ? 6 : 3;
+  const completeUniqueRequired = isDiverse ? 9 : 3;
+  const expectedDiverseTemplateIds = new Set(
+    POSTURES.flatMap((posture) =>
+      COMPOSITIONS.map(
+        (composition) => `${posture}:${composition}`,
+      ),
+    ),
+  );
+  const usableItems = portfolio.items.filter(
+    (item) =>
+      item.status === "ready" &&
+      item.roster !== null &&
+      (
+        options.usableTemplateIds === undefined ||
+        options.usableTemplateIds.has(item.templateId)
+      ),
+  );
+  const fingerprints = usableItems.map((item) => {
+    try {
+      return rosterExecutionFingerprint(item.roster!);
+    } catch {
+      return null;
+    }
+  });
+  const executionFingerprintErrors =
+    fingerprints.filter((fingerprint) => fingerprint === null).length;
+  const uniqueSimulationPayloads =
+    new Set(
+      fingerprints.filter(
+        (fingerprint): fingerprint is string =>
+          fingerprint !== null,
+      ),
+    ).size;
+  const representedPostures = POSTURES.filter((posture) =>
+    usableItems.some((item) => item.posture === posture),
+  );
+  const allPosturesRepresented =
+    representedPostures.length === POSTURES.length;
+  const missingPostures = POSTURES.filter(
+    (posture) => !representedPostures.includes(posture),
+  );
+  const templateCounts = new Map<string, number>();
+  for (const item of portfolio.items) {
+    templateCounts.set(
+      item.templateId,
+      (templateCounts.get(item.templateId) ?? 0) + 1,
+    );
+  }
+  const duplicateTemplateIds = [...templateCounts.entries()]
+    .filter(([, count]) => count !== 1)
+    .map(([templateId]) => templateId)
+    .sort();
+  const unexpectedTemplateIds = isDiverse
+    ? [...templateCounts.keys()]
+        .filter(
+          (templateId) =>
+            !expectedDiverseTemplateIds.has(templateId),
+        )
+        .sort()
+    : [];
+  const expectedTemplateIds = isDiverse
+    ? [...expectedDiverseTemplateIds]
+    : [];
+  const missingTemplateIds = expectedTemplateIds.filter(
+    (templateId) =>
+      !usableItems.some(
+        (item) => item.templateId === templateId,
+      ),
+  );
+  const reviewContractMatches =
+    portfolioReviewContractMatchesRegistry(portfolio);
+  const contractedReviewedIds = new Set(
+    reviewContractMatches
+      ? portfolio.contract!.reviewedNotApplicableTemplateIds
+      : [],
+  );
+  const reviewedNotApplicableTemplateIds =
+    missingTemplateIds.filter((templateId) => {
+      const matching = portfolio.items.filter(
+        (item) => item.templateId === templateId,
+      );
+      return (
+        contractedReviewedIds.has(templateId) &&
+        matching.length === 1 &&
+        matching[0].status === "unavailable" &&
+        matching[0].warnings.some(
+          (warning) =>
+            warning.code ===
+            "STRESS_TEMPLATE_NOT_APPLICABLE",
+        )
+      );
+    });
+  const reviewedSet = new Set(
+    reviewedNotApplicableTemplateIds,
+  );
+  const unreviewedMissingTemplateIds =
+    missingTemplateIds.filter(
+      (templateId) => !reviewedSet.has(templateId),
+    );
+  const payloadsAreDistinct =
+    executionFingerprintErrors === 0 &&
+    uniqueSimulationPayloads === usableItems.length;
+  const executionViable =
+    usableItems.length >= minimumUniqueRequired &&
+    uniqueSimulationPayloads >= minimumUniqueRequired &&
+    allPosturesRepresented;
+  const commonShapeValid =
+    duplicateTemplateIds.length === 0 &&
+    payloadsAreDistinct &&
+    (
+      !isDiverse ||
+      portfolio.contract === undefined ||
+      reviewContractMatches
+    );
+  const completeCoverage = isDiverse
+    ? commonShapeValid &&
+      portfolio.items.length === completeUniqueRequired &&
+      unexpectedTemplateIds.length === 0 &&
+      missingTemplateIds.length === 0 &&
+      usableItems.length === completeUniqueRequired &&
+      uniqueSimulationPayloads === completeUniqueRequired &&
+      allPosturesRepresented
+    : commonShapeValid &&
+      portfolio.items.length === completeUniqueRequired &&
+      usableItems.length === completeUniqueRequired &&
+      uniqueSimulationPayloads === completeUniqueRequired &&
+      allPosturesRepresented;
+  const degradedCoverage =
+    isDiverse &&
+    !completeCoverage &&
+    commonShapeValid &&
+    portfolio.items.length === completeUniqueRequired &&
+    unexpectedTemplateIds.length === 0 &&
+    executionViable &&
+    missingTemplateIds.length > 0 &&
+    unreviewedMissingTemplateIds.length === 0;
+  const accepted = completeCoverage || degradedCoverage;
+  const maximumResultStatus = completeCoverage
+    ? "complete"
+    : degradedCoverage
+      ? "degraded"
+      : null;
+  const detail = [
+    `usable=${usableItems.length}`,
+    `unique=${uniqueSimulationPayloads}`,
+    `postures=${representedPostures.join(", ") || "none"}`,
+    `missing=${missingTemplateIds.join(", ") || "none"}`,
+    `unreviewed=${unreviewedMissingTemplateIds.join(", ") || "none"}`,
+    `duplicate templates=${duplicateTemplateIds.join(", ") || "none"}`,
+    `unexpected templates=${unexpectedTemplateIds.join(", ") || "none"}`,
+    `unfingerprintable=${executionFingerprintErrors}`,
+    `review contract=${
+      reviewContractMatches
+        ? "bound"
+        : portfolio.contract
+          ? "invalid"
+          : "absent"
+    }`,
+  ].join("; ");
+  const contractDescription = isDiverse
+    ? "diverse-9 requires nine execution-distinct payloads for a complete portfolio, or at least six execution-distinct payloads across all three postures with every missing cell present in the faction's release-bound reviewed-not-applicable contract"
+    : "core-3 requires exactly three distinct payloads covering balanced-control, ranged-pressure, and assault-pressure";
+
+  return {
+    accepted,
+    maximumResultStatus,
+    minimumUniqueRequired,
+    completeUniqueRequired,
+    minimumPosturesRequired: 3,
+    usable: usableItems.length,
+    uniqueSimulationPayloads,
+    representedPostures,
+    missingPostures,
+    allPosturesRepresented,
+    executionViable,
+    completeCoverage,
+    missingTemplateIds,
+    reviewedNotApplicableTemplateIds,
+    unreviewedMissingTemplateIds,
+    violation: accepted
+      ? null
+      : issue(
+          "PORTFOLIO_CONTRACT_UNMET",
+          `The ${portfolio.suite} portfolio contract is unmet: ${contractDescription}. Observed ${detail}.`,
+        ),
+  };
+}
+
 /**
  * Multiset Jaccard distance in the inclusive [0, 1] range.
  */
@@ -268,6 +595,30 @@ export function rosterStructuralDistance(
 ): number {
   const leftTokens = structuralTokens(left);
   const rightTokens = structuralTokens(right);
+  const keys = new Set([...leftTokens.keys(), ...rightTokens.keys()]);
+  let intersection = 0;
+  let union = 0;
+  for (const key of keys) {
+    const leftCount = leftTokens.get(key) ?? 0;
+    const rightCount = rightTokens.get(key) ?? 0;
+    intersection += Math.min(leftCount, rightCount);
+    union += Math.max(leftCount, rightCount);
+  }
+  return union === 0 ? 0 : 1 - intersection / union;
+}
+
+/**
+ * Multiset Jaccard distance over the payload Tessera can execute. Unlike the
+ * legacy structural distance, this deliberately ignores detachment and other
+ * presentation-only differences so a portfolio cannot claim diversity from a
+ * detachment-only roster change.
+ */
+export function rosterSimulationDistance(
+  left: RosterDraftV1,
+  right: RosterDraftV1,
+): number {
+  const leftTokens = simulationTokens(left);
+  const rightTokens = simulationTokens(right);
   const keys = new Set([...leftTokens.keys(), ...rightTokens.keys()]);
   let intersection = 0;
   let union = 0;
@@ -299,11 +650,57 @@ function traitsFor(roster: RosterDraftV1): TesseraStressPortfolioTraits {
   let hordePoints = 0;
   let eliteHeavyPoints = 0;
   let eliteHeavyModelCount = 0;
+  let infantryPoints = 0;
+  let vehiclePoints = 0;
+  let monsterPoints = 0;
+  let rangedPressure = 0;
+  let meleePressure = 0;
+  let mobilityPressurePoints = 0;
+  let maximumUnitPoints = 0;
   for (const unit of roster.units) {
     modelCount += unit.modelCount;
+    maximumUnitPoints = Math.max(maximumUnitPoints, unit.points);
     for (const tag of unit.tags) {
       tagCounts[tag] += 1;
     }
+    const threat = inspectRosterUnitThreatProperties(
+      roster.factionId,
+      unit.unitId,
+      unit.equipment,
+    );
+    const normalizedRole = unit.role.toLowerCase();
+    if (
+      threat?.infantry === true ||
+      normalizedRole === "infantry"
+    ) {
+      infantryPoints += unit.points;
+    }
+    if (
+      threat?.vehicle === true ||
+      normalizedRole === "vehicle"
+    ) {
+      vehiclePoints += unit.points;
+    }
+    if (
+      threat?.monster === true ||
+      normalizedRole === "monster"
+    ) {
+      monsterPoints += unit.points;
+    }
+    rangedPressure +=
+      threat?.rangedPressure ??
+      (unit.tags.includes("shooting") ? unit.points : 0);
+    meleePressure +=
+      threat?.meleePressure ??
+      (unit.tags.includes("melee") ? unit.points : 0);
+    mobilityPressurePoints +=
+      unit.points *
+      Math.min(
+        1,
+        (threat?.mobilityPressure ??
+          (unit.tags.includes("mobility") ? 12 : 0)) /
+          18,
+      );
     if (unit.tags.includes("horde")) {
       hordeModelCount += unit.modelCount;
       hordePoints += unit.points;
@@ -318,11 +715,27 @@ function traitsFor(roster: RosterDraftV1): TesseraStressPortfolioTraits {
     }
   }
   const totalPoints = Math.max(1, roster.totalPoints);
+  const totalCombatPressure = Math.max(
+    1,
+    rangedPressure + meleePressure,
+  );
   return {
     modelCount,
     unitCount: roster.units.length,
     roleCount: new Set(roster.units.map((unit) => unit.role)).size,
     pointsUtilization: roster.totalPoints / Math.max(1, roster.pointsLimit),
+    pointsPerModel: roster.totalPoints / Math.max(1, modelCount),
+    infantryPointsPercent: infantryPoints / totalPoints,
+    vehiclePointsPercent: vehiclePoints / totalPoints,
+    monsterPointsPercent: monsterPoints / totalPoints,
+    rangedPressurePercent:
+      rangedPressure / totalCombatPressure,
+    meleePressurePercent:
+      meleePressure / totalCombatPressure,
+    mobilityPressurePercent:
+      mobilityPressurePoints / totalPoints,
+    unitConcentrationPercent:
+      maximumUnitPoints / totalPoints,
     hordeModelCount,
     hordePoints,
     hordePointsPercent: hordePoints / totalPoints,
@@ -403,7 +816,35 @@ function postureFit(
   roster: RosterDraftV1,
   posture: TesseraArchetype,
 ): number {
-  return templateFit(roster, posture, "mixed");
+  const traits = traitsFor(roster);
+  const ranged =
+    traits.rangedPressurePercent ??
+    templateFit(roster, "ranged-pressure", "mixed");
+  const melee =
+    traits.meleePressurePercent ??
+    templateFit(roster, "assault-pressure", "mixed");
+  const mobility =
+    traits.mobilityPressurePercent ??
+    templateFit(roster, "assault-pressure", "mixed");
+  if (posture === "ranged-pressure") {
+    return ranged * 0.8 + mobility * 0.2;
+  }
+  if (posture === "assault-pressure") {
+    return melee * 0.75 + mobility * 0.25;
+  }
+  const objectivePoints = roster.units
+    .filter((unit) => unit.tags.includes("objective"))
+    .reduce((sum, unit) => sum + unit.points, 0);
+  const objectiveShare =
+    objectivePoints / Math.max(1, roster.totalPoints);
+  const pressureBalance =
+    1 - Math.min(1, Math.abs(ranged - melee));
+  return (
+    pressureBalance * 0.35 +
+    objectiveShare * 0.3 +
+    mobility * 0.15 +
+    (1 - (traits.unitConcentrationPercent ?? 1)) * 0.2
+  );
 }
 
 function preferenceVariants(
@@ -701,6 +1142,238 @@ interface StressCandidate {
   traits: TesseraStressPortfolioTraits;
 }
 
+interface AdaptiveDensityLens {
+  candidates: StressCandidate[];
+  percentileByFingerprint: Map<string, number>;
+  maximumRoleCount: number;
+}
+
+function pointsPerModel(candidate: StressCandidate): number {
+  return (
+    candidate.traits.pointsPerModel ??
+    candidate.roster.totalPoints /
+      Math.max(1, candidate.traits.modelCount)
+  );
+}
+
+/**
+ * Build a faction/posture-relative density scale. A small elite faction and a
+ * high-model-count faction should both be able to expose low-, central-, and
+ * high-density threats without pretending that a faction has horde-tagged
+ * units it does not actually possess.
+ */
+function adaptiveDensityLens(
+  candidates: StressCandidate[],
+): AdaptiveDensityLens {
+  const ordered = [...candidates].sort(
+    (left, right) =>
+      left.traits.modelCount - right.traits.modelCount ||
+      pointsPerModel(right) - pointsPerModel(left) ||
+      right.traits.eliteHeavyPointsPercent -
+        left.traits.eliteHeavyPointsPercent ||
+      rosterSimulationFingerprint(left.roster).localeCompare(
+        rosterSimulationFingerprint(right.roster),
+      ),
+  );
+  const percentileByFingerprint = new Map<string, number>();
+  for (const [index, candidate] of ordered.entries()) {
+    percentileByFingerprint.set(
+      rosterSimulationFingerprint(candidate.roster),
+      ordered.length <= 1 ? 0.5 : index / (ordered.length - 1),
+    );
+  }
+  return {
+    candidates: ordered,
+    percentileByFingerprint,
+    maximumRoleCount: Math.max(
+      1,
+      ...ordered.map((candidate) => candidate.traits.roleCount),
+    ),
+  };
+}
+
+function threatLensDefinition(
+  pools: ReadonlyMap<TesseraArchetype, StressCandidate[]>,
+): NonNullable<
+  NonNullable<TesseraStressPortfolio["contract"]>["lensDefinition"]
+> {
+  const range = (
+    candidates: StressCandidate[],
+    value: (candidate: StressCandidate) => number,
+  ): [number, number] => {
+    const values = candidates.map(value);
+    return values.length === 0
+      ? [0, 0]
+      : [Math.min(...values), Math.max(...values)];
+  };
+  return {
+    schemaVersion: 1,
+    metricVersion: "roster-threat-properties-v1",
+    reviewStatus: "generated-pending-review",
+    metrics: [
+      "model-density",
+      "points-per-model",
+      "infantry-share",
+      "vehicle-monster-share",
+      "ranged-pressure",
+      "melee-pressure",
+      "mobility",
+      "unit-concentration",
+    ],
+    postures: POSTURES.map((posture) => {
+      const candidates = pools.get(posture) ?? [];
+      return {
+        posture,
+        candidateCount: candidates.length,
+        ranges: {
+          modelCount: range(
+            candidates,
+            (candidate) => candidate.traits.modelCount,
+          ),
+          pointsPerModel: range(candidates, pointsPerModel),
+          infantryPointsPercent: range(
+            candidates,
+            (candidate) =>
+              candidate.traits.infantryPointsPercent ?? 0,
+          ),
+          vehicleMonsterPointsPercent: range(
+            candidates,
+            (candidate) =>
+              (candidate.traits.vehiclePointsPercent ?? 0) +
+              (candidate.traits.monsterPointsPercent ?? 0),
+          ),
+          rangedPressurePercent: range(
+            candidates,
+            (candidate) =>
+              candidate.traits.rangedPressurePercent ?? 0,
+          ),
+          meleePressurePercent: range(
+            candidates,
+            (candidate) =>
+              candidate.traits.meleePressurePercent ?? 0,
+          ),
+          mobilityPressurePercent: range(
+            candidates,
+            (candidate) =>
+              candidate.traits.mobilityPressurePercent ?? 0,
+          ),
+          unitConcentrationPercent: range(
+            candidates,
+            (candidate) =>
+              candidate.traits.unitConcentrationPercent ?? 0,
+          ),
+        },
+      };
+    }),
+  };
+}
+
+function densityPercentile(
+  candidate: StressCandidate,
+  lens: AdaptiveDensityLens,
+): number {
+  return (
+    lens.percentileByFingerprint.get(
+      rosterSimulationFingerprint(candidate.roster),
+    ) ?? 0.5
+  );
+}
+
+function adaptiveCompositionEligible(
+  candidate: StressCandidate,
+  composition: TesseraStressComposition,
+  lens: AdaptiveDensityLens,
+): boolean {
+  if (lens.candidates.length < 3) return false;
+  const percentile = densityPercentile(candidate, lens);
+  if (composition === "mass") return percentile >= 1 / 3;
+  if (composition === "elite-heavy") return percentile <= 2 / 3;
+  // The central lens prefers the middle of the distribution through its
+  // score, but remains assignment-capable across the full reviewed candidate
+  // pool. This prevents a narrow elite faction from becoming impossible only
+  // because several legal lists tie on model density.
+  return true;
+}
+
+function adaptiveCompositionFit(
+  candidate: StressCandidate,
+  composition: TesseraStressComposition,
+  lens: AdaptiveDensityLens,
+): number {
+  const percentile = densityPercentile(candidate, lens);
+  const roleBreadth =
+    candidate.traits.roleCount / lens.maximumRoleCount;
+  const eliteShare = candidate.traits.eliteHeavyPointsPercent;
+  const infantryShare =
+    candidate.traits.infantryPointsPercent ?? 0;
+  const vehicleMonsterShare =
+    (candidate.traits.vehiclePointsPercent ?? 0) +
+    (candidate.traits.monsterPointsPercent ?? 0);
+  const concentration =
+    candidate.traits.unitConcentrationPercent ?? 1;
+  const ranged =
+    candidate.traits.rangedPressurePercent ?? 0.5;
+  const melee =
+    candidate.traits.meleePressurePercent ?? 0.5;
+  if (composition === "mass") {
+    return (
+      percentile * 0.35 +
+      (1 - Math.min(1, pointsPerModel(candidate) / 100)) * 0.1 +
+      infantryShare * 0.2 +
+      (1 - Math.min(1, vehicleMonsterShare)) * 0.1 +
+      (1 - concentration) * 0.25
+    );
+  }
+  if (composition === "elite-heavy") {
+    return (
+      (1 - percentile) * 0.25 +
+      eliteShare * 0.2 +
+      Math.min(1, pointsPerModel(candidate) / 100) * 0.1 +
+      Math.min(1, vehicleMonsterShare) * 0.2 +
+      concentration * 0.25
+    );
+  }
+  return (
+    (1 - Math.abs(percentile - 0.5) * 2) * 0.25 +
+    roleBreadth * 0.15 +
+    (1 - Math.abs(eliteShare - 0.5) * 2) * 0.1 +
+    (1 - Math.abs(ranged - melee)) * 0.2 +
+    (1 - concentration) * 0.2 +
+    (
+      1 -
+      Math.min(1, Math.abs(infantryShare - vehicleMonsterShare))
+    ) *
+      0.1
+  );
+}
+
+function adaptiveCompositionEvidence(
+  composition: TesseraStressComposition,
+  candidate: StressCandidate,
+  lens: AdaptiveDensityLens,
+): string[] {
+  const percentile = Math.round(
+    densityPercentile(candidate, lens) * 100,
+  );
+  const label =
+    composition === "mass"
+      ? "high-density"
+      : composition === "elite-heavy"
+        ? "low-density/elite"
+        : "central-density combined-arms";
+  return [
+    `${composition} adaptive lens: ${label}`,
+    `${percentile}th faction/posture-relative density percentile across ${lens.candidates.length} legal exportable candidates`,
+    `${candidate.traits.modelCount} total models at ${pointsPerModel(candidate).toFixed(1)} points per model`,
+    `${candidate.traits.roleCount} represented roles`,
+    `${Math.round(candidate.traits.eliteHeavyPointsPercent * 100)}% elite/Vehicle/Monster points`,
+    `${Math.round((candidate.traits.infantryPointsPercent ?? 0) * 100)}% Infantry points; ${Math.round(((candidate.traits.vehiclePointsPercent ?? 0) + (candidate.traits.monsterPointsPercent ?? 0)) * 100)}% Vehicle/Monster points`,
+    `${Math.round((candidate.traits.rangedPressurePercent ?? 0) * 100)}% ranged and ${Math.round((candidate.traits.meleePressurePercent ?? 0) * 100)}% melee selected-weapon pressure`,
+    `${Math.round((candidate.traits.mobilityPressurePercent ?? 0) * 100)}% mobility pressure; ${Math.round((candidate.traits.unitConcentrationPercent ?? 0) * 100)}% largest-unit concentration`,
+    `${Math.round(candidate.traits.hordePointsPercent * 100)}% horde-tagged points (context only; not a gate)`,
+  ];
+}
+
 function compositionCollections(
   composition: TesseraStressComposition,
   factionUnits: NonNullable<ReturnType<typeof searchUnits>["data"]>,
@@ -760,6 +1433,7 @@ function candidateRosterPool(
   allowLegends: boolean,
   pointsTolerancePercent: number,
   knownBlocked: Set<string>,
+  expanded = false,
 ): StressCandidate[] {
   const factionUnits = searchUnits({
     faction: factionId,
@@ -767,7 +1441,10 @@ function candidateRosterPool(
     limit: 100,
   }).data ?? [];
   const characterIds = factionUnits
-    .filter((unit) => unit.role === "Character")
+    .filter(
+      (unit) =>
+        unit.role === "Character" || unit.isNamedCharacter,
+    )
     .map((unit) => unit.id);
   const results = new Map<string, StressCandidate>();
   const detachments = listDetachments(factionId).sort(
@@ -775,12 +1452,38 @@ function candidateRosterPool(
       left.id.localeCompare(right.id) || left.name.localeCompare(right.name),
   );
   if (detachments.length === 0) return [];
+  const unnamedAnchor = buildExportableRoster(
+    {
+      faction: factionId,
+      pointsLimit,
+      name: `${factionName} ${posture} unnamed-anchor probe`,
+      preferences: POSTURE_TAGS[posture],
+      allowNamedCharacters: false,
+      allowLegends,
+    },
+    new Set(knownBlocked),
+  );
+  const requiresNamedCharacterAnchor = unnamedAnchor === null;
+  const portfolioAnchor =
+    unnamedAnchor ??
+    buildExportableRoster(
+      {
+        faction: factionId,
+        pointsLimit,
+        name: `${factionName} ${posture} named-anchor probe`,
+        preferences: POSTURE_TAGS[posture],
+        allowNamedCharacters: true,
+        allowLegends,
+      },
+      new Set(knownBlocked),
+    );
 
   type Recipe = {
     composition: TesseraStressComposition;
     preferences: PreferenceTag[];
     collectionUnitIds: string[] | undefined;
     requiredUnitIds?: string[];
+    excludedUnitIds?: string[];
   };
   const recipesByComposition = new Map<
     TesseraStressComposition,
@@ -840,7 +1543,7 @@ function candidateRosterPool(
             right.pointsFrom - left.pointsFrom ||
             left.id.localeCompare(right.id),
         )
-        .slice(0, 12)
+        .slice(0, 24)
         .map((unit) => unit.id),
     ]),
   ];
@@ -867,15 +1570,170 @@ function candidateRosterPool(
       };
     },
   );
-  const scheduledRecipes = [...forcedRecipes, ...recipes];
+  const unitById = new Map(
+    factionUnits.map((unit) => [unit.id, unit]),
+  );
+  const forcedPairRecipes: Recipe[] = expanded
+    ? forcedUnitIds
+        .flatMap((unitId, index) =>
+          forcedUnitIds
+            .slice(index + 1)
+            .map((partnerId) => ({
+              unitId,
+              partnerId,
+              unit: unitById.get(unitId),
+              partner: unitById.get(partnerId),
+            })),
+        )
+        .filter(
+          (
+            pair,
+          ): pair is typeof pair & {
+            unit: NonNullable<typeof pair.unit>;
+            partner: NonNullable<typeof pair.partner>;
+          } =>
+            pair.unit !== undefined &&
+            pair.partner !== undefined &&
+            pair.unit.pointsFrom + pair.partner.pointsFrom <=
+              pointsLimit * 0.9,
+        )
+        .sort(
+          (left, right) =>
+            right.unit.pointsFrom +
+              right.partner.pointsFrom -
+              (left.unit.pointsFrom +
+                left.partner.pointsFrom) ||
+            left.unitId.localeCompare(right.unitId) ||
+            left.partnerId.localeCompare(right.partnerId),
+        )
+        .slice(0, 72)
+        .map((pair, index) => {
+          const composition =
+            COMPOSITIONS[
+              (index + POSTURES.indexOf(posture)) %
+                COMPOSITIONS.length
+            ];
+          return {
+            composition,
+            preferences: uniqueTags([
+              ...POSTURE_TAGS[posture],
+              ...COMPOSITION_TAGS[composition],
+              ...pair.unit.tags,
+              ...pair.partner.tags,
+            ]),
+            collectionUnitIds: undefined,
+            requiredUnitIds: [
+              pair.unitId,
+              pair.partnerId,
+            ],
+          };
+        })
+    : [];
+  const anchorRecipes = [
+    ...forcedRecipes,
+    ...forcedPairRecipes,
+  ];
+  const anchorUnitPoints = new Map<string, number>();
+  for (const unit of portfolioAnchor?.units ?? []) {
+    anchorUnitPoints.set(
+      unit.unitId,
+      (anchorUnitPoints.get(unit.unitId) ?? 0) + unit.points,
+    );
+  }
+  const anchorUnitIds = [...anchorUnitPoints.keys()];
+  const pairedExclusionUnitIds =
+    expanded && requiresNamedCharacterAnchor
+      ? anchorUnitIds
+          .filter(
+            (unitId) =>
+              (anchorUnitPoints.get(unitId) ?? pointsLimit) <=
+              pointsLimit * 0.15,
+          )
+          .sort(
+            (left, right) =>
+              (anchorUnitPoints.get(left) ?? 0) -
+                (anchorUnitPoints.get(right) ?? 0) ||
+              left.localeCompare(right),
+          )
+          .flatMap((unitId, index, unitIds) =>
+            unitIds
+              .slice(index + 1)
+              .map((partnerId) => [unitId, partnerId]),
+          )
+      : [];
+  const exclusionUnitIds = [
+    ...pairedExclusionUnitIds,
+    ...anchorUnitIds.map((unitId) => [unitId]),
+  ];
+  const exclusionRecipes: Recipe[] =
+    requiresNamedCharacterAnchor && portfolioAnchor
+      ? exclusionUnitIds.map((excludedUnitIds, index) => {
+          const excludedUnits = excludedUnitIds
+            .map((unitId) =>
+              factionUnits.find(
+                (candidate) => candidate.id === unitId,
+              ),
+            )
+            .filter(
+              (
+                unit,
+              ): unit is NonNullable<typeof unit> =>
+                unit !== undefined,
+            );
+          const composition =
+            excludedUnits.some((unit) =>
+              unit.tags.includes("horde"),
+            )
+              ? "mass"
+              : excludedUnits.some((unit) =>
+                    unit.tags.includes("elite"),
+                  )
+                ? "elite-heavy"
+                : COMPOSITIONS[index % COMPOSITIONS.length];
+          return {
+            composition,
+            preferences: uniqueTags([
+              ...POSTURE_TAGS[posture],
+              ...COMPOSITION_TAGS[composition],
+            ]),
+            collectionUnitIds: undefined,
+            excludedUnitIds,
+          };
+        })
+      : [];
+  const scheduledRecipes =
+    exclusionRecipes.length === 0
+      ? [...anchorRecipes, ...recipes]
+      : Array.from(
+          {
+            length: Math.max(
+              anchorRecipes.length,
+              exclusionRecipes.length,
+              recipes.length,
+            ),
+          },
+          (_, index) => [
+            anchorRecipes[index],
+            exclusionRecipes[index],
+            recipes[index],
+          ].filter((recipe): recipe is Recipe => recipe !== undefined),
+        ).flat();
   const initialAttemptBudget = Math.min(
     scheduledRecipes.length,
     Math.max(12, Math.min(16, detachments.length)),
   );
-  const hardAttemptBudget = Math.min(
-    scheduledRecipes.length,
-    Math.max(initialAttemptBudget, Math.min(18, detachments.length * 2)),
-  );
+  const hardAttemptBudget = expanded
+    ? Math.min(
+        scheduledRecipes.length,
+        Math.max(initialAttemptBudget, 72),
+      )
+    : Math.min(
+        scheduledRecipes.length,
+        Math.max(
+          initialAttemptBudget,
+          Math.min(18, detachments.length * 2),
+        ),
+      );
 
   for (
     let attempt = 0;
@@ -884,26 +1742,36 @@ function candidateRosterPool(
   ) {
     if (
       attempt >= initialAttemptBudget &&
-      results.size >= 6
+      results.size >= (expanded ? 12 : 6)
     ) {
       break;
     }
     const recipe = scheduledRecipes[attempt];
     const detachment = detachments[attempt % detachments.length];
-    const roster = buildExportableRoster(
-      {
-        faction: factionId,
-        pointsLimit,
-        name: `${factionName} ${posture} candidate ${attempt + 1}`,
-        preferences: recipe.preferences,
-        allowNamedCharacters: false,
-        allowLegends,
-        detachmentId: detachment.id,
-        collectionUnitIds: recipe.collectionUnitIds,
-        requiredUnitIds: recipe.requiredUnitIds,
-      },
-      knownBlocked,
-    );
+    const rosterInput: BuildRosterInput = {
+      faction: factionId,
+      pointsLimit,
+      name: `${factionName} ${posture} candidate ${attempt + 1}`,
+      preferences: recipe.preferences,
+      allowNamedCharacters:
+        requiresNamedCharacterAnchor,
+      allowLegends,
+      collectionUnitIds: recipe.collectionUnitIds,
+      requiredUnitIds: recipe.requiredUnitIds,
+      excludedUnitIds: recipe.excludedUnitIds,
+    };
+    const roster =
+      buildExportableRoster(
+        {
+          ...rosterInput,
+          detachmentId: detachment.id,
+        },
+        knownBlocked,
+      ) ??
+      buildExportableRoster(
+        rosterInput,
+        knownBlocked,
+      );
     if (!roster) continue;
     const validation = validateRoster(roster);
     if (!validation.ok) continue;
@@ -912,13 +1780,7 @@ function candidateRosterPool(
       Math.max(1, pointsLimit);
     if (pointDifference > pointsTolerancePercent / 100) continue;
     const traits = traitsFor(roster);
-    if (
-      !COMPOSITIONS.some((composition) =>
-        compositionSatisfied(composition, traits),
-      )
-    ) {
-      continue;
-    }
+    if (traits.modelCount <= 0) continue;
     const fingerprint = rosterSimulationFingerprint(roster);
     const candidate = { roster, traits };
     const current = results.get(fingerprint);
@@ -1045,6 +1907,7 @@ function readyItem(
   composition: TesseraStressComposition,
   candidate: StressCandidate,
   structuralDistance: number,
+  evidence?: string[],
 ): TesseraStressPortfolioItem {
   const templateId = `${posture}:${composition}`;
   return {
@@ -1061,10 +1924,9 @@ function readyItem(
     allowNamedCharacters:
       candidate.roster.constraints.allowNamedCharacters,
     traits: candidate.traits,
-    compositionEvidence: compositionEvidence(
-      composition,
-      candidate.traits,
-    ),
+    compositionEvidence:
+      evidence ??
+      compositionEvidence(composition, candidate.traits),
     containsNamedCharacter:
       rosterHasNamedCharacter(candidate.roster),
     omissionReason: null,
@@ -1167,15 +2029,15 @@ function selectCorePortfolio(
             (entry) => entry.candidate.traits.modelCount,
           );
           const pairwiseDistances = [
-            rosterStructuralDistance(
+            rosterSimulationDistance(
               candidates[0].roster,
               candidates[1].roster,
             ),
-            rosterStructuralDistance(
+            rosterSimulationDistance(
               candidates[0].roster,
               candidates[2].roster,
             ),
-            rosterStructuralDistance(
+            rosterSimulationDistance(
               candidates[1].roster,
               candidates[2].roster,
             ),
@@ -1232,7 +2094,7 @@ function selectCorePortfolio(
         candidate,
         Math.min(
           ...otherCandidates.map((other) =>
-            rosterStructuralDistance(candidate.roster, other.roster),
+            rosterSimulationDistance(candidate.roster, other.roster),
           ),
         ),
       );
@@ -1303,7 +2165,7 @@ function selectCorePortfolio(
           ? 1
           : Math.min(
               ...priorRosters.map((roster) =>
-                rosterStructuralDistance(candidate.roster, roster),
+                rosterSimulationDistance(candidate.roster, roster),
               ),
             ),
       ),
@@ -1312,11 +2174,282 @@ function selectCorePortfolio(
   return selected;
 }
 
+type DiversePortfolioCell = {
+  templateId: string;
+  posture: TesseraArchetype;
+  composition: TesseraStressComposition;
+  lens: AdaptiveDensityLens;
+  options: Array<{
+    candidate: StressCandidate;
+    baseScore: number;
+  }>;
+};
+
+function diverseCellReviewStatus(
+  factionId: string,
+  templateId: string,
+  sourceReleaseId: string,
+): "unreviewed" | "reviewed-not-applicable" {
+  const reviewed = REVIEWED_NOT_APPLICABLE_DIVERSE_CELLS[factionId];
+  return reviewed?.sourceReleaseId === sourceReleaseId &&
+    reviewed.reviewedNotApplicableTemplateIds.includes(templateId)
+    ? "reviewed-not-applicable"
+    : "unreviewed";
+}
+
+function selectDiversePortfolio(
+  factionId: string,
+  factionName: string,
+  sourceReleaseId: string,
+  pools: Map<TesseraArchetype, StressCandidate[]>,
+): TesseraStressPortfolioItem[] {
+  const canonicalCells: DiversePortfolioCell[] = POSTURES.flatMap(
+    (posture) => {
+      const lens = adaptiveDensityLens(pools.get(posture) ?? []);
+      return COMPOSITIONS.map((composition) => ({
+        templateId: `${posture}:${composition}`,
+        posture,
+        composition,
+        lens,
+        options: lens.candidates
+          .filter((candidate) =>
+            adaptiveCompositionEligible(
+              candidate,
+              composition,
+              lens,
+            ),
+          )
+          .map((candidate) => ({
+            candidate,
+            baseScore:
+              adaptiveCompositionFit(
+                candidate,
+                composition,
+                lens,
+              ) *
+                0.65 +
+              postureFit(candidate.roster, posture) * 0.25 +
+              candidate.traits.pointsUtilization * 0.1,
+          }))
+          .sort(
+            (left, right) =>
+              right.baseScore - left.baseScore ||
+              rosterSimulationFingerprint(
+                left.candidate.roster,
+              ).localeCompare(
+                rosterSimulationFingerprint(
+                  right.candidate.roster,
+                ),
+              ),
+          ),
+      }));
+    },
+  );
+  const searchCells = [...canonicalCells].sort(
+    (left, right) =>
+      left.options.length - right.options.length ||
+      POSTURES.indexOf(left.posture) -
+        POSTURES.indexOf(right.posture) ||
+      COMPOSITIONS.indexOf(left.composition) -
+        COMPOSITIONS.indexOf(right.composition),
+  );
+  const chosen = new Map<
+    string,
+    DiversePortfolioCell["options"][number]
+  >();
+  const used = new Set<string>();
+  let best = new Map(chosen);
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let visits = 0;
+  const visitLimit = 250_000;
+
+  const search = (
+    index: number,
+    score: number,
+  ): boolean => {
+    visits += 1;
+    if (visits > visitLimit) return false;
+    if (
+      chosen.size > best.size ||
+      (chosen.size === best.size && score > bestScore)
+    ) {
+      best = new Map(chosen);
+      bestScore = score;
+    }
+    if (chosen.size === canonicalCells.length) return true;
+    if (index >= searchCells.length) return false;
+    if (
+      chosen.size + (searchCells.length - index) <
+      best.size
+    ) {
+      return false;
+    }
+
+    const cell = searchCells[index];
+    const chosenRosters = [...chosen.values()].map(
+      (entry) => entry.candidate.roster,
+    );
+    const ranked = cell.options
+      .filter(
+        (option) =>
+          !used.has(
+            rosterSimulationFingerprint(
+              option.candidate.roster,
+            ),
+          ),
+      )
+      .map((option) => {
+        const minimumDistance =
+          chosenRosters.length === 0
+            ? 1
+            : Math.min(
+                ...chosenRosters.map((roster) =>
+                  rosterSimulationDistance(
+                    option.candidate.roster,
+                    roster,
+                  ),
+                ),
+              );
+        return {
+          ...option,
+          score: option.baseScore + minimumDistance * 0.35,
+        };
+      })
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          rosterSimulationFingerprint(
+            left.candidate.roster,
+          ).localeCompare(
+            rosterSimulationFingerprint(
+              right.candidate.roster,
+            ),
+          ),
+      );
+    for (const option of ranked) {
+      const fingerprint = rosterSimulationFingerprint(
+        option.candidate.roster,
+      );
+      chosen.set(cell.templateId, option);
+      used.add(fingerprint);
+      if (search(index + 1, score + option.score)) return true;
+      used.delete(fingerprint);
+      chosen.delete(cell.templateId);
+    }
+
+    // Retain the best truthful partial portfolio when this cell cannot be
+    // filled. The missing cell remains explicitly unreviewed unless a faction
+    // contract says otherwise.
+    return search(index + 1, score);
+  };
+
+  search(0, 0);
+  if (best.size < canonicalCells.length) {
+    // The score-oriented search above is deliberately bounded. Complete the
+    // cardinality proof with deterministic bipartite matching so a large
+    // candidate pool cannot be mistaken for an impossible portfolio merely
+    // because the scoring search exhausted its visit budget.
+    const cellsByTemplateId = new Map(
+      searchCells.map((cell) => [cell.templateId, cell]),
+    );
+    const matchedCellByFingerprint = new Map<string, string>();
+    const matchedOptionByCell = new Map<
+      string,
+      DiversePortfolioCell["options"][number]
+    >();
+    const match = (
+      cell: DiversePortfolioCell,
+      visitedFingerprints: Set<string>,
+    ): boolean => {
+      for (const option of cell.options) {
+        const fingerprint = rosterSimulationFingerprint(
+          option.candidate.roster,
+        );
+        if (visitedFingerprints.has(fingerprint)) continue;
+        visitedFingerprints.add(fingerprint);
+        const occupiedCellId =
+          matchedCellByFingerprint.get(fingerprint);
+        const occupiedCell = occupiedCellId
+          ? cellsByTemplateId.get(occupiedCellId)
+          : undefined;
+        if (
+          occupiedCell &&
+          !match(occupiedCell, visitedFingerprints)
+        ) {
+          continue;
+        }
+        matchedCellByFingerprint.set(
+          fingerprint,
+          cell.templateId,
+        );
+        matchedOptionByCell.set(cell.templateId, option);
+        return true;
+      }
+      return false;
+    };
+    for (const cell of searchCells) {
+      match(cell, new Set());
+    }
+    if (matchedOptionByCell.size > best.size) {
+      best = matchedOptionByCell;
+    }
+  }
+  const selectedRosters = [...best.values()].map(
+    (entry) => entry.candidate.roster,
+  );
+  return canonicalCells.map((cell) => {
+    const option = best.get(cell.templateId);
+    if (!option) {
+      return unavailableItem(
+        cell.posture,
+        cell.composition,
+        `${factionName} produced ${cell.options.length} candidates for the adaptive ${cell.composition} density lens, but no unique execution payload could be retained for this cell.`,
+        diverseCellReviewStatus(
+          factionId,
+          cell.templateId,
+          sourceReleaseId,
+        ),
+      );
+    }
+    const otherRosters = selectedRosters.filter(
+      (roster) =>
+        rosterSimulationFingerprint(roster) !==
+        rosterSimulationFingerprint(option.candidate.roster),
+    );
+    return readyItem(
+      cell.posture,
+      cell.composition,
+      option.candidate,
+      otherRosters.length === 0
+        ? 1
+        : Math.min(
+            ...otherRosters.map((roster) =>
+              rosterSimulationDistance(
+                option.candidate.roster,
+                roster,
+              ),
+            ),
+          ),
+      adaptiveCompositionEvidence(
+        cell.composition,
+        option.candidate,
+        cell.lens,
+      ),
+    );
+  });
+}
+
 function unavailableItem(
   posture: TesseraArchetype,
   composition: TesseraStressComposition,
   reason: string,
+  reviewStatus: "unreviewed" | "reviewed-not-applicable" =
+    "unreviewed",
 ): TesseraStressPortfolioItem {
+  const reviewMessage =
+    reviewStatus === "reviewed-not-applicable"
+      ? "This missing cell is explicitly reviewed and not applicable."
+      : "This missing cell is not covered by a reviewed faction exception.";
   return {
     templateId: `${posture}:${composition}`,
     posture,
@@ -1334,8 +2467,10 @@ function unavailableItem(
     omissionReason: reason,
     warnings: [
       issue(
-        "STRESS_TEMPLATE_UNAVAILABLE",
-        `[${posture}:${composition}] ${reason}`,
+        reviewStatus === "reviewed-not-applicable"
+          ? "STRESS_TEMPLATE_NOT_APPLICABLE"
+          : "STRESS_TEMPLATE_UNREVIEWED",
+        `[${posture}:${composition}] ${reason} ${reviewMessage}`,
         "warn",
       ),
     ],
@@ -1439,182 +2574,73 @@ export function generateFactionStressPortfolio(
           namedAnchorIds,
         )
       : null;
+  const includeNamedSpecialist = () => {
+    if (suite !== "diverse-9" || !namedSpecialistCandidate) return;
+    const namedFingerprint = rosterSimulationFingerprint(
+      namedSpecialistCandidate.roster,
+    );
+    for (const posture of POSTURES) {
+      const pool = candidatePools.get(posture) ?? [];
+      if (
+        pool.some(
+          (candidate) =>
+            rosterSimulationFingerprint(candidate.roster) ===
+            namedFingerprint,
+        )
+      ) {
+        continue;
+      }
+      candidatePools.set(posture, [
+        ...pool,
+        namedSpecialistCandidate,
+      ]);
+    }
+  };
 
-  const selected: TesseraStressPortfolioItem[] =
+  let selected: TesseraStressPortfolioItem[] =
     suite === "core-3"
       ? selectCorePortfolio(candidatePools)
-      : [];
-  if (suite === "diverse-9") {
+      : selectDiversePortfolio(
+          factionId,
+          factionName,
+          seed.data.sourceData.releaseId,
+          candidatePools,
+        );
+  if (
+    suite === "diverse-9" &&
+    selected.some((item) => item.status === "unavailable")
+  ) {
+    // A globally unique nine-cell assignment can move a scarce candidate
+    // from one posture to another. Expand every posture together so the
+    // second assignment is not constrained by whichever cells happened to
+    // be missing from the first pass.
     for (const posture of POSTURES) {
-      for (const composition of COMPOSITIONS) {
-        const candidates = (candidatePools.get(posture) ?? [])
-          .filter((candidate) =>
-            compositionSatisfied(composition, candidate.traits),
-          )
-          .map((candidate) => ({
-            ...candidate,
-            fit: templateFit(
-              candidate.roster,
-              posture,
-              composition,
-            ),
-          }));
-        if (candidates.length === 0) {
-          const threshold =
-            composition === "mass"
-              ? "25% of points and 40% of models in horde-tagged units, with elite anchors capped at 55%"
-              : composition === "elite-heavy"
-                ? "45% of points in elite-tagged, Vehicle, or Monster units"
-                : "three represented roles with bounded mass and elite shares";
-          selected.push(
-            unavailableItem(
-              posture,
-              composition,
-              `${factionName} could not produce a legal ${posture}/${composition} proxy satisfying ${threshold}.`,
-            ),
-          );
-          continue;
-        }
-
-        const alreadySelectedItems = selected
-        .filter(
-          (
-            item,
-          ): item is TesseraStressPortfolioItem & {
-            roster: RosterDraftV1;
-          } => item.status === "ready" && item.roster !== null,
-        );
-        const alreadySelected = alreadySelectedItems.map(
-          (item) => item.roster,
-        );
-        const selectedFingerprints = new Set(
-          alreadySelectedItems.map(
-            (item) => item.simulationFingerprint,
-          ),
-        );
-        let distinctCandidates = candidates.filter(
-          (candidate) =>
-            !selectedFingerprints.has(
-              rosterSimulationFingerprint(candidate.roster),
-            ),
-        );
-        if (distinctCandidates.length === 0) {
-          const exclusionCandidates = [
-            ...new Set(
-              alreadySelected
-                .flatMap((roster) => roster.units)
-                .sort(
-                  (left, right) =>
-                    right.points - left.points ||
-                    left.unitId.localeCompare(right.unitId),
-                )
-                .map((unit) => unit.unitId),
-            ),
-          ];
-          for (const excludedUnitId of exclusionCandidates.slice(0, 4)) {
-            const roster = buildExportableRoster(
-              {
-                faction: factionId,
-                pointsLimit,
-                name: `${factionName} ${posture} ${composition}`,
-                preferences: uniqueTags([
-                  ...POSTURE_TAGS[posture],
-                  ...COMPOSITION_TAGS[composition],
-                ]),
-                allowNamedCharacters: false,
-                allowLegends: input.allowLegends ?? false,
-                excludedUnitIds: [excludedUnitId],
-              },
-              knownBlocked,
-            );
-            if (!roster) continue;
-            const pointDifference =
-              Math.abs(pointsLimit - roster.totalPoints) /
-              Math.max(1, pointsLimit);
-            const traits = traitsFor(roster);
-            if (
-              pointDifference > pointsTolerancePercent / 100 ||
-              !compositionSatisfied(composition, traits) ||
-              selectedFingerprints.has(
-                rosterSimulationFingerprint(roster),
-              )
-            ) {
-              continue;
-            }
-            distinctCandidates = [
-              {
-                roster,
-                traits,
-                fit: templateFit(roster, posture, composition),
-              },
-            ];
-            break;
-          }
-        }
-        if (distinctCandidates.length === 0) {
-          selected.push(
-            unavailableItem(
-              posture,
-              composition,
-              `${factionName} produced only roster structures already used by another stress-test template.`,
-            ),
-          );
-          continue;
-        }
-        const ranked = distinctCandidates
-          .map((candidate) => {
-            const minimumDistance =
-              alreadySelected.length === 0
-                ? 1
-                : Math.min(
-                    ...alreadySelected.map((roster) =>
-                      rosterStructuralDistance(
-                        candidate.roster,
-                        roster,
-                      ),
-                    ),
-                  );
-            return {
-              ...candidate,
-              minimumDistance,
-              score:
-                candidate.fit * 0.65 +
-                candidate.traits.pointsUtilization * 0.1 +
-                minimumDistance * 0.25 +
-                (
-                  !alreadySelectedItems.some(
-                    (item) => item.containsNamedCharacter === true,
-                  ) &&
-                  rosterHasNamedCharacter(candidate.roster)
-                    ? 10
-                    : 0
-                ),
-            };
-          })
-          .sort(
-            (left, right) =>
-              right.score - left.score ||
-              right.minimumDistance - left.minimumDistance ||
-              rosterSimulationFingerprint(left.roster).localeCompare(
-                rosterSimulationFingerprint(right.roster),
-              ),
-          );
-        const chosen = ranked[0];
-        selected.push(
-          readyItem(
-            posture,
-            composition,
-            chosen,
-            chosen.minimumDistance,
-          ),
-        );
-      }
+      candidatePools.set(
+        posture,
+        candidateRosterPool(
+          factionId,
+          factionName,
+          pointsLimit,
+          posture,
+          input.allowLegends ?? false,
+          pointsTolerancePercent,
+          knownBlocked,
+          true,
+        ),
+      );
     }
+    includeNamedSpecialist();
+    selected = selectDiversePortfolio(
+      factionId,
+      factionName,
+      seed.data.sourceData.releaseId,
+      candidatePools,
+    );
   }
 
   const readyItems = selected.filter((item) => item.status === "ready");
-  const selectedNamedAnchor = Boolean(
-    namedSpecialistCandidate,
+  const selectedNamedAnchor = readyItems.some(
+    (item) => item.containsNamedCharacter === true,
   );
   let namedCharacterCoverageStatus:
     TesseraNamedCharacterCoverageStatus;
@@ -1622,6 +2648,10 @@ export function generateFactionStressPortfolio(
   if (selectedNamedAnchor) {
     namedCharacterCoverageStatus = "included";
     namedCharacterCoverageReason = null;
+  } else if (namedSpecialistCandidate) {
+    namedCharacterCoverageStatus = "buildable-not-simulated";
+    namedCharacterCoverageReason =
+      `${factionName} produced a legal, New Recruit-exportable named-character specialist, but that roster is capability evidence only and is not one of the simulated ${suite} portfolio payloads.`;
   } else if (!legalNamedAnchorExists) {
     namedCharacterCoverageStatus = "not-applicable";
     namedCharacterCoverageReason =
@@ -1671,6 +2701,14 @@ export function generateFactionStressPortfolio(
   const portfolio: TesseraStressPortfolio = {
     schemaVersion: 1,
     generatorVersion: TESSERA_STRESS_GENERATOR_VERSION,
+    contract:
+      suite === "diverse-9"
+        ? expectedDiversePortfolioContract(
+            factionId,
+            seed.data.sourceData.releaseId,
+            threatLensDefinition(candidatePools),
+          )
+        : undefined,
     suite,
     factionId,
     factionName,
@@ -1690,8 +2728,8 @@ export function generateFactionStressPortfolio(
       missingCells,
       uniqueSimulationPayloads,
       namedCharacterCoverage:
-        namedCharacterCoverageStatus !==
-        "unavailable-after-evaluation",
+        namedCharacterCoverageStatus === "included" ||
+        namedCharacterCoverageStatus === "not-applicable",
       namedCharacterCoverageStatus,
       namedCharacterCoverageReason,
       namedCharacterSpecialistStructuralFingerprint:
@@ -1785,7 +2823,7 @@ export async function previewFactionStressPortfolio(
           ? null
           : Math.min(
               ...others.map((candidate) =>
-                rosterStructuralDistance(item.roster!, candidate.roster),
+                rosterSimulationDistance(item.roster!, candidate.roster),
               ),
             ),
       compositionEvidence: item.compositionEvidence,
@@ -1799,33 +2837,26 @@ export async function previewFactionStressPortfolio(
             "New Recruit export failed.",
     });
   }
-  const minimumUniqueRequired = 2;
-  const completeUniqueRequired =
-    generated.data.suite === "diverse-9" ? 9 : 3;
-  const uniqueSimulationPayloads = new Set(
+  const exportableTemplateIds = new Set(
     previewItems
-      .map((item) => item.simulationFingerprint)
-      .filter((value): value is string => value !== null),
-  ).size;
-  const allPosturesRepresented =
-    generated.data.coverage.missingPostures.length === 0;
+      .filter((item) => item.exportable)
+      .map((item) => item.templateId),
+  );
+  const contract = evaluateTesseraStressPortfolioContract(
+    generated.data,
+    { usableTemplateIds: exportableTemplateIds },
+  );
   const namedCharacterCoverage =
     generated.data.coverage.namedCharacterCoverage;
   const namedCharacterCoverageStatus =
     generated.data.coverage.namedCharacterCoverageStatus;
   const exportable = previewItems.filter((item) => item.exportable).length;
-  const executionViable =
-    uniqueSimulationPayloads >= minimumUniqueRequired &&
-    generated.data.coverage.representedPostures.length >= 2 &&
-    exportable >= minimumUniqueRequired;
-  const completeCoverage =
-    uniqueSimulationPayloads >= completeUniqueRequired &&
-    allPosturesRepresented &&
-    generated.data.coverage.missingCells.length === 0 &&
-    exportable >= completeUniqueRequired;
-  const accepted = executionViable;
+  generated.data.coverage.uniqueSimulationPayloads =
+    contract.uniqueSimulationPayloads;
+  generated.data.coverage.maximumResultStatus =
+    contract.maximumResultStatus ?? "degraded";
   return {
-    ok: accepted,
+    ok: contract.accepted,
     data: {
       schemaVersion: 1,
       previewKind: "tessera-stress-portfolio",
@@ -1833,15 +2864,16 @@ export async function previewFactionStressPortfolio(
       portfolio: generated.data,
       items: previewItems,
       gates: {
-        minimumUniqueRequired,
-        uniqueSimulationPayloads,
-        executionViable,
-        completeCoverage,
-        allPosturesRepresented,
-        representedPostures:
-          generated.data.coverage.representedPostures,
-        missingPostures:
-          generated.data.coverage.missingPostures,
+        minimumUniqueRequired:
+          contract.minimumUniqueRequired,
+        uniqueSimulationPayloads:
+          contract.uniqueSimulationPayloads,
+        executionViable: contract.executionViable,
+        completeCoverage: contract.completeCoverage,
+        allPosturesRepresented:
+          contract.allPosturesRepresented,
+        representedPostures: contract.representedPostures,
+        missingPostures: contract.missingPostures,
         representedCompositions:
           generated.data.coverage.representedCompositions,
         missingCompositions:
@@ -1862,18 +2894,13 @@ export async function previewFactionStressPortfolio(
         maximumResultStatus:
           generated.data.coverage.maximumResultStatus,
         exportable,
-        accepted,
+        accepted: contract.accepted,
       },
       warnings: generated.warnings.map((warning) => warning.message),
     },
-    violations: accepted
+    violations: contract.accepted
       ? []
-      : [
-          issue(
-            "STRESS_PORTFOLIO_PREVIEW_FAILED",
-            `The portfolio has ${uniqueSimulationPayloads} unique payloads and ${exportable} exportable proxies; at least ${minimumUniqueRequired} distinct payloads across two postures are required to run a degraded test. Represented cells=${generated.data.coverage.representedCells.map((cell) => cell.templateId).join(", ") || "none"}, missing cells=${generated.data.coverage.missingCells.map((cell) => cell.templateId).join(", ") || "none"}, posture coverage=${allPosturesRepresented}, named-character status=${namedCharacterCoverageStatus}.`,
-          ),
-        ],
+      : [contract.violation!],
     warnings: generated.warnings,
   };
 }

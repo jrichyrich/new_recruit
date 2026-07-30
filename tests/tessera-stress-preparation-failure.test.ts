@@ -11,12 +11,19 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  strFromU8,
+  strToU8,
+  unzipSync,
+  zipSync,
+} from "fflate";
+
+import {
   buildRoster,
+  exportRoster,
   generateFactionStressPortfolio,
-  getNewRecruitFactionSummary,
-  newRecruitCatalogue,
+  inspectEnrichedRosz,
+  rosterProfileRequirements,
   type ConnectorEvent,
-  type EnrichedRoszSummary,
   type NewRecruitDelivery,
   type ResultEnvelope,
   type RosterDraftV1,
@@ -46,47 +53,97 @@ function roster(
   return result.data;
 }
 
-function enrichedSummary(
+function xmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+async function deliveryArtifacts(
   candidate: RosterDraftV1,
   catalogueRevisionOffset = 0,
-): EnrichedRoszSummary {
-  const faction = getNewRecruitFactionSummary(
-    candidate.factionId,
+): Promise<{ source: Uint8Array; enriched: Uint8Array }> {
+  const exported = await exportRoster(candidate, "rosz");
+  assert.ok(exported.ok && exported.data);
+  assert.notEqual(typeof exported.data.content, "string");
+  const source = exported.data.content as Uint8Array;
+  const entries = unzipSync(source);
+  const [filename, content] = Object.entries(entries)[0];
+  let xml = strFromU8(content).replace(
+    'generatedBy="RosterPilot"',
+    'generatedBy="https://newrecruit.eu"',
   );
-  assert.ok(faction?.catalogue.id);
+  if (catalogueRevisionOffset !== 0) {
+    xml = xml.replace(
+      /(<force\b[^>]*\bcatalogueRevision=")(\d+)(")/,
+      (_match, prefix: string, value: string, suffix: string) =>
+        `${prefix}${Number(value) + catalogueRevisionOffset}${suffix}`,
+    );
+  }
+
+  const requirements = rosterProfileRequirements(candidate);
+  const insertions = new Map<number, string>();
+  const selectionTokens = [
+    ...xml.matchAll(/<selection\b[^>]*>|<\/selection>/g),
+  ];
+  let depth = 0;
+  let unitIndex = 0;
+  for (const tokenMatch of selectionTokens) {
+    const token = tokenMatch[0];
+    if (token === "</selection>") {
+      depth -= 1;
+      continue;
+    }
+    const selfClosing = token.endsWith("/>");
+    const type = token.match(/\btype="([^"]*)"/)?.[1] ?? "";
+    if (
+      depth === 0 &&
+      (type === "unit" || type === "model") &&
+      unitIndex < candidate.units.length
+    ) {
+      const unit = candidate.units[unitIndex];
+      const alternateProfiles = requirements
+        .filter(
+          (requirement) =>
+            requirement.selectionId === unit.selectionId,
+        )
+        .flatMap((requirement) =>
+          requirement.availableProfiles.map(
+            (profile) =>
+              `<profile name="${xmlAttribute(
+                `➤ ${requirement.weaponGroup} - ${profile}`,
+              )}" typeName="${
+                requirement.phase === "shooting"
+                  ? "Ranged Weapons"
+                  : "Melee Weapons"
+              }"/>`,
+          ),
+        )
+        .join("");
+      insertions.set(
+        (tokenMatch.index ?? 0) + token.length,
+        '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/>' +
+          alternateProfiles +
+          "</profiles>",
+      );
+      unitIndex += 1;
+    }
+    if (!selfClosing) depth += 1;
+  }
+  assert.equal(unitIndex, candidate.units.length);
+  for (const [index, insertion] of [...insertions.entries()].sort(
+    ([left], [right]) => right - left,
+  )) {
+    xml = `${xml.slice(0, index)}${insertion}${xml.slice(index)}`;
+  }
   return {
-    rosterName: candidate.name,
-    factionName: candidate.factionName,
-    totalPoints: candidate.totalPoints,
-    generatedBy: "https://newrecruit.eu",
-    observedNewRecruitCatalogue: {
-      source: "new-recruit-enriched-rosz",
-      gameSystem: {
-        id: newRecruitCatalogue.gameSystem.id,
-        name: newRecruitCatalogue.gameSystem.name,
-        revision:
-          candidate.sourceData.newRecruit.gameSystemRevision,
-      },
-      catalogues: [
-        {
-          id: faction.catalogue.id,
-          name: faction.catalogue.name,
-          revision:
-            (candidate.sourceData.newRecruit
-              .catalogueRevision ?? 0) +
-            catalogueRevisionOffset,
-        },
-      ],
-    },
-    profileCount: 1,
-    weaponProfileCount: 1,
-    units: candidate.units.map((unit) => ({
-      selectionId: unit.selectionId,
-      name: unit.name,
-      modelCount: unit.modelCount,
-      ordinal: unit.ordinal,
-      points: unit.points,
-    })),
+    source,
+    enriched: zipSync(
+      { [filename]: strToU8(xml) },
+      { level: 6, mtime: new Date(1980, 0, 1) },
+    ),
   };
 }
 
@@ -116,9 +173,12 @@ async function successfulDelivery(
   const outputDirectory =
     options.outputDirectory ?? fallbackDirectory;
   await mkdir(outputDirectory, { recursive: true });
-  const content = Buffer.from(`fixture:${candidate.id}`);
+  const content = await deliveryArtifacts(
+    candidate,
+    catalogueRevisionOffset,
+  );
   const contentSha256 = createHash("sha256")
-    .update(content)
+    .update(content.enriched)
     .digest("hex");
   const source = path.join(outputDirectory, "source.rosz");
   const enriched = path.join(
@@ -126,8 +186,8 @@ async function successfulDelivery(
     "enriched.rosz",
   );
   await Promise.all([
-    writeFile(source, content),
-    writeFile(enriched, content),
+    writeFile(source, content.source),
+    writeFile(enriched, content.enriched),
   ]);
   const event = connectorEvent(candidate, contentSha256);
   return {
@@ -140,10 +200,7 @@ async function successfulDelivery(
       imported: true,
       sessionReused: true,
       verification: null,
-      enrichedSummary: enrichedSummary(
-        candidate,
-        catalogueRevisionOffset,
-      ),
+      enrichedSummary: inspectEnrichedRosz(content.enriched),
       connectorEvents: [event],
       artifacts: [
         {

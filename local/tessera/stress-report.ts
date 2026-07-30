@@ -531,6 +531,25 @@ function normalizePortfolioItems(report: UnknownRecord): PortfolioItemView[] {
           : `${displayPercent(
               numberAt(item, ["traits.eliteHeavyPointsPercent"]),
             )} elite/heavy points`,
+        numberAt(item, ["traits.infantryPointsPercent"]) === null
+          ? ""
+          : `${displayPercent(
+              numberAt(item, ["traits.infantryPointsPercent"]),
+            )} Infantry points`,
+        (
+          numberAt(item, ["traits.vehiclePointsPercent"]) === null &&
+          numberAt(item, ["traits.monsterPointsPercent"]) === null
+        )
+          ? ""
+          : `${displayPercent(
+              (numberAt(item, ["traits.vehiclePointsPercent"]) ?? 0) +
+                (numberAt(item, ["traits.monsterPointsPercent"]) ?? 0),
+            )} Vehicle/Monster points`,
+        numberAt(item, ["traits.unitConcentrationPercent"]) === null
+          ? ""
+          : `${displayPercent(
+              numberAt(item, ["traits.unitConcentrationPercent"]),
+            )} largest-unit concentration`,
       ]
         .filter(Boolean)
         .join(", ") || "Not classified",
@@ -1051,8 +1070,12 @@ function normalizeStressTest(report: TesseraStressTestReport): StressTestView {
       { label: "Suite", value: suite },
       { label: "Analysis strategy", value: strategy },
       {
-        label: "Portfolio fingerprint",
-        value: textAt(root, ["portfolio.fingerprint"], "Not recorded"),
+        label: "Portfolio SHA-256",
+        value: textAt(
+          root,
+          ["portfolioSha256", "portfolio.fingerprint"],
+          "Not recorded",
+        ),
       },
       {
         label: "Player fingerprint",
@@ -1884,10 +1907,15 @@ export function renderTesseraStressRevisionReportHtml(
         ),
       },
       {
-        label: "Portfolio fingerprint",
+        label: "Portfolio SHA-256",
         value: textAt(
           root,
-          ["portfolioFingerprint", "baselinePortfolioFingerprint"],
+          [
+            "portfolioSha256",
+            "baseline.portfolioSha256",
+            "portfolioFingerprint",
+            "baselinePortfolioFingerprint",
+          ],
           "Not recorded",
         ),
       },

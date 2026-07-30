@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import {
+  evaluateTesseraStressPortfolioContract,
   type TesseraConfidence,
   type TesseraMatchupReport,
   type TesseraScenarioCell,
@@ -444,8 +445,8 @@ function unitRobustness(
       instanceId: unit.instanceId,
       label: unit.label,
       points: unit.points,
-      answerBreadth: weightedBreadth,
-      exposedWeight,
+      answerBreadth: Math.max(0, Math.min(1, weightedBreadth)),
+      exposedWeight: Math.max(0, Math.min(1, exposedWeight)),
       supportingTemplateIds,
       exposedTemplateIds,
     };
@@ -469,20 +470,19 @@ export function computeStressRobustness(
       .filter((sample) => sample.status === "confident")
       .map((sample) => sample.posture),
   );
-  const degradedMinimum = Math.min(2, readyItems.length);
-  const degradedPostureMinimum = Math.min(
-    2,
-    new Set(readyItems.map((item) => item.posture)).size,
-  );
+  const contract =
+    evaluateTesseraStressPortfolioContract(portfolio);
   const legacyCoverageConfidence =
-    confidentCount === portfolio.coverage.intended
+    contract.accepted &&
+    contract.maximumResultStatus === "complete" &&
+    confidentCount === contract.completeUniqueRequired &&
+    representedPostures.size ===
+      contract.minimumPosturesRequired
       ? "complete"
-      : (
-          portfolio.coverage.maximumResultStatus === "degraded" &&
-          confidentCount >= degradedMinimum &&
-          representedPostures.size >= degradedPostureMinimum
-        ) ||
-          (confidentCount >= 6 && representedPostures.size === 3)
+      : contract.accepted &&
+          confidentCount >= contract.minimumUniqueRequired &&
+          representedPostures.size >=
+            contract.minimumPosturesRequired
         ? "review"
         : "insufficient";
   const coverageCompleteness =
@@ -497,6 +497,9 @@ export function computeStressRobustness(
       .map((sample) => sample.evidenceConfidence ?? "ambiguous"),
   );
   const warnings: string[] = [];
+  if (!contract.accepted && contract.violation) {
+    warnings.push(contract.violation.message);
+  }
   if (confidentCount !== readyItems.length) {
     warnings.push(
       `${readyItems.length - confidentCount} prepared proxy result(s) lacked at least ${Math.round(
@@ -535,11 +538,20 @@ export function computeStressRobustness(
 
 function compositionVector(item: TesseraStressPortfolioItem): number[] {
   const traits = item.traits;
-  if (!traits || traits.unitCount === 0) return [0, 0, 0];
+  if (!traits || traits.unitCount === 0) {
+    return [0, 0, 0, 0, 0, 0, 0, 1];
+  }
   return [
     traits.hordePointsPercent,
     traits.eliteHeavyPointsPercent,
-    (traits.tagCounts.mobility ?? 0) / traits.unitCount,
+    traits.infantryPointsPercent ?? 0,
+    (traits.vehiclePointsPercent ?? 0) +
+      (traits.monsterPointsPercent ?? 0),
+    traits.rangedPressurePercent ?? 0,
+    traits.meleePressurePercent ?? 0,
+    traits.mobilityPressurePercent ??
+      (traits.tagCounts.mobility ?? 0) / traits.unitCount,
+    traits.unitConcentrationPercent ?? 1,
   ];
 }
 

@@ -133,6 +133,78 @@ test("requires an explicit player faction when prose names two armies", () => {
   );
 });
 
+test("builds against an exact opponent roster and records owned-model limits", () => {
+  const opponent = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+    preferences: ["shooting", "mobility"],
+  });
+  assert.ok(opponent.ok && opponent.data);
+  const seed = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(seed.ok && seed.data);
+  const ownedUnits = [...new Set(seed.data.units.map((unit) => unit.unitId))]
+    .map((unitId) => {
+      const selections = seed.data!.units.filter(
+        (unit) => unit.unitId === unitId,
+      );
+      return {
+        unitId,
+        maxUnits: selections.length,
+        maxModels: selections.reduce(
+          (sum, unit) => sum + unit.modelCount,
+          0,
+        ),
+      };
+    });
+  const matchup = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    collectionProfile: {
+      mode: "owned",
+      units: ownedUnits,
+    },
+    opponentContext: {
+      kind: "known-roster",
+      roster: opponent.data,
+    },
+  });
+  assert.ok(
+    matchup.ok && matchup.data,
+    matchup.violations.map((issue) => issue.message).join("; "),
+  );
+  assert.equal(
+    matchup.data.constraints.opponentFactionId,
+    "aeldari",
+  );
+  assert.ok(matchup.data.constraints.opponentRosterFingerprint);
+  assert.equal(
+    matchup.data.constraints.opponentThreatProfile?.bodyCount,
+    opponent.data.units.reduce(
+      (sum, unit) => sum + unit.modelCount,
+      0,
+    ),
+  );
+  for (const owned of ownedUnits) {
+    const selected = matchup.data.units.filter(
+      (unit) => unit.unitId === owned.unitId,
+    );
+    assert.ok(selected.length <= owned.maxUnits);
+    assert.ok(
+      selected.reduce((sum, unit) => sum + unit.modelCount, 0) <=
+        owned.maxModels,
+    );
+  }
+  const explanation = explainRoster(matchup.data);
+  assert.equal(
+    explanation.data?.optimizer.targetProfileCoverage
+      ?.opponentRosterFingerprint,
+    matchup.data.constraints.opponentRosterFingerprint,
+  );
+});
+
 test("keeps generic Sentinel defaults but selects anti-elite profiles against Custodes", async () => {
   const requiredUnitIds = [
     "armoured-sentinels",

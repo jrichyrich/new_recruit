@@ -707,6 +707,81 @@ async function addFactionPortfolioCertification(
           started,
         ),
       );
+      for (const pointsLimit of [1000, 2000]) {
+        const diverseStarted = startCase();
+        progress(
+          `Certifying ${faction.name} diverse-9 portfolio at ${pointsLimit} points.`,
+        );
+        try {
+          const diverse =
+            await previewFactionStressPortfolio({
+              faction: faction.id,
+              pointsLimit,
+              suite: "diverse-9",
+              pointsTolerancePercent: 5,
+              allowLegends: false,
+            });
+          const diverseGates = diverse.data?.gates ?? null;
+          const diverseClassification =
+            classifyTesseraPreparationCapability(
+              faction.tesseraPreparation,
+              {
+                mappingAvailable: mappingCapability.available,
+                available: Boolean(diverse.data),
+                executionViable: Boolean(
+                  diverseGates?.executionViable &&
+                    diverseGates.accepted,
+                ),
+                maximumResultStatus:
+                  diverseGates?.maximumResultStatus ?? null,
+              },
+            );
+          report.cases.push(
+            finishCase(
+              {
+                caseId:
+                  `${faction.id}:portfolio:diverse-9:${pointsLimit}`,
+                factionId: faction.id,
+                workflow: "tessera-preparation",
+                stage: "faction-diverse-9",
+                status: diverseClassification.status,
+                code: diverseClassification.code,
+                message:
+                  diverseClassification.status === "pass"
+                    ? `${faction.name} produced an accepted adaptive nine-list portfolio at ${pointsLimit} points.`
+                    : `${faction.name} did not satisfy its declared diverse-9 portfolio capability at ${pointsLimit} points.`,
+                retryable: false,
+                evidence: {
+                  expectedCapability:
+                    faction.tesseraPreparation,
+                  mappingCapability,
+                  portfolioPolicy:
+                    faction.portfolioPolicy ??
+                    manifest.defaults.portfolioPolicy,
+                  pointsLimit,
+                  gates: diverseGates,
+                  violations: diverse.violations,
+                  warnings: diverse.data?.warnings ?? [],
+                },
+                artifacts: [],
+                connectorEvents: [],
+              },
+              diverseStarted,
+            ),
+          );
+        } catch (error) {
+          report.cases.push(
+            failureCase(
+              `${faction.id}:portfolio:diverse-9:${pointsLimit}`,
+              faction.id,
+              "tessera-preparation",
+              "faction-diverse-9",
+              error,
+              diverseStarted,
+            ),
+          );
+        }
+      }
       if (!mappingCapability.available) continue;
       const specialistStarted = startCase();
       const policy =
@@ -1296,6 +1371,9 @@ async function addLiveCertification(
     let mutationCandidate:
       | ResultEnvelope<NewRecruitDelivery>
       | null = null;
+    const retainedMutationCandidate = ():
+      | ResultEnvelope<NewRecruitDelivery>
+      | null => mutationCandidate;
     try {
       const resumedArtifact =
         previous && resumeBundleDirectory
@@ -1843,6 +1921,8 @@ async function addLiveCertification(
         ),
       );
     } catch (error) {
+      const failedMutationCandidate =
+        retainedMutationCandidate();
       const failureCode =
         error &&
         typeof error === "object" &&
@@ -1854,9 +1934,9 @@ async function addLiveCertification(
         CertificationCaseResult["artifacts"] = [];
       if (
         newRecruitMutationStarted &&
-        mutationCandidate?.data
+        failedMutationCandidate?.data
       ) {
-        for (const artifact of mutationCandidate.data.artifacts) {
+        for (const artifact of failedMutationCandidate.data.artifacts) {
           if (
             artifact.format !==
               "new-recruit-enriched-rosz" ||
@@ -1911,12 +1991,12 @@ async function addLiveCertification(
                 livePlan.planSha256,
               newRecruitUiIdentity:
                 safeNewRecruitUiIdentity(
-                  mutationCandidate?.data?.uiIdentity,
+                  failedMutationCandidate?.data?.uiIdentity,
                 ),
             },
             artifacts: partialArtifacts,
             connectorEvents:
-              mutationCandidate?.data?.connectorEvents ??
+              failedMutationCandidate?.data?.connectorEvents ??
               [],
           },
           preparationStarted,
@@ -2587,7 +2667,9 @@ async function main(): Promise<void> {
     flag(args, "portfolio") ||
     (tier === "live" && !opponentMatrix);
   if (portfolio && !opponentMatrix) {
-    progress("Certifying selected faction core-3 portfolios.");
+    progress(
+      "Certifying selected faction core-3 and 1,000/2,000-point diverse-9 portfolios.",
+    );
     await addFactionPortfolioCertification(
       report,
       manifest,

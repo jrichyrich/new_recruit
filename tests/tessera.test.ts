@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,7 +16,6 @@ import { strToU8, zipSync } from "fflate";
 import {
   buildRoster,
   compareNewRecruitCatalogueProvenance,
-  generateFactionStressPortfolio,
   getNewRecruitFactionSummary,
   inspectEnrichedRosz,
   newRecruitCatalogue,
@@ -315,6 +321,42 @@ function deliveryFor(
   };
 }
 
+async function writeDeliveryFor(
+  roster: RosterDraftV1,
+  outputDirectory: string,
+): Promise<ResultEnvelope<NewRecruitDelivery>> {
+  const delivery = deliveryFor(roster, outputDirectory);
+  const faction = getNewRecruitFactionSummary(roster.factionId)!;
+  const selections = roster.units
+    .map(
+      (unit) =>
+        `<selection id="${unit.selectionId}" name="${unit.name}" number="1" type="unit">
+          <cost name="pts" value="${unit.points}"/>
+          <selections><selection name="${unit.name}" number="${unit.modelCount}" type="model"/></selections>
+        </selection>`,
+    )
+    .join("");
+  const xml = `<?xml version="1.0"?>
+<roster name="${roster.name}" generatedBy="https://newrecruit.eu" gameSystemId="${newRecruitCatalogue.gameSystem.id}" gameSystemName="${newRecruitCatalogue.gameSystem.name}" gameSystemRevision="${roster.sourceData.newRecruit.gameSystemRevision}">
+  <cost name="pts" value="${roster.totalPoints}"/>
+  <forces><force name="${faction.catalogue.name}" catalogueId="${faction.catalogue.id}" catalogueName="${faction.catalogue.name}" catalogueRevision="${roster.sourceData.newRecruit.catalogueRevision ?? 0}">
+    <selections>${selections}</selections>
+  </force></forces>
+  <profiles>
+    <profile name="Fixture model" typeName="Unit"/>
+    <profile name="Fixture weapon" typeName="Ranged Weapons"/>
+  </profiles>
+</roster>`;
+  const content = zipSync({ "fixture.ros": strToU8(xml) });
+  await mkdir(outputDirectory, { recursive: true });
+  await Promise.all(
+    delivery.data!.artifacts.map((artifact) =>
+      writeFile(artifact.written, content),
+    ),
+  );
+  return delivery;
+}
+
 test("prepares enriched handoff and writes a prepare-only matchup report", async () => {
   const player = buildRoster({
     faction: "adeptus-custodes",
@@ -330,7 +372,7 @@ test("prepares enriched handoff and writes a prepare-only matchup report", async
   const deliver = async (
     roster: RosterDraftV1,
     options: NewRecruitDeliveryOptions = {},
-  ) => deliveryFor(roster, options.outputDirectory ?? directory);
+  ) => writeDeliveryFor(roster, options.outputDirectory ?? directory);
   try {
     const prepared = await prepareRosterForTessera(
       player,
@@ -367,7 +409,11 @@ test("prepares enriched handoff and writes a prepare-only matchup report", async
     assert.equal(parsed.simulation.status, "not-requested");
     assert.deepEqual(
       parsed.artifacts.map((artifact) => artifact.written),
-      ["Player-matchup.json", "Player-matchup.html"],
+      [
+        "Player-matchup.json",
+        "Player-matchup.html",
+        "Player-matchup.receipt.json",
+      ],
     );
     assert.equal(inspectEnrichedRosz(fixtureRosz()).weaponProfileCount, 1);
   } finally {
@@ -521,7 +567,7 @@ test("direct matchup retains the prepared player when opponent delivery fails", 
         ) => {
           deliveryCalls += 1;
           if (deliveryCalls === 1) {
-            return deliveryFor(
+            return writeDeliveryFor(
               roster,
               deliveryOptions.outputDirectory ?? directory,
             );
@@ -545,6 +591,24 @@ test("direct matchup retains the prepared player when opponent delivery fails", 
     assert.equal(analyzed.data?.status, "failed");
     assert.equal(analyzed.data?.player.rosterName, player.name);
     assert.equal(analyzed.data?.opponents.length, 0);
+    assert.match(
+      analyzed.data?.player.sourceRoszPath ?? "",
+      /\/player\/artifacts\/source-[a-f0-9]{64}\.rosz$/,
+    );
+    assert.match(
+      analyzed.data?.player.enrichedRoszPath ?? "",
+      /\/player\/artifacts\/enriched-[a-f0-9]{64}\.rosz$/,
+    );
+    assert.match(
+      analyzed.data?.player.sourceRoszSha256 ?? "",
+      /^[a-f0-9]{64}$/,
+    );
+    assert.match(
+      analyzed.data?.player.enrichedRoszSha256 ?? "",
+      /^[a-f0-9]{64}$/,
+    );
+    await access(analyzed.data!.player.sourceRoszPath);
+    await access(analyzed.data!.player.enrichedRoszPath);
     assert.equal(
       analyzed.data?.failures?.[0]?.code,
       "SYNTHETIC_OPPONENT_DELIVERY_FAILED",
@@ -555,7 +619,7 @@ test("direct matchup retains the prepared player when opponent delivery fails", 
   }
 });
 
-test("direct faction analysis retains earlier opponents when a later proxy fails", async () => {
+test("deprecated direct faction analysis fails closed before delivery", async () => {
   const player = buildRoster({
     faction: "aeldari",
     pointsLimit: 1000,
@@ -584,7 +648,7 @@ test("direct faction analysis retains earlier opponents when a later proxy fails
         ) => {
           deliveryCalls += 1;
           if (deliveryCalls <= 2) {
-            return deliveryFor(
+            return writeDeliveryFor(
               roster,
               deliveryOptions.outputDirectory ?? directory,
             );
@@ -605,14 +669,12 @@ test("direct faction analysis retains earlier opponents when a later proxy fails
       },
     );
     assert.equal(analyzed.ok, false);
-    assert.equal(analyzed.data?.status, "failed");
-    assert.equal(analyzed.data?.player.rosterName, player.name);
-    assert.equal(analyzed.data?.opponents.length, 1);
+    assert.equal(analyzed.data, null);
     assert.equal(
-      analyzed.data?.failures?.[0]?.code,
-      "SYNTHETIC_PROXY_DELIVERY_FAILED",
+      analyzed.violations[0]?.code,
+      "OPPONENT_SCOPE_REQUIRED",
     );
-    assert.ok(deliveryCalls >= 3);
+    assert.equal(deliveryCalls, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -653,22 +715,12 @@ test("missing live catalogue identity fails closed with prepared data", async ()
   }
 });
 
-test("direct faction analysis reuses the shared portfolio payloads", async () => {
+test("known-faction unknown-list requests must use the stress workflow", async () => {
   const player = buildRoster({
     faction: "aeldari",
     pointsLimit: 1000,
     name: "Shared Portfolio Player",
   }).data!;
-  const portfolio = generateFactionStressPortfolio({
-    faction: "adeptus-custodes",
-    pointsLimit: 1000,
-    suite: "core-3",
-  });
-  assert.ok(portfolio.data);
-  const expected = portfolio.data.items
-    .filter((item) => item.status === "ready")
-    .map((item) => item.simulationFingerprint)
-    .sort();
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "tessera-shared-portfolio-"),
   );
@@ -689,19 +741,17 @@ test("direct faction analysis reuses the shared portfolio payloads", async () =>
           roster,
           deliveryOptions: NewRecruitDeliveryOptions = {},
         ) =>
-          deliveryFor(
+          writeDeliveryFor(
             roster,
             deliveryOptions.outputDirectory ?? directory,
           ),
       },
     );
-    assert.equal(analyzed.ok, true);
-    assert.equal(analyzed.data?.status, "prepared");
-    assert.deepEqual(
-      analyzed.data?.opponents
-        .map((prepared) => prepared.fingerprint ?? null)
-        .sort(),
-      expected,
+    assert.equal(analyzed.ok, false);
+    assert.equal(analyzed.data, null);
+    assert.equal(
+      analyzed.violations[0]?.code,
+      "OPPONENT_SCOPE_REQUIRED",
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

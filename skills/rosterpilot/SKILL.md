@@ -30,14 +30,40 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
    `get_new_recruit_connection_status` first. If local automation is
    unavailable, fall back to `prepare_new_recruit_handoff`.
 11. Treat Tessera as a separate, optional workflow. Call
-    `get_tessera_connection_status` before local comparison work. Use
-    `prepare_roster_for_tessera` only for an explicit Tessera handoff, and
-    `analyze_roster_matchup` only when the user asks to compare or simulate two
-    armies. Explain that preparation creates verified New Recruit list copies
-    to obtain profile-rich `.rosz` files.
-12. Do not apply a Tessera change candidate automatically. After explicit
+    `get_tessera_connection_status` first, then route the opponent explicitly:
+    - Known faction, unknown list: call
+      `preview_faction_stress_portfolio`, resolve any structured profile
+      requirements, then start `stress` with `start_tessera_run`, passing the
+      returned full preview `data` object as `request.portfolioPreview`. The durable job
+      freezes and hashes that exact preview; do not regenerate or summarize
+      it before starting.
+    - Known canonical roster or `.rosz`: resolve its exact provenance and
+      profile requirements, then start `exact` with `start_tessera_run`.
+    - Build against a known canonical roster: use
+      `build_and_analyze_roster_matchup`, which scores against that roster
+      rather than the faction catalogue.
+    A missing faction and missing exact roster is not enough scope; report
+    `OPPONENT_SCOPE_REQUIRED` instead of choosing a faction.
+12. Prefer durable simulation jobs over waiting synchronously. After
+    `start_tessera_run`, poll `get_tessera_run_status`. For `needs-input`, show
+    the structured choices, call `resolve_tessera_profiles`, and then
+    `resume_tessera_run`. Resume with the manifest’s frozen suite, strategy,
+    data pin, artifacts, and policy; do not invent omitted overrides. Use
+    `restartFrom: true` only after retry exhaustion or verified runtime drift;
+    it opens a fresh simulation stage and may copy only hash-verified frozen
+    inputs, never prior simulation evidence. Use
+    `cancel_tessera_run` only when the user asks to stop the run. Cancellation
+    retains the run bundle and never deletes New Recruit lists.
+13. Explain that Tessera preparation may create verified New Recruit list
+    copies to obtain profile-rich `.rosz` files. Never describe a client or
+    Codex timeout as a failed workflow; return the run ID and current durable
+    status.
+14. Do not apply a Tessera change candidate automatically. After explicit
     approval, modify and validate a new canonical roster, then call
-    `compare_roster_revision` only when the user asks for the before/after run.
+    `compare_roster_revision` or `compare_stress_test_revision` against the
+    exact frozen baseline only when the user asks for the before/after run.
+    Both comparison tools return durable job references; follow them with the
+    same status, profile-resolution, resume, and restart flow above.
 
 ## Validation rules
 
@@ -53,6 +79,10 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - Do not hide `DATA_SOURCE_CONFLICT`, `PROVISIONAL_POINTS`,
   `OFFICIAL_UPDATE_PENDING`, or `DATA_FRESHNESS_UNKNOWN` warnings.
 - Treat community data as a planning source; remind users to confirm event-specific rulings.
+- When collection quantities are omitted, label counter-build advice
+  `open-catalog`. Use `collectionProfile.mode="owned"` with per-unit
+  `maxUnits` and `maxModels` when quantities are known; do not imply that
+  unowned or Forge World models are practical recommendations.
 
 ## Export safety
 
@@ -97,4 +127,7 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - “Prepare this roster for New Recruit and give me both files.”
 - “Upload this validated roster to New Recruit and download Pretty HTML.”
 - “Compare these two validated armies in Tessera and return the HTML report.”
-- “Run a quick Tessera smoke comparison against a Necron proxy.”
+- “Stress-test this list against nine frozen Aeldari proxies and let me resume
+  it if the client disconnects.”
+- “Build a Custodes roster against this exact Aeldari roster, respecting my
+  owned-model quantities, then start a durable Tessera run.”
