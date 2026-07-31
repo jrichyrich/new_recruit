@@ -57,9 +57,11 @@ import {
 import {
   PREPARE_DATA_BUNDLE_USAGE,
   parsePrepareDataBundleArgs,
+  partialRollForwardBlockReason,
   prepareDataBundleUpdate,
   runPrepareDataBundleCli,
   validationPlanForDelta,
+  writeCertificationReviewPackage,
 } from "../scripts/prepare-data-bundle-update";
 
 const digest = (character: string): string => character.repeat(64);
@@ -333,8 +335,16 @@ test("bundle build and update help are read-only before signing configuration", 
     officialExtractorTrustedKeys:
       "data/official-extractor-trusted-keys.json",
     officialAuthorityUnavailableReason: null,
+    reviewPackageDir: null,
     skipRefresh: true,
   });
+  assert.equal(
+    parsePrepareDataBundleArgs([
+      "--review-package-dir",
+      "out/review",
+    ]).reviewPackageDir,
+    "out/review",
+  );
   assert.throws(
     () =>
       dataBundleSignerFromEnvironment({ NODE_ENV: "test" }),
@@ -342,6 +352,141 @@ test("bundle build and update help are read-only before signing configuration", 
     message:
       /ROSTERPILOT_DATA_SIGNING_KEY_ID.*ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK/,
     },
+  );
+});
+
+test("review packages preserve exact evidence with a hash inventory", () => {
+  const root = mkdtempSync(
+    path.join(os.tmpdir(), "rosterpilot-review-source-"),
+  );
+  const output = mkdtempSync(
+    path.join(os.tmpdir(), "rosterpilot-review-parent-"),
+  );
+  const packageDirectory = path.join(output, "review");
+  try {
+    mkdirSync(path.join(root, "data"), { recursive: true });
+    mkdirSync(
+      path.join(root, ".certification-data-bundle", "aeldari"),
+      { recursive: true },
+    );
+    const manifestPath = path.join(root, "manifest.json");
+    const updatePath = path.join(root, "update.json");
+    writeFileSync(
+      path.join(root, "data", "certification-manifest.json"),
+      '{"schemaVersion":1}\n',
+    );
+    writeFileSync(
+      path.join(
+        root,
+        ".certification-data-bundle",
+        "aeldari",
+        "certification-report.json",
+      ),
+      '{"status":"degraded"}\n',
+    );
+    writeFileSync(manifestPath, '{"bundleId":"candidate"}\n');
+    writeFileSync(updatePath, '{"classification":"mapping-only"}\n');
+
+    const packagePath = writeCertificationReviewPackage({
+      outputDirectory: packageDirectory,
+      candidateRoot: root,
+      candidateManifestPath: manifestPath,
+      candidateUpdateReportPath: updatePath,
+      candidate: {
+        bundleId: digest("a"),
+        manifestPath,
+        channelPath: path.join(root, "stable.json"),
+        classification: "mapping-only",
+        affectedFactions: ["aeldari"],
+        retainedFactions: [],
+      },
+      certification: {
+        failedFactions: [
+          {
+            factionId: "aeldari",
+            reason: "expert review pending",
+          },
+        ],
+      },
+      createdAt: "2026-07-31T18:00:00.000Z",
+    });
+    const reviewPackage = JSON.parse(
+      readFileSync(packagePath, "utf8"),
+    ) as {
+      packageKind: string;
+      failedFactions: Array<{ factionId: string }>;
+      files: Array<{ path: string; sha256: string }>;
+    };
+    assert.equal(
+      reviewPackage.packageKind,
+      "rosterpilot-certification-review",
+    );
+    assert.deepEqual(
+      reviewPackage.failedFactions.map((entry) => entry.factionId),
+      ["aeldari"],
+    );
+    assert.deepEqual(
+      reviewPackage.files.map((entry) => entry.path),
+      [
+        "candidate/manifest.json",
+        "candidate/update-report.json",
+        "certification-manifest.pending.json",
+        "README.md",
+        "reports/aeldari/certification-report.json",
+      ],
+    );
+    assert.ok(
+      reviewPackage.files.every((entry) =>
+        /^[a-f0-9]{64}$/.test(entry.sha256),
+      ),
+    );
+    assert.throws(
+      () =>
+        writeCertificationReviewPackage({
+          outputDirectory: packageDirectory,
+          candidateRoot: root,
+          candidateManifestPath: manifestPath,
+          candidateUpdateReportPath: updatePath,
+          candidate: {
+            bundleId: digest("a"),
+            manifestPath,
+            channelPath: path.join(root, "stable.json"),
+            classification: "mapping-only",
+            affectedFactions: ["aeldari"],
+            retainedFactions: [],
+          },
+          certification: { failedFactions: [] },
+          createdAt: "2026-07-31T18:00:00.000Z",
+        }),
+      /not empty/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(output, { recursive: true, force: true });
+  }
+});
+
+test("partial roll-forward rejects shared semantic changes", () => {
+  const baseline = {
+    engineDataSchemaVersion: 3,
+    semanticHashes: {
+      globalHash: digest("1"),
+      methodologyHash: digest("2"),
+    },
+  };
+  assert.equal(
+    partialRollForwardBlockReason(baseline, baseline),
+    null,
+  );
+  assert.equal(
+    partialRollForwardBlockReason(baseline, {
+      ...baseline,
+      semanticHashes: {
+        ...baseline.semanticHashes,
+        globalHash: digest("3"),
+      },
+    }),
+    "the global shard semantics changed",
   );
 });
 
