@@ -120,5 +120,5 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run doctor -- --profile core --non-interactive --refresh skip
+      - run: node scripts/setup.mjs --doctor --profile core --non-interactive --refresh skip
       - run: npm run rosterpilot -- --help
