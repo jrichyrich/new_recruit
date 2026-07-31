@@ -524,6 +524,7 @@ async function runFixture(
               .update(playerContent)
               .digest("hex"),
             scopedProfilePolicySha256,
+            profilePolicyEntryKeys: [],
             rosterExecutionFingerprint: "c".repeat(64),
             expectedUnitCount: 2,
           },
@@ -533,6 +534,7 @@ async function runFixture(
               .update(opponentContent)
               .digest("hex"),
             scopedProfilePolicySha256,
+            profilePolicyEntryKeys: [],
             rosterExecutionFingerprint: "d".repeat(64),
             expectedUnitCount: 2,
           },

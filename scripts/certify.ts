@@ -99,6 +99,9 @@ import {
 import { safeNewRecruitUiIdentity } from "../local/new-recruit/ui-identity";
 import { getRuntimeProvenance } from "../local/runtime-provenance";
 import {
+  profilePolicyIdentityKey,
+} from "../local/tessera/profile-policy";
+import {
   scopedTesseraProfilePolicySha256,
 } from "../local/tessera/saved-list-reuse";
 
@@ -2165,6 +2168,11 @@ async function addLiveCertification(
             runId: report.runId,
             enrichedRoszSha256: sha256(enriched),
             scopedProfilePolicySha256: scopedPolicySha256,
+            profilePolicyEntryKeys:
+              profilePolicyPreflight.policy?.entries
+                .map((entry) => profilePolicyIdentityKey(entry))
+                .sort((left, right) => left.localeCompare(right)) ??
+              [],
             rosterExecutionFingerprint: executionFingerprint,
             expectedUnitCount: roster.units.length,
           },
@@ -2172,6 +2180,11 @@ async function addLiveCertification(
             runId: report.runId,
             enrichedRoszSha256: sha256(opponent),
             scopedProfilePolicySha256: scopedPolicySha256,
+            profilePolicyEntryKeys:
+              profilePolicyPreflight.policy?.entries
+                .map((entry) => profilePolicyIdentityKey(entry))
+                .sort((left, right) => left.localeCompare(right)) ??
+              [],
             rosterExecutionFingerprint: executionFingerprint,
             expectedUnitCount: roster.units.length,
           },

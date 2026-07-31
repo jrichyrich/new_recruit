@@ -4184,7 +4184,7 @@ export async function analyzeRosterMatchup(
   let captureIntegrityClean = true;
   let profileResolutionClean = true;
   if (simulationRequested) {
-    for (const prepared of opponents) {
+    for (const [opponentIndex, prepared] of opponents.entries()) {
       const profileDirectory = await mkdtemp(
         path.join(os.tmpdir(), "rosterpilot-tessera-"),
       );
@@ -4213,6 +4213,11 @@ export async function analyzeRosterMatchup(
                   expectedUnitCount:
                     prepared.summary.units.length,
                 },
+                playerProfileRequirements:
+                  preparedProfileInspections[0]?.data ?? [],
+                opponentProfileRequirements:
+                  preparedProfileInspections[opponentIndex + 1]?.data ??
+                  [],
               })
             : null;
         const result: TesseraBrowserResult = await (

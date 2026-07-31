@@ -16,6 +16,7 @@ import {
 import {
   deterministicTesseraSavedListName,
   scopedTesseraProfilePolicySha256,
+  tesseraProfilePolicyForEntryKeys,
   tesseraSavedListReuseValidationError,
   type TesseraSavedListReuse,
   type TesseraSavedListReuseAction,
@@ -311,12 +312,25 @@ async function prepareSavedListReuse(
       );
     }
   }
-  const observedPolicySha256 =
-    scopedTesseraProfilePolicySha256(input.profilePolicy);
   for (const [side, identity] of [
     ["player", reuse.player],
     ["opponent", reuse.opponent],
   ] as const) {
+    const scopedPolicy = tesseraProfilePolicyForEntryKeys(
+      input.profilePolicy,
+      identity.profilePolicyEntryKeys,
+    );
+    if (
+      identity.profilePolicyEntryKeys.length > 0 &&
+      !scopedPolicy
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_SAVED_LIST_REUSE_INVALID",
+        `The ${side} saved-list identity refers to Tessera profile-policy entries that are not present.`,
+      );
+    }
+    const observedPolicySha256 =
+      scopedTesseraProfilePolicySha256(scopedPolicy);
     if (
       observedPolicySha256 !==
       identity.scopedProfilePolicySha256.toLocaleLowerCase()

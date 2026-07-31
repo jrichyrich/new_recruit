@@ -2,13 +2,19 @@ import { createHash } from "node:crypto";
 
 import type {
   ProfilePolicyV1,
+  TesseraProfileRequirement,
 } from "../../lib/rosterpilot";
-import { profilePolicyHash } from "./profile-policy";
+import {
+  profilePolicyHash,
+  profilePolicyIdentityKey,
+  profilePolicyIdentityMatches,
+} from "./profile-policy";
 
 export type TesseraSavedListReuseSide = {
   runId: string;
   enrichedRoszSha256: string;
   scopedProfilePolicySha256: string;
+  profilePolicyEntryKeys: string[];
   rosterExecutionFingerprint: string;
   expectedUnitCount: number;
 };
@@ -24,26 +30,42 @@ export function createTesseraSavedListReuse(input: {
   profilePolicy: ProfilePolicyV1 | null | undefined;
   player: Omit<
     TesseraSavedListReuseSide,
-    "runId" | "scopedProfilePolicySha256"
+    | "runId"
+    | "scopedProfilePolicySha256"
+    | "profilePolicyEntryKeys"
   >;
   opponent: Omit<
     TesseraSavedListReuseSide,
-    "runId" | "scopedProfilePolicySha256"
+    | "runId"
+    | "scopedProfilePolicySha256"
+    | "profilePolicyEntryKeys"
   >;
+  playerProfileRequirements: TesseraProfileRequirement[];
+  opponentProfileRequirements: TesseraProfileRequirement[];
 }): TesseraSavedListReuse {
-  const scopedProfilePolicySha256 =
-    scopedTesseraProfilePolicySha256(input.profilePolicy);
+  const playerPolicy = scopeTesseraProfilePolicy(
+    input.profilePolicy,
+    input.playerProfileRequirements,
+  );
+  const opponentPolicy = scopeTesseraProfilePolicy(
+    input.profilePolicy,
+    input.opponentProfileRequirements,
+  );
   return {
     schemaVersion: 1,
     player: {
       ...input.player,
       runId: input.runId,
-      scopedProfilePolicySha256,
+      scopedProfilePolicySha256:
+        scopedTesseraProfilePolicySha256(playerPolicy.policy),
+      profilePolicyEntryKeys: playerPolicy.entryKeys,
     },
     opponent: {
       ...input.opponent,
       runId: input.runId,
-      scopedProfilePolicySha256,
+      scopedProfilePolicySha256:
+        scopedTesseraProfilePolicySha256(opponentPolicy.policy),
+      profilePolicyEntryKeys: opponentPolicy.entryKeys,
     },
   };
 }
@@ -71,6 +93,16 @@ export function tesseraSavedListReuseValidationError(
   }
   if (!sha256Pattern.test(input.scopedProfilePolicySha256)) {
     return "scopedProfilePolicySha256 must be a SHA-256 digest";
+  }
+  if (
+    !Array.isArray(input.profilePolicyEntryKeys) ||
+    input.profilePolicyEntryKeys.some(
+      (key) => typeof key !== "string" || !key.trim(),
+    ) ||
+    new Set(input.profilePolicyEntryKeys).size !==
+      input.profilePolicyEntryKeys.length
+  ) {
+    return "profilePolicyEntryKeys must contain unique, non-empty strings";
   }
   if (!sha256Pattern.test(input.rosterExecutionFingerprint)) {
     return "rosterExecutionFingerprint must be a SHA-256 digest";
@@ -118,4 +150,58 @@ export function scopedTesseraProfilePolicySha256(
     : createHash("sha256")
       .update("rosterpilot:tessera-profile-policy:none:v1")
       .digest("hex");
+}
+
+export function scopeTesseraProfilePolicy(
+  policy: ProfilePolicyV1 | null | undefined,
+  requirements: TesseraProfileRequirement[],
+): {
+  policy: ProfilePolicyV1 | null;
+  entryKeys: string[];
+} {
+  if (!policy || requirements.length === 0) {
+    return {
+      policy: null,
+      entryKeys: [],
+    };
+  }
+  const entries = policy.entries.filter((entry) =>
+    requirements.some((requirement) =>
+      profilePolicyIdentityMatches(entry, requirement),
+    ),
+  );
+  if (entries.length === 0) {
+    return {
+      policy: null,
+      entryKeys: [],
+    };
+  }
+  return {
+    policy: {
+      schemaVersion: 1,
+      policyKind: "tessera-profile-policy",
+      entries,
+    },
+    entryKeys: entries
+      .map((entry) => profilePolicyIdentityKey(entry))
+      .sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+export function tesseraProfilePolicyForEntryKeys(
+  policy: ProfilePolicyV1 | null | undefined,
+  entryKeys: string[],
+): ProfilePolicyV1 | null {
+  if (entryKeys.length === 0) return null;
+  if (!policy) return null;
+  const requested = new Set(entryKeys);
+  const entries = policy.entries.filter((entry) =>
+    requested.has(profilePolicyIdentityKey(entry)),
+  );
+  if (entries.length !== requested.size) return null;
+  return {
+    schemaVersion: 1,
+    policyKind: "tessera-profile-policy",
+    entries,
+  };
 }
