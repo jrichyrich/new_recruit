@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "releaseId": "2026-07-31.1",
-  "generatedAt": "2026-07-30T12:01:53+01:00",
+  "releaseId": "2026-07-31.2",
+  "generatedAt": "2026-07-31T06:31:26+01:00",
   "sources": {
     "rules": {
       "package": "@alpaca-software/40kdc-data",
@@ -12,7 +12,7 @@
     "newRecruit": {
       "repository": "BSData/wh40k-11e",
       "branch": "main",
-      "commit": "21b4efa69d7212cb206fdcbf98aa606ee49f78a2"
+      "commit": "94ebcd1ee4ae26d7c5442abb111c6e5e9a528837"
     },
     "official": {
       "downloadsUrl": "https://www.warhammer-community.com/en-gb/downloads/warhammer-40000/",
@@ -20,7 +20,7 @@
       "mfmVersion": "1.1",
       "updatedAt": "2026-07-22",
       "contentSha256": "91706631d93b6065ee65c089e044c8df1652d73c752680d3ef10def11e77acfb",
-      "checkedAt": "2026-07-31T03:21:29.052Z"
+      "checkedAt": "2026-07-31T13:06:58.709Z"
     }
   },
   "gameSystem": {
@@ -41,7 +41,7 @@
       "catalogue": {
         "id": "b39e-4401-8f3e-fdf7",
         "name": "Imperium - Adepta Sororitas",
-        "revision": 9
+        "revision": 10
       },
       "coverage": {
         "engineUnits": 37,
@@ -74,7 +74,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "29b2-5ee-95ac-8fe9::4b94-c22e-84f9-8d32"
           }
         },
@@ -100,7 +100,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -121,7 +121,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -142,7 +142,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -163,7 +163,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -184,7 +184,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -205,7 +205,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -226,7 +226,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -247,7 +247,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -268,7 +268,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "e13c-bf6c-87b2-30f8::f26d-450d-1c55-caeb"
           }
         },
@@ -314,7 +314,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "2d06-a7ed-1a18-6735::f1af-4984-1a52-c5"
           }
         },
@@ -335,7 +335,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "2d06-a7ed-1a18-6735::f1af-4984-1a52-c5"
           }
         },
@@ -356,7 +356,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "2d06-a7ed-1a18-6735::f1af-4984-1a52-c5"
           }
         },
@@ -377,7 +377,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "2d06-a7ed-1a18-6735::f1af-4984-1a52-c5"
           }
         },
@@ -403,7 +403,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "ee6b-e1a3-5bb0-61c7::8569-2390-d4db-30fd"
           }
         },
@@ -424,7 +424,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "ee6b-e1a3-5bb0-61c7::8569-2390-d4db-30fd"
           }
         },
@@ -450,7 +450,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "1695-8d01-1159-9a13::d929-b22d-3040-9707"
           }
         },
@@ -471,7 +471,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "1695-8d01-1159-9a13::d929-b22d-3040-9707"
           }
         },
@@ -492,7 +492,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "1695-8d01-1159-9a13::d929-b22d-3040-9707"
           }
         },
@@ -513,7 +513,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "1695-8d01-1159-9a13::d929-b22d-3040-9707"
           }
         },
@@ -534,7 +534,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "1695-8d01-1159-9a13::d929-b22d-3040-9707"
           }
         },
@@ -560,7 +560,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "48b-3ef7-99c4-720f::938e-1c24-4e63-4cf3"
           }
         },
@@ -581,7 +581,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "48b-3ef7-99c4-720f::938e-1c24-4e63-4cf3"
           }
         },
@@ -607,7 +607,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "c17e-9345-c79b-ce1::3c3f-f02d-c05c-492a"
           }
         },
@@ -633,7 +633,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "c17e-9345-c79b-ce1::3c3f-f02d-c05c-492a"
           }
         },
@@ -659,7 +659,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "85dd-dbb2-891c-15d3::c49d-f150-4b3-c118"
           }
         },
@@ -680,7 +680,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "85dd-dbb2-891c-15d3::c49d-f150-4b3-c118"
           }
         },
@@ -701,7 +701,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "85dd-dbb2-891c-15d3::c49d-f150-4b3-c118"
           }
         },
@@ -722,7 +722,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "85dd-dbb2-891c-15d3::c49d-f150-4b3-c118"
           }
         },
@@ -743,7 +743,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "85dd-dbb2-891c-15d3::c49d-f150-4b3-c118"
           }
         },
@@ -764,7 +764,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "85dd-dbb2-891c-15d3::c49d-f150-4b3-c118"
           }
         },
@@ -790,7 +790,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "9c29-9181-6f36-18ea::eade-6ec7-7236-bfdb"
           }
         },
@@ -836,7 +836,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "56c1-9bf9-11a1-be0a::bee9-172b-7db7-f748"
           }
         },
@@ -862,7 +862,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "5a25-df80-8da1-cad9::4269-a229-1461-67d0"
           }
         },
@@ -883,7 +883,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "5a25-df80-8da1-cad9::4269-a229-1461-67d0"
           }
         },
@@ -904,7 +904,7 @@
           },
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9,
+            "revision": 10,
             "entryPath": "5a25-df80-8da1-cad9::4269-a229-1461-67d0"
           }
         },
@@ -921,7 +921,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9
+            "revision": 10
           }
         },
         {
@@ -937,7 +937,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9
+            "revision": 10
           }
         },
         {
@@ -953,7 +953,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9
+            "revision": 10
           }
         },
         {
@@ -969,7 +969,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b39e-4401-8f3e-fdf7",
-            "revision": 9
+            "revision": 10
           }
         }
       ],
@@ -3834,7 +3834,7 @@
       "catalogue": {
         "id": "77b9-2f66-3f9b-5cf3",
         "name": "Imperium - Adeptus Mechanicus",
-        "revision": 7
+        "revision": 8
       },
       "coverage": {
         "engineUnits": 38,
@@ -3891,7 +3891,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "9bfc-c4ed-8483-113e::b31e-5003-5b63-a305"
           }
         },
@@ -3917,7 +3917,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "9bfc-c4ed-8483-113e::b31e-5003-5b63-a305"
           }
         },
@@ -3943,7 +3943,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "9bfc-c4ed-8483-113e::b31e-5003-5b63-a305"
           }
         },
@@ -3969,7 +3969,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "9bfc-c4ed-8483-113e::b31e-5003-5b63-a305"
           }
         },
@@ -3995,7 +3995,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "9bfc-c4ed-8483-113e::b31e-5003-5b63-a305"
           }
         },
@@ -4021,7 +4021,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "9bfc-c4ed-8483-113e::b31e-5003-5b63-a305"
           }
         },
@@ -4047,7 +4047,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "f262-e6fd-26d-9fee::958-a256-360-8620"
           }
         },
@@ -4073,7 +4073,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "f262-e6fd-26d-9fee::958-a256-360-8620"
           }
         },
@@ -4099,7 +4099,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "f262-e6fd-26d-9fee::958-a256-360-8620"
           }
         },
@@ -4125,7 +4125,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "f262-e6fd-26d-9fee::958-a256-360-8620"
           }
         },
@@ -4151,7 +4151,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "f262-e6fd-26d-9fee::958-a256-360-8620"
           }
         },
@@ -4177,7 +4177,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "f262-e6fd-26d-9fee::958-a256-360-8620"
           }
         },
@@ -4215,7 +4215,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "b93d-b9db-120f-5c9e::5797-adb8-930-e832"
           }
         },
@@ -4236,7 +4236,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "b93d-b9db-120f-5c9e::5797-adb8-930-e832"
           }
         },
@@ -4262,7 +4262,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "111d-1e2e-2cad-bc8c::a523-606f-b05c-851e"
           }
         },
@@ -4308,7 +4308,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "68b3-c113-ba10-e744::8863-9784-8377-aa7a"
           }
         },
@@ -4329,7 +4329,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "68b3-c113-ba10-e744::8863-9784-8377-aa7a"
           }
         },
@@ -4350,7 +4350,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "68b3-c113-ba10-e744::8863-9784-8377-aa7a"
           }
         },
@@ -4375,7 +4375,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "7156-2132-a326-b724::7efb-de37-79c4-cccb"
           }
         },
@@ -4400,7 +4400,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "7156-2132-a326-b724::7efb-de37-79c4-cccb"
           }
         },
@@ -4425,7 +4425,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "7156-2132-a326-b724::7efb-de37-79c4-cccb"
           }
         },
@@ -4450,7 +4450,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "7156-2132-a326-b724::7efb-de37-79c4-cccb"
           }
         },
@@ -4475,7 +4475,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "7156-2132-a326-b724::7efb-de37-79c4-cccb"
           }
         },
@@ -4500,7 +4500,7 @@
           },
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7,
+            "revision": 8,
             "entryPath": "7156-2132-a326-b724::7efb-de37-79c4-cccb"
           }
         },
@@ -4517,7 +4517,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7
+            "revision": 8
           }
         },
         {
@@ -4533,7 +4533,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7
+            "revision": 8
           }
         },
         {
@@ -4549,7 +4549,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7
+            "revision": 8
           }
         },
         {
@@ -4565,7 +4565,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "77b9-2f66-3f9b-5cf3",
-            "revision": 7
+            "revision": 8
           }
         }
       ],
@@ -5634,7 +5634,7 @@
       "catalogue": {
         "id": "b00-cd86-4b4c-97ba",
         "name": "Imperium - Agents of the Imperium",
-        "revision": 6
+        "revision": 7
       },
       "coverage": {
         "engineUnits": 33,
@@ -5671,7 +5671,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "64ef-9075-f9c7-ff3f::b040-ce24-7e1a-c903"
           }
         },
@@ -5692,7 +5692,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "64ef-9075-f9c7-ff3f::b040-ce24-7e1a-c903"
           }
         },
@@ -5718,7 +5718,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "12bb-705b-ca74-329a::ec63-524d-55a-3065"
           }
         },
@@ -5744,7 +5744,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "de50-b47d-9b47-196e::24d5-9987-4d2-b42b"
           }
         },
@@ -5765,7 +5765,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "5605-f75f-cbda-75f4::3e57-b15c-5580-1de1"
           }
         },
@@ -5791,7 +5791,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "eda3-cf8a-c3ed-f64f::4469-7239-717e-9abd"
           }
         },
@@ -5817,7 +5817,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "6145-8b13-c9cf-a009::ede2-ae50-5f5b-cced"
           }
         },
@@ -5843,7 +5843,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "b5c8-8283-a1da-d5a1::4e74-3710-7a66-9d6c"
           }
         },
@@ -5869,7 +5869,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "d206-2f04-665a-eb01::73fc-a193-7da1-d9c4"
           }
         },
@@ -5894,7 +5894,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "ae88-5451-bffd-d597::f201-1f4a-b907-d9d1"
           }
         },
@@ -5919,7 +5919,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "6d21-f616-901f-6546::15c0-9294-7eb8-f3a7"
           }
         },
@@ -5944,7 +5944,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "5605-f75f-cbda-75f4::3e57-b15c-5580-1de1"
           }
         },
@@ -5969,7 +5969,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "8ae-eb96-e978-195a::264a-fc24-3a98-31dc"
           }
         },
@@ -5994,7 +5994,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "bbe2-28dd-1a9a-2506::f3a6-de9-584e-c394"
           }
         },
@@ -6019,7 +6019,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "eda3-cf8a-c3ed-f64f::4469-7239-717e-9abd"
           }
         },
@@ -6044,7 +6044,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "eda3-cf8a-c3ed-f64f::4469-7239-717e-9abd"
           }
         },
@@ -6069,7 +6069,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "eda3-cf8a-c3ed-f64f::4469-7239-717e-9abd"
           }
         },
@@ -6094,7 +6094,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "eda3-cf8a-c3ed-f64f::4469-7239-717e-9abd"
           }
         },
@@ -6119,7 +6119,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "eda3-cf8a-c3ed-f64f::4469-7239-717e-9abd"
           }
         },
@@ -6144,7 +6144,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "eda3-cf8a-c3ed-f64f::4469-7239-717e-9abd"
           }
         },
@@ -6169,7 +6169,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "9052-88c1-4514-4f52::55cf-8d86-affd-bc9b"
           }
         },
@@ -6194,7 +6194,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "d218-e450-350e-fa87::9360-d8b2-cd92-9e7f"
           }
         },
@@ -6219,7 +6219,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "3d4a-e34b-8d44-16de::a5c9-2cb7-d874-8169"
           }
         },
@@ -6244,7 +6244,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "3d4a-e34b-8d44-16de::a5c9-2cb7-d874-8169"
           }
         },
@@ -6269,7 +6269,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "552e-4779-7146-f972::6db9-cede-3810-f1f0"
           }
         },
@@ -6294,7 +6294,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "49ea-3a6b-20d2-7901::efa3-2cf5-dcfb-b976"
           }
         },
@@ -6319,7 +6319,7 @@
           },
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6,
+            "revision": 7,
             "entryPath": "4805-4ca0-4e1-db82::3953-4e12-fe7b-97e9"
           }
         },
@@ -6336,7 +6336,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6
+            "revision": 7
           }
         },
         {
@@ -6352,7 +6352,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6
+            "revision": 7
           }
         },
         {
@@ -6368,7 +6368,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6
+            "revision": 7
           }
         },
         {
@@ -6384,7 +6384,7 @@
           "source": "bsdata",
           "catalogue": {
             "id": "b00-cd86-4b4c-97ba",
-            "revision": 6
+            "revision": 7
           }
         }
       ],
