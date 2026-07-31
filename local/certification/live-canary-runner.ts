@@ -1195,7 +1195,8 @@ async function runDistinctFactionCanary(input: {
       // The pinned Death Guard catalogue has several live-observed
       // non-round-tripping optional vehicle loadouts, and Mortarion forces a
       // different Warlord during enrichment. Keep this exact-route canary on
-      // a reviewed selection pool whose New Recruit choices are explicit,
+      // an observed export-stable selection pool whose New Recruit choices are
+      // explicit,
       // while those wider faction limitations remain certification findings.
       allowNamedCharacters: false,
       collectionUnitIds: [

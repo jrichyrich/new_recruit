@@ -2421,20 +2421,23 @@
           }
         }
       ],
-      "expectedLimitations": [],
+      "expectedLimitations": [
+        "Live New Recruit round-trip verification under this pin does not preserve the tested Defiler Excruciator cannon, Plagueburst Crawler entropy cannon, or Mortarion Warlord identity. Exact live canaries use an observed export-stable unit pool until those upstream mappings reconcile."
+      ],
       "expertReview": {
         "status": "pending",
         "reviewedAt": "2026-07-29",
         "assertions": [
           "Deathshroud subgroup profile occurrences remain distinct.",
           "Slow projection and actual movement are reported separately.",
-          "Hard exclusions survive candidate generation."
+          "Hard exclusions survive candidate generation.",
+          "Live exact canaries fail closed on the observed Defiler, Plagueburst Crawler, and Mortarion New Recruit round-trip drift instead of weakening gameplay identity checks."
         ],
         "binding": {
           "schemaVersion": 1,
           "dataPinSha256": "a7877d6f45fa018455321799b2d1b47ef2430d3e8833f232082bcb778d514642",
-          "factionContractSha256": "dc89b7002308a1a2102304f5ed7ddb33ed74cec159476586bdcbc971e564f06d",
-          "bindingSha256": "9fdacea9cf5953bef1178ee16e55d64883600c004e39e0a21ca16f9574a5d2c7"
+          "factionContractSha256": "a5d698b2cda5512ada29c6bbde08351fe19e9888ab752cd81aecca3621a44ddc",
+          "bindingSha256": "68b66d987842c0433d3b536d8f4bd4777870715ced31c42e016242f8e122a15d"
         },
         "invalidationReason": "unbound-legacy"
       }
