@@ -897,7 +897,8 @@ function missingExactSelectionSide(
   if (
     !(error instanceof TesseraAutomationError) ||
     error.code !== "TESSERA_LIST_SELECTION_MISMATCH" ||
-    !/exposed 0 exact entries/i.test(error.message)
+    !/exposed 0 exact entries/i.test(error.message) ||
+    !/identityMatches=0\b/i.test(error.message)
   ) {
     return null;
   }
@@ -1418,17 +1419,21 @@ async function selectArmies(
     const expectedName = normalized(roster.name);
     const expectedValue = `list:${roster.name}`;
     let options: Array<{ label: string; value: string }> = [];
+    let identityMatches: Array<{ label: string; value: string }> = [];
     let matching: Array<{ label: string; value: string }> = [];
     const hydrationDeadline = Date.now() + 10_000;
     while (Date.now() < hydrationDeadline) {
       options = await savedListOptions(select);
-      matching = options.filter((candidate) => {
+      identityMatches = options.filter((candidate) => {
         return (
           candidate.value === expectedValue &&
-          normalized(savedListName(candidate.label)) === expectedName &&
-          savedListUnitCount(candidate.label) === roster.unitCount
+          normalized(savedListName(candidate.label)) === expectedName
         );
       });
+      matching = identityMatches.filter(
+        (candidate) =>
+          savedListUnitCount(candidate.label) === roster.unitCount,
+      );
       if (matching.length > 0) break;
       await select.focus().catch(() => undefined);
       await page.waitForTimeout(100);
@@ -1448,7 +1453,7 @@ async function selectArmies(
         "TESSERA_LIST_SELECTION_MISMATCH",
         importSideMessage(
           side,
-          `Tessera exposed ${matching.length} exact entries for the imported army, expected one (options=${options.length}, expectedUnits=${roster.unitCount}, expectedNameHash=${expectedNameHash}, optionLabelHashes=${optionHashes.join(",") || "none"}).`,
+          `Tessera exposed ${matching.length} exact entries for the imported army, expected one (options=${options.length}, identityMatches=${identityMatches.length}, expectedUnits=${roster.unitCount}, expectedNameHash=${expectedNameHash}, optionLabelHashes=${optionHashes.join(",") || "none"}).`,
         ),
       );
     }

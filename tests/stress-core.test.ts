@@ -584,6 +584,34 @@ test("diverse-9 expands a constrained faction pool until every cell has a unique
   assert.equal(unavailable.length, 0);
 });
 
+test(
+  "ordinary faction anchors diversify into complete Astra Militarum portfolios",
+  { timeout: 300_000 },
+  async () => {
+    for (const suite of ["core-3", "diverse-9"] as const) {
+      for (const pointsLimit of [1000, 2000]) {
+        const preview = await previewFactionStressPortfolio({
+          faction: "astra-militarum",
+          pointsLimit,
+          suite,
+          pointsTolerancePercent: 5,
+          allowLegends: false,
+        });
+        assert.equal(preview.ok, true);
+        assert.ok(preview.data);
+        assert.equal(preview.data.gates.executionViable, true);
+        assert.equal(preview.data.gates.completeCoverage, true);
+        assert.equal(preview.data.gates.allPosturesRepresented, true);
+        assert.equal(preview.data.gates.accepted, true);
+        assert.equal(
+          preview.data.gates.uniqueSimulationPayloads,
+          suite === "core-3" ? 3 : 9,
+        );
+      }
+    }
+  },
+);
+
 test("shared portfolio contract requires three core postures and release-bound diverse exceptions", () => {
   const generatedCore = generateFactionStressPortfolio({
     faction: "adeptus-custodes",

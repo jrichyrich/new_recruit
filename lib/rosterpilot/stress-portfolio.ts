@@ -1666,7 +1666,7 @@ function candidateRosterPool(
     ...anchorUnitIds.map((unitId) => [unitId]),
   ];
   const exclusionRecipes: Recipe[] =
-    requiresNamedCharacterAnchor && portfolioAnchor
+    portfolioAnchor && (requiresNamedCharacterAnchor || expanded)
       ? exclusionUnitIds.map((excludedUnitIds, index) => {
           const excludedUnits = excludedUnitIds
             .map((unitId) =>
@@ -2607,13 +2607,12 @@ export function generateFactionStressPortfolio(
           candidatePools,
         );
   if (
-    suite === "diverse-9" &&
     selected.some((item) => item.status === "unavailable")
   ) {
-    // A globally unique nine-cell assignment can move a scarce candidate
-    // from one posture to another. Expand every posture together so the
-    // second assignment is not constrained by whichever cells happened to
-    // be missing from the first pass.
+    // A globally unique assignment can move a scarce candidate from one
+    // posture to another. Expand every posture together so the second
+    // assignment is not constrained by whichever cells happened to be
+    // missing from the first pass.
     for (const posture of POSTURES) {
       candidatePools.set(
         posture,
@@ -2630,12 +2629,15 @@ export function generateFactionStressPortfolio(
       );
     }
     includeNamedSpecialist();
-    selected = selectDiversePortfolio(
-      factionId,
-      factionName,
-      seed.data.sourceData.releaseId,
-      candidatePools,
-    );
+    selected =
+      suite === "core-3"
+        ? selectCorePortfolio(candidatePools)
+        : selectDiversePortfolio(
+            factionId,
+            factionName,
+            seed.data.sourceData.releaseId,
+            candidatePools,
+          );
   }
 
   const readyItems = selected.filter((item) => item.status === "ready");
