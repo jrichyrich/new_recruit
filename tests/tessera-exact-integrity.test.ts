@@ -322,6 +322,32 @@ test("ROSZ gameplay snapshots tolerate New Recruit selection metadata enrichment
   );
 });
 
+test("ROSZ gameplay snapshots tolerate New Recruit selection-cost redistribution", () => {
+  const archive = (unitCost: boolean): Uint8Array => {
+    const cost =
+      '<cost name="pts" typeId="51b2-306e-1021-d207" value="140" />';
+    const xml = [
+      '<roster id="cost-placement" name="Cost Placement" gameSystemId="system" gameSystemRevision="7">',
+      `<costs>${cost}</costs>`,
+      '<forces><force id="force" catalogueId="catalogue" catalogueRevision="1"><selections>',
+      '<selection id="unit" name="Starfangs" entryId="unit-entry" number="1" type="unit">',
+      unitCost ? `<costs>${cost}</costs>` : "",
+      '<selections><selection id="model" name="Starfang" entryId="model-entry" number="2" type="model">',
+      unitCost ? "" : `<costs>${cost}</costs>`,
+      "</selection></selections></selection>",
+      "</selections></force></forces></roster>",
+    ].join("");
+    return zipSync({ "cost-placement.ros": strToU8(xml) });
+  };
+  assert.deepEqual(
+    compareRoszGameplaySnapshots(
+      inspectRoszGameplaySnapshot(archive(true)),
+      inspectRoszGameplaySnapshot(archive(false)),
+    ),
+    [],
+  );
+});
+
 test("New Recruit enrichment drift is rejected before persistent reuse", async () => {
   const candidate = roster(
     "adeptus-custodes",

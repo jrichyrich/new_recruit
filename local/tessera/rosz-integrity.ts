@@ -70,18 +70,6 @@ function semanticAncestryIdentity(value: string): string {
   ].join("|");
 }
 
-function semanticCosts(costs: string[]): string[] {
-  return costs
-    .map((cost) => JSON.parse(cost) as {
-      typeId: string;
-      name: string;
-      value: number | null;
-    })
-    .filter((cost) => cost.value !== 0)
-    .map((cost) => JSON.stringify(cost))
-    .sort();
-}
-
 function semanticSelections(snapshot: RoszGameplaySnapshot): string[] {
   return snapshot.selections
     .map((serialized) => {
@@ -92,7 +80,6 @@ function semanticSelections(snapshot: RoszGameplaySnapshot): string[] {
         name: normalizedSelectionName(selection.name),
         type: selection.type,
         number: selection.number,
-        costs: semanticCosts(selection.costs),
       });
     })
     .sort();
