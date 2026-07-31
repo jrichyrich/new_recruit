@@ -86,6 +86,7 @@ type FixtureOptions = {
   inspectFinalDom?: boolean;
   savedListReuse?: boolean;
   preexistingReuseSides?: readonly ("player" | "opponent")[];
+  savedListCapacity?: number;
   initialSavedLists?: Array<{
     name: string;
     unitCount: number;
@@ -107,6 +108,7 @@ const savedListUnitCounts = JSON.parse(
     initialSavedLists.map((entry) => [entry.name, entry.unitCount])
   ))
 );
+const savedListCapacity = ${JSON.stringify(options.savedListCapacity ?? null)};
 let matrixOpenCount = Number(sessionStorage.getItem("matrixOpenCount") || "0");
 let profileEditorApplied = false;
 const duplicateProfileEditorApplied = {};
@@ -222,6 +224,17 @@ function showReview() {
       document.querySelector('input[aria-label="Save to list (army name)"]').value;
     savedLists.push(savedName);
     savedListUnitCounts[savedName] = 2;
+    if (
+      Number.isSafeInteger(savedListCapacity) &&
+      savedListCapacity > 0
+    ) {
+      while (savedLists.length > savedListCapacity) {
+        const removed = savedLists.shift();
+        if (removed && !savedLists.includes(removed)) {
+          delete savedListUnitCounts[removed];
+        }
+      }
+    }
     localStorage.setItem("savedLists", JSON.stringify(savedLists));
     localStorage.setItem(
       "savedListUnitCounts",
@@ -530,13 +543,16 @@ async function runFixture(
   const fixtureOptions: FixtureOptions = savedListReuse
     ? {
         ...options,
-        initialSavedLists: preexistingReuseSides.map((side) => ({
-          name: deterministicTesseraSavedListName(
-            side,
-            savedListReuse[side],
-          ),
-          unitCount: 2,
-        })),
+        initialSavedLists: [
+          ...preexistingReuseSides.map((side) => ({
+            name: deterministicTesseraSavedListName(
+              side,
+              savedListReuse[side],
+            ),
+            unitCount: 2,
+          })),
+          ...(options.initialSavedLists ?? []),
+        ],
       }
     : options;
   let browserContext: BrowserContext | undefined;
@@ -883,6 +899,31 @@ test(
     assert.equal(result.savedListReuse?.player.action, "reused");
     assert.equal(result.savedListReuse?.opponent.action, "imported");
     assert.equal(result.fixtureDiagnostics?.importCount, 1);
+  },
+);
+
+test(
+  "reimports a deterministic player evicted while adding its opponent",
+  { skip: !runBrowserTests },
+  async () => {
+    const result = await runFixture({
+      savedListReuse: true,
+      preexistingReuseSides: ["player"],
+      initialSavedLists: [
+        {
+          name: "Older unrelated fixture",
+          unitCount: 2,
+        },
+      ],
+      savedListCapacity: 2,
+      savedNamesOnlyInMatrix: true,
+      inspectFinalDom: true,
+      requestedPhases: ["shooting"],
+      requestedMetrics: ["wipe-probability"],
+    });
+    assert.equal(result.savedListReuse?.player.action, "imported");
+    assert.equal(result.savedListReuse?.opponent.action, "imported");
+    assert.equal(result.fixtureDiagnostics?.importCount, 2);
   },
 );
 

@@ -877,6 +877,24 @@ function importSideMessage(
   return `[TESSERA_IMPORT_SIDE=${side}] ${message}`;
 }
 
+function missingExactSelectionSide(
+  error: unknown,
+): TesseraImportIssue["side"] | null {
+  if (
+    !(error instanceof TesseraAutomationError) ||
+    error.code !== "TESSERA_LIST_SELECTION_MISMATCH" ||
+    !/exposed 0 exact entries/i.test(error.message)
+  ) {
+    return null;
+  }
+  const side = error.message.match(
+    /^\[TESSERA_IMPORT_SIDE=(player|opponent)\]/,
+  )?.[1];
+  return side === "player" || side === "opponent"
+    ? side
+    : null;
+}
+
 async function importRosz(
   page: Page,
   filename: string,
@@ -2678,22 +2696,6 @@ export async function runTesseraBrowserMatchup(
         matrixOrigin,
       );
     }
-    const reportedImportWarnings = (
-      imported: Awaited<ReturnType<typeof importRosz>>,
-    ) =>
-      imported.issues.map((issue) =>
-        issue.resolvedByPolicy
-          ? `[TESSERA_PROFILE_POLICY_APPLIED] ${issue.unit ?? "Imported unit"}: ${issue.weaponGroup ?? "alternate weapon"} uses ${issue.selectedProfile ?? "the frozen selected profile"}.`
-          : issue.message,
-      );
-    const importWarnings: TesseraImportWarnings = {
-      player: [...new Set(reportedImportWarnings(playerImport))],
-      opponent: [...new Set(reportedImportWarnings(opponentImport))],
-    };
-    const warnings = [
-      ...importWarnings.player,
-      ...importWarnings.opponent,
-    ];
     const playerSelection = {
       name: playerBrowserListName,
       unitCount: playerImport.unitCount,
@@ -2724,12 +2726,77 @@ export async function runTesseraBrowserMatchup(
         input.licenseKey,
         matrixOrigin,
       );
-      await selectArmies(
-        page,
-        playerSelection,
-        opponentSelection,
-      );
+      let recovered = false;
+      let recoveryError: unknown = error;
+      for (let repair = 0; repair < 2; repair += 1) {
+        try {
+          await selectArmies(
+            page,
+            playerSelection,
+            opponentSelection,
+          );
+          recovered = true;
+          break;
+        } catch (nextError) {
+          recoveryError = nextError;
+          const missingSide =
+            missingExactSelectionSide(nextError);
+          if (!missingSide) throw nextError;
+          await page.goto(baseUrl, {
+            waitUntil: "domcontentloaded",
+            timeout,
+          });
+          await ensureRosterPage(page, timeout);
+          if (missingSide === "player") {
+            playerImport = await importRosz(
+              page,
+              input.playerRoszPath,
+              "player",
+              input.profilePolicy,
+              playerBrowserListName,
+              playerSelection.unitCount,
+            );
+            if (savedListReuse) {
+              savedListReuse.player.action = "imported";
+            }
+          } else {
+            opponentImport = await importRosz(
+              page,
+              input.opponentRoszPath,
+              "opponent",
+              input.profilePolicy,
+              opponentBrowserListName,
+              opponentSelection.unitCount,
+            );
+            if (savedListReuse) {
+              savedListReuse.opponent.action = "imported";
+            }
+          }
+          await openArmyMatrix(
+            page,
+            input.licenseKey,
+            matrixOrigin,
+          );
+        }
+      }
+      if (!recovered) throw recoveryError;
     }
+    const reportedImportWarnings = (
+      imported: Awaited<ReturnType<typeof importRosz>>,
+    ) =>
+      imported.issues.map((issue) =>
+        issue.resolvedByPolicy
+          ? `[TESSERA_PROFILE_POLICY_APPLIED] ${issue.unit ?? "Imported unit"}: ${issue.weaponGroup ?? "alternate weapon"} uses ${issue.selectedProfile ?? "the frozen selected profile"}.`
+          : issue.message,
+      );
+    const importWarnings: TesseraImportWarnings = {
+      player: [...new Set(reportedImportWarnings(playerImport))],
+      opponent: [...new Set(reportedImportWarnings(opponentImport))],
+    };
+    const warnings = [
+      ...importWarnings.player,
+      ...importWarnings.opponent,
+    ];
     await page
       .locator("table")
       .first()
