@@ -364,11 +364,16 @@ test("MCP renderers use the active executable and safely quote checkout paths", 
   };
   assert.match(codex, /command = "\/opt\/Node Runtime\/bin\/node"/);
   assert.match(codex, /Roster \\"Pilot\\"/);
+  assert.match(codex, /file:\/\/\/tmp\/Roster%20%22Pilot%22/);
   assert.equal(
     claude.mcpServers.rosterpilot.command,
     "/opt/Node Runtime/bin/node",
   );
   assert.equal(claude.mcpServers.rosterpilot.cwd, "/tmp/Roster \"Pilot\"");
+  assert.match(
+    JSON.stringify(claude.mcpServers.rosterpilot),
+    /file:\/\/\/tmp\/Roster%20%22Pilot%22/,
+  );
   assert.match(codex, /ROSTERPILOT_DATA_CHANNEL_URL/);
   assert.match(codex, /data-bundle-trusted-keys\.json/);
   assert.match(codex, /bootstrap-data-bundle/);

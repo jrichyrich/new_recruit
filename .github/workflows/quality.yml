@@ -121,4 +121,4 @@ jobs:
 
       - run: npm ci
       - run: node scripts/setup.mjs --doctor --profile core --non-interactive --refresh skip
-      - run: npm run rosterpilot -- --help
+      - run: node bin/rosterpilot.mjs --help
