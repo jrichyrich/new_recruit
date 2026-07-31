@@ -207,6 +207,8 @@ export type TesseraAnalysisOptions = WriteOptions & {
   sessionId?: string;
   allowPointMismatch?: boolean;
   includeChangeCandidates?: boolean;
+  /** Proceed with visibly provisional results after verified catalogue drift. */
+  catalogueDriftMode?: "reject" | "diagnostic";
 };
 
 export type TesseraDependencies = {
@@ -603,6 +605,7 @@ export async function prepareRosterForTessera(
     },
   );
   prepared.catalogueProvenance = catalogueProvenance;
+  const preparationWarnings = [...delivery.warnings];
   if (catalogueProvenance.status === "drift") {
     const mismatchSummary = catalogueProvenance.mismatches
       .map(
@@ -612,19 +615,27 @@ export async function prepareRosterForTessera(
           }`,
       )
       .join("; ");
-    return {
-      ok: false,
-      data: prepared,
-      violations: [
-        {
-          code: "NEW_RECRUIT_CATALOGUE_DRIFT",
-          message:
-            `The catalogue identity observed in New Recruit's enriched ROSZ differs from frozen bundle ${roster.sourceData.bundleId} (source release ${roster.sourceData.releaseId}): ${mismatchSummary}. Tessera was not started. This comparison does not infer New Recruit's backend commit.`,
-          severity: "error",
-        },
-      ],
-      warnings: delivery.warnings,
-    };
+    if (options.catalogueDriftMode !== "diagnostic") {
+      return {
+        ok: false,
+        data: prepared,
+        violations: [
+          {
+            code: "NEW_RECRUIT_CATALOGUE_DRIFT",
+            message:
+              `The catalogue identity observed in New Recruit's enriched ROSZ differs from frozen bundle ${roster.sourceData.bundleId} (source release ${roster.sourceData.releaseId}): ${mismatchSummary}. Tessera was not started. This comparison does not infer New Recruit's backend commit.`,
+            severity: "error",
+          },
+        ],
+        warnings: preparationWarnings,
+      };
+    }
+    preparationWarnings.push({
+      code: "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",
+      message:
+        `Diagnostic mode accepted a semantically verified New Recruit archive despite catalogue drift: ${mismatchSummary}. Results remain provisional, retain both catalogue identities, and are not promoted into the persistent preparation cache.`,
+      severity: "warn",
+    });
   }
   if (catalogueProvenance.status === "unverifiable") {
     return {
@@ -638,7 +649,7 @@ export async function prepareRosterForTessera(
           severity: "error",
         },
       ],
-      warnings: delivery.warnings,
+      warnings: preparationWarnings,
     };
   }
   const gameplayIntegrity = await verifyRoszGameplayArtifacts(
@@ -651,10 +662,14 @@ export async function prepareRosterForTessera(
       ok: false,
       data: prepared,
       violations: [gameplayIntegrity],
-      warnings: delivery.warnings,
+      warnings: preparationWarnings,
     };
   }
-  if (pendingPersistentCacheStore && !cacheReused) {
+  if (
+    pendingPersistentCacheStore &&
+    !cacheReused &&
+    catalogueProvenance.status === "matched"
+  ) {
     await storeNewRecruitCache(roster, delivery, {
       runId: mutationRunId,
       mutationAttemptId:
@@ -665,7 +680,7 @@ export async function prepareRosterForTessera(
     ok: true,
     data: prepared,
     violations: [],
-    warnings: delivery.warnings,
+    warnings: preparationWarnings,
   };
   } finally {
     await releaseCacheLease?.();

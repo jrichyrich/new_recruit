@@ -73,6 +73,12 @@ export type NewRecruitDeliveryOptions = WriteOptions & {
    * to that roster instead of the content-addressed uploaded-file subject.
    */
   mutationSubjectRoster?: RosterDraftV1;
+  /**
+   * Explicit diagnostic escape hatch for a profile-rich archive that passed
+   * semantic delivery verification but reports a newer New Recruit catalogue
+   * revision. Drifted artifacts are never promoted into the persistent cache.
+   */
+  catalogueDriftMode?: "reject" | "diagnostic";
 };
 
 export type NewRecruitCompanionDependencies = {

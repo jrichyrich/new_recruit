@@ -251,8 +251,8 @@ Usage:
   rosterpilot tessera configure
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera]
-  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates]
-  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
+  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
+  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
   rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
   rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--allow-readiness-warnings] [--full-json]
@@ -1284,6 +1284,12 @@ async function main(): Promise<void> {
               outputDirectory,
               executionMode: "simulate",
               experimental: false,
+              catalogueDriftMode: flag(
+                args,
+                "verified-catalogue-drift-diagnostic",
+              )
+                ? "diagnostic"
+                : "reject",
             },
           },
           {
@@ -1321,6 +1327,12 @@ async function main(): Promise<void> {
             | "simulate"
             | undefined,
           experimental: flag(args, "experimental"),
+          catalogueDriftMode: flag(
+            args,
+            "verified-catalogue-drift-diagnostic",
+          )
+            ? "diagnostic"
+            : "reject",
         },
       );
       print(
@@ -1470,6 +1482,12 @@ async function main(): Promise<void> {
         allowPointMismatch: flag(args, "allow-point-mismatch"),
         includeChangeCandidates: !flag(args, "no-change-candidates"),
         opponentRosterContext,
+        catalogueDriftMode: flag(
+          args,
+          "verified-catalogue-drift-diagnostic",
+        )
+          ? ("diagnostic" as const)
+          : ("reject" as const),
       };
       if (
         shouldStartDurableTesseraRun(

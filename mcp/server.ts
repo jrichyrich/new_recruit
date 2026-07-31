@@ -120,6 +120,7 @@ type ServerOptions = {
         allowPointMismatch: boolean;
         includeChangeCandidates: boolean;
         opponentRosterContext?: RosterDraftV1;
+        catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<TesseraMatchupReport>>;
     compare?: (
@@ -157,6 +158,7 @@ type ServerOptions = {
         outputDirectory?: string;
         overwrite: boolean;
         experimental: boolean;
+        catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<TesseraStressRunReport>>;
     previewPortfolio?: (input: {
@@ -1075,6 +1077,9 @@ export function createRosterPilotMcpServer(
           metrics: z.array(tesseraMetricSchema).min(1).max(4).optional(),
           allowPointMismatch: z.boolean().default(false),
           includeChangeCandidates: z.boolean().default(true),
+          verifiedCatalogueDriftDiagnostic: z
+            .boolean()
+            .default(false),
         },
         annotations: {
           readOnlyHint: false,
@@ -1097,6 +1102,7 @@ export function createRosterPilotMcpServer(
         metrics,
         allowPointMismatch,
         includeChangeCandidates,
+        verifiedCatalogueDriftDiagnostic,
       }) => {
         if (!opponent) {
           return resultContent(opponentScopeRequired());
@@ -1143,6 +1149,10 @@ export function createRosterPilotMcpServer(
                 phases,
                 metrics,
                 allowPointMismatch,
+                catalogueDriftMode:
+                  verifiedCatalogueDriftDiagnostic
+                    ? "diagnostic"
+                    : "reject",
                 includeChangeCandidates,
                 opponentRosterContext,
               },
@@ -1167,6 +1177,10 @@ export function createRosterPilotMcpServer(
               metrics,
               allowPointMismatch,
               includeChangeCandidates,
+              catalogueDriftMode:
+                verifiedCatalogueDriftDiagnostic
+                  ? "diagnostic"
+                  : "reject",
               ...(opponentRosterContext
                 ? { opponentRosterContext }
                 : {}),
@@ -1567,6 +1581,9 @@ export function createRosterPilotMcpServer(
               .default("compact"),
             overwrite: z.boolean().default(false),
             experimental: z.boolean().default(false),
+            verifiedCatalogueDriftDiagnostic: z
+              .boolean()
+              .default(false),
           },
           annotations: {
             readOnlyHint: false,
@@ -1589,6 +1606,7 @@ export function createRosterPilotMcpServer(
           responseDetail,
           overwrite,
           experimental,
+          verifiedCatalogueDriftDiagnostic,
         }) => {
           if (
             options.tesseraRunJobs &&
@@ -1618,6 +1636,10 @@ export function createRosterPilotMcpServer(
                   outputDirectory,
                   overwrite,
                   experimental: false,
+                  catalogueDriftMode:
+                    verifiedCatalogueDriftDiagnostic
+                      ? "diagnostic"
+                      : "reject",
                 },
               },
               { outputDirectory },
@@ -1639,6 +1661,10 @@ export function createRosterPilotMcpServer(
                 outputDirectory,
                 overwrite,
                 experimental,
+                catalogueDriftMode:
+                  verifiedCatalogueDriftDiagnostic
+                    ? "diagnostic"
+                    : "reject",
               },
             );
           return detailedResultContent(

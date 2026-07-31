@@ -379,7 +379,11 @@ test("prepares enriched handoff and writes a prepare-only matchup report", async
       { outputDirectory: path.join(directory, "prepare") },
       { deliver },
     );
-    assert.equal(prepared.ok, true);
+    assert.equal(
+      prepared.ok,
+      true,
+      JSON.stringify(prepared.violations),
+    );
     assert.equal(prepared.data?.summary.generatedBy, "https://newrecruit.eu");
 
     const report = await analyzeRosterMatchup(
@@ -432,7 +436,7 @@ test("catalogue drift retains verified preparation and stops before Tessera", as
     path.join(os.tmpdir(), "tessera-catalogue-drift-"),
   );
   try {
-    const delivery = deliveryFor(player, directory);
+    const delivery = await writeDeliveryFor(player, directory);
     delivery.data!.enrichedSummary!.observedNewRecruitCatalogue = {
       source: "new-recruit-enriched-rosz",
       gameSystem: {
@@ -470,6 +474,67 @@ test("catalogue drift retains verified preparation and stops before Tessera", as
     assert.doesNotMatch(
       prepared.violations[0]?.message ?? "",
       /backend commit is/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit diagnostic mode accepts verified drift as provisional preparation", async () => {
+  const player = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Diagnostic Drift Player",
+  }).data!;
+  const faction = getNewRecruitFactionSummary(player.factionId)!;
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-catalogue-drift-diagnostic-"),
+  );
+  try {
+    const delivery = await writeDeliveryFor(player, directory);
+    delivery.data!.enrichedSummary!.observedNewRecruitCatalogue = {
+      source: "new-recruit-enriched-rosz",
+      gameSystem: {
+        id: newRecruitCatalogue.gameSystem.id,
+        name: newRecruitCatalogue.gameSystem.name,
+        revision: newRecruitCatalogue.gameSystem.revision + 1,
+      },
+      catalogues: [
+        {
+          id: faction.catalogue.id,
+          name: faction.catalogue.name,
+          revision: faction.catalogue.revision,
+        },
+      ],
+    };
+    const prepared = await prepareRosterForTessera(
+      player,
+      {
+        outputDirectory: directory,
+        catalogueDriftMode: "diagnostic",
+      },
+      { deliver: async () => delivery },
+    );
+    assert.equal(
+      prepared.ok,
+      true,
+      JSON.stringify(prepared.violations),
+    );
+    assert.equal(prepared.violations.length, 0);
+    assert.equal(
+      prepared.data?.catalogueProvenance?.status,
+      "drift",
+    );
+    assert.ok(
+      prepared.warnings.some(
+        (warning) =>
+          warning.code ===
+          "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",
+      ),
+    );
+    assert.match(
+      prepared.warnings.at(-1)?.message ?? "",
+      /provisional/i,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

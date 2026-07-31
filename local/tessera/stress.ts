@@ -139,6 +139,8 @@ export type TesseraStressOptions = WriteOptions & {
   profilePolicyPath?: string;
   forceRetry?: boolean;
   experimental?: boolean;
+  /** Proceed with visibly provisional results after verified catalogue drift. */
+  catalogueDriftMode?: "reject" | "diagnostic";
   /**
    * Internal durable-run contract. A durable coordinator owns the three
    * automatic attempts and the two explicit lifetime attempts, so a single

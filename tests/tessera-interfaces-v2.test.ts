@@ -27,12 +27,14 @@ type AnalysisOptions = {
   metrics?: TesseraMetric[];
   allowPointMismatch: boolean;
   includeChangeCandidates: boolean;
+  catalogueDriftMode?: "reject" | "diagnostic";
 };
 
 type RevisionOptions = {
   outputDirectory?: string;
   overwrite: boolean;
   experimental: boolean;
+  catalogueDriftMode?: "reject" | "diagnostic";
 };
 
 type StressOptions = {
@@ -232,6 +234,10 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     ]);
     assert.equal(properties.allowPointMismatch.default, false);
     assert.equal(properties.includeChangeCandidates.default, true);
+    assert.equal(
+      properties.verifiedCatalogueDriftDiagnostic.default,
+      false,
+    );
     const stressProperties = (
       stressTool.inputSchema as {
         properties: Record<
@@ -252,6 +258,10 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     assert.equal(stressProperties.analysisStrategy.default, undefined);
     assert.equal(stressProperties.outputDirectory.default, undefined);
     assert.equal(stressProperties.responseDetail.default, "compact");
+    assert.equal(
+      stressProperties.verifiedCatalogueDriftDiagnostic.default,
+      false,
+    );
 
     await client.callTool({
       name: "analyze_roster_matchup",
@@ -272,6 +282,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       metrics: undefined,
       allowPointMismatch: false,
       includeChangeCandidates: true,
+      catalogueDriftMode: "reject",
     });
 
     await client.callTool({
@@ -287,6 +298,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         metrics: ["mean-damage"],
         allowPointMismatch: true,
         includeChangeCandidates: false,
+        verifiedCatalogueDriftDiagnostic: true,
       },
     });
     assert.deepEqual(analyses[1], {
@@ -301,6 +313,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       metrics: ["mean-damage"],
       allowPointMismatch: true,
       includeChangeCandidates: false,
+      catalogueDriftMode: "diagnostic",
     });
 
     await client.callTool({
@@ -352,6 +365,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         outputDirectory: undefined,
         overwrite: false,
         experimental: false,
+        catalogueDriftMode: "reject",
       },
     });
 
@@ -370,6 +384,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         outputDirectory: "exports/stress",
         overwrite: true,
         experimental: true,
+        verifiedCatalogueDriftDiagnostic: true,
         responseDetail: "full",
       },
     });
@@ -394,6 +409,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         outputDirectory: "exports/stress",
         overwrite: true,
         experimental: true,
+        catalogueDriftMode: "diagnostic",
       },
     });
 
