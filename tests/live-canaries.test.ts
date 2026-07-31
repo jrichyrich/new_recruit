@@ -25,6 +25,7 @@ import {
 } from "../local/certification/live-canaries";
 import {
   runRotatingLiveCanary,
+  sourcePinsCompatible,
   writeRotatingLiveCanaryReport,
 } from "../local/certification/live-canary-runner";
 
@@ -70,6 +71,40 @@ function readyAgent(projectDirectory: string): LocalAgentStatus {
     ],
   };
 }
+
+test("cross-faction canaries compare the shared release pin rather than faction catalogue revisions", () => {
+  const deathGuard = buildRoster({
+    faction: "death-guard",
+    pointsLimit: 1_000,
+  }).data;
+  const orks = buildRoster({
+    faction: "orks",
+    pointsLimit: 1_000,
+  }).data;
+  assert.ok(deathGuard);
+  assert.ok(orks);
+  assert.notEqual(
+    deathGuard.sourceData.newRecruit.catalogueRevision,
+    orks.sourceData.newRecruit.catalogueRevision,
+  );
+  assert.equal(sourcePinsCompatible(deathGuard, orks), true);
+
+  const staleOrks = structuredClone(orks);
+  staleOrks.sourceData.releaseId = "stale-release";
+  assert.equal(
+    sourcePinsCompatible(deathGuard, staleOrks),
+    false,
+  );
+
+  const staleDeathGuard = structuredClone(deathGuard);
+  staleDeathGuard.sourceData.newRecruit.catalogueRevision =
+    (staleDeathGuard.sourceData.newRecruit.catalogueRevision ?? 0) +
+    1;
+  assert.equal(
+    sourcePinsCompatible(deathGuard, staleDeathGuard),
+    false,
+  );
+});
 
 function builtRoster(
   faction: string,

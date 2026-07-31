@@ -244,12 +244,32 @@ function factionNamesCompatible(
   );
 }
 
-function sameSourcePin(
+export function sourcePinsCompatible(
   left: RosterDraftV1,
   right: RosterDraftV1,
 ): boolean {
-  return canonicalSha256(left.sourceData) ===
-    canonicalSha256(right.sourceData);
+  if (left.factionId === right.factionId) {
+    return canonicalSha256(left.sourceData) ===
+      canonicalSha256(right.sourceData);
+  }
+  const sharedReleaseIdentity = (roster: RosterDraftV1) => ({
+    package: roster.sourceData.package,
+    version: roster.sourceData.version,
+    edition: roster.sourceData.edition,
+    dataslate: roster.sourceData.dataslate,
+    releaseId: roster.sourceData.releaseId,
+    newRecruit: {
+      repository: roster.sourceData.newRecruit.repository,
+      commit: roster.sourceData.newRecruit.commit,
+      gameSystemRevision:
+        roster.sourceData.newRecruit.gameSystemRevision,
+    },
+    official: roster.sourceData.official,
+  });
+  return (
+    canonicalSha256(sharedReleaseIdentity(left)) ===
+    canonicalSha256(sharedReleaseIdentity(right))
+  );
 }
 
 function matchedPoints(rosters: RosterDraftV1[]): boolean {
@@ -1205,7 +1225,7 @@ async function runDistinctFactionCanary(input: {
   );
   const pointsContract =
     matchedPoints([player, opponent]) &&
-    sameSourcePin(player, opponent);
+    sourcePinsCompatible(player, opponent);
   recordAssertion(
     input.report.assertions,
     "matched-points-contract",
@@ -1215,7 +1235,7 @@ async function runDistinctFactionCanary(input: {
       playerTotalPoints: player.totalPoints,
       opponentPointsLimit: opponent.pointsLimit,
       opponentTotalPoints: opponent.totalPoints,
-      sourcePinMatched: sameSourcePin(player, opponent),
+      sourcePinMatched: sourcePinsCompatible(player, opponent),
     },
   );
   const policy = await readValidatedPolicy(
@@ -1451,8 +1471,8 @@ async function runUploadedRevisionCanary(input: {
   const contextVerified =
     player.factionId === revised.factionId &&
     baselineFingerprint !== revisedFingerprint &&
-    sameSourcePin(player, revised) &&
-    sameSourcePin(player, opponentContext) &&
+    sourcePinsCompatible(player, revised) &&
+    sourcePinsCompatible(player, opponentContext) &&
     matchedPoints([player, opponentContext, revised]) &&
     uploadedSummary.totalPoints ===
       opponentContext.totalPoints &&
@@ -1555,7 +1575,7 @@ async function runUploadedRevisionCanary(input: {
       opponentFactionId: opponentContext.factionId,
       uploadedPoints: uploadedSummary.totalPoints,
       canonicalPoints: opponentContext.totalPoints,
-      sourcePinMatched: sameSourcePin(
+      sourcePinMatched: sourcePinsCompatible(
         player,
         opponentContext,
       ),
