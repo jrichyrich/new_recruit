@@ -1192,13 +1192,28 @@ async function runDistinctFactionCanary(input: {
       faction: "death-guard",
       pointsLimit: 1_000,
       name: "Live Canary Death Guard 1000",
-      // Two pinned Death Guard selections do not currently round-trip
-      // unchanged through New Recruit revision 6: it removes the Defiler's
-      // Excruciator cannon and forces Mortarion to replace the selected
-      // Warlord. Keep the rotating exact-route canary on the reviewed,
-      // export-stable unit pool while those limitations remain explicit in
-      // faction certification.
-      excludedUnitIds: ["defiler", "mortarion"],
+      // The pinned Death Guard catalogue has several live-observed
+      // non-round-tripping optional vehicle loadouts, and Mortarion forces a
+      // different Warlord during enrichment. Keep this exact-route canary on
+      // a reviewed selection pool whose New Recruit choices are explicit,
+      // while those wider faction limitations remain certification findings.
+      allowNamedCharacters: false,
+      collectionUnitIds: [
+        "daemon-prince-of-nurgle-with-wings",
+        "daemon-prince-of-nurgle",
+        "icon-bearer",
+        "plague-surgeon",
+        "biologus-putrifier",
+        "malignant-plaguecaster",
+        "noxious-blightbringer",
+        "tallyman",
+        "foul-blightspawn",
+        "lord-of-poxes",
+        "chaos-spawn",
+        "poxwalkers",
+        "lord-of-virulence",
+        "lord-of-contagion",
+      ],
     }),
     "The Death Guard live-canary roster",
     input.dependencies,
