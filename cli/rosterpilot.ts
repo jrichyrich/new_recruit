@@ -13,12 +13,17 @@ import {
   exportRoster,
   getNewRecruitCapability,
   getDataStatus,
+  getDataUpdateStatus,
   listDataConflicts,
   modifyRoster,
   previewFactionStressPortfolio,
+  rebaseRosterWithProvider,
+  refreshDataNow,
+  rollbackDataBundle,
   searchFactions,
   searchUnits,
   validateRoster,
+  withDataBundleSnapshotLease,
   type ExportFormat,
   type ModifyRosterOperation,
   type PreferenceTag,
@@ -68,6 +73,9 @@ import {
   type TesseraRunRequest,
 } from "../local/tessera/jobs";
 import { ProfilePolicySchema } from "../local/tessera/profile-policy";
+import {
+  initializeLocalDataBundleProvider,
+} from "../local/data-bundles/configure";
 
 type Args = Record<string, string | boolean | string[]>;
 
@@ -217,6 +225,10 @@ Usage:
   rosterpilot workflows
   rosterpilot status
   rosterpilot freshness
+  rosterpilot data update-status
+  rosterpilot data refresh [--force]
+  rosterpilot data rollback --bundle <bundle-id>
+  rosterpilot rebase --file roster.json [--out rebased.json]
   rosterpilot conflicts [--faction adeptus-custodes] [--blocking true]
   rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective]
   rosterpilot compare <faction> <faction>
@@ -234,15 +246,15 @@ Usage:
   rosterpilot new-recruit status
   rosterpilot new-recruit coverage --faction adeptus-custodes
   rosterpilot new-recruit forget
-  rosterpilot new-recruit deliver --file roster.json [--out-dir exports/new-recruit] [--no-pretty] [--enriched]
+  rosterpilot new-recruit deliver --file roster.json [--out-dir exports/new-recruit] [--no-pretty]
   rosterpilot tessera status
   rosterpilot tessera configure
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera]
-  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates] [--experimental]
-  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite] [--experimental]
+  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--no-change-candidates]
+  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
-  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json] [--experimental]
+  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
   rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--allow-readiness-warnings] [--full-json]
   rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--portfolio-preview preview.json]
   rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
@@ -250,7 +262,7 @@ Usage:
   rosterpilot tessera resolve-profiles --job ... --profile-policy profiles.json
   rosterpilot tessera run-cancel --job exports/tessera/runs/run-.../tessera-run.json
   rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--profile-policy profiles.json] [--out-dir exports/tessera]
-  rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite] [--experimental]
+  rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite]
   rosterpilot mcp
 
 Writes are restricted to the current directory unless --allow-outside-root is supplied.
@@ -328,7 +340,7 @@ async function main(): Promise<void> {
             fallback:
               "Export .rosz on any supported core platform and import it manually.",
             nextCommand:
-              "rosterpilot new-recruit deliver --file roster.json --enriched",
+              "rosterpilot new-recruit deliver --file roster.json",
           },
           {
             id: "tessera",
@@ -347,7 +359,7 @@ async function main(): Promise<void> {
               "machine-readable JSON report",
             ],
             nextCommand:
-              "rosterpilot tessera analyze --file roster.json --opponent-roster enemy.json --experimental",
+              "rosterpilot tessera analyze --file roster.json --opponent-roster enemy.json --execution-mode simulate",
           },
           {
             id: "faction-stress",
@@ -368,13 +380,52 @@ async function main(): Promise<void> {
               "interactive HTML and machine-readable JSON reports",
             ],
             nextCommand:
-              "rosterpilot tessera stress-test --file roster.json --against-faction necrons --experimental",
+              "rosterpilot tessera stress-test --file roster.json --against-faction necrons --execution-mode simulate",
           },
         ],
       },
       violations: [],
       warnings: workflowWarnings,
     });
+    return;
+  }
+  if (
+    command === "data" ||
+    command === "data-update-status" ||
+    command === "refresh-data-now" ||
+    command === "rollback-data-bundle"
+  ) {
+    const action =
+      command === "data"
+        ? (positionals[0] ?? "update-status")
+        : command === "data-update-status"
+          ? "update-status"
+          : command === "refresh-data-now"
+            ? "refresh"
+            : "rollback";
+    const result =
+      action === "update-status" || action === "status"
+        ? await getDataUpdateStatus()
+        : action === "refresh"
+          ? await refreshDataNow({
+              force:
+                args.force === undefined
+                  ? true
+                  : flag(args, "force"),
+            })
+          : action === "rollback"
+            ? await rollbackDataBundle(
+                value(args, "bundle") ??
+                  value(args, "bundle-id") ??
+                  positionals[1] ??
+                  "",
+              )
+            : null;
+    if (!result) {
+      throw new Error(`Unknown data command "${action}".`);
+    }
+    print(result);
+    if (!result.ok) process.exitCode = 2;
     return;
   }
   if (command === "agent") {
@@ -434,7 +485,9 @@ async function main(): Promise<void> {
       }
       const roster = await readRosterDraft(path.resolve(inputFile));
       const result = await deliverRosterToNewRecruit(roster, {
-        downloadEnrichedRosz: flag(args, "enriched"),
+        // A verified enriched archive is required to detect a lagging or
+        // advanced New Recruit catalogue before accepting the delivery.
+        downloadEnrichedRosz: true,
         downloadPrettyHtml: !flag(args, "no-pretty"),
         outputDirectory: value(args, "out-dir") ?? "exports/new-recruit",
         overwrite: flag(args, "overwrite"),
@@ -1527,13 +1580,43 @@ async function main(): Promise<void> {
     return;
   }
 
-  const fileCommands = new Set(["validate", "explain", "modify", "export"]);
+  const fileCommands = new Set([
+    "validate",
+    "explain",
+    "modify",
+    "export",
+    "rebase",
+    "rebase-roster",
+  ]);
   if (!fileCommands.has(command)) {
     throw new Error(`Unknown command "${command}". Run "rosterpilot --help".`);
   }
   const file = value(args, "file");
   if (!file) throw new Error(`The ${command} command requires --file.`);
   const draft = await readRosterDraft(path.resolve(file));
+  if (command === "rebase" || command === "rebase-roster") {
+    const result = await rebaseRosterWithProvider(draft);
+    const output = value(args, "out");
+    if (
+      result.data &&
+      result.data.status !== "review-required" &&
+      output
+    ) {
+      const written = await writeRosterDraft(
+        result.data.roster,
+        output,
+        {
+          overwrite: flag(args, "overwrite"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+        },
+      );
+      print({ ...result, written });
+    } else {
+      print(result);
+    }
+    if (!result.ok) process.exitCode = 2;
+    return;
+  }
   if (command === "validate") {
     const result = validateRoster(draft);
     print(result);
@@ -1592,7 +1675,27 @@ async function main(): Promise<void> {
   throw new Error(`Unknown command "${command}".`);
 }
 
-main().catch((error) => {
+async function runMainWithDataSnapshot(): Promise<void> {
+  const rawCommand = process.argv[2] ?? "status";
+  const providerOnlyCommands = new Set([
+    "mcp",
+    "data",
+    "data-update-status",
+    "refresh-data-now",
+    "rollback-data-bundle",
+  ]);
+  if (
+    process.argv.includes("--help") ||
+    process.argv.includes("-h") ||
+    providerOnlyCommands.has(rawCommand)
+  ) {
+    await main();
+    return;
+  }
+  await withDataBundleSnapshotLease(main);
+}
+
+initializeLocalDataBundleProvider().then(runMainWithDataSnapshot).catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

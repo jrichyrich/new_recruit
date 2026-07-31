@@ -1,13 +1,15 @@
 import {
-  missionCards,
-  missionMatchups,
-  missions,
   normalizeName,
-  units,
 } from "@alpaca-software/40kdc-data";
 import type { UnitView } from "@alpaca-software/40kdc-data";
 
 import { validateRoster } from "./engine";
+import {
+  missionCards,
+  missionMatchups,
+  missions,
+  units,
+} from "./runtime-dataset";
 import { rosterExecutionFingerprint } from "./stress-portfolio";
 import type {
   ResultEnvelope,

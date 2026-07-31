@@ -12,7 +12,9 @@ import path from "node:path";
 
 import {
   type ConnectorEvent,
+  rosterExportFingerprint,
   rosterExecutionFingerprint,
+  rosterSourceDataCompatibleForExport,
   type EnrichedRoszSummary,
   type NewRecruitDelivery,
   type ResultEnvelope,
@@ -298,12 +300,7 @@ async function atomicWriteJson(
 export function newRecruitCacheKey(roster: RosterDraftV1): string {
   return crypto
     .createHash("sha256")
-    .update(
-      canonical({
-        executionFingerprint: rosterExecutionFingerprint(roster),
-        sourceData: roster.sourceData,
-      }),
-    )
+    .update(rosterExportFingerprint(roster))
     .digest("hex");
 }
 
@@ -364,10 +361,23 @@ function inventoryPath(): string {
   );
 }
 
-function sourceDataHash(
-  sourceData: RosterDraftV1["sourceData"],
-): string {
-  return sha256Text(canonical(sourceData));
+function sourceDataMatchesForExport(
+  left: unknown,
+  right: RosterDraftV1["sourceData"],
+): boolean {
+  if (
+    left &&
+    typeof left === "object" &&
+    "engineDataSchemaVersion" in left &&
+    "rosterRulesHash" in left &&
+    "mappingHash" in left
+  ) {
+    return rosterSourceDataCompatibleForExport(
+      left as RosterDraftV1["sourceData"],
+      right,
+    );
+  }
+  return canonical(left) === canonical(right);
 }
 
 function validMutationAttempt(
@@ -671,8 +681,7 @@ function assertReceiptProvenance(
     receipt.cacheKey !== cacheKey ||
     receipt.executionFingerprint !==
       rosterExecutionFingerprint(roster) ||
-    sourceDataHash(receipt.sourceData) !==
-      sourceDataHash(roster.sourceData)
+    !sourceDataMatchesForExport(receipt.sourceData, roster.sourceData)
   ) {
     throw failClosed(
       "NEW_RECRUIT_MUTATION_PROVENANCE_MISMATCH",
@@ -1731,7 +1740,7 @@ export async function loadNewRecruitCache(
         !integrityMatches(receipt)) ||
       receipt.cacheKey !== key ||
       receipt.executionFingerprint !== rosterExecutionFingerprint(roster) ||
-      canonical(receipt.sourceData) !== canonical(roster.sourceData) ||
+      !sourceDataMatchesForExport(receipt.sourceData, roster.sourceData) ||
       receipt.sourceRoszSha256 !== (await sha256(sourceRoszPath)) ||
       receipt.enrichedRoszSha256 !== (await sha256(enrichedRoszPath))
     ) return null;

@@ -1,0 +1,4 @@
+interface:
+  display_name: "RosterPilot"
+  short_description: "Build, validate, export, or compare tabletop army rosters"
+  default_prompt: "Use $rosterpilot to build and validate a roster for the requested faction, then perform only the export, New Recruit handoff, or Tessera comparison the user explicitly requests."

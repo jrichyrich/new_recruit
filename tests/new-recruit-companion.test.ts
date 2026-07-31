@@ -3,9 +3,14 @@ import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { strToU8, zipSync } from "fflate";
+import {
+  strFromU8,
+  strToU8,
+  unzipSync,
+  zipSync,
+} from "fflate";
 
-import { buildRoster } from "../lib/rosterpilot";
+import { buildRoster, exportRoster } from "../lib/rosterpilot";
 import { LocalAgentError } from "../local/agent/client";
 import { runNewRecruitBrowserDelivery } from "../local/new-recruit/browser";
 import {
@@ -29,6 +34,35 @@ async function chromeAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function enrichedArchiveForRoster(
+  roster: NonNullable<ReturnType<typeof buildRoster>["data"]>,
+  options: { gameSystemRevision?: number } = {},
+): Promise<Uint8Array> {
+  const exported = await exportRoster(roster, "rosz");
+  assert.equal(exported.ok, true);
+  assert.ok(exported.data);
+  const files = unzipSync(exported.data!.content as Uint8Array);
+  const entry = Object.keys(files).find((name) => /\.ros$/i.test(name));
+  assert.ok(entry);
+  let xml = strFromU8(files[entry!]);
+  xml = xml.replace(
+    /generatedBy="[^"]*"/,
+    'generatedBy="https://newrecruit.eu"',
+  );
+  if (options.gameSystemRevision !== undefined) {
+    xml = xml.replace(
+      /gameSystemRevision="\d+"/,
+      `gameSystemRevision="${options.gameSystemRevision}"`,
+    );
+  }
+  xml = xml.replace(
+    /<\/roster>\s*$/,
+    '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Melee Weapons"/></profiles></roster>',
+  );
+  files[entry!] = strToU8(xml);
+  return zipSync(files);
 }
 
 function fixturePage(requestUrl: string): string {
@@ -336,8 +370,189 @@ test("New Recruit catalogue drift stops before an external mutation", async () =
   );
   assert.equal(result.ok, false);
   assert.equal(result.data, null);
-  assert.equal(result.violations[0]?.code, "CATALOGUE_VERSION_CHANGED");
+  assert.equal(
+    result.violations[0]?.code,
+    "ROSTER_DATA_INTEGRITY_MISMATCH",
+  );
   assert.equal(agentCalls, 0);
+});
+
+test("semantic review-required blocks export and New Recruit before mutation", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const reviewRequired = structuredClone(built.data!);
+  reviewRequired.sourceData.bundleId = "9".repeat(64);
+  reviewRequired.sourceData.rosterRulesHash = "8".repeat(64);
+  const referencedUnit = Object.keys(
+    reviewRequired.sourceData.entityHashes,
+  ).find((key) => key.startsWith("unit:"));
+  assert.ok(referencedUnit);
+  reviewRequired.sourceData.entityHashes[referencedUnit] =
+    "7".repeat(64);
+
+  const exported = await exportRoster(reviewRequired, "rosz");
+  assert.equal(exported.ok, false);
+  assert.equal(exported.data, null);
+  assert.ok(
+    exported.violations.some(
+      (issue) => issue.code === "ROSTER_DATA_REVIEW_REQUIRED",
+    ),
+  );
+
+  let agentCalls = 0;
+  const delivered = await deliverRosterToNewRecruit(
+    reviewRequired,
+    {
+      outputDirectory: path.join(
+        os.tmpdir(),
+        "unused-review-required",
+      ),
+      allowOutsideRoot: true,
+      downloadEnrichedRosz: true,
+      downloadPrettyHtml: false,
+      mutationReceiptMode: "external",
+    },
+    {
+      platform: "darwin",
+      browserAvailable: true,
+      agentDeliver: async () => {
+        agentCalls += 1;
+        throw new Error("must not be called");
+      },
+    },
+  );
+  assert.equal(delivered.ok, false);
+  assert.equal(delivered.data, null);
+  assert.ok(
+    delivered.violations.some(
+      (issue) => issue.code === "ROSTER_DATA_REVIEW_REQUIRED",
+    ),
+  );
+  assert.equal(
+    agentCalls,
+    0,
+    "review-required must fail before any remote mutation",
+  );
+});
+
+test("direct New Recruit delivery accepts only a matching verified catalogue identity", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-catalogue-match-"),
+  );
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!);
+    const result = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        mutationReceiptMode: "external",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        agentDeliver: async () => ({
+          worker: {
+            ok: true,
+            uiIdentity: "e".repeat(64),
+            imported: true,
+            sessionReused: false,
+            listUrl:
+              "https://www.newrecruit.eu/app/Lists/catalogue-match-fixture",
+            verification: {
+              name: true,
+              faction: true,
+              points: true,
+              units: [],
+              mismatches: [],
+            },
+          },
+          enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.data?.catalogueProvenance?.status, "matched");
+    assert.equal(result.data?.connectorEvents?.[0]?.outcome, "verified");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("direct New Recruit delivery rejects a verified enriched roster from a drifted live catalogue", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-catalogue-drift-"),
+  );
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!, {
+      gameSystemRevision:
+        built.data!.sourceData.newRecruit.gameSystemRevision + 1,
+    });
+    const result = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        mutationReceiptMode: "external",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        agentDeliver: async () => ({
+          worker: {
+            ok: true,
+            uiIdentity: "d".repeat(64),
+            imported: true,
+            sessionReused: false,
+            listUrl:
+              "https://www.newrecruit.eu/app/Lists/catalogue-drift-fixture",
+            verification: {
+              name: true,
+              faction: true,
+              points: true,
+              units: [],
+              mismatches: [],
+            },
+          },
+          enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.violations[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_DRIFT",
+    );
+    assert.equal(result.data?.catalogueProvenance?.status, "drift");
+    assert.equal(result.data?.connectorEvents?.[0]?.outcome, "verified");
+    assert.ok(
+      result.data?.artifacts.some(
+        (artifact) =>
+          artifact.format === "new-recruit-enriched-rosz",
+      ),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("an imported list with an invalid enriched archive is an uncertain non-retryable outcome", async () => {

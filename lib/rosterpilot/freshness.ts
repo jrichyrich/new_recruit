@@ -4,6 +4,9 @@ import type {
   ResultEnvelope,
   RosterIssue,
 } from "./types";
+import {
+  getDataUpdateStatusSnapshot,
+} from "./data-operations";
 
 type FetchLike = typeof fetch;
 
@@ -171,27 +174,28 @@ export async function checkDataFreshness(
       latestContentSha256: official?.contentSha256 ?? null,
       updateAvailable: officialUpdate,
     },
+    dataBundle: getDataUpdateStatusSnapshot(),
   };
 
   if (state === "update-available") {
     warnings.unshift(
       warning(
-        "DATA_UPDATE_AVAILABLE",
-        "Newer rules or New Recruit catalogue data is available. The roster remains pinned to its recorded release until the update is reviewed and generated.",
+        "DATA_PROVENANCE_CHANGED",
+        "Newer rules or New Recruit provenance is available. The active bundle remains unchanged until the candidate is signed, semantically classified, and certified for its affected scope.",
       ),
     );
   } else if (state === "official-update-pending") {
     warnings.unshift(
       warning(
-        "OFFICIAL_UPDATE_PENDING",
-        "The official points source changed after the pinned release. Treat points as pending review until the community datasets reconcile.",
+        "DATA_SEMANTICS_CHANGED",
+        "The official points source changed. The candidate official scope remains quarantined until machine-verifiable official reconciliation evidence is available.",
       ),
     );
   } else if (state === "unknown") {
     warnings.unshift(
       warning(
         "DATA_FRESHNESS_UNKNOWN",
-        "At least one live source could not be checked. The roster was built from the exact pinned release.",
+        "At least one live source could not be checked. The roster was built from its exact frozen data-bundle snapshot.",
       ),
     );
   }

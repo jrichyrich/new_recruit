@@ -75,9 +75,10 @@ type CommandRunner = (
   options: { cwd: string },
 ) => void;
 
-export const DATA_UPDATE_USAGE = `Usage: npm run data:prepare-update -- [--help]
+export const DATA_UPDATE_USAGE = `Usage: npm run data:prepare-update:legacy-direct-sync -- [--help]
 
-Prepare, validate, and atomically publish a pinned roster-data update.
+Legacy maintenance command: validate and atomically rewrite the tracked
+bootstrap data. Routine releases use npm run data:prepare-update instead.
 
 Options:
   -h, --help  Show this help without checking or changing data.
@@ -156,12 +157,14 @@ export function nextSourceManifest(
   freshness: LiveDataFreshness,
 ): SourceManifest {
   const next = structuredClone(source);
+  let sourceIdentityChanged = false;
   if (
     freshness.rules.updateAvailable &&
     freshness.rules.latestVersion &&
     freshness.rules.latestVersion !== source.rules.version
   ) {
     next.rules.version = freshness.rules.latestVersion;
+    sourceIdentityChanged = true;
   }
   if (
     freshness.newRecruit.updateAvailable &&
@@ -169,16 +172,30 @@ export function nextSourceManifest(
     freshness.newRecruit.latestCommit !== source.newRecruit.commit
   ) {
     next.newRecruit.commit = freshness.newRecruit.latestCommit;
+    sourceIdentityChanged = true;
   }
   if (freshness.official.updateAvailable) {
-    next.official.mfmVersion =
+    const latestVersion =
       freshness.official.latestVersion ?? source.official.mfmVersion;
-    next.official.contentSha256 =
+    const latestContentSha256 =
       freshness.official.latestContentSha256 ??
       source.official.contentSha256;
+    if (
+      latestVersion !== source.official.mfmVersion ||
+      latestContentSha256 !== source.official.contentSha256
+    ) {
+      next.official.mfmVersion = latestVersion;
+      next.official.contentSha256 = latestContentSha256;
+      sourceIdentityChanged = true;
+    }
   }
-  next.official.checkedAt = freshness.checkedAt;
-  next.releaseId = nextReleaseId(source.releaseId, freshness.checkedAt);
+  if (sourceIdentityChanged) {
+    next.official.checkedAt = freshness.checkedAt;
+    next.releaseId = nextReleaseId(
+      source.releaseId,
+      freshness.checkedAt,
+    );
+  }
   return next;
 }
 
@@ -607,7 +624,8 @@ export async function prepareDataUpdate(options: {
       }`,
     );
   }
-  if (freshness.state === "current") {
+  const next = nextSourceManifest(source, freshness);
+  if (JSON.stringify(next) === JSON.stringify(source)) {
     return {
       changed: false,
       previousReleaseId: source.releaseId,
@@ -617,7 +635,6 @@ export async function prepareDataUpdate(options: {
     };
   }
 
-  const next = nextSourceManifest(source, freshness);
   const stagingParent = mkdtempSync(
     path.join(os.tmpdir(), "rosterpilot-data-update-stage-"),
   );

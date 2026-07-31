@@ -672,10 +672,13 @@ test("exports a validated Aeldari roster with an eligible mapped Warlord", async
   );
 });
 
-test("records exact source provenance and migrates V1 drafts", async () => {
+test("records semantic source identity and migrates V1 drafts", async () => {
   const built = buildRoster({ faction: "adeptus-custodes", pointsLimit: 1000 });
   assert.ok(built.data);
-  assert.equal(built.data.schemaVersion, 2);
+  assert.equal(built.data.schemaVersion, 3);
+  assert.match(built.data.sourceData.bundleId, /^[0-9a-f]{64}$/);
+  assert.match(built.data.sourceData.rosterRulesHash, /^[0-9a-f]{64}$/);
+  assert.match(built.data.sourceData.mappingHash, /^[0-9a-f]{64}$/);
   assert.match(built.data.sourceData.newRecruit.commit, /^[0-9a-f]{40}$/);
   assert.match(built.data.sourceData.official.contentSha256, /^[0-9a-f]{64}$/);
 
@@ -686,7 +689,7 @@ test("records exact source provenance and migrates V1 drafts", async () => {
   assert.equal(migrated.success, true);
   if (!migrated.success) return;
   assert.equal(migrated.migrated, true);
-  assert.equal(migrated.data.schemaVersion, 2);
+  assert.equal(migrated.data.schemaVersion, 3);
   assert.equal(migrated.data.sourceData.migratedFrom, 1);
 
   const status = getDataStatus();
@@ -739,7 +742,9 @@ test("checks all live source classes without changing the pinned build", async (
   assert.equal(freshness.data?.rules.updateAvailable, false);
   assert.equal(freshness.data?.newRecruit.updateAvailable, true);
   assert.ok(
-    freshness.warnings.some((item) => item.code === "DATA_UPDATE_AVAILABLE"),
+    freshness.warnings.some(
+      (item) => item.code === "DATA_PROVENANCE_CHANGED",
+    ),
   );
 });
 

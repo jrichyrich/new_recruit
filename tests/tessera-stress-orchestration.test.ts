@@ -554,7 +554,12 @@ test("default stress outputs are unique and recovery paths fail closed", async (
     ) as {
       schemaVersion: number;
       portfolioSha256: string;
-      portfolio: unknown;
+      portfolio: {
+        sourceData: RosterDraftV1["sourceData"];
+        items: Array<{
+          roster: { name: string } | null;
+        }>;
+      };
     };
     assert.equal(seededManifest.schemaVersion, 3);
     assert.match(seededManifest.portfolioSha256, /^[0-9a-f]{64}$/);
@@ -565,6 +570,11 @@ test("default stress outputs are unique and recovery paths fail closed", async (
     assert.equal(
       seeded.data.portfolioSha256,
       seededManifest.portfolioSha256,
+    );
+    assert.deepEqual(
+      seededManifest.portfolio.sourceData.official.authority,
+      player.sourceData.official.authority,
+      "manifest round trips must retain official-authority provenance before resume",
     );
 
     const attemptsBeforeCollision = deliveryAttempts;

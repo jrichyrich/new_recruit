@@ -1,5 +1,14 @@
-import { checkDataFreshnessCached } from "@/lib/rosterpilot";
+import {
+  checkDataFreshnessCached,
+  withDataBundleSnapshotLease,
+} from "@/lib/rosterpilot";
+import {
+  initializeHostedDataForRequest,
+} from "@/app/hosted-data-bundles";
 
-export async function GET() {
-  return Response.json(await checkDataFreshnessCached());
+export async function GET(request?: Request) {
+  if (request) await initializeHostedDataForRequest(request);
+  return withDataBundleSnapshotLease(async () =>
+    Response.json(await checkDataFreshnessCached()),
+  );
 }

@@ -422,7 +422,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
   }
 });
 
-test("compact Astra stress handoff stays bounded and preserves freshness and artifact paths", async () => {
+test("compact Astra stress handoff stays bounded and preserves frozen freshness and artifact paths", async () => {
   const built = buildRoster({
     faction: "astra-militarum",
     pointsLimit: 1000,
@@ -529,8 +529,11 @@ test("compact Astra stress handoff stays bounded and preserves freshness and art
     oversizedDiagnostics: "x".repeat(75_000),
   } as unknown as TesseraStressRunReport;
 
+  let liveFreshnessChecks = 0;
   const server = createRosterPilotMcpServer({
-    freshnessChecker: async () => ({
+    freshnessChecker: async () => {
+      liveFreshnessChecks += 1;
+      return {
       ok: true,
       data: {
         checkedAt: "2026-07-30T00:00:00.000Z",
@@ -556,13 +559,14 @@ test("compact Astra stress handoff stays bounded and preserves freshness and art
       violations: [],
       warnings: [
         {
-          code: "DATA_UPDATE_AVAILABLE",
+          code: "DATA_PROVENANCE_CHANGED",
           message:
-            "Newer data is available; this run remains pinned.",
+            "Newer upstream provenance is available; this run remains frozen.",
           severity: "warn",
         },
       ],
-    }),
+      };
+    },
     tesseraCompanion: {
       status: async () => notInvoked("STATUS_FIXTURE"),
       prepare: async () => notInvoked("PREPARE_FIXTURE"),
@@ -601,14 +605,16 @@ test("compact Astra stress handoff stays bounded and preserves freshness and art
       Buffer.byteLength(JSON.stringify(compactPayload)) <
         50_000,
     );
-    assert.equal(compactPayload.warningCount, 1);
+    assert.equal(compactPayload.warningCount, 0);
+    assert.deepEqual(compactPayload.warnings, []);
     assert.equal(
       (
-        compactPayload.warnings as Array<{
-          code: string;
-        }>
-      )[0].code,
-      "DATA_UPDATE_AVAILABLE",
+        compactPayload.data as {
+          freshness: { state: string };
+        }
+      ).freshness.state,
+      "update-available",
+      "compact results retain the run's frozen freshness receipt",
     );
     assert.equal(
       (
@@ -644,6 +650,11 @@ test("compact Astra stress handoff stays bounded and preserves freshness and art
         ).data.oversizedDiagnostics
       ).length,
       75_000,
+    );
+    assert.equal(
+      liveFreshnessChecks,
+      0,
+      "roster and Tessera requests must not wait on a live upstream check",
     );
   } finally {
     await client.close();

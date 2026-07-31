@@ -55,3 +55,9 @@ next-env.d.ts
 /*-matchup.json
 .rosterpilot-data-update-lock/
 .rosterpilot-data-update-transaction/
+/.rosterpilot-data-bundle-release.lock
+/.rosterpilot-data-bundle-release-transaction.json
+/data/.bootstrap-data-bundle.next-*
+/data/bootstrap-data-bundle.previous-release-*
+/public/.data-bundles.next-*
+/public/data-bundles.previous-release-*

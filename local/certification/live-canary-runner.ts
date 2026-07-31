@@ -26,7 +26,11 @@ import {
   type TesseraProfileRequirement,
   type TesseraRevisionComparisonReport,
   type TesseraStressTestReport,
+  type VerifiedDataBundleManifestV1,
 } from "../../lib/rosterpilot";
+import {
+  getActiveDataBundleManifest,
+} from "../../lib/rosterpilot/active-data-context";
 import { getLocalAgentStatus } from "../agent/client";
 import type { LocalAgentStatus } from "../agent/contracts";
 import { projectRoot } from "../agent/paths";
@@ -100,6 +104,12 @@ export type RotatingLiveCanaryReport = {
   evidenceKind: "live" | "none";
   readiness: LiveCanaryReadiness;
   runtime: RuntimeProvenance;
+  dataBundle: {
+    bundleId: string;
+    signingKeyId: string;
+    manifestSha256: string;
+    semanticIdentitySha256: string;
+  } | null;
   localAgent: {
     available: boolean;
     version: string | null;
@@ -143,6 +153,7 @@ export type RunRotatingLiveCanaryInput = {
   maxWaitMs?: number;
   pollMs?: number;
   forcedClientTimeoutMs?: number;
+  expectedBundleId?: string;
 };
 
 type TerminalTesseraRun = {
@@ -160,6 +171,9 @@ export type LiveCanaryRunnerDependencies = {
   getRunStatus: typeof getTesseraRunStatus;
   resumeRun: typeof resumeTesseraRun;
   compareRevision: typeof compareRosterRevision;
+  getActiveBundleManifest: () =>
+    | VerifiedDataBundleManifestV1
+    | null;
   wait: (milliseconds: number) => Promise<void>;
 };
 
@@ -173,6 +187,7 @@ const defaultDependencies: LiveCanaryRunnerDependencies = {
   getRunStatus: getTesseraRunStatus,
   resumeRun: resumeTesseraRun,
   compareRevision: compareRosterRevision,
+  getActiveBundleManifest: getActiveDataBundleManifest,
   wait: async (milliseconds) => {
     await new Promise<void>((resolve) =>
       setTimeout(resolve, milliseconds),
@@ -809,6 +824,7 @@ function baseReport(input: {
   startedAt: string;
   readiness: LiveCanaryReadiness;
   runtime: RuntimeProvenance;
+  dataBundleManifest: VerifiedDataBundleManifestV1 | null;
   agentStatus: LocalAgentStatus | null;
   resolvedPaths: Record<string, string | undefined>;
 }): RotatingLiveCanaryReport {
@@ -824,6 +840,19 @@ function baseReport(input: {
     evidenceKind: "none",
     readiness: input.readiness,
     runtime: input.runtime,
+    dataBundle: input.dataBundleManifest
+      ? {
+          bundleId: input.dataBundleManifest.bundleId,
+          signingKeyId:
+            input.dataBundleManifest.signature.keyId,
+          manifestSha256: canonicalSha256(
+            input.dataBundleManifest,
+          ),
+          semanticIdentitySha256: canonicalSha256(
+            input.dataBundleManifest.semanticHashes,
+          ),
+        }
+      : null,
     localAgent: safeAgentSummary(input.agentStatus),
     profilePolicy: {
       basename:
@@ -1746,9 +1775,25 @@ export async function runRotatingLiveCanary(
     startedAt,
     readiness: collected.readiness,
     runtime: collected.runtime,
+    dataBundleManifest:
+      dependencies.getActiveBundleManifest(),
     agentStatus: collected.agentStatus,
     resolvedPaths: collected.resolvedPaths,
   });
+  if (
+    input.expectedBundleId &&
+    report.dataBundle?.bundleId !== input.expectedBundleId
+  ) {
+    report.status = "fail";
+    report.evidenceKind = "none";
+    report.failure = {
+      code: "LIVE_CANARY_DATA_BUNDLE_MISMATCH",
+      message:
+        `The live canary expected activated data bundle ${input.expectedBundleId}, ` +
+        `but the process has ${report.dataBundle?.bundleId ?? "no signed bundle"} active.`,
+    };
+    return finalizeReport(report);
+  }
   if (collected.readiness.status === "unavailable") {
     return finalizeReport(report);
   }
@@ -1856,6 +1901,32 @@ export async function runRotatingLiveCanary(
       report.failure = { code, message };
       report.status = "fail";
     }
+  }
+  const completedBundleId =
+    dependencies.getActiveBundleManifest()?.bundleId ?? null;
+  if (
+    report.dataBundle &&
+    completedBundleId !== report.dataBundle.bundleId
+  ) {
+    report.failure = {
+      code: "LIVE_CANARY_DATA_BUNDLE_CHANGED",
+      message:
+        `The activated data bundle changed during the canary from ${report.dataBundle.bundleId} ` +
+        `to ${completedBundleId ?? "the compiled bootstrap"}.`,
+    };
+    report.status = "fail";
+    report.assertions = report.assertions.map((assertion) =>
+      assertion.status === "not-run"
+        ? assertion
+        : {
+            ...assertion,
+            status: "fail",
+            evidence: {
+              ...(assertion.evidence ?? {}),
+              dataBundleChanged: true,
+            },
+          },
+    );
   }
   return finalizeReport(report);
 }

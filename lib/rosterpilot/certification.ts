@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 
-import {
-  factions,
-  normalizeName,
-} from "@alpaca-software/40kdc-data";
+import { normalizeName } from "@alpaca-software/40kdc-data";
 import { strFromU8, unzipSync } from "fflate";
 import { z } from "zod";
 
@@ -15,7 +12,10 @@ import {
   searchUnits,
   validateRoster,
 } from "./engine";
-import { getNewRecruitFactionCatalogue } from "./catalogue";
+import {
+  getNewRecruitFactionCatalogue,
+  newRecruitCatalogueMappings,
+} from "./catalogue";
 import {
   getNewRecruitCapability,
   listDataConflicts,
@@ -26,6 +26,7 @@ import { newRecruitRos } from "./new-recruit";
 import { resolveNewRecruitUnit } from "./new-recruit-resolver";
 import {
   buildExportableRosterCandidate,
+  legacyProvenanceBoundRosterExecutionFingerprint,
   rosterExecutionFingerprint,
   rosterStructuralFingerprint,
 } from "./stress-portfolio";
@@ -40,6 +41,12 @@ import {
   deriveCertificationCoverageDimensions,
   type CertificationCoverageDimensions,
 } from "./certification-coverage";
+import {
+  currentRosterCompatibilityFactionIdentity,
+  type RosterCompatibilityFactionIdentity,
+} from "./draft";
+import { getActiveDataBundleManifest } from "./active-data-context";
+import { factions } from "./runtime-dataset";
 
 export const CERTIFICATION_SCHEMA_VERSION = 1 as const;
 
@@ -81,7 +88,34 @@ export const ConnectorEventSchema = z
   .strict();
 export type { ConnectorEvent } from "./types";
 
-export const CertificationExpertReviewBindingSchema = z
+export const CertificationReviewCapabilitySchema = z.enum([
+  "roster-rules",
+  "mapping",
+  "portfolio",
+  "connector",
+]);
+export type CertificationReviewCapability = z.infer<
+  typeof CertificationReviewCapabilitySchema
+>;
+
+const certificationReviewCapabilities = [
+  "roster-rules",
+  "mapping",
+  "portfolio",
+  "connector",
+] as const satisfies readonly CertificationReviewCapability[];
+
+const CertificationReviewCapabilityScopesSchema = z
+  .array(CertificationReviewCapabilitySchema)
+  .min(1)
+  .refine(
+    (capabilities) =>
+      new Set(capabilities).size === capabilities.length,
+    "Expert-review capability scopes must be unique.",
+  )
+  .optional();
+
+const CertificationExpertReviewBindingV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     dataPinSha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -90,11 +124,58 @@ export const CertificationExpertReviewBindingSchema = z
   })
   .strict();
 
+export const CertificationSemanticEvidenceSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    rosterRulesSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    mappingSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    portfolioSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    connectorSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    // Optional on read so schema-v2 bindings produced before runtime bundles
+    // remain attributable during the one-time migration. Newly generated
+    // evidence always records these values explicitly.
+    runtimeFactionRulesSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+    runtimeRosterRuleEntitiesSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+    runtimeMappingSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+    runtimeMappingEntitiesSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+const CertificationExpertReviewBindingV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    capabilityScopes:
+      CertificationReviewCapabilityScopesSchema.unwrap(),
+    semanticEvidence: CertificationSemanticEvidenceSchema,
+    bindingSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+export const CertificationExpertReviewBindingSchema =
+  z.discriminatedUnion("schemaVersion", [
+    CertificationExpertReviewBindingV1Schema,
+    CertificationExpertReviewBindingV2Schema,
+  ]);
+
 const PendingExpertReviewSchema = z
   .object({
     status: z.literal("pending"),
     reviewedAt: z.string().min(1).optional(),
     assertions: z.array(z.string().min(1)).default([]),
+    capabilityScopes:
+      CertificationReviewCapabilityScopesSchema,
     binding: CertificationExpertReviewBindingSchema.optional(),
     invalidationReason: z
       .enum(["unbound-legacy", "binding-mismatch"])
@@ -107,6 +188,8 @@ const ReviewedExpertReviewSchema = z
     status: z.literal("reviewed"),
     reviewedAt: z.string().min(1),
     assertions: z.array(z.string().min(1)).min(1),
+    capabilityScopes:
+      CertificationReviewCapabilityScopesSchema,
     binding: CertificationExpertReviewBindingSchema,
   })
   .strict();
@@ -132,6 +215,9 @@ const ExpertReviewSchema = z.preprocess(
     return {
       ...review,
       status,
+      capabilityScopes:
+        review.capabilityScopes ??
+        [...certificationReviewCapabilities],
     };
   },
   z.discriminatedUnion("status", [
@@ -148,22 +234,43 @@ const RepresentativeUnitModelMultisetEntrySchema = z
   })
   .strict();
 
-export const RepresentativeRosterGoldenEvidenceSchema = z
-  .object({
+const representativeRosterGoldenEvidenceShape = {
+  detachmentId: z.string().min(1),
+  warlordUnitId: z.string().min(1),
+  unitModelMultiset: z
+    .array(RepresentativeUnitModelMultisetEntrySchema)
+    .min(1),
+  structuralFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  executionFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  canonicalRoszSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
+};
+
+export const RepresentativeRosterGoldenEvidenceV1Schema =
+  z.object({
     schemaVersion: z.literal(1),
-    detachmentId: z.string().min(1),
-    warlordUnitId: z.string().min(1),
-    unitModelMultiset: z
-      .array(RepresentativeUnitModelMultisetEntrySchema)
-      .min(1),
-    structuralFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
-    executionFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
-    canonicalRoszSha256: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/)
-      .optional(),
-  })
-  .strict();
+    ...representativeRosterGoldenEvidenceShape,
+  }).strict();
+
+export const RepresentativeRosterGoldenEvidenceV2Schema =
+  z.object({
+    schemaVersion: z.literal(2),
+    executionFingerprintPolicy: z.literal(
+      "semantic-roster-rules-v1",
+    ),
+    canonicalRoszIdPolicy: z.literal(
+      "semantic-roster-rules-v1",
+    ),
+    ...representativeRosterGoldenEvidenceShape,
+  }).strict();
+
+export const RepresentativeRosterGoldenEvidenceSchema =
+  z.discriminatedUnion("schemaVersion", [
+    RepresentativeRosterGoldenEvidenceV1Schema,
+    RepresentativeRosterGoldenEvidenceV2Schema,
+  ]);
 
 const RepresentativeRosterSchema = z
   .object({
@@ -278,9 +385,16 @@ const ExplicitFactionCertificationSchema = z
       .array(RepresentativeRosterSchema)
       .default([]),
     portfolioPolicy: PortfolioPolicySchema.optional(),
+    /**
+     * Regenerable capability evidence. It is deliberately separate from the
+     * stable manual review policy and assertions.
+     */
+    semanticEvidence:
+      CertificationSemanticEvidenceSchema.optional(),
     expertReview: ExpertReviewSchema.default({
       status: "pending",
       assertions: [],
+      capabilityScopes: [...certificationReviewCapabilities],
     }),
   })
   .strict();
@@ -388,19 +502,46 @@ type ParsedCertificationManifest = z.infer<
 >;
 
 export const CertificationManifestSchema =
-  CertificationManifestDocumentSchema.transform((manifest) => ({
-    ...manifest,
-    factions: manifest.factions.map((faction) => ({
-      ...faction,
-      expertReview: synchronizeCertificationExpertReview({
-        review: faction.expertReview,
-        expectedBinding: certificationExpertReviewBinding(
-          manifest,
-          faction,
-        ),
+  CertificationManifestDocumentSchema.transform((manifest) => {
+    // Legacy bindings are migrated only while the process is using the
+    // matching compiled bootstrap. Once a signed bundle is active, an old
+    // policy-only binding cannot prove which runtime rules were reviewed.
+    const allowLegacyBindingMigration =
+      getActiveDataBundleManifest() === null &&
+      certificationDataPinMatchesRuntime(manifest.dataPin);
+    return {
+      ...manifest,
+      factions: manifest.factions.map((faction) => {
+        const semanticEvidence =
+          certificationSemanticEvidence(manifest, faction);
+        return {
+          ...faction,
+          semanticEvidence,
+          expertReview: synchronizeCertificationExpertReview({
+            review: faction.expertReview,
+            expectedBinding: certificationExpertReviewBinding(
+              manifest,
+              faction,
+            ),
+            legacyExpectedBinding:
+              allowLegacyBindingMigration
+                ? legacyCertificationExpertReviewBinding(
+                    manifest,
+                    faction,
+                  )
+                : undefined,
+            legacyExpectedBindingV2:
+              allowLegacyBindingMigration
+                ? legacyCertificationExpertReviewBindingV2(
+                    manifest,
+                    faction,
+                  )
+                : undefined,
+          }),
+        };
       }),
-    })),
-  }));
+    };
+  });
 
 export type CertificationManifest = z.infer<
   typeof CertificationManifestSchema
@@ -411,8 +552,20 @@ export type FactionCertification = z.infer<
 export type CertificationExpertReviewBinding = z.infer<
   typeof CertificationExpertReviewBindingSchema
 >;
+export type CertificationExpertReviewBindingV2 = z.infer<
+  typeof CertificationExpertReviewBindingV2Schema
+>;
+export type CertificationSemanticEvidence = z.infer<
+  typeof CertificationSemanticEvidenceSchema
+>;
 export type RepresentativeRosterGoldenEvidence = z.infer<
   typeof RepresentativeRosterGoldenEvidenceSchema
+>;
+export type RepresentativeRosterGoldenEvidenceV1 = z.infer<
+  typeof RepresentativeRosterGoldenEvidenceV1Schema
+>;
+export type RepresentativeRosterGoldenEvidenceV2 = z.infer<
+  typeof RepresentativeRosterGoldenEvidenceV2Schema
 >;
 
 function canonicalJson(value: unknown): string {
@@ -443,7 +596,12 @@ function canonicalPortfolioPolicy(
     requiredCorePostures: [...policy.requiredCorePostures].sort(),
     notApplicableCompositions: [
       ...policy.notApplicableCompositions,
-    ].sort((left, right) =>
+    ]
+      .map((entry) => ({
+        composition: entry.composition,
+        reason: normalizedPolicyText(entry.reason),
+      }))
+      .sort((left, right) =>
       `${left.composition}\u0000${left.reason}`.localeCompare(
         `${right.composition}\u0000${right.reason}`,
       ),
@@ -452,15 +610,476 @@ function canonicalPortfolioPolicy(
   };
 }
 
+function canonicalCapabilityScopes(
+  scopes: readonly CertificationReviewCapability[],
+): CertificationReviewCapability[] {
+  return [...scopes].sort();
+}
+
+function canonicalRepresentativePolicy(
+  faction: FactionCertification,
+) {
+  return faction.representativeRosters
+    .map((roster) => ({
+      id: roster.id,
+      pointsLimit: roster.pointsLimit,
+      minimumPointsUtilization:
+        roster.minimumPointsUtilization,
+      capabilities: [...roster.capabilities].sort(),
+      goldenEvidence: roster.goldenEvidence
+        ? {
+            detachmentId:
+              roster.goldenEvidence.detachmentId,
+            warlordUnitId:
+              roster.goldenEvidence.warlordUnitId,
+            unitModelMultiset: [
+              ...roster.goldenEvidence.unitModelMultiset,
+            ].sort(
+              (left, right) =>
+                left.unitId.localeCompare(right.unitId) ||
+                left.modelCount - right.modelCount ||
+                left.selectionCount - right.selectionCount,
+            ),
+            structuralFingerprint:
+              roster.goldenEvidence.structuralFingerprint,
+          }
+        : null,
+    }))
+    .sort((left, right) =>
+      canonicalJson(left).localeCompare(canonicalJson(right)),
+    );
+}
+
+function mappingSemanticValue(
+  value: unknown,
+  key = "",
+): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => mappingSemanticValue(entry))
+      .sort((left, right) =>
+        canonicalJson(left).localeCompare(canonicalJson(right)),
+      );
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(
+          ([entryKey]) =>
+            ![
+              "generatedAt",
+              "entityName",
+              "factionName",
+              "message",
+              "name",
+              "revision",
+              "source",
+              "sourceFile",
+            ].includes(entryKey),
+        )
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([entryKey, entry]) => [
+          entryKey,
+          mappingSemanticValue(entry, entryKey),
+        ]),
+    );
+  }
+  if (typeof value === "string" && key === "normalizedName") {
+    return normalizeName(value);
+  }
+  return value;
+}
+
+const mappingSemanticHashCache = new WeakMap<
+  object,
+  Map<string, string>
+>();
+
+function mappingSemanticSha256(factionId: string): string {
+  let snapshotCache = mappingSemanticHashCache.get(
+    newRecruitCatalogueMappings,
+  );
+  if (!snapshotCache) {
+    snapshotCache = new Map<string, string>();
+    mappingSemanticHashCache.set(
+      newRecruitCatalogueMappings,
+      snapshotCache,
+    );
+  }
+  const cached = snapshotCache.get(factionId);
+  if (cached) return cached;
+  const catalogue = getNewRecruitFactionCatalogue(factionId);
+  const digest = sha256(
+    canonicalJson(
+      catalogue
+        ? mappingSemanticValue({
+            factionId: catalogue.factionId,
+            catalogue: catalogue.catalogue,
+            configuration: catalogue.configuration,
+            units: catalogue.units,
+            coverage: catalogue.coverage,
+            conflicts: catalogue.conflicts,
+          })
+        : null,
+    ),
+  );
+  snapshotCache.set(factionId, digest);
+  return digest;
+}
+
+function normalizedPolicyText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
 /**
- * Binds manual faction assertions to the exact pinned data and executable
- * faction contract they reviewed. Set-like contract arrays are normalized so
- * harmless serialization reordering does not invalidate a review.
+ * Derives capability-scoped semantic evidence. Raw release labels, package
+ * versions, repository commits, catalogue revisions, generated timestamps,
+ * display-only names, prose formatting, and byte-level ROSZ hashes are
+ * intentionally excluded.
+ */
+export function certificationSemanticEvidence(
+  manifest: Pick<
+    ParsedCertificationManifest,
+    "defaults"
+  > &
+    Partial<
+      Pick<ParsedCertificationManifest, "browserFixtures">
+  >,
+  faction: FactionCertification,
+  runtimeIdentity: RosterCompatibilityFactionIdentity =
+    currentRosterCompatibilityFactionIdentity(faction.id),
+): CertificationSemanticEvidence {
+  const representatives =
+    canonicalRepresentativePolicy(faction);
+  const normalizedLimitations = faction.expectedLimitations
+    .map(normalizedPolicyText)
+    .sort();
+  const rosterPolicySha256 = sha256(
+    canonicalJson({
+      defaults: {
+        pointBands: [...manifest.defaults.pointBands].sort(
+          (left, right) => left - right,
+        ),
+        minimumPointsUtilization:
+          manifest.defaults.minimumPointsUtilization,
+        preferences: [...manifest.defaults.preferences].sort(),
+        allowNamedCharacters:
+          manifest.defaults.allowNamedCharacters,
+        allowLegends: manifest.defaults.allowLegends,
+      },
+      faction: {
+        id: faction.id,
+        rosterCorrectness: faction.rosterCorrectness,
+        detachmentIds: [...faction.detachmentIds].sort(),
+        representatives: representatives.map(
+          (representative) => ({
+            id: representative.id,
+            pointsLimit: representative.pointsLimit,
+            minimumPointsUtilization:
+              representative.minimumPointsUtilization,
+            goldenEvidence: representative.goldenEvidence,
+          }),
+        ),
+      },
+    }),
+  );
+  const mappingPolicySha256 = sha256(
+    canonicalJson({
+      factionId: faction.id,
+      newRecruitExport: faction.newRecruitExport,
+      expectedBlockingConflicts:
+        faction.expectedBlockingConflicts,
+      catalogueSemanticSha256:
+        mappingSemanticSha256(faction.id),
+    }),
+  );
+  const portfolioSha256 = sha256(
+    canonicalJson({
+      defaults: {
+        opponentPostures: [
+          ...manifest.defaults.opponentPostures,
+        ].sort(),
+        specialistCases: [
+          ...manifest.defaults.specialistCases,
+        ].sort(),
+        portfolioPolicy: canonicalPortfolioPolicy(
+          manifest.defaults.portfolioPolicy,
+        ),
+      },
+      faction: {
+        id: faction.id,
+        tesseraPreparation: faction.tesseraPreparation,
+        portfolioPolicy: canonicalPortfolioPolicy(
+          faction.portfolioPolicy,
+        ),
+        representatives: representatives.map(
+          (representative) => ({
+            id: representative.id,
+            pointsLimit: representative.pointsLimit,
+            capabilities: representative.capabilities.filter(
+              (capability) =>
+                capability === "tessera-preparation" ||
+                capability === "tessera-simulation",
+            ),
+            goldenEvidence: representative.goldenEvidence,
+          }),
+        ),
+      },
+    }),
+  );
+  const connectorSha256 = sha256(
+    canonicalJson({
+      browserFixtures: [
+        ...(manifest.browserFixtures ?? []),
+      ].sort(),
+      faction: {
+        id: faction.id,
+        newRecruitDelivery: faction.newRecruitDelivery,
+        tesseraPreparation: faction.tesseraPreparation,
+        trustedTesseraSimulation:
+          faction.trustedTesseraSimulation,
+        expectedLimitations: normalizedLimitations,
+      },
+    }),
+  );
+  const rosterRuleEntitiesSha256 = sha256(
+    canonicalJson(
+      Object.entries(runtimeIdentity.entityHashes)
+        .filter(([key]) => !key.startsWith("mapping:"))
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
+  const mappingEntitiesSha256 = sha256(
+    canonicalJson(
+      Object.entries(runtimeIdentity.entityHashes)
+        .filter(([key]) => key.startsWith("mapping:"))
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
+  return {
+    schemaVersion: 1,
+    rosterRulesSha256: sha256(
+      canonicalJson({
+        policySha256: rosterPolicySha256,
+        factionRulesSha256: runtimeIdentity.factionRulesHash,
+        entityRulesSha256: rosterRuleEntitiesSha256,
+      }),
+    ),
+    mappingSha256: sha256(
+      canonicalJson({
+        policySha256: mappingPolicySha256,
+        runtimeMappingSha256: runtimeIdentity.mappingHash,
+        mappingEntitiesSha256,
+      }),
+    ),
+    portfolioSha256,
+    connectorSha256,
+    runtimeFactionRulesSha256:
+      runtimeIdentity.factionRulesHash,
+    runtimeRosterRuleEntitiesSha256:
+      rosterRuleEntitiesSha256,
+    runtimeMappingSha256: runtimeIdentity.mappingHash,
+    runtimeMappingEntitiesSha256: mappingEntitiesSha256,
+  };
+}
+
+/**
+ * Reconstructs the policy-only schema-v2 evidence used before runtime rules
+ * hashes were available. It is accepted solely by the guarded one-time
+ * compiled-bootstrap migration path.
+ */
+function legacyCertificationSemanticEvidenceV2(
+  manifest: Pick<ParsedCertificationManifest, "defaults"> &
+    Partial<Pick<ParsedCertificationManifest, "browserFixtures">>,
+  faction: FactionCertification,
+): CertificationSemanticEvidence {
+  const current = certificationSemanticEvidence(
+    manifest,
+    faction,
+  );
+  const representatives = canonicalRepresentativePolicy(faction);
+  return {
+    schemaVersion: 1,
+    rosterRulesSha256: sha256(
+      canonicalJson({
+        defaults: {
+          pointBands: [...manifest.defaults.pointBands].sort(
+            (left, right) => left - right,
+          ),
+          minimumPointsUtilization:
+            manifest.defaults.minimumPointsUtilization,
+          preferences: [
+            ...manifest.defaults.preferences,
+          ].sort(),
+          allowNamedCharacters:
+            manifest.defaults.allowNamedCharacters,
+          allowLegends: manifest.defaults.allowLegends,
+        },
+        faction: {
+          id: faction.id,
+          rosterCorrectness: faction.rosterCorrectness,
+          detachmentIds: [...faction.detachmentIds].sort(),
+          representatives: representatives.map(
+            (representative) => ({
+              id: representative.id,
+              pointsLimit: representative.pointsLimit,
+              minimumPointsUtilization:
+                representative.minimumPointsUtilization,
+              goldenEvidence:
+                representative.goldenEvidence,
+            }),
+          ),
+        },
+      }),
+    ),
+    mappingSha256: sha256(
+      canonicalJson({
+        factionId: faction.id,
+        newRecruitExport: faction.newRecruitExport,
+        expectedBlockingConflicts:
+          faction.expectedBlockingConflicts,
+        catalogueSemanticSha256:
+          mappingSemanticSha256(faction.id),
+      }),
+    ),
+    portfolioSha256: current.portfolioSha256,
+    connectorSha256: current.connectorSha256,
+  };
+}
+
+function scopedSemanticEvidence(
+  evidence: CertificationSemanticEvidence,
+  scopes: readonly CertificationReviewCapability[],
+): Record<string, string> {
+  const byScope: Record<
+    CertificationReviewCapability,
+    string
+  > = {
+    "roster-rules": evidence.rosterRulesSha256,
+    mapping: evidence.mappingSha256,
+    portfolio: evidence.portfolioSha256,
+    connector: evidence.connectorSha256,
+  };
+  return Object.fromEntries(
+    canonicalCapabilityScopes(scopes).map((scope) => [
+      scope,
+      byScope[scope],
+    ]),
+  );
+}
+
+/**
+ * Binds manual assertions only to the semantic capabilities in their stable
+ * review policy. Regenerable evidence for capabilities outside that scope is
+ * retained for audit but cannot invalidate the review.
  */
 export function certificationExpertReviewBinding(
-  manifest: Pick<ParsedCertificationManifest, "dataPin" | "defaults">,
+  manifest: Pick<
+    ParsedCertificationManifest,
+    "defaults"
+  > &
+    Partial<
+      Pick<ParsedCertificationManifest, "browserFixtures">
+  >,
   faction: FactionCertification,
-): CertificationExpertReviewBinding {
+  runtimeIdentity?: RosterCompatibilityFactionIdentity,
+): CertificationExpertReviewBindingV2 {
+  const capabilityScopes = canonicalCapabilityScopes(
+    faction.expertReview.capabilityScopes ??
+      certificationReviewCapabilities,
+  );
+  const semanticEvidence = certificationSemanticEvidence(
+    manifest,
+    faction,
+    runtimeIdentity ??
+      currentRosterCompatibilityFactionIdentity(faction.id),
+  );
+  return {
+    schemaVersion: 2,
+    capabilityScopes,
+    semanticEvidence,
+    bindingSha256: sha256(
+      canonicalJson({
+        schemaVersion: 2,
+        capabilityScopes,
+        semanticEvidence: scopedSemanticEvidence(
+          semanticEvidence,
+          capabilityScopes,
+        ),
+      }),
+    ),
+  };
+}
+
+export function legacyCertificationExpertReviewBindingV2(
+  manifest: Pick<
+    ParsedCertificationManifest,
+    "defaults"
+  > &
+    Partial<
+      Pick<ParsedCertificationManifest, "browserFixtures">
+    >,
+  faction: FactionCertification,
+): CertificationExpertReviewBindingV2 {
+  const capabilityScopes = canonicalCapabilityScopes(
+    faction.expertReview.capabilityScopes ??
+      certificationReviewCapabilities,
+  );
+  const semanticEvidence =
+    legacyCertificationSemanticEvidenceV2(manifest, faction);
+  return {
+    schemaVersion: 2,
+    capabilityScopes,
+    semanticEvidence,
+    bindingSha256: sha256(
+      canonicalJson({
+        schemaVersion: 2,
+        capabilityScopes,
+        semanticEvidence: scopedSemanticEvidence(
+          semanticEvidence,
+          capabilityScopes,
+        ),
+      }),
+    ),
+  };
+}
+
+function certificationDataPinMatchesRuntime(
+  dataPin: z.infer<typeof CertificationDataPinSchema>,
+): boolean {
+  const status = getDataStatus();
+  if (!status.ok || !status.data) return false;
+  return (
+    dataPin.releaseId === status.data.sources.releaseId &&
+    dataPin.rulesPackageVersion === status.data.packageVersion &&
+    dataPin.newRecruitCommit ===
+      status.data.sources.newRecruit.commit &&
+    (dataPin.newRecruitRepository === undefined ||
+      dataPin.newRecruitRepository ===
+        status.data.sources.newRecruit.repository) &&
+    (dataPin.newRecruitGameSystemRevision === undefined ||
+      dataPin.newRecruitGameSystemRevision ===
+        status.data.sources.newRecruit.gameSystemRevision) &&
+    (dataPin.officialMfmVersion === undefined ||
+      dataPin.officialMfmVersion ===
+        status.data.sources.official.mfmVersion) &&
+    (dataPin.officialMfmContentSha256 === undefined ||
+      dataPin.officialMfmContentSha256 ===
+        status.data.sources.official.contentSha256)
+  );
+}
+
+export function legacyCertificationExpertReviewBinding(
+  manifest: Pick<
+    ParsedCertificationManifest,
+    "dataPin" | "defaults"
+  >,
+  faction: FactionCertification,
+): z.infer<typeof CertificationExpertReviewBindingV1Schema> {
   const dataPinSha256 = sha256(canonicalJson(manifest.dataPin));
   const factionContractSha256 = sha256(
     canonicalJson({
@@ -543,28 +1162,63 @@ export function certificationExpertReviewBindingMatches(
   actual: CertificationExpertReviewBinding | undefined,
   expected: CertificationExpertReviewBinding,
 ): boolean {
-  return (
-    actual?.schemaVersion === expected.schemaVersion &&
-    actual.dataPinSha256 === expected.dataPinSha256 &&
-    actual.factionContractSha256 ===
-      expected.factionContractSha256 &&
-    actual.bindingSha256 === expected.bindingSha256
-  );
+  if (!actual || actual.schemaVersion !== expected.schemaVersion) {
+    return false;
+  }
+  if (actual.schemaVersion === 1 && expected.schemaVersion === 1) {
+    return (
+      actual.dataPinSha256 === expected.dataPinSha256 &&
+      actual.factionContractSha256 ===
+        expected.factionContractSha256 &&
+      actual.bindingSha256 === expected.bindingSha256
+    );
+  }
+  if (actual.schemaVersion === 2 && expected.schemaVersion === 2) {
+    return (
+      canonicalJson(actual.capabilityScopes) ===
+        canonicalJson(expected.capabilityScopes) &&
+      actual.bindingSha256 === expected.bindingSha256
+    );
+  }
+  return false;
 }
 
 export function synchronizeCertificationExpertReview(input: {
   review: FactionCertification["expertReview"];
   expectedBinding: CertificationExpertReviewBinding;
+  legacyExpectedBinding?: CertificationExpertReviewBinding;
+  legacyExpectedBindingV2?: CertificationExpertReviewBinding;
 }): FactionCertification["expertReview"] {
+  const legacyBindingCarries =
+    (input.review.binding?.schemaVersion === 1 &&
+      input.legacyExpectedBinding?.schemaVersion === 1 &&
+      certificationExpertReviewBindingMatches(
+        input.review.binding,
+        input.legacyExpectedBinding,
+      )) ||
+    (input.review.binding?.schemaVersion === 2 &&
+      input.legacyExpectedBindingV2?.schemaVersion === 2 &&
+      certificationExpertReviewBindingMatches(
+        input.review.binding,
+        input.legacyExpectedBindingV2,
+      ));
   if (
     input.review.status === "reviewed" &&
-    certificationExpertReviewBindingMatches(
-      input.review.binding,
-      input.expectedBinding,
+    (
+      certificationExpertReviewBindingMatches(
+        input.review.binding,
+        input.expectedBinding,
+      ) ||
+      legacyBindingCarries
     )
   ) {
     return {
       ...input.review,
+      capabilityScopes:
+        canonicalCapabilityScopes(
+          input.review.capabilityScopes ??
+            certificationReviewCapabilities,
+        ),
       binding: input.expectedBinding,
     };
   }
@@ -577,6 +1231,11 @@ export function synchronizeCertificationExpertReview(input: {
       ? { reviewedAt: input.review.reviewedAt }
       : {}),
     assertions: input.review.assertions,
+    capabilityScopes:
+      canonicalCapabilityScopes(
+        input.review.capabilityScopes ??
+          certificationReviewCapabilities,
+      ),
     binding: input.expectedBinding,
     ...(input.review.status === "reviewed"
       ? { invalidationReason: "binding-mismatch" as const }
@@ -584,6 +1243,7 @@ export function synchronizeCertificationExpertReview(input: {
         ? { invalidationReason: input.review.invalidationReason }
         : hadReviewedEvidence &&
             input.review.binding &&
+            !legacyBindingCarries &&
             !certificationExpertReviewBindingMatches(
               input.review.binding,
               input.expectedBinding,
@@ -1287,6 +1947,10 @@ export function certificationExpertReviewCases(
           reviewStatus: "pending",
           reviewedAt: faction.expertReview.reviewedAt ?? null,
           draftAssertions: faction.expertReview.assertions,
+          capabilityScopes:
+            faction.expertReview.capabilityScopes,
+          semanticEvidence:
+            faction.semanticEvidence ?? null,
           reviewBinding: faction.expertReview.binding ?? null,
           invalidationReason:
             faction.expertReview.invalidationReason ?? null,
@@ -1315,6 +1979,10 @@ export function certificationExpertReviewCases(
           automated: false,
           reviewStatus: "reviewed",
           reviewedAt: faction.expertReview.reviewedAt,
+          capabilityScopes:
+            faction.expertReview.capabilityScopes,
+          semanticEvidence:
+            faction.semanticEvidence ?? null,
           reviewBinding: faction.expertReview.binding,
           assertion: assertionText,
           assertionIndex: assertionIndex + 1,
@@ -2090,8 +2758,12 @@ export function validateCanonicalRoszArchive(
 
 function stableCertificationDraft(
   roster: RosterDraftV1,
+  goldenSchemaVersion: 1 | 2,
 ): RosterDraftV1 {
-  const fingerprint = rosterExecutionFingerprint(roster);
+  const fingerprint =
+    goldenSchemaVersion === 1
+      ? legacyProvenanceBoundRosterExecutionFingerprint(roster)
+      : rosterExecutionFingerprint(roster);
   return {
     ...roster,
     id: `cert-${fingerprint.slice(0, 24)}`,
@@ -2187,7 +2859,12 @@ export function assertRepresentativeRosterMatchesGolden(
     unitModelMultiset:
       canonicalRepresentativeUnitModelMultiset(roster),
     structuralFingerprint: rosterStructuralFingerprint(roster),
-    executionFingerprint: rosterExecutionFingerprint(roster),
+    executionFingerprint:
+      expected.schemaVersion === 1
+        ? legacyProvenanceBoundRosterExecutionFingerprint(
+            roster,
+          )
+        : rosterExecutionFingerprint(roster),
   };
   const commonEvidence = {
     expectedGoldenEvidence: expected,
@@ -2329,15 +3006,35 @@ export async function generateRepresentativeGoldenEvidence(input: {
     "CERTIFICATION_WARLORD_INVALID",
     `${input.faction.name} produced ${warlords.length} Warlords while generating golden evidence.`,
   );
-  const golden: RepresentativeRosterGoldenEvidence = {
-    schemaVersion: 1,
+  const schemaVersion =
+    input.contract.goldenEvidence?.schemaVersion ?? 2;
+  const commonGolden = {
     detachmentId: roster.detachmentId,
     warlordUnitId: warlords[0].unitId,
     unitModelMultiset:
       canonicalRepresentativeUnitModelMultiset(roster),
     structuralFingerprint: rosterStructuralFingerprint(roster),
-    executionFingerprint: rosterExecutionFingerprint(roster),
   };
+  const golden: RepresentativeRosterGoldenEvidence =
+    schemaVersion === 1
+      ? {
+          schemaVersion: 1,
+          ...commonGolden,
+          executionFingerprint:
+            legacyProvenanceBoundRosterExecutionFingerprint(
+              roster,
+            ),
+        }
+      : {
+          schemaVersion: 2,
+          executionFingerprintPolicy:
+            "semantic-roster-rules-v1",
+          canonicalRoszIdPolicy:
+            "semantic-roster-rules-v1",
+          ...commonGolden,
+          executionFingerprint:
+            rosterExecutionFingerprint(roster),
+        };
   if (
     input.faction.newRecruitExport === "required" &&
     input.contract.capabilities.includes("new-recruit-export")
@@ -2357,7 +3054,10 @@ export async function generateRepresentativeGoldenEvidence(input: {
       "CERTIFICATION_EXPORT_REPRESENTATIVE_UNAVAILABLE",
       `${input.faction.name} has no deterministic ${input.contract.pointsLimit}-point export representative under its declared capability.`,
     );
-    const stable = stableCertificationDraft(exportRepresentative);
+    const stable = stableCertificationDraft(
+      exportRepresentative,
+      golden.schemaVersion,
+    );
     const exported = await exportRoster(stable, "rosz");
     assertion(
       exported.ok &&
@@ -2815,8 +3515,12 @@ async function certifyFaction(
         "CERTIFICATION_EXPORT_REPRESENTATIVE_UNAVAILABLE",
         `${faction.name} has no deterministic ${exportContract.pointsLimit}-point export representative under its declared capability.`,
       );
+      const expectedGolden = exportContract.goldenEvidence;
       const stableExportRepresentative =
-        stableCertificationDraft(exportRepresentative);
+        stableCertificationDraft(
+          exportRepresentative,
+          expectedGolden?.schemaVersion ?? 2,
+        );
       const exported = await exportRoster(
         stableExportRepresentative,
         "rosz",
@@ -2868,7 +3572,6 @@ async function certifyFaction(
           stableExportRepresentative,
           exported.data.content,
         );
-        const expectedGolden = exportContract.goldenEvidence;
         if (expectedGolden?.canonicalRoszSha256) {
           assertCanonicalRoszMatchesGolden(
             String(archive.contentSha256),
@@ -2908,9 +3611,13 @@ async function certifyFaction(
               pointsLimit: stableExportRepresentative.pointsLimit,
               totalPoints: stableExportRepresentative.totalPoints,
               executionFingerprint:
-                rosterExecutionFingerprint(
-                  stableExportRepresentative,
-                ),
+                expectedGolden?.schemaVersion === 1
+                  ? legacyProvenanceBoundRosterExecutionFingerprint(
+                      stableExportRepresentative,
+                    )
+                  : rosterExecutionFingerprint(
+                      stableExportRepresentative,
+                    ),
               unitIds: stableExportRepresentative.units.map(
                 (unit) => unit.unitId,
               ),
@@ -2987,26 +3694,10 @@ export async function runDeterministicCertification(
     "CERTIFICATION_FACTION_COVERAGE_DRIFT",
     "The certification manifest does not contain exactly the factions in the pinned rules package.",
   );
-  assertion(
-    manifest.dataPin.releaseId === data.data.sources.releaseId &&
-      manifest.dataPin.rulesPackageVersion === data.data.packageVersion &&
-      manifest.dataPin.newRecruitCommit ===
-        data.data.sources.newRecruit.commit &&
-      (manifest.dataPin.newRecruitRepository === undefined ||
-        manifest.dataPin.newRecruitRepository ===
-          data.data.sources.newRecruit.repository) &&
-      (manifest.dataPin.newRecruitGameSystemRevision === undefined ||
-        manifest.dataPin.newRecruitGameSystemRevision ===
-          data.data.sources.newRecruit.gameSystemRevision) &&
-      (manifest.dataPin.officialMfmVersion === undefined ||
-        manifest.dataPin.officialMfmVersion ===
-          data.data.sources.official.mfmVersion) &&
-      (manifest.dataPin.officialMfmContentSha256 === undefined ||
-        manifest.dataPin.officialMfmContentSha256 ===
-          data.data.sources.official.contentSha256),
-    "CERTIFICATION_DATA_PIN_DRIFT",
-    "The certification manifest data pin does not match the runtime data pin.",
-  );
+  // The legacy data pin is retained as provenance in reports, but it is not
+  // an equivalence boundary. Capability-scoped bindings and deterministic
+  // cases below validate the live runtime semantics, so a provenance-only
+  // bundle advance does not force certification churn.
   assertion(
     data.data.buildableFactionCount === manifest.baselines.buildableFactions &&
       data.data.newRecruitCoverage.exportCapableFactions ===

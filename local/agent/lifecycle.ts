@@ -31,6 +31,9 @@ import {
   type LocalAgentStatus,
 } from "./contracts";
 import { getRuntimeProvenance } from "../runtime-provenance";
+import {
+  defaultLocalDataBundleEnvironment,
+} from "../data-bundles/defaults";
 
 const run = promisify(execFile);
 export const LOCAL_AGENT_LABEL = "com.jasonricha.rosterpilot.agent";
@@ -207,6 +210,9 @@ export function renderLaunchAgent(options: {
   profileDirectory: string;
   stdoutPath: string;
   stderrPath: string;
+  dataChannelUrl?: string;
+  dataTrustedKeysFile?: string;
+  bootstrapDataBundleDirectory?: string;
 }): string {
   const loader = path.join(
     options.projectDirectory,
@@ -229,6 +235,9 @@ export function renderLaunchAgent(options: {
   ]
     .map((argument) => `      <string>${xml(argument)}</string>`)
     .join("\n");
+  const dataBundle = defaultLocalDataBundleEnvironment(
+    options.projectDirectory,
+  );
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -249,6 +258,12 @@ ${argumentsXml}
       <string>${xml(options.socketPath)}</string>
       <key>ROSTERPILOT_NEW_RECRUIT_PROFILE</key>
       <string>${xml(options.profileDirectory)}</string>
+      <key>ROSTERPILOT_DATA_CHANNEL_URL</key>
+      <string>${xml(options.dataChannelUrl ?? dataBundle.channelUrl)}</string>
+      <key>ROSTERPILOT_DATA_TRUSTED_KEYS_FILE</key>
+      <string>${xml(options.dataTrustedKeysFile ?? dataBundle.trustedKeysFile)}</string>
+      <key>ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY</key>
+      <string>${xml(options.bootstrapDataBundleDirectory ?? dataBundle.bootstrapDirectory)}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

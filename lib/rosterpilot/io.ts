@@ -1,7 +1,11 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
+import {
+  retainDataBundleReference,
+} from "./data-operations";
 import {
   type ExportArtifact,
   type RosterDraftV1,
@@ -123,7 +127,7 @@ export async function writeRosterDraft(
   outputPath: string,
   options: WriteOptions = {},
 ): Promise<string> {
-  return writeExportArtifact(
+  const written = await writeExportArtifact(
     {
       format: "roster-json",
       filename: path.basename(outputPath),
@@ -134,6 +138,13 @@ export async function writeRosterDraft(
     outputPath,
     options,
   );
+  await retainDataBundleReference(
+    `roster-file:${createHash("sha256")
+      .update(path.resolve(written))
+      .digest("hex")}`,
+    draft.sourceData.bundleId,
+  );
+  return written;
 }
 
 export async function readRosterDraft(filename: string): Promise<RosterDraftV1> {
@@ -144,6 +155,18 @@ export async function readRosterDraft(filename: string): Promise<RosterDraftV1> 
     throw new Error(
       `${filename} is not a valid RosterPilot roster: ${result.error.issues[0]?.message ?? "schema mismatch"}`,
     );
+  }
+  try {
+    await retainDataBundleReference(
+      `roster-file:${createHash("sha256")
+        .update(path.resolve(filename))
+        .digest("hex")}`,
+      result.data.sourceData.bundleId,
+    );
+  } catch {
+    // Reading remains available for legacy, relocated, or pruned-bundle
+    // rosters. Rebase/validation reports whether the embedded identity can be
+    // verified; retention is best-effort until that historical bundle exists.
   }
   return result.data;
 }

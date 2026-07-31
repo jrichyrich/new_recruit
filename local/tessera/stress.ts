@@ -25,6 +25,7 @@ import {
   rosterExecutionFingerprint,
   RosterConstraintsSchema,
   RosterDraftSchema,
+  RosterSourceDataSchema,
   validateRoster,
   type LiveDataFreshness,
   type NewRecruitDelivery,
@@ -283,25 +284,9 @@ type PreparedOpponentsResult =
       failureContext: PreparationFailureContext;
     };
 
-const SourceDataSchema = z.object({
-  package: z.literal("@alpaca-software/40kdc-data"),
-  version: z.string().min(1),
-  edition: z.literal("11th"),
-  dataslate: z.string().min(1),
-  releaseId: z.string().min(1),
-  migratedFrom: z.literal(1).optional(),
-  newRecruit: z.object({
-    repository: z.literal("BSData/wh40k-11e"),
-    commit: z.string().regex(/^[0-9a-f]{40}$/),
-    gameSystemRevision: z.number().int().nonnegative(),
-    catalogueRevision: z.number().int().nonnegative().nullable(),
-  }),
-  official: z.object({
-    mfmVersion: z.string().min(1),
-    updatedAt: z.string().min(1),
-    contentSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  }),
-});
+const SourceDataSchema = RosterSourceDataSchema;
+
+type StressSourceData = z.infer<typeof SourceDataSchema>;
 
 const UnitInstanceSchema = z.object({
   instanceId: z.string().min(1),
@@ -502,6 +487,8 @@ const PortfolioSchema = z.object({
   contract: z.object({
     schemaVersion: z.literal(1),
     methodology: z.literal("adaptive-threat-lenses-v1"),
+    portfolioHash:
+      z.string().regex(/^[0-9a-f]{64}$/).optional(),
     sourceReleaseId: z.string().min(1),
     reviewedNotApplicableTemplateIds:
       z.array(z.string().min(1)),
@@ -1986,8 +1973,18 @@ async function preflightPortfolio(
 }
 
 function sharedSourcePin(
-  sourceData: RosterDraftV1["sourceData"],
+  sourceData: StressSourceData,
 ): string {
+  if (
+    "bundleId" in sourceData &&
+    "engineDataSchemaVersion" in sourceData
+  ) {
+    return JSON.stringify({
+      bundleId: sourceData.bundleId,
+      engineDataSchemaVersion:
+        sourceData.engineDataSchemaVersion,
+    });
+  }
   return JSON.stringify({
     package: sourceData.package,
     version: sourceData.version,
@@ -6504,7 +6501,7 @@ export async function runRosterStressTest(
     ) {
       return failure(
         "TESSERA_STRESS_DATA_PIN_CHANGED",
-        "The player roster data pin differs from the frozen resume manifest. Start a new stress test instead of mixing data releases.",
+        "The player roster data bundle differs from the frozen resume manifest. Start a new stress test instead of mixing bundle snapshots.",
         validation.warnings,
       );
     }
@@ -6514,7 +6511,7 @@ export async function runRosterStressTest(
     ) {
       return failure(
         "TESSERA_STRESS_DATA_PIN_CHANGED",
-        "The resume manifest mixes player and opponent portfolio data releases. Start a new stress test instead of reusing mixed data.",
+        "The resume manifest mixes player and opponent portfolio bundle snapshots. Start a new stress test instead of reusing mixed data.",
         validation.warnings,
       );
     }
@@ -6959,7 +6956,7 @@ export async function runRosterStressTest(
     ) {
       return failure(
         "TESSERA_STRESS_DATA_PIN_CHANGED",
-        "The player roster and generated opponent portfolio use different pinned data releases. Rebuild the player roster before starting external activity.",
+        "The player roster and generated opponent portfolio use different frozen data bundles. Rebase or rebuild the player roster before starting external activity.",
         [
           ...validation.warnings,
           ...generated.warnings,
@@ -7413,7 +7410,7 @@ export async function compareRosterStressRevision(
   ) {
     return failure(
       "TESSERA_STRESS_DATA_PIN_CHANGED",
-      "The revised roster must use the same pinned data release as the frozen baseline.",
+      "The revised roster must use the same frozen data bundle as the baseline.",
       validation.warnings,
     );
   }
@@ -7423,7 +7420,7 @@ export async function compareRosterStressRevision(
   ) {
     return failure(
       "TESSERA_STRESS_DATA_PIN_CHANGED",
-      "The baseline mixes player and opponent portfolio data releases, so it cannot support a paired revision comparison.",
+      "The baseline mixes player and opponent portfolio bundle snapshots, so it cannot support a paired revision comparison.",
       validation.warnings,
     );
   }

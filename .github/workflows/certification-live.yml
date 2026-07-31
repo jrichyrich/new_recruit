@@ -2,8 +2,12 @@ name: Live connector certification
 
 on:
   schedule:
-    - cron: "31 10 * * *"
     - cron: "43 9 * * 0"
+  workflow_run:
+    workflows:
+      - Roster data freshness
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       cadence:
@@ -24,13 +28,131 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  daily-canary:
+  post-activation-bundle:
     if: >-
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
         (
-          (github.event_name == 'schedule' && github.event.schedule == '31 10 * * *') ||
-          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'daily')
+          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'daily') ||
+          (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+        )
+      }}
+    runs-on: ubuntu-latest
+    outputs:
+      bundle_id: ${{ steps.channel.outputs.bundle_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: channel
+        name: Resolve the signed stable bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin data-bundles
+          git show origin/data-bundles:channels/stable.json > "$RUNNER_TEMP/rosterpilot-stable.json"
+          bundle_id="$(node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (!/^[a-f0-9]{64}$/.test(value.bundleId)) process.exit(2); process.stdout.write(value.bundleId)' "$RUNNER_TEMP/rosterpilot-stable.json")"
+          echo "bundle_id=$bundle_id" >> "$GITHUB_OUTPUT"
+
+  live-release-prerequisites:
+    if: >-
+      ${{
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        (
+          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'daily') ||
+          (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+        )
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      release_run_id: ${{ steps.release.outputs.run_id }}
+      release_artifact_name: ${{ steps.release.outputs.artifact_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - id: release
+        name: Resolve the latest verified application data release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: "application-release.yml",
+                status: "completed",
+                per_page: 100,
+              },
+            );
+            const defaultBranch = context.payload.repository?.default_branch ?? "main";
+            const run = runs.find(
+              (candidate) =>
+                candidate.conclusion === "success" &&
+                candidate.head_branch === defaultBranch,
+            );
+            if (!run) {
+              throw new Error("No successful Application release assets workflow run exists. Provision the Ed25519 signing secret and key ID, then run that workflow before enabling live canaries.");
+            }
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              },
+            );
+            const artifactName = `rosterpilot-application-data-assets-${run.id}`;
+            const artifact = artifacts.find(
+              (candidate) => candidate.name === artifactName && !candidate.expired,
+            );
+            if (!artifact) {
+              throw new Error(`Application release run ${run.id} has no unexpired ${artifactName} artifact. Rerun the Application release assets workflow.`);
+            }
+            core.setOutput("run_id", String(run.id));
+            core.setOutput("artifact_name", artifactName);
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.release.outputs.artifact_name }}
+          path: ${{ runner.temp }}/rosterpilot-application-assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.release.outputs.run_id }}
+
+      - run: npm ci
+      - name: Require trusted signed bootstrap and hosted copies
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="$RUNNER_TEMP/rosterpilot-application-assets"
+          if ! npm run data:bundle:verify-release -- \
+            --bootstrap-dir "$assets/data/bootstrap-data-bundle" \
+            --trusted-keys "$assets/data/data-bundle-trusted-keys.json" \
+            --hosted-assets-dir "$assets/public/data-bundles"; then
+            echo "::error title=Signed data release is invalid::Live canaries require a non-empty trusted-key registry plus byte-matching, signature-verified bootstrap and hosted assets from the Application release assets workflow."
+            exit 1
+          fi
+
+  daily-canary:
+    needs:
+      - post-activation-bundle
+      - live-release-prerequisites
+    if: >-
+      ${{
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        (
+          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'daily') ||
+          (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
         )
       }}
     strategy:
@@ -45,6 +167,9 @@ jobs:
       - self-hosted
       - macOS
       - rosterpilot-live
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -54,10 +179,39 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run rosterpilot -- agent ensure-current
+
+      - name: Install the verified application data release
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.live-release-prerequisites.outputs.release_artifact_name }}
+          path: ${{ runner.temp }}/rosterpilot-application-assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.live-release-prerequisites.outputs.release_run_id }}
+
+      - name: Verify and configure the exact release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="$RUNNER_TEMP/rosterpilot-application-assets"
+          npm run data:bundle:verify-release -- \
+            --bootstrap-dir "$assets/data/bootstrap-data-bundle" \
+            --trusted-keys "$assets/data/data-bundle-trusted-keys.json" \
+            --hosted-assets-dir "$assets/public/data-bundles"
+          echo "ROSTERPILOT_DATA_TRUSTED_KEYS_FILE=$assets/data/data-bundle-trusted-keys.json" >> "$GITHUB_ENV"
+          echo "ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY=$assets/data/bootstrap-data-bundle" >> "$GITHUB_ENV"
+
+      - name: Ensure the local agent is current
+        run: npm run rosterpilot -- agent ensure-current
+      - name: Prime the exact signed bundle
+        env:
+          ROSTERPILOT_DATA_CHANNEL_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles/channels/stable.json
+        run: npm run rosterpilot -- data refresh --force
+      - name: Restart the agent against the primed data store
+        run: npm run rosterpilot -- agent restart
       - name: Run live canary
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          ROSTERPILOT_DATA_CHANNEL_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles/channels/stable.json
           ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
           ROSTERPILOT_CANARY_MULTIPROFILE_ROSZ_PATH: ${{ vars.ROSTERPILOT_CANARY_MULTIPROFILE_ROSZ_PATH }}
           ROSTERPILOT_CANARY_MULTIPROFILE_CONTEXT_PATH: ${{ vars.ROSTERPILOT_CANARY_MULTIPROFILE_CONTEXT_PATH }}
@@ -67,6 +221,7 @@ jobs:
           npm run certify:canary --
           --canary "${{ matrix.canary }}"
           --out-dir .certification/live-canaries
+          --expected-bundle-id "${{ needs.post-activation-bundle.outputs.bundle_id }}"
           --require-live
 
       - if: always()
@@ -77,6 +232,77 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 30
+
+  quarantine-failed-bundle:
+    needs:
+      - post-activation-bundle
+      - daily-canary
+    if: >-
+      ${{
+        always() &&
+        needs.post-activation-bundle.result == 'success' &&
+        needs.daily-canary.result != 'skipped'
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      ROSTERPILOT_DATA_SIGNING_KEY_ID: ${{ vars.ROSTERPILOT_DATA_SIGNING_KEY_ID }}
+      ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK: ${{ secrets.ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK }}
+      ROSTERPILOT_DATA_BUNDLE_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: live-canary-*
+          path: .certification/live-canaries
+          merge-multiple: true
+
+      - id: channel
+        name: Prepare the immutable channel worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel_root="$RUNNER_TEMP/rosterpilot-data-channel"
+          git fetch origin data-bundles
+          git worktree add --detach "$channel_root" FETCH_HEAD
+          echo "root=$channel_root" >> "$GITHUB_OUTPUT"
+
+      - name: Verify canary evidence and roll back only a failed bundle
+        run: >-
+          npm run data:rollback-after-canary --
+          --channel-root "${{ steps.channel.outputs.root }}"
+          --reports-root .certification/live-canaries
+          --channel stable
+          --failed-bundle-id "${{ needs.post-activation-bundle.outputs.bundle_id }}"
+          --manifest-base-url "$ROSTERPILOT_DATA_BUNDLE_BASE_URL"
+          --trusted-keys data/data-bundle-trusted-keys.json
+
+      - name: Publish a signed quarantine and rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel_root="${{ steps.channel.outputs.root }}"
+          git -C "$channel_root" config user.name "github-actions[bot]"
+          git -C "$channel_root" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$channel_root" add channels quarantines
+          if git -C "$channel_root" diff --cached --quiet; then
+            echo "All bundle-bound live canaries passed; no rollback was published."
+            exit 0
+          fi
+          git -C "$channel_root" commit -m "Quarantine failed roster data bundle"
+          git -C "$channel_root" push origin HEAD:data-bundles
 
   weekly-rotation:
     if: >-

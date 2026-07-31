@@ -20,15 +20,19 @@ import {
   exportRoster,
   getNewRecruitCapability,
   getDataStatus,
+  getDataUpdateStatus,
   listDataConflicts,
   modifyRoster,
   modifyRosterBatch,
   prepareNewRecruitHandoff,
+  rebaseRosterWithProvider,
+  refreshDataNow,
+  rollbackDataBundle,
   searchFactions,
   searchUnits,
   setCachedDataFreshness,
   validateRoster,
-  addFreshnessWarnings,
+  withDataBundleSnapshotLease,
   CollectionProfileSchema,
   ModifyRosterOperationSchema,
   RosterDraftSchema,
@@ -38,6 +42,7 @@ import {
   type BuildAndStressRosterResult,
   type BuildAndAnalyzeRosterInput,
   type BuildAndAnalyzeRosterResult,
+  type DataBundleProvider,
   type LiveDataFreshness,
   type ModifyRosterOperation,
   type NewRecruitConnectionStatus,
@@ -81,6 +86,7 @@ type ServerOptions = {
     deliver: (
       roster: RosterDraftV1,
       options: {
+        downloadEnrichedRosz: boolean;
         downloadPrettyHtml: boolean;
         outputDirectory: string;
         overwrite: boolean;
@@ -218,6 +224,7 @@ type ServerOptions = {
   };
   freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
   freshnessCacheMs?: number;
+  dataBundleProvider?: DataBundleProvider;
 };
 
 function serializable<T>(value: T): T {
@@ -348,6 +355,29 @@ export function createRosterPilotMcpServer(
     name: "rosterpilot",
     version: "0.2.0",
   });
+  const registerTool = server.registerTool.bind(server);
+  (
+    server as unknown as {
+      registerTool: (...args: unknown[]) => unknown;
+    }
+  ).registerTool = (...args: unknown[]) => {
+    const toolName =
+      typeof args[0] === "string" ? args[0] : "";
+    const controlPlaneTool =
+      toolName === "get_data_update_status" ||
+      toolName === "refresh_data_now" ||
+      toolName === "rollback_data_bundle";
+    const handlerIndex = args.length - 1;
+    const handler = args[handlerIndex];
+    if (typeof handler === "function" && !controlPlaneTool) {
+      args[handlerIndex] = (...handlerArgs: unknown[]) =>
+        withDataBundleSnapshotLease(
+          () => Reflect.apply(handler, undefined, handlerArgs),
+          options.dataBundleProvider ?? null,
+        );
+    }
+    return Reflect.apply(registerTool, server, args);
+  };
   let freshnessCache:
     | {
         expiresAt: number;
@@ -376,20 +406,36 @@ export function createRosterPilotMcpServer(
     {
       title: "Get roster data status",
       description:
-        "Return the pinned data version, buildable factions, coverage, and attribution.",
+        "Return the active leased-data identity, exact source provenance, buildable factions, coverage, update-provider state, and attribution.",
       inputSchema: {},
     },
     async () => {
       const result = getDataStatus();
+      const updateStatus = await getDataUpdateStatus(
+        options.dataBundleProvider,
+      );
       return resultContent({
         ...result,
         data:
-          result.data && options.runtimeProvenance
+          result.data
             ? {
                 ...result.data,
-                runtime: options.runtimeProvenance(),
+                ...(updateStatus.data
+                  ? { dataBundle: updateStatus.data }
+                  : {}),
+                ...(options.runtimeProvenance
+                  ? { runtime: options.runtimeProvenance() }
+                  : {}),
               }
             : result.data,
+        warnings: [
+          ...result.warnings,
+          ...updateStatus.warnings,
+          ...updateStatus.violations.map((violation) => ({
+            ...violation,
+            severity: "warn" as const,
+          })),
+        ],
       });
     },
   );
@@ -399,7 +445,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Check live roster data freshness",
       description:
-        "Compare the exact pinned rules package, BSData commit, and official points app with their current live versions. Cached for 15 minutes unless force is true.",
+        "Compare the active bundle's exact source provenance with the current rules package, BSData commit, and official publication. This diagnostic is cached for 15 minutes unless force is true and never activates data.",
       inputSchema: {
         force: z.boolean().default(false),
       },
@@ -413,11 +459,78 @@ export function createRosterPilotMcpServer(
   );
 
   server.registerTool(
+    "get_data_update_status",
+    {
+      title: "Get signed data update status",
+      description:
+        "Distinguish the bundle currently in use from the latest verified bundle and latest upstream candidate, including scoped quarantines.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () =>
+      resultContent(
+        await getDataUpdateStatus(options.dataBundleProvider),
+      ),
+  );
+
+  server.registerTool(
+    "refresh_data_now",
+    {
+      title: "Refresh signed roster data",
+      description:
+        "Check the signed stable channel now, verify and classify a candidate, and atomically activate only safe scopes for future requests.",
+      inputSchema: {
+        force: z.boolean().default(true),
+      },
+      annotations: {
+        readOnlyHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ force }) =>
+      resultContent(
+        await refreshDataNow(
+          { force },
+          options.dataBundleProvider,
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "rollback_data_bundle",
+    {
+      title: "Roll back roster data",
+      description:
+        "Atomically select an archived, verified bundle for future requests. Existing roster builds and durable jobs retain their leased bundle.",
+      inputSchema: {
+        bundleId: z.string().regex(/^[a-f0-9]{64}$/),
+      },
+      annotations: {
+        readOnlyHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ bundleId }) =>
+      resultContent(
+        await rollbackDataBundle(
+          bundleId,
+          options.dataBundleProvider,
+        ),
+      ),
+  );
+
+  server.registerTool(
     "list_data_conflicts",
     {
       title: "List roster data conflicts",
       description:
-        "List explicit unit, points, equipment, detachment, enhancement, or catalogue disagreements between the pinned rules engine and New Recruit's BSData source.",
+        "List explicit unit, points, equipment, detachment, enhancement, or catalogue disagreements in the active leased bundle between official-first roster rules and the New Recruit interoperability source.",
       inputSchema: {
         factionId: z.string().optional(),
         entityType: z
@@ -580,9 +693,7 @@ export function createRosterPilotMcpServer(
               }
             : undefined,
       });
-      return resultContent(
-        addFreshnessWarnings(result, await currentFreshness()),
-      );
+      return resultContent(result);
     },
   );
 
@@ -631,10 +742,32 @@ export function createRosterPilotMcpServer(
     {
       title: "Validate a roster",
       description:
-        "Recalculate points and run the pinned loadout and army-construction legality checks.",
+        "Recalculate points and run loadout and army-construction legality checks under one immutable active-bundle lease.",
       inputSchema: { roster: RosterDraftSchema },
     },
     async ({ roster }) => resultContent(validateRoster(roster as RosterDraftV1)),
+  );
+
+  server.registerTool(
+    "rebase_roster",
+    {
+      title: "Check or rebase roster data",
+      description:
+        "Compare a V1, V2, or V3 roster with the active semantic bundle. Provenance-only changes rebase automatically; relevant rule or mapping changes return exact review-required scopes without changing selections.",
+      inputSchema: { roster: RosterDraftSchema },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ roster }) =>
+      resultContent(
+        await rebaseRosterWithProvider(
+          roster,
+          options.dataBundleProvider ?? null,
+        ),
+      ),
   );
 
   server.registerTool(
@@ -845,6 +978,7 @@ export function createRosterPilotMcpServer(
           await options.newRecruitCompanion!.deliver(
             roster as RosterDraftV1,
             {
+              downloadEnrichedRosz: true,
               downloadPrettyHtml,
               outputDirectory,
               overwrite,
@@ -1131,8 +1265,7 @@ export function createRosterPilotMcpServer(
             );
             return inProgressJobContent(job);
           }
-          const freshness = await currentFreshness();
-          const result = addFreshnessWarnings(
+          const result =
             await options.tesseraCompanion!.buildAndAnalyze!(
               {
                 prompt,
@@ -1150,9 +1283,7 @@ export function createRosterPilotMcpServer(
                 experimental,
               },
               { outputDirectory, overwrite },
-            ),
-            freshness,
-          );
+            );
           return detailedResultContent(
             result,
             responseDetail,
@@ -1373,8 +1504,7 @@ export function createRosterPilotMcpServer(
             );
             return inProgressJobContent(job);
           }
-          const freshness = await currentFreshness();
-          const result = addFreshnessWarnings(
+          const result =
             await options.tesseraCompanion!.buildAndStress!(
               {
                 prompt,
@@ -1396,9 +1526,7 @@ export function createRosterPilotMcpServer(
                 experimental,
               },
               { outputDirectory, overwrite },
-            ),
-            freshness,
-          );
+            );
           return detailedResultContent(
             result,
             responseDetail,
@@ -1496,8 +1624,7 @@ export function createRosterPilotMcpServer(
             );
             return inProgressJobContent(job);
           }
-          const freshness = await currentFreshness();
-          const result = addFreshnessWarnings(
+          const result =
             await options.tesseraCompanion!.stressTest!(
               playerRoster as RosterDraftV1,
               { kind: "faction", factionId },
@@ -1513,9 +1640,7 @@ export function createRosterPilotMcpServer(
                 overwrite,
                 experimental,
               },
-            ),
-            freshness,
-          );
+            );
           return detailedResultContent(
             result,
             responseDetail,
@@ -1579,8 +1704,7 @@ export function createRosterPilotMcpServer(
             );
             return inProgressJobContent(job);
           }
-          const freshness = await currentFreshness();
-          const result = addFreshnessWarnings(
+          const result =
             await options.tesseraCompanion!.compareStressRevision!(
               baselineReportPath,
               revisedRoster as RosterDraftV1,
@@ -1592,9 +1716,7 @@ export function createRosterPilotMcpServer(
                   : {}),
                 experimental,
               },
-            ),
-            freshness,
-          );
+            );
           return detailedResultContent(
             result,
             responseDetail,

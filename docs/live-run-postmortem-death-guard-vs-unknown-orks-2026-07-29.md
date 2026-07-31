@@ -1,5 +1,10 @@
 # Live-run postmortem: Death Guard vs unknown Orks
 
+> Historical evidence snapshot. Issue states and commands below describe the
+> recorded 2026-07-29 run; use [Architecture](./architecture.md),
+> [Workflow guide](./workflows.md), and [Certification](./certification.md) for
+> the current product contract.
+
 Date: 2026-07-29  
 Pinned rules release: `2026-07-28.1`  
 Verified run: `f23c81be-7e3d-437d-9743-f99028b764d9`  

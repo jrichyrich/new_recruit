@@ -43,6 +43,7 @@ function setupHarness(options: {
   newRecruitAgentAvailable?: boolean;
   newRecruitAvailable?: boolean;
   platform?: string;
+  runtimeDataProviderAvailable?: boolean;
   tesseraCredentialsConfigured?: boolean;
   trackedChanges?: string;
 } = {}) {
@@ -83,6 +84,26 @@ function setupHarness(options: {
         code: 1,
         stdout: "",
         stderr: "pinned data fixture does not match\n",
+      };
+    }
+    if (
+      args.includes("skill:install") ||
+      args.includes("skill:check")
+    ) {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          ok: true,
+          status: "current",
+          version: "0.2.0",
+          sourceHash: "a".repeat(64),
+          pluginCache: {
+            status: "outside-setup-control",
+            path: "/tmp/codex/plugins/cache/personal/rosterpilot",
+            versions: ["0.2.0"],
+          },
+        }),
+        stderr: "",
       };
     }
     if (args.some((entry) => entry.endsWith("cli/rosterpilot.ts"))) {
@@ -134,11 +155,22 @@ function setupHarness(options: {
         };
       }
       if (action === "status") {
+        const providerAvailable =
+          options.runtimeDataProviderAvailable ?? true;
         return {
           code: 0,
           stdout: JSON.stringify({
             ok: true,
-            data: { sources: { releaseId: "2026-07-27.1" } },
+            data: {
+              sources: { releaseId: "2026-07-27.1" },
+              dataBundle: {
+                providerConfigured: providerAvailable,
+                state: providerAvailable ? "ready" : "offline",
+                activeBundleId: providerAvailable
+                  ? "d".repeat(64)
+                  : "c".repeat(64),
+              },
+            },
           }),
           stderr: "",
         };
@@ -157,6 +189,39 @@ function setupHarness(options: {
             ok: true,
             data: { state: options.freshnessState ?? "current" },
           }),
+          stderr: "",
+        };
+      }
+      if (args.includes("data") && action === "refresh") {
+        const available =
+          options.runtimeDataProviderAvailable ?? true;
+        return {
+          code: 0,
+          stdout: JSON.stringify(
+            available
+              ? {
+                  ok: true,
+                  data: {
+                    status: "activated",
+                    bundleId: "d".repeat(64),
+                  },
+                  violations: [],
+                  warnings: [],
+                }
+              : {
+                  ok: false,
+                  data: null,
+                  violations: [
+                    {
+                      code: "DATA_BUNDLE_PROVIDER_UNAVAILABLE",
+                      message:
+                        "Signed runtime data updates are unavailable.",
+                      severity: "error",
+                    },
+                  ],
+                  warnings: [],
+                },
+          ),
           stderr: "",
         };
       }
@@ -222,6 +287,29 @@ test("setup arguments validate profiles, refresh modes, and doctor mutations", (
   );
 });
 
+test("interactive setup advertises the complete Tessera profile", async () => {
+  const harness = setupHarness();
+  const questions: string[] = [];
+  await runSetup(
+    {
+      doctor: false,
+      help: false,
+      nonInteractive: false,
+      profile: null,
+      refresh: "skip",
+    },
+    {
+      ...harness.dependencies,
+      ask: async (question: string) => {
+        questions.push(question);
+        return "core";
+      },
+      isTTY: true,
+    },
+  );
+  assert.match(questions[0], /core\/mcp\/new-recruit\/tessera/);
+});
+
 test("Node validation enforces the minimum and warns away from the baseline", () => {
   assert.equal(validateNodeVersion("v22.12.0").supported, false);
   assert.deepEqual(
@@ -266,7 +354,13 @@ test("MCP renderers use the active executable and safely quote checkout paths", 
   };
   const codex = renderCodexConfig(input);
   const claude = JSON.parse(renderClaudeConfig(input)) as {
-    mcpServers: { rosterpilot: { command: string; cwd: string } };
+    mcpServers: {
+      rosterpilot: {
+        command: string;
+        cwd: string;
+        env: Record<string, string>;
+      };
+    };
   };
   assert.match(codex, /command = "\/opt\/Node Runtime\/bin\/node"/);
   assert.match(codex, /Roster \\"Pilot\\"/);
@@ -275,6 +369,18 @@ test("MCP renderers use the active executable and safely quote checkout paths", 
     "/opt/Node Runtime/bin/node",
   );
   assert.equal(claude.mcpServers.rosterpilot.cwd, "/tmp/Roster \"Pilot\"");
+  assert.match(codex, /ROSTERPILOT_DATA_CHANNEL_URL/);
+  assert.match(codex, /data-bundle-trusted-keys\.json/);
+  assert.match(codex, /bootstrap-data-bundle/);
+  assert.match(
+    claude.mcpServers.rosterpilot.env.ROSTERPILOT_DATA_CHANNEL_URL,
+    /data-bundles\/channels\/stable\.json$/,
+  );
+  assert.match(
+    claude.mcpServers.rosterpilot.env
+      .ROSTERPILOT_DATA_TRUSTED_KEYS_FILE,
+    /data-bundle-trusted-keys\.json$/,
+  );
 });
 
 test("core setup installs locked dependencies and validates committed data", async () => {
@@ -304,11 +410,18 @@ test("core setup installs locked dependencies and validates committed data", asy
     harness.calls.some((call) => call.args.at(-1) === "freshness"),
   );
   assert.match(harness.stdout.chunks.join(""), /release 2026-07-27\.1/);
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "Signed data updates",
+    )?.status,
+    "ready",
+  );
 });
 
 test("doctor verifies dependencies without installing or mutating data", async () => {
   const harness = setupHarness();
-  await runSetup(
+  const result = await runSetup(
     {
       doctor: true,
       help: false,
@@ -329,6 +442,13 @@ test("doctor verifies dependencies without installing or mutating data", async (
   assert.equal(
     harness.calls.some((call) => call.args.includes("data:sync-check")),
     false,
+  );
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "Signed data updates",
+    )?.status,
+    "ready",
   );
 });
 
@@ -371,7 +491,7 @@ test("doctor keeps local diagnostics usable when remote freshness is offline", a
   );
   assert.match(
     harness.stdout.chunks.join(""),
-    /Local readiness results remain valid for the pinned release/,
+    /Local readiness results remain valid for the active frozen data bundle/,
   );
 });
 
@@ -509,6 +629,17 @@ test("MCP setup creates missing local config and preserves an existing file", as
     created.files.get(created.configPath) ?? "",
     /\[mcp_servers\.rosterpilot\]/,
   );
+  assert.equal(
+    created.calls.some((call) =>
+      call.args.includes("data:sync-check"),
+    ),
+    false,
+  );
+  assert.ok(
+    created.calls.some((call) =>
+      call.args.includes("skill:install"),
+    ),
+  );
   assert.match(created.stdout.chunks.join(""), /Claude Desktop configuration/);
 
   const preserved = setupHarness({ configExists: true });
@@ -526,7 +657,7 @@ test("MCP setup creates missing local config and preserves an existing file", as
   assert.match(preserved.stdout.chunks.join(""), /was not overwritten/);
 });
 
-test("explicit refresh applies only with a clean tracked worktree", async () => {
+test("explicit refresh activates runtime data without requiring a clean tracked worktree", async () => {
   const clean = setupHarness({ freshnessState: "update-available" });
   await runSetup(
     {
@@ -539,51 +670,92 @@ test("explicit refresh applies only with a clean tracked worktree", async () => 
     clean.dependencies,
   );
   assert.ok(
-    clean.calls.some((call) => call.args.includes("data:prepare-update")),
+    clean.calls.some(
+      (call) =>
+        call.args.includes("data") &&
+        call.args.at(-1) === "refresh",
+    ),
+  );
+  assert.equal(
+    clean.calls.some((call) =>
+      call.args.includes("data:prepare-update"),
+    ),
+    false,
   );
 
   const dirty = setupHarness({
     freshnessState: "update-available",
     trackedChanges: " M data/sources.json\n",
   });
-  await assert.rejects(
-    runSetup(
-      {
-        doctor: false,
-        help: false,
-        nonInteractive: true,
-        profile: "core",
-        refresh: "apply",
-      },
-      dirty.dependencies,
-    ),
-    /tracked files are modified/,
+  await runSetup(
+    {
+      doctor: false,
+      help: false,
+      nonInteractive: true,
+      profile: "core",
+      refresh: "apply",
+    },
+    dirty.dependencies,
   );
-  assert.equal(
-    dirty.calls.some((call) => call.args.includes("data:prepare-update")),
-    false,
+  assert.ok(
+    dirty.calls.some(
+      (call) =>
+        call.args.includes("data") &&
+        call.args.at(-1) === "refresh",
+    ),
   );
 });
 
 test("unknown freshness never applies an update", async () => {
   assert.equal(freshnessAction("unknown"), "unknown");
   const harness = setupHarness({ freshnessState: "unknown" });
-  await assert.rejects(
-    runSetup(
-      {
-        doctor: false,
-        help: false,
-        nonInteractive: true,
-        profile: "core",
-        refresh: "apply",
-      },
-      harness.dependencies,
-    ),
-    /freshness is unknown/,
+  const result = await runSetup(
+    {
+      doctor: false,
+      help: false,
+      nonInteractive: true,
+      profile: "core",
+      refresh: "apply",
+    },
+    harness.dependencies,
   );
+  assert.equal(result.ok, true);
   assert.equal(
-    harness.calls.some((call) => call.args.includes("data:prepare-update")),
+    harness.calls.some(
+      (call) =>
+        call.args.includes("data") &&
+        call.args.at(-1) === "refresh",
+    ),
     false,
+  );
+});
+
+test("setup keeps pinned compiled data when the runtime provider is unavailable", async () => {
+  const harness = setupHarness({
+    freshnessState: "update-available",
+    runtimeDataProviderAvailable: false,
+  });
+  const result = await runSetup(
+    {
+      doctor: false,
+      help: false,
+      nonInteractive: true,
+      profile: "core",
+      refresh: "apply",
+    },
+    harness.dependencies,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "Signed data updates",
+    )?.status,
+    "warning",
+  );
+  assert.match(
+    harness.stdout.chunks.join(""),
+    /continuing from the pinned compiled offline data/,
   );
 });
 

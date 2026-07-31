@@ -1821,7 +1821,7 @@ async function addLiveCertification(
               code,
               message:
                 catalogueProvenance.status === "drift"
-                  ? `The catalogue ID or revision observed in New Recruit's enriched ROSZ differs from pinned release ${roster.sourceData.releaseId}. Tessera was not started.`
+                  ? `The catalogue ID or revision observed in New Recruit's enriched ROSZ differs from frozen bundle ${roster.sourceData.bundleId} (source release ${roster.sourceData.releaseId}). Tessera was not started.`
                   : `New Recruit's enriched ROSZ omitted ${catalogueProvenance.missing.join(", ")}. Tessera was not started because the live catalogue identity could not be verified.`,
               retryable: false,
               evidence: {

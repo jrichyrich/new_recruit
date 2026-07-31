@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   LIVE_CANARY_IDS,
@@ -9,6 +10,12 @@ import {
   runRotatingLiveCanary,
   writeRotatingLiveCanaryReport,
 } from "../local/certification/live-canary-runner";
+import {
+  getConfiguredDataBundleProvider,
+} from "../lib/rosterpilot";
+import {
+  initializeLocalDataBundleProvider,
+} from "../local/data-bundles/configure";
 
 type ParsedArguments = {
   canaryId: LiveCanaryId | null;
@@ -17,8 +24,35 @@ type ParsedArguments = {
   maxWaitMs: number | undefined;
   pollMs: number | undefined;
   forcedClientTimeoutMs: number | undefined;
+  expectedBundleId: string | undefined;
   requireLive: boolean;
   help: boolean;
+};
+
+type ReleaseEvidenceBinding =
+  | {
+      kind: "bundle-bound";
+      expectedBundleId: string;
+    }
+  | {
+      kind: "ad-hoc";
+      expectedBundleId: null;
+    };
+
+type LiveCanaryReport = Awaited<
+  ReturnType<typeof runRotatingLiveCanary>
+> & {
+  releaseEvidence: ReleaseEvidenceBinding;
+};
+
+type DataBundlePreflightFailure = {
+  code:
+    | "LIVE_CANARY_RELEASE_BUNDLE_REQUIRED"
+    | "LIVE_CANARY_DATA_PROVIDER_UNAVAILABLE"
+    | "LIVE_CANARY_DATA_BUNDLE_REFRESH_FAILED"
+    | "LIVE_CANARY_DATA_BUNDLE_MISMATCH"
+    | "LIVE_CANARY_DATA_BUNDLE_LEASE_FAILED";
+  message: string;
 };
 
 function help(): string {
@@ -36,7 +70,8 @@ Options:
   --max-wait-ms <milliseconds>      Overall durable-job wait budget.
   --poll-ms <milliseconds>          Durable-job status polling interval.
   --forced-client-timeout-ms <ms>   Custodes/Aeldari client timeout boundary.
-  --require-live                    Treat a structured unavailable result as failure.
+  --expected-bundle-id <sha256>     Require and freeze this activated bundle.
+  --require-live                    Require bundle-bound live release evidence.
   --help                            Show this help.
 
 The runner also accepts ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH.
@@ -46,6 +81,106 @@ The uploaded multi-profile canary additionally requires:
   ROSTERPILOT_CANARY_PLAYER_ROSTER_PATH
   ROSTERPILOT_CANARY_REVISED_ROSTER_PATH
 `;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Unknown data-bundle preflight failure.";
+}
+
+function releaseEvidenceBinding(
+  args: ParsedArguments,
+): ReleaseEvidenceBinding {
+  return args.requireLive && args.expectedBundleId
+    ? {
+        kind: "bundle-bound",
+        expectedBundleId: args.expectedBundleId,
+      }
+    : {
+        kind: "ad-hoc",
+        expectedBundleId: null,
+      };
+}
+
+function bindReleaseEvidence(
+  report: Awaited<
+    ReturnType<typeof runRotatingLiveCanary>
+  >,
+  args: ParsedArguments,
+): LiveCanaryReport {
+  return Object.assign(report, {
+    releaseEvidence: releaseEvidenceBinding(args),
+  });
+}
+
+async function unavailablePreflightReport(input: {
+  args: ParsedArguments;
+  canaryOutput: string;
+  failure: DataBundlePreflightFailure;
+}): Promise<LiveCanaryReport> {
+  const report = await runRotatingLiveCanary({
+    canaryId: input.args.canaryId!,
+    outputDirectory: input.canaryOutput,
+    profilePolicyPath: input.args.profilePolicyPath,
+    maxWaitMs: input.args.maxWaitMs,
+    pollMs: input.args.pollMs,
+    forcedClientTimeoutMs:
+      input.args.forcedClientTimeoutMs,
+    // Force readiness to stop before any external connector mutation. The
+    // report is then specialized with the exact data preflight failure below.
+    environment: {
+      ...process.env,
+      ROSTERPILOT_CERTIFICATION_LIVE: "0",
+    },
+  });
+  report.status = "unavailable";
+  report.livePass = false;
+  report.evidenceKind = "none";
+  report.failure = input.failure;
+  report.assertions = report.assertions.map((assertion) => ({
+    ...assertion,
+    status: "not-run",
+    evidence: null,
+  }));
+  report.run = null;
+  report.revision = null;
+  report.limitations = [
+    ...report.limitations,
+    "Release evidence was not captured because exact signed data-bundle preflight did not complete.",
+  ];
+  return bindReleaseEvidence(report, input.args);
+}
+
+async function writeReportAndSummary(input: {
+  report: LiveCanaryReport;
+  canaryOutput: string;
+}): Promise<void> {
+  const written = await writeRotatingLiveCanaryReport(
+    input.report,
+    input.canaryOutput,
+  );
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        canaryId: input.report.canary.id,
+        status: input.report.status,
+        livePass: input.report.livePass,
+        releaseEvidence: input.report.releaseEvidence,
+        unavailableReasons:
+          input.report.readiness.reasons.map(
+            (reason) => reason.code,
+          ),
+        failure: input.report.failure,
+        runId: input.report.run?.runId ?? null,
+        reportPath: written.reportPath,
+        checksumPath: written.checksumPath,
+        reportSha256: written.sha256,
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 function positiveInteger(
@@ -69,6 +204,7 @@ function parseArguments(argv: string[]): ParsedArguments {
   let maxWaitMs: number | undefined;
   let pollMs: number | undefined;
   let forcedClientTimeoutMs: number | undefined;
+  let expectedBundleId: string | undefined;
   let requireLive = false;
   let showHelp = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -95,6 +231,14 @@ function parseArguments(argv: string[]): ParsedArguments {
       pollMs = positiveInteger(next(), token);
     } else if (token === "--forced-client-timeout-ms") {
       forcedClientTimeoutMs = positiveInteger(next(), token);
+    } else if (token === "--expected-bundle-id") {
+      const value = next();
+      if (!/^[a-f0-9]{64}$/.test(value)) {
+        throw new Error(
+          "--expected-bundle-id requires a lowercase SHA-256 bundle ID.",
+        );
+      }
+      expectedBundleId = value;
     } else if (token === "--require-live") {
       requireLive = true;
     } else if (token === "--help" || token === "-h") {
@@ -110,6 +254,7 @@ function parseArguments(argv: string[]): ParsedArguments {
     maxWaitMs,
     pollMs,
     forcedClientTimeoutMs,
+    expectedBundleId,
     requireLive,
     help: showHelp,
   };
@@ -128,37 +273,107 @@ async function main(): Promise<void> {
     args.outputDirectory,
     args.canaryId,
   );
-  const report = await runRotatingLiveCanary({
-    canaryId: args.canaryId,
-    outputDirectory: canaryOutput,
-    profilePolicyPath: args.profilePolicyPath,
-    maxWaitMs: args.maxWaitMs,
-    pollMs: args.pollMs,
-    forcedClientTimeoutMs:
-      args.forcedClientTimeoutMs,
-  });
-  const written = await writeRotatingLiveCanaryReport(
-    report,
-    canaryOutput,
-  );
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        canaryId: report.canary.id,
-        status: report.status,
-        livePass: report.livePass,
-        unavailableReasons:
-          report.readiness.reasons.map(
-            (reason) => reason.code,
-          ),
-        runId: report.run?.runId ?? null,
-        reportPath: written.reportPath,
-        reportSha256: written.sha256,
+  if (args.requireLive && !args.expectedBundleId) {
+    const report = await unavailablePreflightReport({
+      args,
+      canaryOutput,
+      failure: {
+        code: "LIVE_CANARY_RELEASE_BUNDLE_REQUIRED",
+        message:
+          "--require-live requires --expected-bundle-id so release evidence is bound to one exact signed bundle.",
       },
-      null,
-      2,
-    )}\n`,
-  );
+    });
+    await writeReportAndSummary({ report, canaryOutput });
+    process.exitCode = 2;
+    return;
+  }
+  const initialization =
+    await initializeLocalDataBundleProvider();
+  const provider = getConfiguredDataBundleProvider();
+  let preflightFailure: DataBundlePreflightFailure | null =
+    null;
+  if (args.expectedBundleId && !provider) {
+    preflightFailure = {
+      code: "LIVE_CANARY_DATA_PROVIDER_UNAVAILABLE",
+      message:
+        initialization.reason ??
+        "The expected signed data bundle cannot be activated because no trusted local data-bundle provider is configured.",
+    };
+  }
+  if (args.expectedBundleId && provider) {
+    try {
+      await provider.refresh({ force: true });
+    } catch (error) {
+      preflightFailure = {
+        code: "LIVE_CANARY_DATA_BUNDLE_REFRESH_FAILED",
+        message: errorMessage(error),
+      };
+    }
+    if (!preflightFailure) {
+      try {
+        const status = await provider.getStatus();
+        if (status.activeBundleId !== args.expectedBundleId) {
+          preflightFailure = {
+            code: "LIVE_CANARY_DATA_BUNDLE_MISMATCH",
+            message:
+              `Expected activated data bundle ${args.expectedBundleId}, ` +
+              `but the provider is using ${status.activeBundleId}.`,
+          };
+        }
+      } catch (error) {
+        preflightFailure = {
+          code: "LIVE_CANARY_DATA_PROVIDER_UNAVAILABLE",
+          message: errorMessage(error),
+        };
+      }
+    }
+  }
+  let lease: Awaited<
+    ReturnType<NonNullable<typeof provider>["acquireSnapshot"]>
+  > | null = null;
+  if (provider && !preflightFailure) {
+    try {
+      lease = await provider.acquireSnapshot({
+        ...(args.expectedBundleId
+          ? { bundleId: args.expectedBundleId }
+          : {}),
+      });
+    } catch (error) {
+      preflightFailure = {
+        code: "LIVE_CANARY_DATA_BUNDLE_LEASE_FAILED",
+        message: errorMessage(error),
+      };
+    }
+  }
+  if (preflightFailure) {
+    const report = await unavailablePreflightReport({
+      args,
+      canaryOutput,
+      failure: preflightFailure,
+    });
+    await writeReportAndSummary({ report, canaryOutput });
+    process.exitCode = 2;
+    return;
+  }
+  let report: LiveCanaryReport;
+  try {
+    report = bindReleaseEvidence(
+      await runRotatingLiveCanary({
+        canaryId: args.canaryId,
+        outputDirectory: canaryOutput,
+        profilePolicyPath: args.profilePolicyPath,
+        maxWaitMs: args.maxWaitMs,
+        pollMs: args.pollMs,
+        forcedClientTimeoutMs:
+          args.forcedClientTimeoutMs,
+        expectedBundleId: args.expectedBundleId,
+      }),
+      args,
+    );
+  } finally {
+    await lease?.release();
+  }
+  await writeReportAndSummary({ report, canaryOutput });
   if (
     report.status === "fail" ||
     (report.status === "unavailable" &&
@@ -168,9 +383,14 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(
-    `${error instanceof Error ? error.message : String(error)}\n`,
-  );
-  process.exitCode = 2;
-});
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  await main().catch((error) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 2;
+  });
+}

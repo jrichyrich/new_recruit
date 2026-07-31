@@ -2,7 +2,6 @@
 
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -10,36 +9,27 @@ import {
 } from "react";
 
 import {
-  buildRoster,
-  exportRoster,
-  getDataStatus,
-  getNewRecruitCapability,
-  listDetachments,
-  modifyRoster,
-  parseRosterDraft,
-  prepareNewRecruitHandoff,
-  searchFactions,
-  searchUnits,
-  validateRoster,
+  type BuildRosterInput,
   type ExportArtifact,
   type ExportFormat,
   type FactionSummary,
+  type ModifyRosterOperation,
   type NewRecruitHandoff,
   type LiveDataFreshness,
   type PreferenceTag,
   type RosterDraftV1,
   type UnitSummary,
 } from "@/lib/rosterpilot";
+import type {
+  BrowserEngineBootstrap,
+  BrowserEngineEnvelope,
+  BrowserEngineSearch,
+  BrowserRosterWorkspace,
+  SerializedBrowserArtifact,
+} from "@/app/browser-engine-contract";
 
 const STORAGE_KEY = "rosterpilot.drafts.v2";
 const LEGACY_STORAGE_KEY = "rosterpilot.drafts.v1";
-const DEFAULT_RESULT = buildRoster({
-  prompt: "Build a 1,000 point fast Custodes army with no named characters",
-  name: "Golden Vanguard",
-});
-const DEFAULT_DRAFT = DEFAULT_RESULT.data as RosterDraftV1;
-const DATA_STATUS = getDataStatus().data;
-
 const PREFERENCES: Array<{ id: PreferenceTag; label: string }> = [
   { id: "mobility", label: "Mobility" },
   { id: "durability", label: "Durability" },
@@ -60,6 +50,13 @@ type DraftStore = {
   drafts: RosterDraftV1[];
 };
 
+type SerializedBrowserHandoff = Omit<
+  NewRecruitHandoff,
+  "artifacts"
+> & {
+  artifacts: SerializedBrowserArtifact[];
+};
+
 function downloadArtifact(artifact: ExportArtifact): void {
   const blob = new Blob([artifact.content as BlobPart], {
     type: artifact.mimeType,
@@ -70,6 +67,35 @@ function downloadArtifact(artifact: ExportArtifact): void {
   anchor.download = artifact.filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function decodedArtifact(
+  artifact: SerializedBrowserArtifact,
+): ExportArtifact {
+  return {
+    format: artifact.format,
+    filename: artifact.filename,
+    mimeType: artifact.mimeType,
+    encoding: artifact.encoding,
+    content:
+      artifact.transferEncoding === "base64"
+        ? Uint8Array.from(atob(artifact.content), (value) =>
+            value.charCodeAt(0),
+          )
+        : artifact.content,
+  };
+}
+
+async function browserEngineRequest<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<BrowserEngineEnvelope<T>> {
+  const response = await fetch(path, init);
+  const result = (await response.json()) as BrowserEngineEnvelope<T>;
+  if (!response.ok && result.violations.length === 0) {
+    throw new Error(`Browser engine returned HTTP ${response.status}.`);
+  }
+  return result;
 }
 
 function factionMark(faction: FactionSummary): string {
@@ -95,10 +121,15 @@ function parseStoredDrafts(): DraftStore | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { drafts?: unknown[] };
     if (!Array.isArray(parsed.drafts)) return null;
-    const drafts = parsed.drafts.flatMap((value) => {
-      const result = parseRosterDraft(value);
-      return result.success ? [result.data] : [];
-    });
+    const drafts = parsed.drafts.filter(
+      (value): value is RosterDraftV1 =>
+        value !== null &&
+        typeof value === "object" &&
+        "id" in value &&
+        "factionId" in value &&
+        "pointsLimit" in value &&
+        "selections" in value,
+    );
     return drafts.length ? { version: 2, drafts } : null;
   } catch {
     return null;
@@ -107,7 +138,7 @@ function parseStoredDrafts(): DraftStore | null {
 
 function freshnessMessage(freshness: LiveDataFreshness): string {
   if (freshness.state === "current") {
-    return "Live source check: the pinned release is current.";
+    return "Live source check: the active data bundle matches the latest checked sources.";
   }
   if (freshness.state === "official-update-pending") {
     return "Live source check: the official points source changed and is pending reconciliation.";
@@ -115,12 +146,21 @@ function freshnessMessage(freshness: LiveDataFreshness): string {
   if (freshness.state === "update-available") {
     return "Live source check: newer rules or New Recruit data is available for review.";
   }
-  return "Live source check was incomplete; this roster remains reproducible from its pinned release.";
+  return "Live source check was incomplete; this roster remains reproducible from its frozen data bundle.";
 }
 
 export default function Home() {
-  const [draft, setDraft] = useState<RosterDraftV1>(DEFAULT_DRAFT);
-  const [history, setHistory] = useState<RosterDraftV1[]>([DEFAULT_DRAFT]);
+  const [workspace, setWorkspace] =
+    useState<BrowserRosterWorkspace | null>(null);
+  const [dataStatus, setDataStatus] =
+    useState<BrowserEngineBootstrap["dataStatus"] | null>(null);
+  const [runtimeData, setRuntimeData] =
+    useState<BrowserEngineBootstrap["runtimeData"] | null>(null);
+  const [history, setHistory] = useState<RosterDraftV1[]>([]);
+  const [factionResult, setFactionResult] = useState<FactionSummary[]>([]);
+  const [unitResult, setUnitResult] = useState<UnitSummary[]>([]);
+  const [selectedFactionSummary, setSelectedFactionSummary] =
+    useState<FactionSummary | null>(null);
   const [factionQuery, setFactionQuery] = useState("");
   const [unitQuery, setUnitQuery] = useState("");
   const [selectedFaction, setSelectedFaction] = useState("adeptus-custodes");
@@ -129,7 +169,7 @@ export default function Home() {
   const [preferences, setPreferences] = useState<PreferenceTag[]>(["mobility"]);
   const [allowNamed, setAllowNamed] = useState(false);
   const [agentNote, setAgentNote] = useState(
-    "A legal 1,000-point Custodes draft is ready. The engine calculated every point and loadout from pinned community data.",
+    "A legal 1,000-point Custodes draft is ready. The engine calculated every point and loadout from one frozen roster-data snapshot.",
   );
   const [copied, setCopied] = useState(false);
   const [newRecruitHandoff, setNewRecruitHandoff] =
@@ -137,17 +177,60 @@ export default function Home() {
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const restore = window.setTimeout(() => {
-      const stored = parseStoredDrafts();
-      if (stored?.drafts.length) {
-        setHistory(stored.drafts);
-        setDraft(stored.drafts[0]);
-        setTarget(stored.drafts[0].pointsLimit);
-        setPreferences(stored.drafts[0].preferences);
-        setSelectedFaction(stored.drafts[0].factionId);
-      }
-    }, 0);
-    return () => window.clearTimeout(restore);
+    let cancelled = false;
+    void browserEngineRequest<BrowserEngineBootstrap>(
+      "/api/browser-engine?bootstrap=true&selectedFaction=adeptus-custodes",
+    )
+      .then(async (result) => {
+        if (cancelled || !result.data) {
+          throw new Error(
+            result.violations[0]?.message ??
+              "The hosted roster engine did not return startup data.",
+          );
+        }
+        let initialWorkspace = result.data.workspace;
+        const stored = parseStoredDrafts();
+        if (stored?.drafts.length) {
+          setHistory(stored.drafts);
+          const inspected = await browserEngineRequest<BrowserRosterWorkspace>(
+            "/api/browser-engine",
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                action: "inspect",
+                roster: stored.drafts[0],
+              }),
+            },
+          );
+          if (inspected.data) initialWorkspace = inspected.data;
+        }
+        if (cancelled) return;
+        setDataStatus(result.data.dataStatus);
+        setRuntimeData(result.data.runtimeData);
+        setFactionResult(result.data.factions);
+        setUnitResult(result.data.units);
+        setSelectedFactionSummary(result.data.selectedFaction);
+        setWorkspace(initialWorkspace);
+        if (!stored?.drafts.length) {
+          setHistory([initialWorkspace.roster]);
+        }
+        setTarget(initialWorkspace.roster.pointsLimit);
+        setPreferences(initialWorkspace.roster.preferences);
+        setSelectedFaction(initialWorkspace.roster.factionId);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAgentNote(
+            error instanceof Error
+              ? error.message
+              : "The hosted roster engine is unavailable.",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -172,41 +255,54 @@ export default function Home() {
     };
   }, []);
 
-  const factionResult = useMemo(
-    () => searchFactions(factionQuery, 40).data ?? [],
-    [factionQuery],
-  );
-  const selectedFactionSummary = useMemo(
-    () =>
-      searchFactions(selectedFaction, 5).data?.find(
-        (faction) => faction.id === selectedFaction,
-      ),
-    [selectedFaction],
-  );
-  const unitResult = useMemo(
-    () =>
-      searchUnits({
-        faction: selectedFaction,
-        query: unitQuery,
-        includeLegends: false,
-        limit: 12,
-      }).data ?? [],
-    [selectedFaction, unitQuery],
-  );
-  const validation = useMemo(() => validateRoster(draft), [draft]);
-  const detachments = useMemo(() => listDetachments(draft.factionId), [draft.factionId]);
+  useEffect(() => {
+    if (!workspace) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      const parameters = new URLSearchParams({
+        factionQuery,
+        selectedFaction,
+        unitQuery,
+      });
+      void browserEngineRequest<BrowserEngineSearch>(
+        `/api/browser-engine?${parameters.toString()}`,
+        { signal: controller.signal },
+      )
+        .then((result) => {
+          if (!result.data) return;
+          setFactionResult(result.data.factions);
+          setUnitResult(result.data.units);
+          setSelectedFactionSummary(result.data.selectedFaction);
+        })
+        .catch(() => {
+          // Keep the last complete server snapshot while a search is retried.
+        });
+    }, 120);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [factionQuery, selectedFaction, unitQuery, workspace]);
+
+  const draft = workspace?.roster ?? null;
+  const validation = workspace?.validation ?? null;
+  const detachments = workspace?.detachments ?? [];
   const selectedDetachment = detachments.find(
-    (detachment) => detachment.id === draft.detachmentId,
+    (detachment) => detachment.id === draft?.detachmentId,
   );
 
-  function commitDraft(next: RosterDraftV1, note?: string): void {
-    setDraft(next);
+  function commitWorkspace(
+    next: BrowserRosterWorkspace,
+    note?: string,
+  ): void {
+    const roster = next.roster;
+    setWorkspace(next);
     setNewRecruitHandoff(null);
     setHistory((current) => {
-      const deduped = [next, ...current.filter((item) => item.id !== next.id)].slice(
-        0,
-        12,
-      );
+      const deduped = [
+        roster,
+        ...current.filter((item) => item.id !== roster.id),
+      ].slice(0, 12);
       window.localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({ version: 2, drafts: deduped } satisfies DraftStore),
@@ -224,8 +320,8 @@ export default function Home() {
     );
   }
 
-  function generateDraft(): void {
-    const result = buildRoster({
+  async function generateDraft(): Promise<void> {
+    const input: BuildRosterInput = {
       prompt,
       faction: selectedFaction,
       pointsLimit: target,
@@ -234,7 +330,15 @@ export default function Home() {
       name: `${target.toLocaleString()}pt ${
         selectedFactionSummary?.name ?? "Army"
       } Draft`,
-    });
+    };
+    const result = await browserEngineRequest<BrowserRosterWorkspace>(
+      "/api/browser-engine",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "build", input }),
+      },
+    );
     if (!result.data) {
       setAgentNote(
         result.violations[0]?.message ??
@@ -242,12 +346,13 @@ export default function Home() {
       );
       return;
     }
-    const buildNote = `${result.data.name} built at ${result.data.totalPoints}/${result.data.pointsLimit} points. ${
-        result.ok
+    const built = result.data.roster;
+    const buildNote = `${built.name} built at ${built.totalPoints}/${built.pointsLimit} points. ${
+      result.ok
           ? "Deterministic validation passed."
           : "Review the validation issues before exporting."
       }`;
-    commitDraft(result.data, `${buildNote} Checking live data sources…`);
+    commitWorkspace(result.data, `${buildNote} Checking live data sources…`);
     void fetch("/api/data-freshness")
       .then((response) => response.json())
       .then((freshness: { data?: LiveDataFreshness | null }) => {
@@ -266,16 +371,24 @@ export default function Home() {
       });
   }
 
-  function applyModification(
-    operation: Parameters<typeof modifyRoster>[1],
+  async function applyModification(
+    operation: ModifyRosterOperation,
     successMessage: string,
-  ): void {
-    const result = modifyRoster(draft, operation);
+  ): Promise<void> {
+    if (!draft) return;
+    const result = await browserEngineRequest<BrowserRosterWorkspace>(
+      "/api/browser-engine",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "modify", roster: draft, operation }),
+      },
+    );
     if (!result.data) {
       setAgentNote(result.violations[0]?.message ?? "That change could not be applied.");
       return;
     }
-    commitDraft(
+    commitWorkspace(
       result.data,
       `${successMessage} ${
         result.ok ? "The roster remains legal." : "The roster now needs attention."
@@ -284,70 +397,92 @@ export default function Home() {
   }
 
   function addUnit(unit: UnitSummary): void {
+    if (!draft) return;
     if (selectedFaction !== draft.factionId) {
       setAgentNote(
         `${unit.name} belongs to the selected faction, but the active roster is ${draft.factionName}. Build the selected faction before adding units.`,
       );
       return;
     }
-    applyModification(
+    void applyModification(
       { type: "add", unitId: unit.id, modelCount: unit.modelCounts[0] },
       `${unit.name} added.`,
     );
   }
 
   function removeUnit(selectionId: string, name: string): void {
-    applyModification({ type: "remove", selectionId }, `${name} removed.`);
+    void applyModification({ type: "remove", selectionId }, `${name} removed.`);
   }
 
   function setModelCount(selectionId: string, modelCount: number): void {
-    applyModification(
+    void applyModification(
       { type: "set-model-count", selectionId, modelCount },
       "Model count updated.",
     );
   }
 
   function setDetachment(detachmentId: string): void {
-    applyModification(
+    void applyModification(
       { type: "set-detachment", detachmentId },
       "Detachment and compatible disposition updated.",
     );
   }
 
   function setDisposition(forceDispositionId: string): void {
-    applyModification(
+    void applyModification(
       { type: "set-disposition", forceDispositionId },
       "Force disposition updated.",
     );
   }
 
   async function handleExport(format: ExportFormat): Promise<void> {
-    const result = await exportRoster(draft, format);
+    if (!draft) return;
+    const result = await browserEngineRequest<SerializedBrowserArtifact>(
+      "/api/browser-engine",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "export", roster: draft, format }),
+      },
+    );
     if (!result.data) {
       setAgentNote(
         `Export blocked: ${result.violations.map((item) => item.message).join(" ")}`,
       );
       return;
     }
-    downloadArtifact(result.data);
+    const artifact = decodedArtifact(result.data);
+    downloadArtifact(artifact);
     setAgentNote(`${result.data.filename} downloaded and ready for handoff.`);
   }
 
   async function prepareNewRecruit(): Promise<void> {
-    const result = await prepareNewRecruitHandoff(draft);
+    if (!draft) return;
+    const result = await browserEngineRequest<SerializedBrowserHandoff>(
+      "/api/browser-engine",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "handoff", roster: draft }),
+      },
+    );
     if (!result.data) {
       setAgentNote(
         `New Recruit handoff blocked: ${result.violations.map((item) => item.message).join(" ")}`,
       );
       return;
     }
-    const rosz = result.data.artifacts.find((artifact) => artifact.format === "rosz");
+    const handoff: NewRecruitHandoff = {
+      ...result.data,
+      artifacts: result.data.artifacts.map(decodedArtifact),
+    };
+    const rosz = handoff.artifacts.find((artifact) => artifact.format === "rosz");
     if (!rosz) {
       setAgentNote("New Recruit handoff failed to produce a .rosz artifact.");
       return;
     }
     downloadArtifact(rosz);
-    setNewRecruitHandoff(result.data);
+    setNewRecruitHandoff(handoff);
     setAgentNote(
       `${rosz.filename} downloaded. Import it in New Recruit to create a new list copy.`,
     );
@@ -375,16 +510,23 @@ export default function Home() {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const parsed = parseRosterDraft(JSON.parse(await file.text()));
-      if (!parsed.success) {
-        throw new Error("Roster schema mismatch.");
-      }
-      const imported = parsed.data;
-      const result = validateRoster(imported);
-      commitDraft(
-        imported,
+      const result = await browserEngineRequest<BrowserRosterWorkspace>(
+        "/api/browser-engine",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "inspect",
+            roster: JSON.parse(await file.text()),
+          }),
+        },
+      );
+      if (!result.data) throw new Error("Roster schema mismatch.");
+      const imported = result.data.roster;
+      commitWorkspace(
+        result.data,
         result.ok
-          ? `${file.name} imported and validated${parsed.migrated ? " after upgrading its V1 provenance" : ""}.`
+          ? `${file.name} imported and validated${result.data.migrated ? " after upgrading its provenance" : ""}.`
           : `${file.name} imported with ${result.violations.length} issue(s).`,
       );
       setSelectedFaction(imported.factionId);
@@ -399,8 +541,53 @@ export default function Home() {
     }
   }
 
+  async function restoreDraft(roster: RosterDraftV1): Promise<void> {
+    const result = await browserEngineRequest<BrowserRosterWorkspace>(
+      "/api/browser-engine",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "inspect", roster }),
+      },
+    );
+    if (!result.data) {
+      setAgentNote(
+        result.violations[0]?.message ??
+          "That saved roster cannot be opened with the active data bundle.",
+      );
+      return;
+    }
+    setWorkspace(result.data);
+    setNewRecruitHandoff(null);
+    setTarget(result.data.roster.pointsLimit);
+    setPreferences(result.data.roster.preferences);
+    setSelectedFaction(result.data.roster.factionId);
+    setAgentNote(`${result.data.roster.name} restored from local history.`);
+  }
+
+  if (!draft || !validation || !workspace || !dataStatus || !runtimeData) {
+    return (
+      <main className="app-shell">
+        <section className="hero-copy">
+          <span className="eyebrow">RosterPilot · active data snapshot</span>
+          <h1>Build the army you mean to play.</h1>
+          <p>
+            Loading the current verified roster engine for Adeptus Custodes and
+            every supported faction.
+          </p>
+          <p>
+            One roster, three independent paths: build, New Recruit, and
+            Compare in Tessera.
+          </p>
+          <p>Powered by 40kdc-data</p>
+          <p>{agentNote}</p>
+        </section>
+      </main>
+    );
+  }
+
   const ready = validation.ok;
-  const newRecruitCapability = getNewRecruitCapability(draft.factionId);
+  const newRecruitCapability = workspace.newRecruitCapability;
   const newRecruitMapped = newRecruitCapability.available;
   const remaining = draft.pointsLimit - draft.totalPoints;
   const rosterCommand = `Build or review "${draft.name}" as a ${draft.pointsLimit}-point ${draft.factionName} roster. Validate it before making any legality claim, then ${
@@ -434,7 +621,12 @@ export default function Home() {
         </nav>
         <div className="status-pill">
           <span className="status-dot" />
-          Release {DATA_STATUS?.sources.releaseId ?? "pinned"} · local engine
+          Release {dataStatus.sources.releaseId ?? "pinned"} ·{" "}
+          {runtimeData.source === "signed-verified"
+            ? runtimeData.durability.mode === "persistent"
+              ? "verified durable server data"
+              : "verified server data"
+            : "compiled server fallback"}
         </div>
       </header>
 
@@ -578,7 +770,7 @@ export default function Home() {
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                  generateDraft();
+                  void generateDraft();
                 }
               }}
             />
@@ -613,7 +805,11 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-              <button className="primary-button" type="button" onClick={generateDraft}>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void generateDraft()}
+              >
                 Build draft <span aria-hidden="true">↗</span>
               </button>
             </div>
@@ -688,12 +884,6 @@ export default function Home() {
 
             <div className="roster-list">
               {draft.units.map((selection) => {
-                const summary = searchUnits({
-                  faction: draft.factionId,
-                  query: selection.name,
-                  includeLegends: true,
-                  limit: 3,
-                }).data?.find((unit) => unit.id === selection.unitId);
                 return (
                   <article className="roster-row" key={selection.selectionId}>
                     <div className="role-token">
@@ -721,7 +911,7 @@ export default function Home() {
                           )
                         }
                       >
-                        {(summary?.modelCounts ?? [selection.modelCount]).map(
+                        {(workspace.modelCountsByUnitId[selection.unitId] ?? [selection.modelCount]).map(
                           (count) => (
                             <option key={count} value={count}>
                               {count} models
@@ -963,14 +1153,7 @@ export default function Home() {
                 key={`${item.id}-${item.updatedAt}`}
                 type="button"
                 className={item.updatedAt === draft.updatedAt ? "active" : ""}
-                onClick={() => {
-                  setDraft(item);
-                  setNewRecruitHandoff(null);
-                  setTarget(item.pointsLimit);
-                  setPreferences(item.preferences);
-                  setSelectedFaction(item.factionId);
-                  setAgentNote(`${item.name} restored from local history.`);
-                }}
+                onClick={() => void restoreDraft(item)}
               >
                 <span>{item.name}</span>
                 <small>
@@ -996,9 +1179,9 @@ export default function Home() {
             Powered by 40kdc-data
           </a>
           <p className="source-caveat">
-            Rules {DATA_STATUS?.packageVersion} · BSData{" "}
-            {DATA_STATUS?.sources.newRecruit.commit.slice(0, 8)} · MFM v
-            {DATA_STATUS?.sources.official.mfmVersion}. Verify event-specific
+            Rules {dataStatus.packageVersion} · BSData{" "}
+            {dataStatus.sources.newRecruit.commit.slice(0, 8)} · MFM v
+            {dataStatus.sources.official.mfmVersion}. Verify event-specific
             rulings before play.
           </p>
         </aside>

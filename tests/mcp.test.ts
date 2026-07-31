@@ -180,6 +180,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "explain_roster",
         "export_roster",
         "get_data_status",
+        "get_data_update_status",
         "get_new_recruit_capability",
         "get_new_recruit_connection_status",
         "get_tessera_connection_status",
@@ -188,6 +189,9 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "modify_roster_batch",
         "prepare_new_recruit_handoff",
         "prepare_roster_for_tessera",
+        "rebase_roster",
+        "refresh_data_now",
+        "rollback_data_bundle",
         "search_factions",
         "search_units",
         "validate_roster",
@@ -217,7 +221,11 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
       rosterExecutionFingerprint(structured.data),
       rosterExecutionFingerprint(direct.data),
     );
-    assert.equal(freshnessChecks, 1);
+    assert.equal(
+      freshnessChecks,
+      0,
+      "a roster build must not wait for a live source check",
+    );
 
     const aeldariResponse = await client.callTool({
       name: "build_roster",
@@ -237,14 +245,18 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     assert.equal(aeldari.ok, true);
     assert.equal(aeldari.data.factionId, "aeldari");
     assert.ok(aeldari.data.totalPoints >= 980);
-    assert.equal(freshnessChecks, 1, "builds should reuse the freshness TTL");
+    assert.equal(
+      freshnessChecks,
+      0,
+      "additional builds remain offline-first",
+    );
 
     const forcedFreshness = await client.callTool({
       name: "check_data_freshness",
       arguments: { force: true },
     });
     assert.equal(forcedFreshness.isError, false);
-    assert.equal(freshnessChecks, 2);
+    assert.equal(freshnessChecks, 1);
 
     const capability = await client.callTool({
       name: "get_new_recruit_capability",

@@ -1,5 +1,10 @@
 # Live-run postmortem: Custodes vs unknown Aeldari
 
+> Historical evidence snapshot. Issue states and commands below describe the
+> recorded 2026-07-28 run; use [Architecture](./architecture.md),
+> [Workflow guide](./workflows.md), and [Certification](./certification.md) for
+> the current product contract.
+
 The reusable, credential-free regression evidence from this run is preserved
 in
 `tests/fixtures/tessera-v2/unknown-aeldari-live-run.sanitized.json`. It covers

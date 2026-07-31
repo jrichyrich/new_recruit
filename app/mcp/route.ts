@@ -5,15 +5,25 @@ import {
   remoteOptions,
   withRemoteCors,
 } from "@/lib/rosterpilot/remote";
+import {
+  getConfiguredDataBundleProvider,
+} from "@/lib/rosterpilot";
 import { createRosterPilotMcpServer } from "@/mcp/server";
+import {
+  initializeHostedDataForRequest,
+} from "@/app/hosted-data-bundles";
 
 async function handle(request: Request): Promise<Response> {
   const denied = authorizeRemoteRequest(request);
   if (denied) return withRemoteCors(denied, request);
+  await initializeHostedDataForRequest(request);
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
   });
-  const server = createRosterPilotMcpServer();
+  const server = createRosterPilotMcpServer({
+    dataBundleProvider:
+      getConfiguredDataBundleProvider() ?? undefined,
+  });
   await server.connect(transport);
   const response = await transport.handleRequest(request);
   return withRemoteCors(response, request);

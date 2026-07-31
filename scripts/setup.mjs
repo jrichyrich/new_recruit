@@ -17,6 +17,8 @@ const supportedProfiles = new Set(["core", "mcp", "new-recruit", "tessera"]);
 const supportedRefreshModes = new Set(["skip", "check", "apply"]);
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const defaultDataBundleChannelUrl =
+  "https://raw.githubusercontent.com/jrichyrich/new_recruit/data-bundles/channels/stable.json";
 const ensureCurrentNextStep =
   'Run "npm run rosterpilot -- agent ensure-current" from this checkout.';
 
@@ -100,12 +102,34 @@ function quoteToml(value) {
   return JSON.stringify(value);
 }
 
+function localDataBundleEnvironment(projectRoot) {
+  return {
+    ROSTERPILOT_DATA_CHANNEL_URL:
+      process.env.ROSTERPILOT_DATA_CHANNEL_URL ??
+      defaultDataBundleChannelUrl,
+    ROSTERPILOT_DATA_TRUSTED_KEYS_FILE:
+      process.env.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE ??
+      path.join(
+        projectRoot,
+        "data",
+        "data-bundle-trusted-keys.json",
+      ),
+    ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY:
+      process.env.ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY ??
+      path.join(projectRoot, "data", "bootstrap-data-bundle"),
+  };
+}
+
 export function renderCodexConfig({
   nodeExecutable,
   projectRoot,
 }) {
   const loader = path.join(projectRoot, "node_modules", "tsx", "dist", "loader.mjs");
   const server = path.join(projectRoot, "mcp", "stdio.ts");
+  const dataEnvironment = localDataBundleEnvironment(projectRoot);
+  const dataEnvironmentToml = Object.entries(dataEnvironment)
+    .map(([name, value]) => `${name} = ${quoteToml(value)}`)
+    .join(", ");
   return [
     "[mcp_servers.rosterpilot]",
     `command = ${quoteToml(nodeExecutable)}`,
@@ -115,6 +139,7 @@ export function renderCodexConfig({
       server,
     ].map(quoteToml).join(", ")}]`,
     `cwd = ${quoteToml(projectRoot)}`,
+    `env = { ${dataEnvironmentToml} }`,
     "",
   ].join("\n");
 }
@@ -123,6 +148,7 @@ export function renderClaudeConfig({
   nodeExecutable,
   projectRoot,
 }) {
+  const dataEnvironment = localDataBundleEnvironment(projectRoot);
   return JSON.stringify(
     {
       mcpServers: {
@@ -140,6 +166,7 @@ export function renderClaudeConfig({
             path.join(projectRoot, "mcp", "stdio.ts"),
           ],
           cwd: projectRoot,
+          env: dataEnvironment,
         },
       },
     },
@@ -353,20 +380,6 @@ function ensureNewRecruitPrerequisites(dependencies) {
   }
 }
 
-function ensureCleanTrackedWorktree(dependencies) {
-  const result = dependencies.run(
-    "git",
-    ["status", "--porcelain", "--untracked-files=no"],
-    { capture: true, cwd: dependencies.projectRoot },
-  );
-  assertCommand("Git worktree check", result);
-  if (result.stdout.trim()) {
-    throw new SetupError(
-      "Cannot apply a data update while tracked files are modified. Commit or stash those changes, then rerun setup.",
-    );
-  }
-}
-
 function configureMcp({ doctor, results }, dependencies) {
   const configDirectory = path.join(dependencies.projectRoot, ".codex");
   const configPath = path.join(configDirectory, "config.toml");
@@ -412,6 +425,45 @@ function configureMcp({ doctor, results }, dependencies) {
       nodeExecutable: dependencies.nodeExecutable,
       projectRoot: dependencies.projectRoot,
     }),
+  );
+}
+
+function configureManagedSkill({ doctor, results }, dependencies) {
+  const action = doctor ? "skill:check" : "skill:install";
+  const result = runNpmScript(action, [], dependencies, true);
+  let report = null;
+  try {
+    report = result.stdout.trim()
+      ? JSON.parse(result.stdout)
+      : null;
+  } catch {
+    report = null;
+  }
+  const ready =
+    !result.error &&
+    result.code === 0 &&
+    report?.ok === true &&
+    report?.status === "current";
+  const pluginNotice =
+    report?.pluginCache?.status === "outside-setup-control"
+      ? ` Plugin cache ${report.pluginCache.path} is outside setup control.`
+      : "";
+  addResult(
+    results,
+    "RosterPilot Codex skill",
+    ready ? "ready" : "warning",
+    ready
+      ? `managed skill ${report.version} matches source ${report.sourceHash}.${pluginNotice}`
+      : `${
+          report?.status
+            ? `managed skill is ${report.status}`
+            : commandFailure("RosterPilot skill management", result).message
+        }.${pluginNotice}`,
+    ready
+      ? []
+      : [
+          `Run "npm run ${doctor ? "skill:install" : "skill:check"}" to inspect or repair the managed RosterPilot skill.`,
+        ],
   );
 }
 
@@ -595,14 +647,32 @@ async function handleFreshness(
     addResult(results, "Live freshness", "warning", "check skipped");
     return;
   }
-  const response = parseJsonCommand(
+  const diagnostic = diagnosticJson(
     "Live freshness check",
     runRosterPilot(["freshness"], dependencies),
   );
+  if (!diagnostic.ok) {
+    addResult(
+      results,
+      "Live freshness",
+      "warning",
+      `${diagnostic.detail} The pinned local data remains available and no update was applied.`,
+      [
+        'Retry "npm run rosterpilot -- freshness" when internet access is available.',
+      ],
+    );
+    return;
+  }
+  const response = diagnostic.value;
   const state = response.data?.state ?? "unknown";
   const action = freshnessAction(state);
   if (action === "current") {
-    addResult(results, "Live freshness", "ready", "committed release is current");
+    addResult(
+      results,
+      "Live freshness",
+      "ready",
+      "active verified data is current",
+    );
     return;
   }
   if (action === "unknown") {
@@ -612,11 +682,6 @@ async function handleFreshness(
       "warning",
       "at least one upstream source could not be checked; no update was applied",
     );
-    if (refresh === "apply") {
-      throw new SetupError(
-        "Cannot apply a data update while live freshness is unknown.",
-      );
-    }
     return;
   }
 
@@ -632,24 +697,85 @@ async function handleFreshness(
       )));
   if (!apply) return;
 
-  ensureCleanTrackedWorktree(dependencies);
-  assertCommand(
-    "Data update",
-    runNpmScript("data:prepare-update", [], dependencies),
+  const refreshResponse = parseJsonCommand(
+    "Runtime data refresh",
+    runRosterPilot(["data", "refresh"], dependencies),
   );
-  assertCommand(
-    "Generated data synchronization",
-    runNpmScript("data:sync-check", [], dependencies),
-  );
-  assertCommand("Roster data validation", runNpmScript("data:check", [], dependencies));
+  if (!refreshResponse.ok) {
+    const providerUnavailable = refreshResponse.violations?.some(
+      (violation) =>
+        violation.code === "DATA_BUNDLE_PROVIDER_UNAVAILABLE",
+    );
+    if (providerUnavailable) {
+      results.splice(
+        results.findIndex(
+          (result) => result.name === "Live freshness",
+        ),
+        1,
+        {
+          name: "Live freshness",
+          status: "warning",
+          detail:
+            "signed runtime updates are unavailable; continuing from the pinned compiled offline data",
+        },
+      );
+      return;
+    }
+    throw new SetupError(
+      `Runtime data refresh failed: ${
+        refreshResponse.violations
+          ?.map((violation) => violation.message)
+          .join(" ") ?? "the provider rejected the update"
+      }`,
+    );
+  }
   results.splice(
     results.findIndex((result) => result.name === "Live freshness"),
     1,
     {
       name: "Live freshness",
       status: "ready",
-      detail: "update applied and validated; review and commit the tracked changes",
+      detail:
+        "latest verified runtime bundle activated; the tracked offline bootstrap was unchanged",
     },
+  );
+}
+
+function addDataBundleReadiness(results, status) {
+  const bundle = status?.dataBundle;
+  const signed =
+    bundle?.dataTrust === undefined ||
+    bundle.dataTrust === "signed-verified";
+  const healthy =
+    bundle?.state !== "degraded" &&
+    bundle?.state !== "offline";
+  const durable = bundle?.durability?.state !== "degraded";
+  const ready =
+    bundle?.providerConfigured === true &&
+    typeof bundle.activeBundleId === "string" &&
+    bundle.activeBundleId.length > 0 &&
+    signed &&
+    healthy &&
+    durable;
+  addResult(
+    results,
+    "Signed data updates",
+    ready ? "ready" : "warning",
+    ready
+      ? `provider is ${bundle.state ?? "ready"} on bundle ${bundle.activeBundleId}`
+      : bundle?.providerConfigured
+        ? `signed provider is configured but not release-ready (state ${bundle.state ?? "degraded"}, trust ${bundle.dataTrust ?? "unknown"}${
+            bundle?.durability?.reason
+              ? `; ${bundle.durability.reason}`
+              : ""
+          })`
+        : "signed runtime provider is unavailable; builds use pinned compiled data",
+    ready
+      ? []
+      : [
+          'Run "npm run rosterpilot -- data update-status" to inspect bootstrap, trust-key, and channel readiness.',
+          'Release operators must run "npm run data:bundle:verify-release" before deployment.',
+        ],
   );
 }
 
@@ -899,7 +1025,7 @@ async function diagnoseRemoteFreshness(options, dependencies, results) {
       results,
       "Remote data freshness",
       "warning",
-      `${response.detail} Local readiness results remain valid for the pinned release.`,
+      `${response.detail} Local readiness results remain valid for the active frozen data bundle.`,
       [
         'Retry "npm run rosterpilot -- freshness" when internet access is available.',
       ],
@@ -913,7 +1039,7 @@ async function diagnoseRemoteFreshness(options, dependencies, results) {
     "Remote data freshness",
     action === "current" ? "ready" : "warning",
     action === "current"
-      ? "the committed release matches the checked upstream sources"
+      ? "the active verified data matches the checked upstream sources"
       : action === "offer-update"
         ? `upstream state is ${state}; no update was applied`
         : "one or more upstream sources could not be checked; local diagnostics are unaffected",
@@ -1056,6 +1182,7 @@ async function runDoctor(options, dependencies, results) {
         "ready",
         `release ${statusResponse.value.data.sources.releaseId} validated`,
       );
+      addDataBundleReadiness(results, statusResponse.value.data);
     } else {
       addResult(
         results,
@@ -1083,6 +1210,7 @@ async function runDoctor(options, dependencies, results) {
   }
 
   if (profileIncludesMcp(options.profile)) {
+    configureManagedSkill({ doctor: true, results }, dependencies);
     configureMcp({ doctor: true, results }, dependencies);
   }
   if (dependenciesReady) {
@@ -1156,7 +1284,7 @@ export async function runSetup(rawOptions, overrides = {}) {
   if (!options.profile) {
     options.profile = interactive
       ? await askChoice(
-          "Setup profile [core/mcp/new-recruit] (core): ",
+          "Setup profile [core/mcp/new-recruit/tessera] (core): ",
           [...supportedProfiles],
           "core",
           dependencies,
@@ -1205,11 +1333,42 @@ export async function runSetup(rawOptions, overrides = {}) {
     addResult(results, "Dependencies", "ready", "installed with npm ci");
   }
 
-  assertCommand(
-    "Generated data synchronization",
-    runNpmScript("data:sync-check", [], dependencies),
-  );
-  addResult(results, "Generated data", "ready", "matches the pinned BSData commit");
+  if (options.refresh === "skip") {
+    addResult(
+      results,
+      "Remote pinned-source check",
+      "warning",
+      "network-backed BSData synchronization check skipped; committed data will be validated locally",
+      [
+        'Run "npm run data:sync-check" when internet access is available.',
+      ],
+    );
+  } else {
+    const synchronization = runNpmScript(
+      "data:sync-check",
+      [],
+      dependencies,
+      true,
+    );
+    if (synchronization.error || synchronization.code !== 0) {
+      addResult(
+        results,
+        "Remote pinned-source check",
+        "warning",
+        "the pinned BSData checkout could not be fetched; committed data will still be validated locally",
+        [
+          'Retry "npm run data:sync-check" when internet access is available.',
+        ],
+      );
+    } else {
+      addResult(
+        results,
+        "Remote pinned-source check",
+        "ready",
+        "generated data matches a freshly checked pinned BSData checkout",
+      );
+    }
+  }
 
   assertCommand("Roster data validation", runNpmScript("data:check", [], dependencies));
   const status = parseJsonCommand(
@@ -1225,8 +1384,10 @@ export async function runSetup(rawOptions, overrides = {}) {
     "ready",
     `release ${status.data.sources.releaseId} validated`,
   );
+  addDataBundleReadiness(results, status.data);
 
   if (profileIncludesMcp(options.profile)) {
+    configureManagedSkill({ doctor: false, results }, dependencies);
     configureMcp({ doctor: options.doctor, results }, dependencies);
   }
   if (options.profile === "new-recruit" || options.profile === "tessera") {

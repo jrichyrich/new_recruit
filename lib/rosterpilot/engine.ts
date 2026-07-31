@@ -2,16 +2,10 @@ import {
   baseLoadout,
   baseUnitPoints,
   checkRoster,
-  dataset,
-  detachments,
-  enhancements,
   exportRoster as export40kRoster,
-  factions,
-  forceDispositions,
   normalizeName,
   optionCap,
   pointsTierMissing,
-  units,
   validateRosterCore,
   wargearPoints,
 } from "@alpaca-software/40kdc-data";
@@ -50,17 +44,47 @@ import {
   newRecruitCatalogue,
 } from "./catalogue-summary";
 import { getNewRecruitFactionCatalogue } from "./catalogue";
-import { currentRosterSourceData, parseRosterDraft } from "./draft";
+import {
+  currentRosterSourceData,
+  parseRosterDraft,
+  rebaseRosterData,
+  stampRosterDataIdentity,
+} from "./draft";
+import {
+  dataset,
+  detachments,
+  enhancements,
+  factions,
+  forceDispositions,
+  units,
+} from "./runtime-dataset";
 import {
   newRecruitEquipmentSignature,
   resolveNewRecruitUnit,
 } from "./new-recruit-resolver";
+import {
+  getDataUpdateStatusSnapshot,
+} from "./data-operations";
 
-export const DATA_PACKAGE_VERSION =
+export let DATA_PACKAGE_VERSION =
   newRecruitCatalogue.sources.rules.version;
-export const DATA_EDITION = newRecruitCatalogue.sources.rules.edition;
-export const DATA_DATASLATE =
+export let DATA_EDITION = newRecruitCatalogue.sources.rules.edition;
+export let DATA_DATASLATE =
   newRecruitCatalogue.sources.rules.dataslate;
+
+export function refreshRuntimeDataConstants(): void {
+  DATA_PACKAGE_VERSION = newRecruitCatalogue.sources.rules.version;
+  DATA_EDITION = newRecruitCatalogue.sources.rules.edition;
+  DATA_DATASLATE = newRecruitCatalogue.sources.rules.dataslate;
+}
+
+export const DEPRECATED_DATA_WARNING_CODE_ALIASES = {
+  DATA_VERSION_CHANGED: "DATA_PROVENANCE_CHANGED",
+  DATA_RELEASE_CHANGED: "DATA_PROVENANCE_CHANGED",
+  CATALOGUE_VERSION_CHANGED: "DATA_PROVENANCE_CHANGED",
+  OFFICIAL_UPDATE_PENDING: "DATA_SEMANTICS_CHANGED",
+  DATA_UPDATE_AVAILABLE: "DATA_PROVENANCE_CHANGED",
+} as const;
 
 const FACTION_ALIASES: Record<string, string> = {
   custodes: "adeptus-custodes",
@@ -994,6 +1018,7 @@ export function getDataStatus(): ResultEnvelope<DataStatus> {
       state: "pinned",
       checkedAt: newRecruitCatalogue.sources.official.checkedAt,
     },
+    dataBundle: getDataUpdateStatusSnapshot(),
     newRecruitCoverage: {
       factionCount: newRecruitCatalogue.summary.factionCount,
       exportCapableFactions:
@@ -1866,23 +1891,17 @@ export function buildRoster(
         opponentValidation.warnings,
       );
     }
-    const opponentPin =
-      rawInput.opponentContext.roster.sourceData;
-    const currentPin = currentRosterSourceData(
-      rawInput.opponentContext.roster.factionId,
+    const opponentCompatibility = rebaseRosterData(
+      rawInput.opponentContext.roster,
     );
     if (
-      opponentPin.edition !== currentPin.edition ||
-      opponentPin.version !== currentPin.version ||
-      (
-        "releaseId" in opponentPin &&
-        opponentPin.releaseId !== currentPin.releaseId
-      )
+      !opponentCompatibility.ok ||
+      opponentCompatibility.data?.status === "review-required"
     ) {
       return envelope<RosterDraftV1>(null, [
         issue(
-          "OPPONENT_DATA_PIN_MISMATCH",
-          "The known opponent roster uses a different pinned rules release. Rebuild or migrate it before constructing a counter-roster.",
+          "OPPONENT_DATA_SEMANTICS_CHANGED",
+          "The known opponent roster references rules or mappings that differ from the active data bundle. Review and rebase it before constructing a counter-roster.",
         ),
       ]);
     }
@@ -3089,7 +3108,7 @@ export function buildRoster(
   }
 
   const timestamp = nowIso();
-  const draft: RosterDraftV1 = {
+  const draft = stampRosterDataIdentity({
     schemaVersion: ROSTER_SCHEMA_VERSION,
     gameSystem: SUPPORTED_GAME,
     sourceData: {
@@ -3129,7 +3148,7 @@ export function buildRoster(
     units: selections,
     createdAt: timestamp,
     updatedAt: timestamp,
-  };
+  });
   const validation = validateRoster(draft);
   return {
     ok: validation.ok,
@@ -3233,6 +3252,16 @@ export function validateRoster(
       issue(
         "DATA_PROVENANCE_INCOMPLETE",
         "This V1 roster was migrated to the current data release; rebuild it when historical source provenance matters.",
+        "warn",
+      ),
+    );
+  }
+  if (draft.sourceData.official.authority?.status !== "verified") {
+    warnings.push(
+      issue(
+        "OFFICIAL_AUTHORITY_UNAVAILABLE",
+        draft.sourceData.official.authority?.reason ??
+          "This roster predates explicit official-extractor authority provenance; its Games Workshop reconciliation status is unverified.",
         "warn",
       ),
     );
@@ -3495,35 +3524,20 @@ export function validateRoster(
     }
   }
 
-  if (draft.sourceData.version !== DATA_PACKAGE_VERSION) {
-    warnings.push(
-      issue(
-        "DATA_VERSION_CHANGED",
-        `This roster was created with data ${draft.sourceData.version}; the engine is pinned to ${DATA_PACKAGE_VERSION}.`,
-        "warn",
-      ),
-    );
-  }
-  if (draft.sourceData.releaseId !== newRecruitCatalogue.releaseId) {
-    warnings.push(
-      issue(
-        "DATA_RELEASE_CHANGED",
-        `This roster was created with release ${draft.sourceData.releaseId}; the engine is pinned to ${newRecruitCatalogue.releaseId}.`,
-        "warn",
-      ),
-    );
-  }
-  if (
-    draft.sourceData.newRecruit.commit !==
-    newRecruitCatalogue.sources.newRecruit.commit
-  ) {
-    warnings.push(
-      issue(
-        "CATALOGUE_VERSION_CHANGED",
-        "The pinned New Recruit catalogue changed after this roster was created.",
-        "warn",
-      ),
-    );
+  const compatibility = rebaseRosterData(draft);
+  if (compatibility.ok) {
+    warnings.push(...compatibility.warnings);
+    if (compatibility.data?.status === "review-required") {
+      violations.push(
+        issue(
+          "ROSTER_DATA_REVIEW_REQUIRED",
+          "This roster references changed rules or New Recruit mappings. Review and explicitly rebase it before validation, export, or external delivery.",
+        ),
+      );
+    }
+  } else {
+    violations.push(...compatibility.violations);
+    warnings.push(...compatibility.warnings);
   }
   for (const sourceConflict of conflictsForRoster(draft)) {
     warnings.push(
@@ -3697,7 +3711,9 @@ export function modifyRoster(
     next.forceDispositionName = dispositionName(operation.forceDispositionId);
   }
 
-  next = recalculateDraft(next, next.units);
+  next = stampRosterDataIdentity(
+    recalculateDraft(next, next.units),
+  );
   const validation = validateRoster(next);
   return {
     ok: validation.ok,

@@ -1,5 +1,3 @@
-import { units } from "@alpaca-software/40kdc-data";
-
 import {
   analyzeMissionReadiness,
   assessMissionReadinessRevisionGuardrail,
@@ -12,6 +10,7 @@ import {
   type TesseraMissionReadinessBand,
   type TesseraMissionReadinessReport,
 } from "../../lib/rosterpilot";
+import { units } from "../../lib/rosterpilot/runtime-dataset";
 
 export const MINIMUM_CHANGE_CANDIDATE_UTILIZATION = 0.98;
 

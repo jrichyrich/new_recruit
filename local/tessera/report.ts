@@ -410,7 +410,12 @@ function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
     { label: "Source", value: safeText(report.source) },
     {
       label: "Schema",
-      value: report.schemaVersion === 2 ? "Tessera report v2" : "Legacy report",
+      value:
+        report.schemaVersion === 3
+          ? "Tessera report v3"
+          : report.schemaVersion === 2
+            ? "Tessera report v2"
+            : "Legacy report",
     },
     {
       label: "Player export",

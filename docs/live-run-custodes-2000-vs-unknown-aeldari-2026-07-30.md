@@ -1,5 +1,10 @@
 # Live run: 2,000-point Custodes vs unknown Aeldari
 
+> Historical evidence snapshot. Results and commands below describe the
+> recorded 2026-07-30 run; use [Architecture](./architecture.md),
+> [Workflow guide](./workflows.md), and [Certification](./certification.md) for
+> the current product contract.
+
 Date: 2026-07-30  
 Result: complete baseline, complete paired revision, two focused workflow fixes
 

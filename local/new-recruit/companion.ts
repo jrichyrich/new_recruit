@@ -5,6 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  compareNewRecruitCatalogueProvenance,
+  getNewRecruitFactionSummary,
+  newRecruitCatalogue,
   prepareNewRecruitHandoff,
   inspectEnrichedRosz,
   validateEnrichedRosz,
@@ -12,6 +15,7 @@ import {
   type ExportArtifact,
   type ConnectorEvent,
   type NewRecruitConnectionStatus,
+  type NewRecruitCatalogueProvenanceComparison,
   type NewRecruitDelivery,
   type ResultEnvelope,
   type RosterDraftV1,
@@ -762,6 +766,7 @@ export async function deliverRosterToNewRecruit(
     connectorEvents: [],
     verification: null,
     enrichedSummary: null,
+    catalogueProvenance: null,
     diagnosticArtifacts: [],
     artifacts: [],
   };
@@ -891,6 +896,11 @@ export async function deliverRosterToNewRecruit(
     }
 
     const artifacts: ExportArtifact[] = [rosz];
+    let catalogueProvenanceViolation: {
+      code: string;
+      message: string;
+      severity: "error";
+    } | null = null;
     if (includeEnriched) {
       if (!agent.enrichedRoszBase64) {
         throw new Error(
@@ -908,6 +918,61 @@ export async function deliverRosterToNewRecruit(
             modelCount: unit.modelCount,
           })),
         });
+        const factionCatalogue = getNewRecruitFactionSummary(
+          draft.factionId,
+        );
+        if (!factionCatalogue?.catalogue.id) {
+          catalogueProvenanceViolation = {
+            code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNAVAILABLE",
+            message:
+              `The pinned ${draft.factionName} New Recruit catalogue identity is unavailable, so the delivered roster cannot be accepted as compatible with its data bundle.`,
+            severity: "error",
+          };
+        } else {
+          const catalogueProvenance: NewRecruitCatalogueProvenanceComparison =
+            compareNewRecruitCatalogueProvenance(
+              delivery.enrichedSummary,
+              {
+                releaseId: draft.sourceData.releaseId,
+                gameSystem: {
+                  id: newRecruitCatalogue.gameSystem.id,
+                  name: newRecruitCatalogue.gameSystem.name,
+                  revision:
+                    draft.sourceData.newRecruit.gameSystemRevision,
+                },
+                catalogue: {
+                  id: factionCatalogue.catalogue.id,
+                  name: factionCatalogue.catalogue.name,
+                  revision:
+                    draft.sourceData.newRecruit.catalogueRevision,
+                },
+              },
+            );
+          delivery.catalogueProvenance = catalogueProvenance;
+          if (catalogueProvenance.status === "drift") {
+            const mismatchSummary = catalogueProvenance.mismatches
+              .map(
+                (mismatch) =>
+                  `${mismatch.field} expected ${mismatch.expected}, observed ${
+                    mismatch.observed ?? "missing"
+                  }`,
+              )
+              .join("; ");
+            catalogueProvenanceViolation = {
+              code: "NEW_RECRUIT_CATALOGUE_DRIFT",
+              message:
+                `New Recruit created or reused the list, but its verified export does not match data bundle ${draft.sourceData.bundleId}: ${mismatchSummary}. The remote list was retained for inventory and was not accepted for downstream use.`,
+              severity: "error",
+            };
+          } else if (catalogueProvenance.status === "unverifiable") {
+            catalogueProvenanceViolation = {
+              code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNVERIFIABLE",
+              message:
+                `New Recruit created or reused the list, but its verified export omitted ${catalogueProvenance.missing.join(", ")}. The remote list was retained for inventory and was not accepted for downstream use.`,
+              severity: "error",
+            };
+          }
+        }
       } catch (error) {
         const failedVerificationEvent = mutationEvent({
           eventId: connectorEventId,
@@ -1024,10 +1089,22 @@ export async function deliverRosterToNewRecruit(
     delivery.connectorEvents = [verifiedMutationEvent];
     await finalizeMutationEvent(
       verifiedMutationEvent,
-      worker.imported
-        ? "New Recruit created and verified a remote roster list."
-        : "New Recruit reused an existing roster state; no import occurred.",
+      catalogueProvenanceViolation
+        ? worker.imported
+          ? "New Recruit created and verified a remote roster list, but its observed catalogue identity was rejected."
+          : "New Recruit reused an existing roster state, but its observed catalogue identity was rejected."
+        : worker.imported
+          ? "New Recruit created and verified a remote roster list."
+          : "New Recruit reused an existing roster state; no import occurred.",
     );
+    if (catalogueProvenanceViolation) {
+      return {
+        ok: false,
+        data: delivery,
+        violations: [catalogueProvenanceViolation],
+        warnings: validation.warnings,
+      };
+    }
     return {
       ok: true,
       data: delivery,

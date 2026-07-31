@@ -1745,6 +1745,7 @@ test("canonical point-limit and source-pin mismatches stop before delivery", asy
     ...samePinOpponent,
     sourceData: {
       ...samePinOpponent.sourceData,
+      bundleId: "f".repeat(64),
       releaseId: `${samePinOpponent.sourceData.releaseId}-different`,
     },
   };

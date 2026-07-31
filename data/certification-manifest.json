@@ -258,12 +258,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "1fd7a73f7b70907f1007df204c6dc39e95996d39a90b265e6fa55a1ce7d20647",
-          "bindingSha256": "7096eb69bb109a853435879a45c4db86bd46e2f935a1038cc326150951cf2358"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -389,12 +389,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "7349600a674a9667b572761ac707a939fd163c0965b124ccd57b0186f02fdabc",
-          "bindingSha256": "bbc5d185ae6c2f84804c40ee0245634f16d701cc139aca762f500a4a41b97802"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -554,12 +554,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "429fc607905705d1ef5047895eb14f34b2a3d18c4facb599d31f12cd167fd616",
-          "bindingSha256": "10b8e6af64b5bdc3934ae17913cf28f61c23450f63472db98d825773dfdbe1db"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -685,12 +685,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "de640f901e2c1a0c0be6d15b9ad08b0749899aa1503f3fceb0d148d618e285e5",
-          "bindingSha256": "c32fde9a28154f19a2ec9b77333bc76df63b808e5d6c42b1c35fad4b249f2af8"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -881,12 +881,12 @@
           "Warlock Skyrunners are not a valid exported Warlord mapping.",
           "Named-character restrictions survive deterministic repair."
         ],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "3b38d1fa7201bc15f532fcb076b0374829548c0f0eefd5fb6b3ced140a101503",
-          "bindingSha256": "e97f72de43c897662bc4a16c4cd772202a238789cdf5a5f1d930d55651941cb1"
-        },
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ],
         "invalidationReason": "unbound-legacy"
       }
     },
@@ -1058,12 +1058,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "02895e9551f8e999f99d2639ee0aa0efd5ea80ff8c733e4637299662b96a668e",
-          "bindingSha256": "7f9ac4d762ef17024f1732396c20afdad4ba2d9430b016791c29ee09015d845f"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -1210,12 +1210,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "dd815cbac9960941f98b83f21346a3e2a46313474309a7e99d7182b454f7bf7f",
-          "bindingSha256": "8166ebd48c644273d791ecf275c6c94d92d74a6cf96952d7caec7900b92eacc3"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -1367,12 +1367,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "21dcf4d4e67489f316add6dd347d712537f4361785dd15b7923ea306606c2a6d",
-          "bindingSha256": "e0d40b4bbf0d2b8e7736a4ee07025d6f0569e05a2f0c2c617bbe059e7c74aa0d"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -1506,12 +1506,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "47c2c8e72bb8a92dd3a449ca77573a9efda23d9ee5d599a9cdec667cc618d651",
-          "bindingSha256": "0a054fd3c05f9871282b53d3b36ac591c0d0215a6b0972fd58fcde881e62995b"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -1701,12 +1701,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "91d0a30b70fdb9547b35fab750ac4814d8fdd2d5a7a205713292ea4d8e485e49",
-          "bindingSha256": "7abe4bd1c93345c257a95bfb5a6de164c935c77c8c11d0385038674211f3f612"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -1851,12 +1851,12 @@
           "Core coverage still requires distinct balanced, ranged, and assault vehicle-heavy payloads.",
           "Named-character specialist coverage is not applicable at 1,000 points under the pinned source data."
         ],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "33a714715c8a71bb5c90386dfeeb8192238ccb6fabb9dc879c01e8b05244c840",
-          "bindingSha256": "dc265ae6712b181171273039e3f79c51a1b4ee61f57432e6cfb8f55b98851b72"
-        },
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ],
         "invalidationReason": "unbound-legacy"
       }
     },
@@ -2025,12 +2025,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "bcbb37deea69c3bd3ebb4fe4998a45a7ab717e5a8bb342565a1f003562a3730e",
-          "bindingSha256": "44207886f8a2b43679a03fb67a8487c489d717875d4fce79680d3a643caa76bd"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -2156,12 +2156,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "2c6e103f9bfa55970abe5836530ff9f836a7d3d1020cbe71ed82e7a051ce29d1",
-          "bindingSha256": "9548004f20a16105252175e5e99787537712c2c02a142ae5a376cc1227d434c3"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -2300,12 +2300,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "9d0b4384f98af4eb616a8da071a587532e5240d0a243f38d281c11e4b8226476",
-          "bindingSha256": "3a5d6f2576322715da50ec3fed020394ae9368e12a0bef4d5905953d836e9f6c"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -2433,12 +2433,12 @@
           "Hard exclusions survive candidate generation.",
           "Live exact canaries fail closed on the observed Defiler, Plagueburst Crawler, and Mortarion New Recruit round-trip drift instead of weakening gameplay identity checks."
         ],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "4640dee18573b45072d176118d4459339ef21daf803dfb0a74fa6f3b2c0de801",
-          "bindingSha256": "7a4f410396750400244d88c5b246ab8c329fda80025894e9ebdb3d6ea11be86d"
-        },
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ],
         "invalidationReason": "unbound-legacy"
       }
     },
@@ -2566,12 +2566,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "786960abf2df5afb8d6688708ab3c38a7cd7e1520199657705332a842d0c8879",
-          "bindingSha256": "720813c725d43638092535c3d9c30a94dd0d302f30e0a5c2d40c0741b3e86253"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -2711,12 +2711,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "fd6242d64f5fed9dc3ec36633ae68a980ff80f7f88f15ff21d1c4f57533514c4",
-          "bindingSha256": "ceed6b572b82809a0694a0dd2a6ff42d59a0671522c4dfa846b928eb1e917723"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -2852,12 +2852,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "b3cf8fd65584f34d0c411f29a3f3fc76717dc62a75ec2dff95b8bffb003ea176",
-          "bindingSha256": "891c365dc402c62971848635e279bdee02a580782e478c0998db6406def227d2"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -3002,12 +3002,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "5de7fe6feef74a9fe0ea302e2ea23febb305d4304feae32a67a89ca4893d3c95",
-          "bindingSha256": "71ac1d15929016a448aa969f710848701775772e74d1aa4aea3d4b4dad225ba0"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -3173,12 +3173,12 @@
           "Core coverage still requires distinct balanced, ranged, and assault elite or mixed payloads.",
           "Named-character specialist coverage remains a separate required case."
         ],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "9825f19558ebb0402c2f63f8ec5549ad10b51109147eaf6301c87d7857616ddc",
-          "bindingSha256": "2774515a1ac561759c54218b13538305d7363a4d91076fdf206cc084740ec48d"
-        },
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ],
         "invalidationReason": "unbound-legacy"
       }
     },
@@ -3306,12 +3306,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "0a2e50ae2bc0051c0f4943e7ec6fe0d759302f27012615ffb01a56fd2772efd8",
-          "bindingSha256": "b29590133d475be54ef59aaffdfc08184e98f1cd687d7af3ab0be5493ea40e74"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -3441,12 +3441,12 @@
           "Core coverage still requires distinct balanced, ranged, and assault vehicle-heavy payloads.",
           "Named-character specialist coverage remains a separate required case."
         ],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "e37cd5b63824835cf41f2bc9e1d6417834daaf48817a414e6c6c339d1aee91fd",
-          "bindingSha256": "252ca6284fb68a5ad72f0b62635b0549ce12fc90837e4208b492e4992b899c5f"
-        },
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ],
         "invalidationReason": "unbound-legacy"
       }
     },
@@ -3574,12 +3574,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "1b3b9fd6b9fbe31846df4c9293f82f60f37a6212282241bbd42ef53be0fb7ff9",
-          "bindingSha256": "5fd91a4a16a21657ecf67ac8320956eb7eef1876758c76815ae92db8dcab4b3a"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -3745,12 +3745,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "28b7eda23ff4e8bb2966485628e6183cea74f98576056594a406f2718e8b16b3",
-          "bindingSha256": "22ccf8fa94f2cdaabbad80e5aa2b6297cffa92bcb0d56d7105c350e6c621df9d"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -3903,12 +3903,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "aead04bc4d6fd1d97f230fe5342f387cc049ec5946fa260aa1c62f1526530b04",
-          "bindingSha256": "54ea9229c8d897d927d042a004364485119ed78129e8af6ece5b9defdded205a"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -4036,12 +4036,12 @@
           "Infeasible mass compositions are unavailable rather than fabricated.",
           "Core coverage contains distinct balanced, ranged, and assault payloads."
         ],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "deb074522cc2750aece55be60d64b96a7da79bbafdc59302f26d6fd522e98880",
-          "bindingSha256": "69464b0dd0b98e22316f4ccd48802b6fd21b1177785ec3e93b5e392530dedb55"
-        },
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ],
         "invalidationReason": "unbound-legacy"
       }
     },
@@ -4169,12 +4169,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "0cc3693f74c7c82bf21c520b3055d865f215902ce9a32df80a855f3afcbb292e",
-          "bindingSha256": "7f224454568760dfd4dd16a14c5d33d3c5820c73d11fa9b55efa5752299cf8c0"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -4301,12 +4301,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "83e0e7fc6c4fcc549ad9b3844e17ba2ef7712833db682b3bb5b485f7ca0a35a1",
-          "bindingSha256": "a7c56e79878e1f15e8439a81e1a9c473396d627ce39fa18319a085a054430874"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -4464,12 +4464,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "7620f48418a289277afb9e201c1575eb4daa2fd204da88e39f644c8a94282919",
-          "bindingSha256": "9d487044e5bb1b65e5ae15a0653c2d897e42adeb9fb13aa74864f997542331b7"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -4602,12 +4602,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "c9a929e6d55b687ab49b0737fe08253297583c220cada882d1131f8cb17f397b",
-          "bindingSha256": "d58d95bef9ade3a9c21e72208f305289b05ab0b440b51d25467a8bd641793d64"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -4762,12 +4762,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "1bcea3346d56cdd7e98993e5ada0be9412e90f4b5f953179d234dde98cd3133b",
-          "bindingSha256": "222db48587f7d961a6c9407109ee97b0bed6764281a84ddafbc79fb7f4477320"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -4933,12 +4933,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "125822d7a25ebe86a0c9a990454d5ec41e9187a443eb42addbc1eb16ca6471f3",
-          "bindingSha256": "6b2206d039b35173f0e8ec4ce269aa772a40e8b5b5d8830362cfad18084c4052"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -5066,12 +5066,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "c7e3b178ac4e107b22bfee7b5ee7774bef851b83ac0d1075638730cc714fc63e",
-          "bindingSha256": "ea62cbedcfd40ccfa7064dcd7298cf3d42001d1806ce9454bde920bd0c5fca9e"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -5213,12 +5213,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "9a9441e4d43d57cc05b3bc23c391228e29c4cb2fffec34f00e74bdc371c8d42b",
-          "bindingSha256": "ddc5622ca2968cb7ce57139eda928584e5081bcb799425f86fd613048aa985a4"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     },
     {
@@ -5332,12 +5332,12 @@
       "expertReview": {
         "status": "pending",
         "assertions": [],
-        "binding": {
-          "schemaVersion": 1,
-          "dataPinSha256": "078614e86b58984c861ecaf20fb434e84bf6faec97e80379c6cc759891b1d933",
-          "factionContractSha256": "efbd6e96e86f9e48bae0cb4c28e603b101f843bbf8088242b1c385eaa8766126",
-          "bindingSha256": "474d61eb8d7d7afca48350263e8faa0b4b621686581f1438883b58c3ec2b627e"
-        }
+        "capabilityScopes": [
+          "connector",
+          "mapping",
+          "portfolio",
+          "roster-rules"
+        ]
       }
     }
   ]

@@ -154,6 +154,31 @@ test("builds a complete next source manifest without mutating the pin", () => {
   assert.equal(next.official.checkedAt, freshness.checkedAt);
 });
 
+test("an unchanged observation does not advance checkedAt or the release label", () => {
+  const observedAgain = nextSourceManifest(source, {
+    checkedAt: "2026-07-30T12:00:00.000Z",
+    state: "update-available",
+    rules: {
+      pinnedVersion: source.rules.version,
+      latestVersion: source.rules.version,
+      updateAvailable: true,
+    },
+    newRecruit: {
+      pinnedCommit: source.newRecruit.commit,
+      latestCommit: source.newRecruit.commit,
+      updateAvailable: true,
+    },
+    official: {
+      pinnedVersion: source.official.mfmVersion,
+      latestVersion: source.official.mfmVersion,
+      pinnedContentSha256: source.official.contentSha256,
+      latestContentSha256: source.official.contentSha256,
+      updateAvailable: true,
+    },
+  });
+  assert.deepEqual(observedAgain, source);
+});
+
 test("publishes a validated data set and rolls every file back on failure", () => {
   const directory = mkdtempSync(
     path.join(os.tmpdir(), "rosterpilot-atomic-data-"),

@@ -1,8 +1,6 @@
 import {
-  dataset,
   groupLoadout,
   normalizeName,
-  units,
 } from "@alpaca-software/40kdc-data";
 
 import type {
@@ -10,6 +8,7 @@ import type {
   CatalogueSelectionReference,
   CatalogueUnitReference,
 } from "./catalogue-types";
+import { dataset, units } from "./runtime-dataset";
 
 const UNICODE_DASHES = /[\u058a\u05be\u1400\u1806\u2010-\u2015\u2e17\u2e1a\u2e3a-\u2e3b\u2e40\u301c\u3030\u30a0\ufe31-\ufe32\ufe58\ufe63\uff0d\u2212]/g;
 

@@ -35,9 +35,18 @@ import {
   startTesseraRun,
 } from "../local/tessera/jobs";
 import { getRuntimeProvenance } from "../local/runtime-provenance";
+import {
+  getConfiguredDataBundleProvider,
+} from "../lib/rosterpilot/data-operations";
+import {
+  initializeLocalDataBundleProvider,
+} from "../local/data-bundles/configure";
 import { createRosterPilotMcpServer } from "./server";
 
+await initializeLocalDataBundleProvider();
 const server = createRosterPilotMcpServer({
+  dataBundleProvider:
+    getConfiguredDataBundleProvider() ?? undefined,
   runtimeProvenance: getRuntimeProvenance,
   artifactWriter: (artifact, outputPath, overwrite) =>
     writeExportArtifact(artifact, outputPath, { overwrite }),

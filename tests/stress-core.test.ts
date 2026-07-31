@@ -9,16 +9,87 @@ import {
   evaluateTesseraStressPortfolioContract,
   exportRoster,
   generateFactionStressPortfolio,
+  portfolioReviewCapabilityBindingMatches,
   previewFactionStressPortfolio,
   rosterExecutionFingerprint,
   rosterSimulationDistance,
   rosterStructuralDistance,
   rosterStructuralFingerprint,
+  tesseraStressPortfolioContractFingerprint,
   validateRoster,
   type RosterDraftV1,
   type TesseraMissionReadinessReport,
   type TesseraStressPortfolioItem,
 } from "../lib/rosterpilot";
+
+test("portfolio reviews survive provenance-only releases but not methodology changes", () => {
+  const portfolioHash = "a".repeat(64);
+  const changedPortfolioHash = "b".repeat(64);
+  const review = {
+    portfolioHash,
+    reviewedNotApplicableTemplateIds: [
+      "balanced-control:mass",
+    ],
+    threatLensesReviewed: true,
+  } as const;
+
+  assert.equal(
+    portfolioReviewCapabilityBindingMatches(review, {
+      portfolioHash,
+      sourceReleaseId: "2026-07-30.1",
+    }),
+    true,
+  );
+  assert.equal(
+    portfolioReviewCapabilityBindingMatches(review, {
+      portfolioHash,
+      sourceReleaseId: "2026-07-31.1",
+    }),
+    true,
+    "raw release provenance must not invalidate a capability-scoped review",
+  );
+  assert.equal(
+    portfolioReviewCapabilityBindingMatches(review, {
+      portfolioHash: changedPortfolioHash,
+      sourceReleaseId: "2026-07-31.1",
+    }),
+    false,
+  );
+
+  const currentContract = {
+    schemaVersion: 1 as const,
+    methodology: "adaptive-threat-lenses-v1" as const,
+    sourceReleaseId: "2026-07-30.1",
+    portfolioHash,
+    reviewedNotApplicableTemplateIds: [
+      "balanced-control:mass",
+    ],
+  };
+  assert.equal(
+    tesseraStressPortfolioContractFingerprint(currentContract),
+    tesseraStressPortfolioContractFingerprint({
+      ...currentContract,
+      sourceReleaseId: "2026-07-31.1",
+    }),
+  );
+
+  const legacyContract = {
+    schemaVersion: 1 as const,
+    methodology: "adaptive-threat-lenses-v1" as const,
+    sourceReleaseId: "2026-07-30.1",
+    reviewedNotApplicableTemplateIds: [
+      "balanced-control:mass",
+    ],
+  };
+  assert.notEqual(
+    tesseraStressPortfolioContractFingerprint(legacyContract),
+    tesseraStressPortfolioContractFingerprint({
+      ...legacyContract,
+      sourceReleaseId: "2026-07-31.1",
+    }),
+    "legacy release-bound manifests retain their original behavior",
+  );
+});
 
 function roster(
   faction: string,
@@ -487,6 +558,10 @@ test("Aeldari 2000 produces nine payload-distinct adaptive stress proxies", asyn
   assert.equal(previewData.gates.uniqueSimulationPayloads, 9);
   assert.equal(previewData.gates.exportable, 9);
   assert.deepEqual(previewData.gates.missingCells, []);
+  assert.match(
+    previewData.portfolio.contract?.portfolioHash ?? "",
+    /^[0-9a-f]{64}$/,
+  );
   assert.equal(
     previewData.portfolio.contract?.lensDefinition?.metricVersion,
     "roster-threat-properties-v1",
@@ -612,7 +687,7 @@ test(
   },
 );
 
-test("shared portfolio contract requires three core postures and release-bound diverse exceptions", () => {
+test("shared portfolio contract requires three core postures and capability-bound diverse exceptions", () => {
   const generatedCore = generateFactionStressPortfolio({
     faction: "adeptus-custodes",
     pointsLimit: 1000,

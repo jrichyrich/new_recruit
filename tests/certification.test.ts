@@ -16,12 +16,17 @@ import {
   CertificationManifestSchema,
   CertificationReportSchema,
   FactionCertificationSchema,
+  RepresentativeRosterGoldenEvidenceSchema,
+  assertRepresentativeRosterMatchesGolden,
   buildCertificationRepresentative,
   certificationExpertReviewBinding,
   certificationExpertReviewCases,
   classifyNamedCharacterSpecialistCapability,
   classifyTesseraPreparationCapability,
   certificationManifestSha256,
+  generateRepresentativeGoldenEvidence,
+  legacyCertificationExpertReviewBinding,
+  legacyCertificationExpertReviewBindingV2,
   runDeterministicCertification,
   synchronizedTesseraPreparationExpectation,
   validateCanonicalRoszArchive,
@@ -32,8 +37,12 @@ import {
 } from "../lib/rosterpilot/engine";
 import {
   buildExportableRosterCandidate,
+  legacyProvenanceBoundRosterExecutionFingerprint,
   rosterExecutionFingerprint,
 } from "../lib/rosterpilot/stress-portfolio";
+import {
+  stampRosterDataIdentity,
+} from "../lib/rosterpilot/draft";
 import type { RosterDraftV1 } from "../lib/rosterpilot/types";
 import {
   sanitizeConnectorFixture,
@@ -132,7 +141,7 @@ function canonicalEnhancementFixture(): Promise<CanonicalFixture> {
     assert.ok(removed);
     assert.ok(warlord);
     const enhancementCost = 5;
-    const roster: RosterDraftV1 = {
+    const roster = stampRosterDataIdentity({
       ...structuredClone(base.roster),
       name: "Canonical certification enhancement fixture",
       totalPoints:
@@ -151,7 +160,7 @@ function canonicalEnhancementFixture(): Promise<CanonicalFixture> {
               }
             : unit,
         ),
-    };
+    });
     return exportedFixture(roster);
   })();
   return canonicalEnhancementFixturePromise;
@@ -355,7 +364,17 @@ test("certification manifest covers every pinned faction and capability baseline
     assert.deepEqual(
       faction.expertReview.binding,
       certificationExpertReviewBinding(manifest, faction),
-      `${faction.id} expert review must be bound to the current pin and faction contract`,
+      `${faction.id} expert review must be bound to current capability semantics`,
+    );
+    assert.equal(
+      faction.expertReview.binding?.schemaVersion,
+      2,
+    );
+    assert.deepEqual(
+      faction.semanticEvidence,
+      faction.expertReview.binding?.schemaVersion === 2
+        ? faction.expertReview.binding.semanticEvidence
+        : null,
     );
   }
   for (const faction of (
@@ -366,9 +385,10 @@ test("certification manifest covers every pinned faction and capability baseline
       }>;
     }
   ).factions) {
-    assert.ok(
+    assert.equal(
       Object.hasOwn(faction.expertReview, "binding"),
-      `${faction.id} must serialize its expert-review binding`,
+      faction.expertReview.status === "reviewed",
+      `${faction.id} must persist bindings only for completed expert attestations`,
     );
   }
   assert.match(certificationManifestSha256(manifest), /^[0-9a-f]{64}$/);
@@ -578,9 +598,12 @@ test("expert review contracts emit manual evidence without treating it as automa
   }
 });
 
-test("expert review bindings invalidate changed data and faction contracts", () => {
+test("expert review bindings ignore provenance churn and invalidate scoped semantic changes", () => {
   const source = structuredClone(manifest);
   const faction = source.factions[0];
+  faction.expectedLimitations = [
+    "Use verified connector output.",
+  ];
   const binding = certificationExpertReviewBinding(source, faction);
   faction.expertReview = {
     status: "reviewed",
@@ -609,44 +632,244 @@ test("expert review bindings invalidate changed data and faction contracts", () 
     "set-like serialization order must not invalidate a review",
   );
 
-  const changedPin = structuredClone(source);
-  changedPin.dataPin.releaseId = `${source.dataPin.releaseId}-next`;
-  const invalidatedPin =
-    CertificationManifestSchema.parse(changedPin).factions[0]
-      .expertReview;
-  assert.equal(invalidatedPin.status, "pending");
-  if (invalidatedPin.status === "pending") {
+  const reformattedPolicyText = structuredClone(source);
+  reformattedPolicyText.factions[0].expectedLimitations = [
+    "  USE verified connector output!!! ",
+  ];
+  assert.equal(
+    CertificationManifestSchema.parse(
+      reformattedPolicyText,
+    ).factions[0].expertReview.status,
+    "reviewed",
+    "case, whitespace, and punctuation-only prose formatting must not invalidate semantic evidence",
+  );
+
+  const changedProvenance = structuredClone(source);
+  changedProvenance.dataPin.releaseId =
+    `${source.dataPin.releaseId}-next`;
+  changedProvenance.dataPin.rulesPackageVersion = "99.0.0";
+  changedProvenance.dataPin.newRecruitCommit =
+    "0".repeat(40);
+  changedProvenance.dataPin.officialMfmContentSha256 =
+    "0".repeat(64);
+  const carriedReview =
+    CertificationManifestSchema.parse(
+      changedProvenance,
+    ).factions[0].expertReview;
+  assert.equal(
+    carriedReview.status,
+    "reviewed",
+    "release labels, package versions, commits, and raw source hashes are provenance rather than reviewed semantics",
+  );
+
+  const changedMapping = structuredClone(source);
+  changedMapping.factions[0].expectedBlockingConflicts += 1;
+  const invalidatedMapping =
+    CertificationManifestSchema.parse(
+      changedMapping,
+    ).factions[0].expertReview;
+  assert.equal(invalidatedMapping.status, "pending");
+  if (invalidatedMapping.status === "pending") {
     assert.equal(
-      invalidatedPin.invalidationReason,
+      invalidatedMapping.invalidationReason,
       "binding-mismatch",
     );
-    assert.deepEqual(invalidatedPin.assertions, [
-      "The current faction contract was reviewed.",
-    ]);
     assert.notEqual(
-      invalidatedPin.binding?.dataPinSha256,
-      binding.dataPinSha256,
+      invalidatedMapping.binding?.schemaVersion === 2
+        ? invalidatedMapping.binding.semanticEvidence
+            .mappingSha256
+        : null,
+      binding.semanticEvidence.mappingSha256,
     );
   }
 
-  const changedContract = structuredClone(source);
-  changedContract.factions[0].expectedLimitations.push(
-    "A new limitation requiring review.",
+  const changedRosterRules = structuredClone(source);
+  changedRosterRules.factions[0].detachmentIds.push(
+    "semantic-detachment-change",
   );
-  const invalidatedContract =
-    CertificationManifestSchema.parse(changedContract).factions[0]
-      .expertReview;
-  assert.equal(invalidatedContract.status, "pending");
-  if (invalidatedContract.status === "pending") {
-    assert.equal(
-      invalidatedContract.invalidationReason,
-      "binding-mismatch",
-    );
+  const invalidatedRosterRules =
+    CertificationManifestSchema.parse(
+      changedRosterRules,
+    ).factions[0].expertReview;
+  assert.equal(invalidatedRosterRules.status, "pending");
+  if (
+    invalidatedRosterRules.status === "pending" &&
+    invalidatedRosterRules.binding?.schemaVersion === 2
+  ) {
     assert.notEqual(
-      invalidatedContract.binding?.factionContractSha256,
-      binding.factionContractSha256,
+      invalidatedRosterRules.binding.semanticEvidence
+        .rosterRulesSha256,
+      binding.semanticEvidence.rosterRulesSha256,
     );
   }
+});
+
+test("schema-v1 expert bindings remain readable and migrate without dropping reviewed evidence", () => {
+  const legacy = structuredClone(
+    manifestDocument,
+  ) as {
+    factions: Array<{
+      expertReview: {
+        status: "pending" | "reviewed";
+        reviewedAt?: string;
+        assertions: string[];
+        binding?: { schemaVersion: number };
+      };
+    }>;
+  };
+  const review = legacy.factions[0].expertReview;
+  review.binding = legacyCertificationExpertReviewBinding(
+    manifest,
+    manifest.factions[0],
+  );
+  assert.equal(review.binding.schemaVersion, 1);
+  review.status = "reviewed";
+  review.reviewedAt = "2026-07-30";
+  review.assertions = [
+    "The legacy review evidence remains attributable.",
+  ];
+
+  const migrated =
+    CertificationManifestSchema.parse(legacy).factions[0]
+      .expertReview;
+  assert.equal(migrated.status, "reviewed");
+  if (migrated.status === "reviewed") {
+    assert.equal(migrated.binding.schemaVersion, 2);
+    assert.deepEqual(migrated.assertions, [
+      "The legacy review evidence remains attributable.",
+    ]);
+    assert.deepEqual(migrated.capabilityScopes, [
+      "connector",
+      "mapping",
+      "portfolio",
+      "roster-rules",
+    ]);
+  }
+});
+
+test("policy-only schema-v2 bindings migrate once on the matching compiled bootstrap", () => {
+  const legacy = structuredClone(manifestDocument) as {
+    factions: Array<{
+      id: string;
+      expertReview: Record<string, unknown>;
+    }>;
+  };
+  const parsed = CertificationManifestSchema.parse(legacy);
+  const parsedFaction = parsed.factions[0];
+  legacy.factions[0].expertReview = {
+    status: "reviewed",
+    reviewedAt: "2026-07-30",
+    assertions: [
+      "The pre-runtime semantic review remains attributable.",
+    ],
+    capabilityScopes: ["roster-rules"],
+    binding: legacyCertificationExpertReviewBindingV2(
+      parsed,
+      {
+        ...parsedFaction,
+        expertReview: {
+          ...parsedFaction.expertReview,
+          capabilityScopes: ["roster-rules"],
+        },
+      },
+    ),
+  };
+
+  const migrated = CertificationManifestSchema.parse(legacy)
+    .factions[0].expertReview;
+  assert.equal(migrated.status, "reviewed");
+  if (
+    migrated.status === "reviewed" &&
+    migrated.binding.schemaVersion === 2
+  ) {
+    assert.match(
+      migrated.binding.semanticEvidence
+        .runtimeFactionRulesSha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.deepEqual(migrated.assertions, [
+      "The pre-runtime semantic review remains attributable.",
+    ]);
+  }
+});
+
+test("deterministic certification accepts a provenance-only legacy pin advance", async () => {
+  const changedProvenance = structuredClone(manifestDocument) as {
+    dataPin: {
+      releaseId: string;
+      rulesPackageVersion: string;
+      newRecruitCommit: string;
+      officialMfmContentSha256?: string;
+    };
+  };
+  changedProvenance.dataPin.releaseId = "provenance-only-next";
+  changedProvenance.dataPin.rulesPackageVersion = "99.0.0";
+  changedProvenance.dataPin.newRecruitCommit = "0".repeat(40);
+  changedProvenance.dataPin.officialMfmContentSha256 =
+    "0".repeat(64);
+  const report = await runDeterministicCertification(
+    changedProvenance,
+    { skipAll: true },
+  );
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.coverage.factions, {
+    intended: 0,
+    exercised: 0,
+    passed: 0,
+    failed: 0,
+    unsupported: 0,
+    pendingExpertReview: 0,
+  });
+});
+
+test("expert review capability scopes isolate unrelated semantic changes", () => {
+  const source = structuredClone(manifest);
+  const faction = source.factions[0];
+  faction.expertReview.capabilityScopes = ["mapping"];
+  const binding = certificationExpertReviewBinding(
+    source,
+    faction,
+  );
+  faction.expertReview = {
+    status: "reviewed",
+    reviewedAt: "2026-07-30",
+    assertions: ["The mapping capability was reviewed."],
+    capabilityScopes: ["mapping"],
+    binding,
+  };
+
+  const unrelatedPortfolioChange = structuredClone(source);
+  unrelatedPortfolioChange.defaults.portfolioPolicy =
+    {
+      ...unrelatedPortfolioChange.defaults.portfolioPolicy,
+      namedCharacterSpecialist: "not-applicable",
+    };
+  const carried = CertificationManifestSchema.parse(
+    unrelatedPortfolioChange,
+  ).factions[0].expertReview;
+  assert.equal(carried.status, "reviewed");
+  if (
+    carried.status === "reviewed" &&
+    carried.binding.schemaVersion === 2
+  ) {
+    assert.notEqual(
+      carried.binding.semanticEvidence.portfolioSha256,
+      binding.semanticEvidence.portfolioSha256,
+      "unscoped evidence is refreshed even though it does not invalidate the mapping review",
+    );
+    assert.equal(
+      carried.binding.bindingSha256,
+      binding.bindingSha256,
+    );
+  }
+
+  const mappingChange = structuredClone(source);
+  mappingChange.factions[0].expectedBlockingConflicts += 1;
+  assert.equal(
+    CertificationManifestSchema.parse(mappingChange)
+      .factions[0].expertReview.status,
+    "pending",
+  );
 });
 
 test("deterministic certification validates a complete faction contract", async () => {
@@ -760,7 +983,7 @@ test("keeps the 2,000-point T’au representative stable across repeated builds"
   assert.ok(contract?.goldenEvidence);
 
   const fingerprints = Array.from({ length: 16 }, () =>
-    rosterExecutionFingerprint(
+    legacyProvenanceBoundRosterExecutionFingerprint(
       buildCertificationRepresentative({
         manifest,
         faction,
@@ -771,6 +994,119 @@ test("keeps the 2,000-point T’au representative stable across repeated builds"
   assert.deepEqual(
     [...new Set(fingerprints)],
     [contract.goldenEvidence.executionFingerprint],
+  );
+});
+
+test("legacy goldens survive schema-v3 migration while new goldens use semantic identity", async () => {
+  const faction = manifest.factions.find(
+    (candidate) => candidate.id === "adeptus-custodes",
+  );
+  assert.ok(faction);
+  const contract = faction.representativeRosters.find(
+    (candidate) => candidate.id === "core-1000",
+  );
+  assert.ok(contract?.goldenEvidence);
+  assert.equal(contract.goldenEvidence.schemaVersion, 1);
+
+  const representative = buildCertificationRepresentative({
+    manifest,
+    faction,
+    contract,
+  });
+  assert.equal(
+    legacyProvenanceBoundRosterExecutionFingerprint(
+      representative.roster,
+    ),
+    contract.goldenEvidence.executionFingerprint,
+  );
+  assert.doesNotThrow(() =>
+    assertRepresentativeRosterMatchesGolden(
+      representative.roster,
+      contract.goldenEvidence!,
+    ),
+  );
+  assert.deepEqual(
+    await generateRepresentativeGoldenEvidence({
+      manifest,
+      faction,
+      contract,
+      representative,
+    }),
+    contract.goldenEvidence,
+    "regenerating an existing schema-v1 golden must preserve its fingerprint and canonical ROSZ bytes",
+  );
+
+  const contractWithoutGolden = structuredClone(contract);
+  Reflect.deleteProperty(
+    contractWithoutGolden,
+    "goldenEvidence",
+  );
+  const semanticContract = {
+    ...contractWithoutGolden,
+    capabilities: [
+      "roster-correctness",
+    ] as typeof contract.capabilities,
+  };
+  const semanticFaction = {
+    ...faction,
+    representativeRosters: [semanticContract],
+  };
+  const semanticGolden =
+    await generateRepresentativeGoldenEvidence({
+      manifest,
+      faction: semanticFaction,
+      contract: semanticContract,
+      representative,
+    });
+  assert.equal(semanticGolden.schemaVersion, 2);
+  assert.equal(
+    semanticGolden.executionFingerprint,
+    rosterExecutionFingerprint(representative.roster),
+  );
+  assert.equal(
+    RepresentativeRosterGoldenEvidenceSchema.safeParse(
+      semanticGolden,
+    ).success,
+    true,
+  );
+
+  const provenanceOnly = structuredClone(representative.roster);
+  provenanceOnly.sourceData.version = "1.2.1+metadata-refresh";
+  provenanceOnly.sourceData.releaseId = "metadata-refresh";
+  provenanceOnly.sourceData.newRecruit.commit = "a".repeat(40);
+  provenanceOnly.sourceData.official.updatedAt =
+    "2099-01-01T00:00:00.000Z";
+  provenanceOnly.sourceData.bundleId = "b".repeat(64);
+  assert.notEqual(
+    legacyProvenanceBoundRosterExecutionFingerprint(
+      provenanceOnly,
+    ),
+    legacyProvenanceBoundRosterExecutionFingerprint(
+      representative.roster,
+    ),
+  );
+  assert.equal(
+    rosterExecutionFingerprint(provenanceOnly),
+    rosterExecutionFingerprint(representative.roster),
+  );
+  assert.doesNotThrow(() =>
+    assertRepresentativeRosterMatchesGolden(
+      provenanceOnly,
+      semanticGolden,
+    ),
+  );
+
+  const semanticChange = structuredClone(provenanceOnly);
+  semanticChange.sourceData.rosterRulesHash = "f".repeat(64);
+  assert.throws(
+    () =>
+      assertRepresentativeRosterMatchesGolden(
+        semanticChange,
+        semanticGolden,
+      ),
+    (error: unknown) =>
+      (error as { code?: string }).code ===
+      CERTIFICATION_GOLDEN_DRIFT_CODES.executionFingerprint,
   );
 });
 

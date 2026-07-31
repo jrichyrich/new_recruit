@@ -1,6 +1,9 @@
 import { z } from "zod";
+import type {
+  DataBundleDeltaResult,
+} from "./semantic-hash";
 
-export const ROSTER_SCHEMA_VERSION = 2 as const;
+export const ROSTER_SCHEMA_VERSION = 3 as const;
 export const SUPPORTED_GAME = "warhammer-40000-11e" as const;
 export const DEFAULT_FACTION_ID = "adeptus-custodes" as const;
 /** @deprecated Use DEFAULT_FACTION_ID. Kept for persisted clients. */
@@ -175,44 +178,131 @@ export const RosterDraftV1Schema = RosterDraftBodySchema.extend({
     .strict(),
 }).strict();
 
-export const RosterDraftV2Schema = RosterDraftBodySchema.extend({
-  schemaVersion: z.literal(ROSTER_SCHEMA_VERSION),
-  sourceData: z
-    .object({
-      package: z.literal("@alpaca-software/40kdc-data"),
-      version: z.string().min(1),
-      edition: z.literal("11th"),
-      dataslate: z.string().min(1),
-      releaseId: z.string().min(1),
-      newRecruit: z
-        .object({
-          repository: z.literal("BSData/wh40k-11e"),
-          commit: z.string().regex(/^[0-9a-f]{40}$/),
-          gameSystemRevision: z.number().int().nonnegative(),
-          catalogueRevision: z.number().int().nonnegative().nullable(),
-        })
-        .strict(),
-      official: z
-        .object({
-          mfmVersion: z.string().min(1),
-          updatedAt: z.string().min(1),
-          contentSha256: z.string().regex(/^[0-9a-f]{64}$/),
-        })
-        .strict(),
-      migratedFrom: z.literal(1).optional(),
-    })
-    .strict(),
+export const RosterSourceProvenanceSchema = z
+  .object({
+    package: z.literal("@alpaca-software/40kdc-data"),
+    version: z.string().min(1),
+    edition: z.literal("11th"),
+    dataslate: z.string().min(1),
+    releaseId: z.string().min(1),
+    newRecruit: z
+      .object({
+        repository: z.literal("BSData/wh40k-11e"),
+        commit: z.string().regex(/^[0-9a-f]{40}$/),
+        gameSystemRevision: z.number().int().nonnegative(),
+        catalogueRevision: z.number().int().nonnegative().nullable(),
+      })
+      .strict(),
+    official: z
+      .object({
+        mfmVersion: z.string().min(1),
+        updatedAt: z.string().min(1),
+        contentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        authority: z
+          .union([
+            z
+              .object({
+                status: z.literal("verified"),
+                sourceArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+                overlaySha256: z.string().regex(/^[0-9a-f]{64}$/),
+                receiptSha256: z.string().regex(/^[0-9a-f]{64}$/),
+                extractorId: z.string().min(1),
+                extractorKeyId: z.string().min(1),
+              })
+              .strict(),
+            z
+              .object({
+                status: z.enum(["unavailable", "unverified-overlay"]),
+                reason: z.string().min(1),
+              })
+              .strict(),
+          ])
+          .optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const LegacyRosterSourceDataV2Schema =
+  RosterSourceProvenanceSchema.extend({
+    migratedFrom: z.literal(1).optional(),
+  }).strict();
+
+export const LegacyRosterDraftV2Schema = RosterDraftBodySchema.extend({
+  schemaVersion: z.literal(2),
+  sourceData: LegacyRosterSourceDataV2Schema,
 }).strict();
 
+const SemanticSha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+
+export const RosterSourceDataV3Schema =
+  RosterSourceProvenanceSchema.extend({
+    bundleId: SemanticSha256Schema,
+    engineDataSchemaVersion: z.number().int().positive(),
+    rosterRulesHash: SemanticSha256Schema,
+    factionRulesHash: SemanticSha256Schema,
+    mappingHash: SemanticSha256Schema,
+    entityHashes: z.record(z.string().min(1), SemanticSha256Schema),
+    identityStatus: z.enum(["verified", "legacy-derived"]),
+    migratedFrom: z.union([z.literal(1), z.literal(2)]).optional(),
+  }).strict();
+
+export const RosterSourceDataSchema = z.union([
+  RosterSourceDataV3Schema,
+  LegacyRosterSourceDataV2Schema,
+]);
+
+export const RosterDraftV3Schema = RosterDraftBodySchema.extend({
+  schemaVersion: z.literal(ROSTER_SCHEMA_VERSION),
+  sourceData: RosterSourceDataV3Schema,
+}).strict();
+
+/**
+ * @deprecated The name is retained for callers that treated V2 as the
+ * "current roster" schema. It now validates the current V3 wire shape.
+ */
+export const RosterDraftV2Schema = RosterDraftV3Schema;
+
 export const RosterDraftSchema = z.union([
-  RosterDraftV2Schema,
+  RosterDraftV3Schema,
+  LegacyRosterDraftV2Schema,
   RosterDraftV1Schema,
 ]);
 
 export type LegacyRosterDraftV1 = z.infer<typeof RosterDraftV1Schema>;
-export type RosterDraftV2 = z.infer<typeof RosterDraftV2Schema>;
-/** @deprecated Name retained for transport compatibility; new drafts are V2. */
-export type RosterDraftV1 = RosterDraftV2;
+export type LegacyRosterDraftV2 = z.infer<
+  typeof LegacyRosterDraftV2Schema
+>;
+export type RosterDraftV3 = z.infer<typeof RosterDraftV3Schema>;
+/** @deprecated Name retained for source compatibility; new drafts are V3. */
+export type RosterDraftV2 = RosterDraftV3;
+/** @deprecated Name retained for transport compatibility; new drafts are V3. */
+export type RosterDraftV1 = RosterDraftV3;
+
+export type RosterDataChangedScope = {
+  kind:
+    | "faction"
+    | "detachment"
+    | "force-disposition"
+    | "unit"
+    | "equipment"
+    | "enhancement"
+    | "mapping"
+    | "unknown";
+  entityId: string;
+  change: "added" | "removed" | "changed" | "unverifiable";
+  previousHash: string | null;
+  currentHash: string | null;
+};
+
+export type RosterDataRebaseResult = {
+  status: "current" | "compatible-rebased" | "review-required";
+  roster: RosterDraftV3;
+  fromBundleId: string;
+  toBundleId: string;
+  provenanceChanged: boolean;
+  changedScopes: RosterDataChangedScope[];
+};
 
 export type BuildRosterInput = {
   prompt?: string;
@@ -397,6 +487,11 @@ export type NewRecruitDelivery = {
   connectorEvents?: ConnectorEvent[];
   verification: NewRecruitVerification | null;
   enrichedSummary?: EnrichedRoszSummary | null;
+  /**
+   * Live catalogue identity observed in the verified New Recruit export,
+   * compared with the immutable data snapshot used to build the roster.
+   */
+  catalogueProvenance?: NewRecruitCatalogueProvenanceComparison | null;
   diagnosticArtifacts?: Array<{
     kind: "rejected-new-recruit-enriched-rosz";
     path: string;
@@ -958,6 +1053,13 @@ export type TesseraStressPortfolio = {
   contract?: {
     schemaVersion: 1;
     methodology: "adaptive-threat-lenses-v1";
+    /**
+     * Semantic capability identity for the faction's portfolio methodology
+     * and review policy. New portfolios bind review evidence to this hash;
+     * legacy persisted portfolios omit it and retain release-bound matching.
+     */
+    portfolioHash?: string;
+    /** Raw provenance retained for audit and legacy-manifest readability. */
     sourceReleaseId: string;
     reviewedNotApplicableTemplateIds: string[];
     /**
@@ -1704,6 +1806,7 @@ export type DataStatus = {
     state: "pinned" | "update-available" | "official-update-pending" | "unknown";
     checkedAt: string;
   };
+  dataBundle: DataUpdateStatus;
   newRecruitCoverage: {
     factionCount: number;
     exportCapableFactions: number;
@@ -1741,4 +1844,65 @@ export type LiveDataFreshness = {
     latestContentSha256: string | null;
     updateAvailable: boolean | null;
   };
+  dataBundle?: DataUpdateStatus;
+};
+
+export type DataUpdateStatus = {
+  providerConfigured: boolean;
+  state:
+    | "ready"
+    | "checking"
+    | "candidate-ready"
+    | "degraded"
+    | "offline";
+  activeBundleId: string | null;
+  latestVerifiedBundleId: string | null;
+  latestUpstreamBundleId: string | null;
+  candidate:
+    | {
+        bundleId: string;
+        classification: DataBundleDeltaResult;
+      }
+    | null;
+  quarantinedScopes: Array<{
+    scope: string;
+    bundleId: string;
+    reason: string;
+  }>;
+  lastSuccessfulCheckAt: string | null;
+  officialAuthority:
+    | {
+        status: "verified";
+        sourceArtifactSha256: string;
+        overlaySha256: string;
+        receiptSha256: string;
+        extractorId: string;
+        extractorKeyId: string;
+      }
+    | {
+        status: "unavailable" | "unverified-overlay";
+        reason: string;
+      };
+  refreshMode?:
+    | "disabled"
+    | "request-driven"
+    | "request-driven-wait-until"
+    | "periodic-unref";
+  rollbackHold?: {
+    bundleId: string;
+    engagedAt: string;
+    release: "force-refresh";
+  } | null;
+  dataTrust?: "signed-verified" | "compiled-unverified";
+  durability?: {
+    mode: "memory" | "persistent";
+    state: "ready" | "degraded";
+    reason: string | null;
+  };
+};
+
+export type DataRefreshResult = {
+  status: DataUpdateStatus;
+  activatedBundleId: string | null;
+  classification: DataBundleDeltaResult | null;
 };

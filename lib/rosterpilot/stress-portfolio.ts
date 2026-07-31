@@ -21,6 +21,7 @@ import {
   newRecruitEquipmentSignature,
   resolveNewRecruitUnit,
 } from "./new-recruit-resolver";
+import { getActiveDataBundleManifest } from "./active-data-context";
 import type {
   BuildRosterInput,
   GenerateFactionStressPortfolioInput,
@@ -233,10 +234,67 @@ export function rosterSimulationFingerprint(
 /**
  * Stable execution identity for prepared artifacts and resumable runs. Unlike
  * the structural diversity fingerprint, this includes rule-bearing roster
- * state and the pinned data release.
+ * state and its scoped semantic rules identity. Raw release provenance is
+ * intentionally excluded so a metadata-only refresh can reuse evidence.
  */
 export function rosterExecutionFingerprint(
   roster: RosterDraftV1,
+): string {
+  return rosterExecutionFingerprintWithIdentity(
+    roster,
+    {
+      rosterRulesHash:
+        "rosterRulesHash" in roster.sourceData
+          ? roster.sourceData.rosterRulesHash
+          : stableFingerprint(JSON.stringify(roster.sourceData)),
+    },
+  );
+}
+
+/**
+ * Reproduces the provenance-bound execution identity emitted before roster
+ * schema v3. Certification golden evidence schema v1 and its canonical ROSZ
+ * selection IDs depend on this exact projection. New caches and durable runs
+ * must use rosterExecutionFingerprint instead.
+ */
+export function legacyProvenanceBoundRosterExecutionFingerprint(
+  roster: RosterDraftV1,
+): string {
+  const source = roster.sourceData;
+  const legacySourceData = {
+    package: source.package,
+    version: source.version,
+    edition: source.edition,
+    dataslate: source.dataslate,
+    releaseId: source.releaseId,
+    newRecruit: {
+      repository: source.newRecruit.repository,
+      commit: source.newRecruit.commit,
+      gameSystemRevision:
+        source.newRecruit.gameSystemRevision,
+      catalogueRevision:
+        source.newRecruit.catalogueRevision,
+    },
+    official: {
+      mfmVersion: source.official.mfmVersion,
+      updatedAt: source.official.updatedAt,
+      contentSha256: source.official.contentSha256,
+    },
+    ...(source.migratedFrom === 1
+      ? { migratedFrom: 1 as const }
+      : {}),
+  };
+  return rosterExecutionFingerprintWithIdentity(
+    roster,
+    { sourceData: legacySourceData },
+  );
+}
+
+function rosterExecutionFingerprintWithIdentity(
+  roster: RosterDraftV1,
+  identity:
+    | { rosterRulesHash: string }
+    | { sourceData: unknown },
 ): string {
   const units = roster.units
     .map((unit) => ({
@@ -274,8 +332,27 @@ export function rosterExecutionFingerprint(
       totalPoints: roster.totalPoints,
       detachmentId: roster.detachmentId,
       forceDispositionId: roster.forceDispositionId,
-      sourceData: roster.sourceData,
+      ...identity,
       units,
+    }),
+  );
+}
+
+/**
+ * Identity of the canonical New Recruit export. It extends execution identity
+ * with only the selected mapping paths, allowing a rules-compatible mapping
+ * update to invalidate exports without invalidating unrelated simulations.
+ */
+export function rosterExportFingerprint(
+  roster: RosterDraftV1,
+): string {
+  return stableFingerprint(
+    JSON.stringify({
+      executionFingerprint: rosterExecutionFingerprint(roster),
+      mappingHash:
+        "mappingHash" in roster.sourceData
+          ? roster.sourceData.mappingHash
+          : stableFingerprint(JSON.stringify(roster.sourceData)),
     }),
   );
 }
@@ -299,46 +376,125 @@ export type TesseraStressPortfolioContractEvaluation = {
   violation: RosterIssue | null;
 };
 
-type DiversePortfolioReviewContract = {
-  sourceReleaseId: string;
+export type DiversePortfolioReviewContract = (
+  | {
+      /** Current capability-scoped binding. */
+      portfolioHash: string;
+      sourceReleaseId?: never;
+    }
+  | {
+      /** Legacy release-scoped binding retained for persisted reviews. */
+      sourceReleaseId: string;
+      portfolioHash?: never;
+    }
+) & {
   reviewedNotApplicableTemplateIds: readonly string[];
   threatLensesReviewed?: boolean;
 };
 
 /**
- * Human review is bound to the exact pinned data release. A missing cell never
- * becomes acceptable merely because an unavailable item carries a warning.
- * The registry is intentionally empty until a faction review records a real
- * exception against a concrete release.
+ * Human review is bound to the portfolio capability hash. A missing cell
+ * never becomes acceptable merely because an unavailable item carries a
+ * warning. Legacy release-bound entries remain readable until they are
+ * reviewed and migrated.
  */
 const REVIEWED_NOT_APPLICABLE_DIVERSE_CELLS: Readonly<
   Record<string, DiversePortfolioReviewContract>
 > = {};
 
+export function portfolioReviewCapabilityBindingMatches(
+  review: DiversePortfolioReviewContract | undefined,
+  binding: {
+    portfolioHash?: string;
+    sourceReleaseId: string;
+  },
+): boolean {
+  if (!review) return false;
+  if (review.portfolioHash !== undefined) {
+    return (
+      binding.portfolioHash !== undefined &&
+      review.portfolioHash === binding.portfolioHash
+    );
+  }
+  return review.sourceReleaseId === binding.sourceReleaseId;
+}
+
+function portfolioCapabilityHash(factionId: string): string {
+  const activeHash =
+    getActiveDataBundleManifest()?.semanticHashes.factions[
+      factionId
+    ]?.portfolioHash;
+  if (activeHash) return activeHash;
+  // The compiled bootstrap has no activated signed manifest. Give it a
+  // deterministic methodology-scoped identity rather than falling back to
+  // raw release provenance.
+  return stableFingerprint(
+    JSON.stringify({
+      schemaVersion: 1,
+      factionId,
+      methodology: "adaptive-threat-lenses-v1",
+      generatorVersion: TESSERA_STRESS_GENERATOR_VERSION,
+    }),
+  );
+}
+
+export function tesseraStressPortfolioContractFingerprint(
+  contract: Omit<
+    NonNullable<TesseraStressPortfolio["contract"]>,
+    "fingerprint"
+  >,
+): string {
+  if (contract.portfolioHash === undefined) {
+    // Preserve the original release-bound fingerprint algorithm for legacy
+    // stress manifests that predate portfolioHash.
+    return stableFingerprint(JSON.stringify(contract));
+  }
+  const capabilityBinding = {
+    schemaVersion: contract.schemaVersion,
+    methodology: contract.methodology,
+    portfolioHash: contract.portfolioHash,
+    reviewedNotApplicableTemplateIds:
+      contract.reviewedNotApplicableTemplateIds,
+    ...(contract.lensDefinition
+      ? { lensDefinition: contract.lensDefinition }
+      : {}),
+  };
+  return stableFingerprint(JSON.stringify(capabilityBinding));
+}
+
 function expectedDiversePortfolioContract(
   factionId: string,
   sourceReleaseId: string,
+  portfolioHash: string | undefined,
   lensDefinition?: NonNullable<
     TesseraStressPortfolio["contract"]
   >["lensDefinition"],
 ): NonNullable<TesseraStressPortfolio["contract"]> {
   const reviewed = REVIEWED_NOT_APPLICABLE_DIVERSE_CELLS[factionId];
+  const reviewApplies = portfolioReviewCapabilityBindingMatches(
+    reviewed,
+    {
+      portfolioHash,
+      sourceReleaseId,
+    },
+  );
   const reviewedNotApplicableTemplateIds =
-    reviewed?.sourceReleaseId === sourceReleaseId
+    reviewApplies && reviewed
       ? [...reviewed.reviewedNotApplicableTemplateIds].sort()
       : [];
   const binding = {
     schemaVersion: 1 as const,
     methodology: "adaptive-threat-lenses-v1" as const,
     sourceReleaseId,
+    ...(portfolioHash ? { portfolioHash } : {}),
     reviewedNotApplicableTemplateIds,
     ...(lensDefinition
       ? {
           lensDefinition: {
             ...lensDefinition,
             reviewStatus:
-              reviewed?.sourceReleaseId === sourceReleaseId &&
-              reviewed.threatLensesReviewed === true
+              reviewApplies &&
+              reviewed?.threatLensesReviewed === true
                 ? ("reviewed" as const)
                 : ("generated-pending-review" as const),
           },
@@ -347,7 +503,8 @@ function expectedDiversePortfolioContract(
   };
   return {
     ...binding,
-    fingerprint: stableFingerprint(JSON.stringify(binding)),
+    fingerprint:
+      tesseraStressPortfolioContractFingerprint(binding),
   };
 }
 
@@ -360,6 +517,7 @@ function portfolioReviewContractMatchesRegistry(
   const expected = expectedDiversePortfolioContract(
     portfolio.factionId,
     portfolio.sourceData.releaseId,
+    portfolio.contract.portfolioHash,
     portfolio.contract.lensDefinition,
   );
   const requiresLensDefinition =
@@ -369,6 +527,7 @@ function portfolioReviewContractMatchesRegistry(
     portfolio.contract.schemaVersion === expected.schemaVersion &&
     portfolio.contract.methodology === expected.methodology &&
     portfolio.contract.sourceReleaseId === expected.sourceReleaseId &&
+    portfolio.contract.portfolioHash === expected.portfolioHash &&
     portfolio.contract.fingerprint === expected.fingerprint &&
     (
       !requiresLensDefinition ||
@@ -558,7 +717,7 @@ export function evaluateTesseraStressPortfolioContract(
     }`,
   ].join("; ");
   const contractDescription = isDiverse
-    ? "diverse-9 requires nine execution-distinct payloads for a complete portfolio, or at least six execution-distinct payloads across all three postures with every missing cell present in the faction's release-bound reviewed-not-applicable contract"
+    ? "diverse-9 requires nine execution-distinct payloads for a complete portfolio, or at least six execution-distinct payloads across all three postures with every missing cell present in the faction's portfolio-capability-bound reviewed-not-applicable contract"
     : "core-3 requires exactly three distinct payloads covering balanced-control, ranged-pressure, and assault-pressure";
 
   return {
@@ -2189,9 +2348,14 @@ function diverseCellReviewStatus(
   factionId: string,
   templateId: string,
   sourceReleaseId: string,
+  portfolioHash: string,
 ): "unreviewed" | "reviewed-not-applicable" {
   const reviewed = REVIEWED_NOT_APPLICABLE_DIVERSE_CELLS[factionId];
-  return reviewed?.sourceReleaseId === sourceReleaseId &&
+  return reviewed &&
+    portfolioReviewCapabilityBindingMatches(reviewed, {
+      portfolioHash,
+      sourceReleaseId,
+    }) &&
     reviewed.reviewedNotApplicableTemplateIds.includes(templateId)
     ? "reviewed-not-applicable"
     : "unreviewed";
@@ -2201,6 +2365,7 @@ function selectDiversePortfolio(
   factionId: string,
   factionName: string,
   sourceReleaseId: string,
+  portfolioHash: string,
   pools: Map<TesseraArchetype, StressCandidate[]>,
 ): TesseraStressPortfolioItem[] {
   const canonicalCells: DiversePortfolioCell[] = POSTURES.flatMap(
@@ -2408,6 +2573,7 @@ function selectDiversePortfolio(
           factionId,
           cell.templateId,
           sourceReleaseId,
+          portfolioHash,
         ),
       );
     }
@@ -2503,6 +2669,7 @@ export function generateFactionStressPortfolio(
 
   const factionId = seed.data.factionId;
   const factionName = seed.data.factionName;
+  const portfolioHash = portfolioCapabilityHash(factionId);
   const capability = getNewRecruitCapability(factionId);
   if (!capability.available) {
     return {
@@ -2604,6 +2771,7 @@ export function generateFactionStressPortfolio(
           factionId,
           factionName,
           seed.data.sourceData.releaseId,
+          portfolioHash,
           candidatePools,
         );
   if (
@@ -2636,6 +2804,7 @@ export function generateFactionStressPortfolio(
             factionId,
             factionName,
             seed.data.sourceData.releaseId,
+            portfolioHash,
             candidatePools,
           );
   }
@@ -2708,6 +2877,7 @@ export function generateFactionStressPortfolio(
         ? expectedDiversePortfolioContract(
             factionId,
             seed.data.sourceData.releaseId,
+            portfolioHash,
             threatLensDefinition(candidatePools),
           )
         : undefined,

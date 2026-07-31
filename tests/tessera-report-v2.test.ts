@@ -211,6 +211,7 @@ function v2Report(): TesseraMatchupReport {
 
 test("renders an interactive v2 matchup report with safe embedded data", () => {
   const html = renderTesseraMatchupReportHtml(v2Report());
+  assert.match(html, /Tessera report v2/);
 
   assert.match(html, /Points match/);
   assert.match(html, /Simulation configuration/);
@@ -230,6 +231,15 @@ test("renders an interactive v2 matchup report with safe embedded data", () => {
   assert.doesNotMatch(html, /also-never-render/);
   assert.doesNotMatch(html, /secret-profile/);
   assert.doesNotMatch(html, /<script[^>]+src=/i);
+});
+
+test("labels current exact reports as schema v3", () => {
+  const report = v2Report();
+  report.schemaVersion = 3;
+
+  const html = renderTesseraMatchupReportHtml(report);
+  assert.match(html, /Tessera report v3/);
+  assert.doesNotMatch(html, /Legacy report/);
 });
 
 test("falls back to legacy matrices and findings", () => {

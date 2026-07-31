@@ -8,36 +8,53 @@ The reviewed contract is
 [`data/certification-manifest.json`](../data/certification-manifest.json). It
 pins all build-supported factions, point bands, connector capabilities,
 mapping-conflict baselines, specialist cases, opponent postures, browser
-fixtures, and faction-specific expert assertions. A data refresh must update
-this manifest in the same review that changes its pin or capability totals.
+fixtures, and faction-specific expert assertions. Routine bundle refreshes
+carry capability-scoped evidence in the signed faction shards and do not
+rewrite this reviewed bootstrap policy. A semantic rules, mapping, portfolio,
+or connector change invalidates only its bound capability scope.
 Each faction declares roster correctness, canonical New Recruit export,
 credential-backed New Recruit delivery, Tessera preparation, and trusted
-Tessera simulation independently. The pin includes the BSData repository and
-commit, game-system revision, and official MFM version and content hash.
+Tessera simulation independently. The bootstrap manifest still records raw
+BSData, game-system, and official MFM provenance for audit and exact replay,
+but raw provenance is not expert-review equivalence.
 
-Every faction's `expertReview` also contains a canonical binding with separate
-hashes for the data pin and executable faction contract, plus a combined
-binding hash. The contract hash covers the global roster defaults and the
-faction's capabilities, detachments, representative rosters, expected
-limitations, mapping baseline, and portfolio policy. Set-like arrays are
-normalized before hashing, so formatting or harmless ordering changes do not
-discard an approval.
+Reviewed `expertReview` entries use a schema-v2 semantic binding for one or
+more capabilities: `roster-rules`, `mapping`, `portfolio`, and `connector`.
+The checked-in bootstrap policy records pending scopes and human assertions;
+it does not churn by serializing generated current-data bindings. Signed
+bundle shards carry the current capability evidence, and a reviewer-approved
+entry binds to those actual runtime faction/entity hashes. Each capability
+hash covers only its executable faction contract and relevant policy. Set-like
+arrays are normalized before hashing, so formatting, harmless ordering, or
+provenance-only source movement does not discard an approval. A semantic
+change outside the entry's declared `capabilityScopes` does not invalidate it.
+If any included capability hash changes, that review entry returns to pending
+so the reviewer cannot accidentally carry its assertions across changed
+semantics.
 
 A `reviewed` entry is valid only when that binding matches the current
 manifest. Manifest synchronization changes a stale approval to `pending`,
 records `binding-mismatch`, and retains its assertions as drafts for a new
 expert review. Legacy reviewed entries without a binding are likewise
 `pending` with `unbound-legacy`; they are never grandfathered into a pass.
-Synchronization writes the current pending binding, after which a Warhammer
-reviewer must re-check the draft assertions, set a new `reviewedAt`, and
-explicitly change the status to `reviewed` (removing any
-`invalidationReason`).
+Pending bindings are deliberately not serialized into the reviewed policy
+manifest. Run deterministic certification for the faction and take the exact
+current `reviewBinding` and `semanticEvidence` from the
+`CERTIFICATION_EXPERT_REVIEW_PENDING` case. After checking that evidence and
+the draft assertions, a Warhammer reviewer copies that binding into the
+faction's `expertReview`, sets a new `reviewedAt`, explicitly changes the status
+to `reviewed`, and removes any `invalidationReason`. Then run
+`npm run certify:manifest:check` and deterministic certification again. Only a
+completed reviewed attestation remains serialized; generated pending evidence
+continues to live in the signed faction shard and certification report.
 
 Representative roster contracts are golden, not point-band smoke tests. Each
 1,000- and 2,000-point entry pins its detachment, Warlord unit ID, canonical
 unit/model multiset, structural fingerprint, and execution fingerprint to the
-declared BSData/MFM pin. Export-capable entries also pin the exact canonical
-ROSZ SHA-256. A legal roster that changes selection still fails with a
+declared semantic roster and export identities. Raw BSData/MFM provenance is
+retained alongside that evidence but does not independently invalidate it.
+Export-capable entries also pin the exact canonical ROSZ SHA-256. A legal
+roster that changes selection still fails with a
 structured `CERTIFICATION_GOLDEN_*_DRIFT` code; a changed archive fails with
 `CERTIFICATION_GOLDEN_ROSZ_SHA256_DRIFT`. Legacy entries without complete
 golden evidence remain readable but report
@@ -67,10 +84,11 @@ uses this deterministic, browser-free gate.
 
 `core-3` always means three unique, exportable payloads representing balanced,
 ranged, and assault postures. The `mixed`, `mass`, and `elite-heavy` wire
-labels are evaluated with release-bound faction-relative ranges over model
-density, points per model, unit-type share, selected-weapon pressure, mobility,
-and concentration. Generated ranges are explicitly pending until expert review
-is rebound to the current data and faction contract. The manifest separately
+labels are evaluated with faction-relative ranges bound to the portfolio
+methodology hash over model density, points per model, unit-type share,
+selected-weapon pressure, mobility, and concentration. Generated ranges are
+explicitly pending until expert review is rebound to the current faction and
+portfolio semantic hashes. The manifest separately
 records expert-reviewed not-applicable exceptions; pending assertions never
 authorize degraded coverage.
 
@@ -184,8 +202,11 @@ reviewed rerun.
 
 ## Rotating source-backed live canaries
 
-The daily workflow routes three named canaries through the durable Tessera job
-coordinator. These are separate from deterministic fixture acceptance and from
+After the daily data-freshness workflow completes successfully, one
+post-activation workflow routes three named canaries through the durable
+Tessera job coordinator. The independent weekly schedule runs only the broader
+rotation, so the named daily canaries are not duplicated. These are separate
+from deterministic fixture acceptance and from
 the renamed-mirror faction certification tier:
 
 | Canary | Required live evidence |
@@ -199,8 +220,10 @@ Run one canary directly with:
 ```bash
 ROSTERPILOT_CERTIFICATION_LIVE=1 \
 ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH=/path/to/canary-policy.json \
+ROSTERPILOT_DATA_CHANNEL_URL=https://data.example.test/channels/stable.json \
   npm run certify:canary -- \
   --canary custodes-vs-adaptive-nine-aeldari-2000 \
+  --expected-bundle-id <64-character-bundle-id> \
   --out-dir .certification/live-canaries \
   --require-live
 ```
@@ -224,7 +247,9 @@ The configured source policy may cover the whole rotation; before mutation the
 runner writes and hashes an exact canary-scoped subset, then freezes that file
 inside the durable job.
 
-Readiness is local-first and non-mutating. The runner checks the live opt-in,
+Readiness is local-first and performs no New Recruit or Tessera mutation. A
+bundle-bound release canary may verify and activate its expected signed bundle
+before acquiring the immutable snapshot lease. The runner then checks the live opt-in,
 macOS runtime, current local-agent build and protocol, Chrome, Keychain broker,
 New Recruit readiness, Tessera licence readiness, profile policy, and required
 fixtures before starting a durable job. An absent credential, policy, browser,
@@ -241,6 +266,28 @@ client can inspect or resume the job. The Custodes/Aeldari canary deliberately
 stops its own client wait briefly, verifies that `resume` returns the same
 active run and attempt, and only then follows the background job to completion.
 The canary never deletes the New Recruit lists it creates or reuses.
+
+Release and post-activation runs must pass `--expected-bundle-id`; an ad-hoc
+diagnostic without it cannot count as release evidence. The runner refreshes
+and activates that exact signed bundle, holds one snapshot lease for the whole
+canary, and records the bundle ID, signing-key ID, manifest hash, and semantic
+identity in its report. A missing, different, or mid-run-changing bundle stops
+the canary before it can count as evidence for that release.
+
+After all three reports are uploaded, the workflow runs
+`data:rollback-after-canary`. The publisher requires all three detached
+checksums, exact bundle bindings, the current signed stable pointer, both the
+failed and predecessor signed manifests, and every shard hash. Only an actual
+live `fail` can authorize rollback; missing, unavailable, duplicated,
+tampered, stale, or concurrently superseded evidence fails closed. A rollback
+signs an immutable quarantine receipt containing the exact report hashes,
+then writes the informational update receipt, and moves the newly signed
+stable pointer last. The immutable receipt is published at
+`quarantines/<failedBundleId>.json`. Later refreshes verify that receipt and
+reject the same quarantined semantic identity. An `unavailable` canary cannot
+authorize rollback and cannot be combined with a different failure to make an
+incomplete rotation sufficient. No part of this operation replaces or deletes
+a New Recruit list.
 
 `tests/release-acceptance-custodes-aeldari.test.ts` and
 `tests/live-canaries.test.ts` remain deterministic fixture acceptance. They

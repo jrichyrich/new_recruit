@@ -24,6 +24,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  withDataBundleSnapshotLease,
+} from "../../lib/rosterpilot/data-operations";
+import {
   LOCAL_AGENT_MAX_FRAME_BYTES,
   LOCAL_AGENT_PROTOCOL_VERSION,
   LOCAL_AGENT_VERSION,
@@ -375,6 +378,15 @@ export async function startLocalAgent(
   spoolDirectory: string;
   socketPath: string;
 }> {
+  const {
+    initializeLocalDataBundleProvider,
+    startLocalDataBundlePeriodicRefresh,
+    stopLocalDataBundlePeriodicRefresh,
+  } = await import(
+    "../data-bundles/configure"
+  );
+  await initializeLocalDataBundleProvider();
+  startLocalDataBundlePeriodicRefresh();
   const socketPath = options.socketPath ?? localAgentSocketPath();
   const spoolDirectory =
     options.spoolDirectory ?? localAgentSpoolDirectory();
@@ -1069,20 +1081,26 @@ export async function startLocalAgent(
       };
     }
     try {
-      const data =
+      const execute = async () =>
         request.operation === "agent.status"
-          ? await status()
+          ? status()
           : request.operation === "new-recruit.deliver"
-            ? await queuedDelivery(request.payload)
+            ? queuedDelivery(request.payload)
             : request.operation === "new-recruit.probe"
-              ? await queuedNewRecruitProbe()
-            : request.operation === "tessera.analyze"
-                ? await queuedTessera(request.payload)
+              ? queuedNewRecruitProbe()
+              : request.operation === "tessera.analyze"
+                ? queuedTessera(request.payload)
                 : request.operation === "tessera.session.close"
-                  ? await queuedTesseraSessionClose(
+                  ? queuedTesseraSessionClose(
                       request.payload.sessionId,
                     )
-                  : await startTesseraRunWorker(request.payload);
+                  : startTesseraRunWorker(request.payload);
+      const requiresDataSnapshot =
+        request.operation === "new-recruit.deliver" ||
+        request.operation === "tessera.analyze";
+      const data = requiresDataSnapshot
+        ? await withDataBundleSnapshotLease(execute)
+        : await execute();
       return {
         id: request.id,
         ok: true,
@@ -1275,6 +1293,7 @@ export async function startLocalAgent(
       clearInterval(spoolTimer);
       clearInterval(spoolCleanupTimer);
       await closeAllTesseraSessionWorkers();
+      stopLocalDataBundlePeriodicRefresh();
       throw error;
     } finally {
       process.umask(previousUmask);
@@ -1298,6 +1317,7 @@ export async function startLocalAgent(
       }
       await queue;
       await closeAllTesseraSessionWorkers();
+      stopLocalDataBundlePeriodicRefresh();
     },
   };
 }

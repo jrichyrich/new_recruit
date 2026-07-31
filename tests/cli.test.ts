@@ -22,6 +22,34 @@ test("CLI standard help flag describes independent workflows", async () => {
     stdout,
     /none runs automatically after another/i,
   );
+  assert.match(stdout, /rosterpilot data update-status/);
+  assert.match(stdout, /rosterpilot rebase --file/);
+});
+
+test("CLI distinguishes the active, verified, and upstream data bundles", async () => {
+  const { stdout } = await run(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "cli/rosterpilot.ts",
+      "data",
+      "update-status",
+    ],
+    { cwd: process.cwd() },
+  );
+  const result = JSON.parse(stdout) as {
+    ok: boolean;
+    data: {
+      activeBundleId: string | null;
+      latestVerifiedBundleId: string | null;
+      latestUpstreamBundleId: string | null;
+    };
+  };
+  assert.equal(result.ok, true);
+  assert.match(result.data.activeBundleId ?? "", /^[a-f0-9]{64}$/);
+  assert.ok("latestVerifiedBundleId" in result.data);
+  assert.ok("latestUpstreamBundleId" in result.data);
 });
 
 test("CLI reports workflow readiness without starting an external action", async () => {

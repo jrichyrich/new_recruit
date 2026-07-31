@@ -1,16 +1,16 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { factions } from "@alpaca-software/40kdc-data";
-
 import {
   CertificationManifestSchema,
   buildCertificationRepresentative,
   certificationExpertReviewBinding,
+  certificationSemanticEvidence,
   generateRepresentativeGoldenEvidence,
   synchronizeCertificationExpertReview,
   synchronizedTesseraPreparationExpectation,
   type CertificationManifest,
+  type FactionCertification,
 } from "../lib/rosterpilot/certification";
 import {
   getDataStatus,
@@ -18,6 +18,7 @@ import {
   listDetachments,
   newRecruitCatalogue,
 } from "../lib/rosterpilot";
+import { factions } from "../lib/rosterpilot/runtime-dataset";
 import {
   BrowserFixtureRegistrySchema,
 } from "../local/certification/browser-fixture-execution";
@@ -136,7 +137,7 @@ const nextFactions = await mapWithConcurrency(
                 current.defaults.minimumPointsUtilization,
             }),
           );
-    const nextFactionWithoutGolden: CertificationManifest["factions"][number] = {
+    const nextFactionWithoutGolden: FactionCertification = {
       id: faction.id,
       name: faction.name,
       rosterCorrectness:
@@ -185,9 +186,15 @@ const nextFactions = await mapWithConcurrency(
       expertReview: prior?.expertReview ?? {
         status: "pending" as const,
         assertions: [],
+        capabilityScopes: [
+          "roster-rules",
+          "mapping",
+          "portfolio",
+          "connector",
+        ],
       },
     };
-    const nextFaction: CertificationManifest["factions"][number] = {
+    const nextFaction: FactionCertification = {
       ...nextFactionWithoutGolden,
       representativeRosters: [],
     };
@@ -217,14 +224,29 @@ const nextFactions = await mapWithConcurrency(
           }),
       });
     }
+    const semanticEvidence =
+      certificationSemanticEvidence(
+        {
+          defaults: current.defaults,
+          browserFixtures:
+            browserFixtureRegistry.fixtures.map(
+              (fixture) => fixture.id,
+            ),
+        },
+        nextFaction,
+      );
     return {
       ...nextFaction,
+      semanticEvidence,
       expertReview: synchronizeCertificationExpertReview({
         review: nextFaction.expertReview,
         expectedBinding: certificationExpertReviewBinding(
           {
-            dataPin: nextDataPin,
             defaults: current.defaults,
+            browserFixtures:
+              browserFixtureRegistry.fixtures.map(
+                (fixture) => fixture.id,
+              ),
           },
           nextFaction,
         ),
@@ -252,7 +274,32 @@ const next: CertificationManifest = {
   ),
   factions: nextFactions,
 };
-const nextText = `${JSON.stringify(next, null, 2)}\n`;
+// Semantic evidence is regenerated from the policy and active data whenever
+// the document is parsed, and is embedded in signed runtime bundles. Keeping
+// a second generated copy in this reviewed policy file creates routine data
+// churn without adding trust. Expert-review bindings retain their scoped
+// evidence because that is the durable reviewer attestation.
+const serializedNext = {
+  ...next,
+  factions: next.factions.map((faction) => {
+    const { semanticEvidence, ...reviewedPolicy } = faction;
+    void semanticEvidence;
+    if (reviewedPolicy.expertReview.status === "reviewed") {
+      return reviewedPolicy;
+    }
+    // A pending review has no attestation to bind. Its current semantic
+    // evidence lives in the signed faction shard and is regenerated on read;
+    // retaining it here would make routine refreshes rewrite reviewed policy.
+    const { binding, ...pendingReview } =
+      reviewedPolicy.expertReview;
+    void binding;
+    return {
+      ...reviewedPolicy,
+      expertReview: pendingReview,
+    };
+  }),
+};
+const nextText = `${JSON.stringify(serializedNext, null, 2)}\n`;
 const changed = sourceText !== nextText;
 
 if (mode === "write") {
@@ -270,7 +317,7 @@ if (mode === "write") {
   );
 } else if (changed) {
   process.stderr.write(
-    "The certification manifest is out of sync with the pinned data. Run npm run certify:manifest:sync and review the capability changes.\n",
+    "The certification manifest is out of sync with the current runtime data snapshot. Run npm run certify:manifest:sync and review the capability changes.\n",
   );
   process.exitCode = 2;
 } else {

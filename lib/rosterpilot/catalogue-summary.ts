@@ -119,8 +119,14 @@ function selectionScopeMatches(
   );
 }
 
-export const newRecruitCatalogue =
+export let newRecruitCatalogue =
   catalogueJson as NewRecruitCatalogueSummaryManifest;
+
+export function activateNewRecruitCatalogueSummary(
+  manifest: NewRecruitCatalogueSummaryManifest,
+): void {
+  newRecruitCatalogue = structuredClone(manifest);
+}
 
 export function getNewRecruitFactionSummary(
   factionId: string,

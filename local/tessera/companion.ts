@@ -579,7 +579,7 @@ export async function prepareRosterForTessera(
         {
           code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNAVAILABLE",
           message:
-            `The pinned ${roster.factionName} New Recruit catalogue identity is unavailable, so Tessera cannot verify the prepared roster's catalogue provenance.`,
+            `The frozen ${roster.factionName} New Recruit catalogue identity is unavailable, so Tessera cannot verify the prepared roster's catalogue provenance.`,
           severity: "error",
         },
       ],
@@ -619,7 +619,7 @@ export async function prepareRosterForTessera(
         {
           code: "NEW_RECRUIT_CATALOGUE_DRIFT",
           message:
-            `The catalogue identity observed in New Recruit's enriched ROSZ differs from pinned release ${roster.sourceData.releaseId}: ${mismatchSummary}. Tessera was not started. This comparison does not infer New Recruit's backend commit.`,
+            `The catalogue identity observed in New Recruit's enriched ROSZ differs from frozen bundle ${roster.sourceData.bundleId} (source release ${roster.sourceData.releaseId}): ${mismatchSummary}. Tessera was not started. This comparison does not infer New Recruit's backend commit.`,
           severity: "error",
         },
       ],
@@ -634,7 +634,7 @@ export async function prepareRosterForTessera(
         {
           code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNVERIFIABLE",
           message:
-            `New Recruit's enriched ROSZ omitted ${catalogueProvenance.missing.join(", ")}. The pinned release remains recorded, but Tessera was not started because the live catalogue identity could not be verified.`,
+            `New Recruit's enriched ROSZ omitted ${catalogueProvenance.missing.join(", ")}. The frozen bundle remains recorded, but Tessera was not started because the live catalogue identity could not be verified.`,
           severity: "error",
         },
       ],
@@ -725,19 +725,25 @@ function canonicalOpponentCompatibilityIssue(
   const opponentSource = opponent.sourceData;
   const sourceCompatible =
     playerSource.edition === opponentSource.edition &&
-    playerSource.releaseId === opponentSource.releaseId &&
-    playerSource.newRecruit.repository ===
-      opponentSource.newRecruit.repository &&
-    playerSource.newRecruit.commit === opponentSource.newRecruit.commit &&
-    playerSource.newRecruit.gameSystemRevision ===
-      opponentSource.newRecruit.gameSystemRevision &&
-    playerSource.official.contentSha256 ===
-      opponentSource.official.contentSha256;
+    ("bundleId" in playerSource &&
+    "bundleId" in opponentSource
+      ? playerSource.bundleId === opponentSource.bundleId &&
+        playerSource.engineDataSchemaVersion ===
+          opponentSource.engineDataSchemaVersion
+      : playerSource.releaseId === opponentSource.releaseId &&
+        playerSource.newRecruit.repository ===
+          opponentSource.newRecruit.repository &&
+        playerSource.newRecruit.commit ===
+          opponentSource.newRecruit.commit &&
+        playerSource.newRecruit.gameSystemRevision ===
+          opponentSource.newRecruit.gameSystemRevision &&
+        playerSource.official.contentSha256 ===
+          opponentSource.official.contentSha256);
   if (!sourceCompatible) {
     return {
       code: "TESSERA_DATA_PIN_MISMATCH",
       message:
-        `Canonical rosters must use the same edition and pinned data release. Player=${playerSource.releaseId} (${playerSource.edition}); opponent=${opponentSource.releaseId} (${opponentSource.edition}).`,
+        `Canonical rosters must use the same edition and frozen data bundle. Player=${playerSource.bundleId} (${playerSource.edition}); opponent=${opponentSource.bundleId} (${opponentSource.edition}). Rebase provenance-compatible rosters before starting a new exact run.`,
       severity: "error",
     };
   }
@@ -897,7 +903,7 @@ async function inspectUploadedRoszPreflight(
       violations.push({
         code: "TESSERA_ROSZ_GAME_SYSTEM_MISMATCH",
         message:
-          `The uploaded ROSZ game system ${gameplaySnapshot.gameSystem.id}@${gameplaySnapshot.gameSystem.revision} does not match pinned ${newRecruitCatalogue.gameSystem.id}@${playerRoster.sourceData.newRecruit.gameSystemRevision}.`,
+          `The uploaded ROSZ game system ${gameplaySnapshot.gameSystem.id}@${gameplaySnapshot.gameSystem.revision} does not match the frozen bundle's ${newRecruitCatalogue.gameSystem.id}@${playerRoster.sourceData.newRecruit.gameSystemRevision}.`,
         severity: "error",
       });
     }
@@ -919,7 +925,7 @@ async function inspectUploadedRoszPreflight(
       violations.push({
         code: "TESSERA_ROSZ_CATALOGUE_IDENTITY_AMBIGUOUS",
         message:
-          "The uploaded ROSZ does not identify exactly one supported opponent faction catalogue from the pinned data release.",
+          "The uploaded ROSZ does not identify exactly one supported opponent faction catalogue from the frozen data bundle.",
         severity: "error",
       });
     } else {
@@ -932,7 +938,7 @@ async function inspectUploadedRoszPreflight(
         violations.push({
           code: "TESSERA_ROSZ_DATA_PIN_MISMATCH",
           message:
-            `The uploaded ROSZ catalogue revision ${catalogue.revision ?? "unknown"} does not match pinned revision ${expected.revision}.`,
+            `The uploaded ROSZ catalogue revision ${catalogue.revision ?? "unknown"} does not match the frozen bundle revision ${expected.revision}.`,
           severity: "error",
         });
       } else {
@@ -5250,12 +5256,19 @@ function baselineSourceCompatible(
 ): boolean {
   return (
     baseline.edition === revised.edition &&
-    baseline.releaseId === revised.releaseId &&
-    baseline.newRecruit.repository === revised.newRecruit.repository &&
-    baseline.newRecruit.commit === revised.newRecruit.commit &&
-    baseline.newRecruit.gameSystemRevision ===
-      revised.newRecruit.gameSystemRevision &&
-    baseline.official.contentSha256 === revised.official.contentSha256
+    ("bundleId" in baseline &&
+    "bundleId" in revised
+      ? baseline.bundleId === revised.bundleId &&
+        baseline.engineDataSchemaVersion ===
+          revised.engineDataSchemaVersion
+      : baseline.releaseId === revised.releaseId &&
+        baseline.newRecruit.repository ===
+          revised.newRecruit.repository &&
+        baseline.newRecruit.commit === revised.newRecruit.commit &&
+        baseline.newRecruit.gameSystemRevision ===
+          revised.newRecruit.gameSystemRevision &&
+        baseline.official.contentSha256 ===
+          revised.official.contentSha256)
   );
 }
 

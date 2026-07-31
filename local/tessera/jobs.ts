@@ -31,6 +31,9 @@ import type {
   TesseraStressRevisionReport,
 } from "../../lib/rosterpilot";
 import { previewFactionStressPortfolio } from "../../lib/rosterpilot";
+import {
+  retainDataBundleReference,
+} from "../../lib/rosterpilot/data-operations";
 import { projectRoot } from "../agent/paths";
 import {
   getLocalAgentStatus,
@@ -3566,6 +3569,14 @@ export async function startTesseraRun(
       { flag: "wx", mode: 0o600 },
     );
     await validateJobDocumentPaths(document, jobPath, true);
+    for (const bundleId of new Set(
+      dataPins.map((entry) => entry.sourceData.bundleId),
+    )) {
+      await retainDataBundleReference(
+        `tessera-job:${runId}:${bundleId}`,
+        bundleId,
+      );
+    }
     manifestPublished = true;
     if (options.launch === false) return publicJob(document);
     return publicJob(await launchWorker(document));

@@ -1,5 +1,4 @@
 import {
-  addFreshnessWarnings,
   buildRoster,
   bytesToBase64,
   checkDataFreshnessCached,
@@ -8,12 +7,17 @@ import {
   exportRoster,
   getNewRecruitCapability,
   getDataStatus,
+  getDataUpdateStatus,
   listDataConflicts,
   modifyRoster,
   prepareNewRecruitHandoff,
+  rebaseRosterWithProvider,
+  refreshDataNow,
+  rollbackDataBundle,
   searchFactions,
   searchUnits,
   validateRoster,
+  withDataBundleSnapshotLease,
   type BuildRosterInput,
   type ExportFormat,
   type ModifyRosterOperation,
@@ -25,6 +29,9 @@ import {
   remoteOptions,
   withRemoteCors,
 } from "@/lib/rosterpilot/remote";
+import {
+  initializeHostedDataForRequest,
+} from "@/app/hosted-data-bundles";
 
 function routePath(request: Request): string {
   return new URL(request.url).pathname.replace(/^\/api\/v1\/?/, "").replace(/\/$/, "");
@@ -53,10 +60,20 @@ function inlineExportArtifact(artifact: {
   };
 }
 
-function guarded(request: Request, handler: () => Promise<Response> | Response) {
+function guarded(
+  request: Request,
+  handler: () => Promise<Response> | Response,
+  options: { lease?: boolean } = {},
+) {
   const denied = authorizeRemoteRequest(request);
   if (denied) return withRemoteCors(denied, request);
-  return Promise.resolve(handler())
+  const response = initializeHostedDataForRequest(request).then(
+    () =>
+      options.lease === false
+        ? Promise.resolve().then(handler)
+        : withDataBundleSnapshotLease(handler),
+  );
+  return response
     .then((response) => withRemoteCors(response, request))
     .catch((error) =>
       withRemoteCors(
@@ -77,10 +94,13 @@ export function OPTIONS(request: Request) {
 }
 
 export function GET(request: Request) {
+  const path = routePath(request);
   return guarded(request, async () => {
     const url = new URL(request.url);
-    const path = routePath(request);
     if (path === "data-status") return json(getDataStatus());
+    if (path === "data-update-status") {
+      return json(await getDataUpdateStatus());
+    }
     if (path === "data-freshness") {
       return json(
         await checkDataFreshnessCached({
@@ -165,17 +185,38 @@ export function GET(request: Request) {
       );
     }
     return json(errorEnvelope("NOT_FOUND", `Unknown API route "${path}".`), 404);
+  }, {
+    lease: path !== "data-update-status",
   });
 }
 
 export function POST(request: Request) {
+  const path = routePath(request);
   return guarded(request, async () => {
-    const path = routePath(request);
-    const body = (await request.json()) as Record<string, unknown>;
+    const content = await request.text();
+    const body = (
+      content.length > 0 ? JSON.parse(content) : {}
+    ) as Record<string, unknown>;
+    if (path === "data-refresh") {
+      return json(
+        await refreshDataNow({
+          force:
+            typeof body.force === "boolean" ? body.force : true,
+        }),
+      );
+    }
+    if (path === "data-rollback") {
+      return json(
+        await rollbackDataBundle(
+          typeof body.bundleId === "string" ? body.bundleId : "",
+        ),
+      );
+    }
+    if (path === "rosters/rebase") {
+      return json(await rebaseRosterWithProvider(body.roster));
+    }
     if (path === "rosters/build") {
-      const result = buildRoster(body as BuildRosterInput);
-      const freshness = await checkDataFreshnessCached();
-      return json(addFreshnessWarnings(result, freshness));
+      return json(buildRoster(body as BuildRosterInput));
     }
     if (path === "rosters/modify") {
       return json(
@@ -217,5 +258,9 @@ export function POST(request: Request) {
       });
     }
     return json(errorEnvelope("NOT_FOUND", `Unknown API route "${path}".`), 404);
+  }, {
+    lease:
+      path !== "data-refresh" &&
+      path !== "data-rollback",
   });
 }

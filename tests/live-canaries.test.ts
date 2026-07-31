@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   mkdtemp,
   readFile,
+  readdir,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -186,19 +190,189 @@ test("the daily workflow serially routes every named live canary", async () => {
   assert.match(workflow, /max-parallel:\s+1/);
   assert.match(workflow, /npm run certify:canary --/);
   assert.match(workflow, /--require-live/);
+  assert.match(workflow, /workflow_run:/);
+  assert.match(workflow, /--expected-bundle-id/);
+  assert.doesNotMatch(workflow, /31 10 \* \* \*/);
+  assert.match(workflow, /live-release-prerequisites:/);
+  assert.match(workflow, /application-release\.yml/);
+  assert.match(
+    workflow,
+    /Require trusted signed bootstrap and hosted copies[\s\S]*data:bundle:verify-release/,
+  );
+  assert.match(
+    workflow,
+    /Install the verified application data release[\s\S]*actions\/download-artifact@v4/,
+  );
+  assert.match(
+    workflow,
+    /npm run data:rollback-after-canary --/,
+  );
+  assert.match(
+    workflow,
+    /git -C "\$channel_root" add channels quarantines/,
+  );
   for (const canaryId of LIVE_CANARY_IDS) {
     assert.ok(
       workflow.includes(`- ${canaryId}`),
       `${canaryId} is missing from the daily rotation`,
     );
   }
+  const dailyWorkflow = workflow.slice(
+    workflow.indexOf("daily-canary:"),
+    workflow.indexOf("weekly-rotation:"),
+  );
+  assert.doesNotMatch(dailyWorkflow, /continue-on-error/);
   assert.doesNotMatch(
-    workflow.slice(
-      workflow.indexOf("daily-canary:"),
-      workflow.indexOf("weekly-rotation:"),
-    ),
+    dailyWorkflow,
     /renamed-mirror|--tier live --faction/,
   );
+});
+
+test("bundle-provider preflight failures emit checksummed unavailable release evidence", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-live-preflight-"),
+  );
+  try {
+    const trustedKeysFile = path.join(
+      root,
+      "trusted-keys.json",
+    );
+    await writeFile(
+      trustedKeysFile,
+      `${JSON.stringify({ schemaVersion: 1, keys: [] })}\n`,
+    );
+    const expectedBundleId = "a".repeat(64);
+    const command = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.resolve("scripts", "live-canary.ts"),
+        "--canary",
+        "death-guard-vs-orks-exact-1000",
+        "--out-dir",
+        root,
+        "--expected-bundle-id",
+        expectedBundleId,
+        "--require-live",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ROSTERPILOT_CERTIFICATION_LIVE: "1",
+          ROSTERPILOT_DATA_TRUSTED_KEYS_FILE:
+            trustedKeysFile,
+        },
+      },
+    );
+    assert.equal(
+      command.status,
+      2,
+      command.stderr || command.stdout,
+    );
+    const canaryDirectory = path.join(
+      root,
+      "death-guard-vs-orks-exact-1000",
+    );
+    const filenames = await readdir(canaryDirectory);
+    const reportName = filenames.find(
+      (filename) =>
+        filename.endsWith(".json") &&
+        !filename.endsWith(".sha256"),
+    );
+    assert.ok(reportName);
+    const reportContent = await readFile(
+      path.join(canaryDirectory, reportName),
+      "utf8",
+    );
+    const report = JSON.parse(reportContent);
+    assert.equal(report.status, "unavailable");
+    assert.equal(report.evidenceKind, "none");
+    assert.equal(
+      report.failure?.code,
+      "LIVE_CANARY_DATA_PROVIDER_UNAVAILABLE",
+    );
+    assert.deepEqual(report.releaseEvidence, {
+      kind: "bundle-bound",
+      expectedBundleId,
+    });
+    const checksum = crypto
+      .createHash("sha256")
+      .update(reportContent)
+      .digest("hex");
+    assert.equal(
+      await readFile(
+        path.join(canaryDirectory, `${reportName}.sha256`),
+        "utf8",
+      ),
+      `${checksum}  ${reportName}\n`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("require-live refuses unbound release evidence and still writes a report", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-live-unbound-"),
+  );
+  try {
+    const command = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.resolve("scripts", "live-canary.ts"),
+        "--canary",
+        "death-guard-vs-orks-exact-1000",
+        "--out-dir",
+        root,
+        "--require-live",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ROSTERPILOT_CERTIFICATION_LIVE: "1",
+        },
+      },
+    );
+    assert.equal(
+      command.status,
+      2,
+      command.stderr || command.stdout,
+    );
+    const canaryDirectory = path.join(
+      root,
+      "death-guard-vs-orks-exact-1000",
+    );
+    const reportName = (await readdir(canaryDirectory)).find(
+      (filename) => filename.endsWith(".json"),
+    );
+    assert.ok(reportName);
+    const report = JSON.parse(
+      await readFile(
+        path.join(canaryDirectory, reportName),
+        "utf8",
+      ),
+    );
+    assert.equal(report.status, "unavailable");
+    assert.equal(
+      report.failure?.code,
+      "LIVE_CANARY_RELEASE_BUNDLE_REQUIRED",
+    );
+    assert.deepEqual(report.releaseEvidence, {
+      kind: "ad-hoc",
+      expectedBundleId: null,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("live canary requests route through durable stress and exact modes", () => {
@@ -364,6 +538,41 @@ test("an unavailable canary never starts a durable job or claims a live pass", a
         reason.code === "LIVE_LOCAL_AGENT_UNAVAILABLE",
     ),
   );
+});
+
+test("an expected bundle mismatch stops before any durable live mutation", async () => {
+  let starts = 0;
+  const report = await runRotatingLiveCanary(
+    {
+      canaryId:
+        "custodes-vs-adaptive-nine-aeldari-2000",
+      outputDirectory: "/unused",
+      expectedBundleId: "a".repeat(64),
+      environment: {
+        NODE_ENV: "test",
+      },
+    },
+    {
+      getRuntime: () => runtime,
+      getActiveBundleManifest: () => null,
+      getAgentStatus: async () => {
+        throw new Error("fixture agent unavailable");
+      },
+      startRun: async (...args) => {
+        starts += 1;
+        throw new Error(
+          `unexpected start ${JSON.stringify(args)}`,
+        );
+      },
+    },
+  );
+  assert.equal(starts, 0);
+  assert.equal(report.status, "fail");
+  assert.equal(
+    report.failure?.code,
+    "LIVE_CANARY_DATA_BUNDLE_MISMATCH",
+  );
+  assert.equal(report.dataBundle, null);
 });
 
 test("live-canary reports are emitted with a detached checksum", async () => {

@@ -161,6 +161,14 @@ test("LaunchAgent rendering quotes paths and exposes no credential values", () =
   assert.match(plist, /Node &amp; Runtime/);
   assert.match(plist, /Roster &lt;Pilot&gt;/);
   assert.match(plist, /ROSTERPILOT_KEYCHAIN_BROKER/);
+  assert.match(plist, /ROSTERPILOT_DATA_CHANNEL_URL/);
+  assert.match(plist, /data-bundles\/channels\/stable\.json/);
+  assert.match(plist, /ROSTERPILOT_DATA_TRUSTED_KEYS_FILE/);
+  assert.match(plist, /data-bundle-trusted-keys\.json/);
+  assert.match(
+    plist,
+    /ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY/,
+  );
   assert.doesNotMatch(plist, /password|cookie|access.?token/i);
 });
 

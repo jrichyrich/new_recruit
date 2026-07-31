@@ -1,13 +1,15 @@
 import {
-  abilities,
   crunch,
-  detachments,
-  factions,
-  units,
   type Buff,
   type EngineContext,
 } from "@alpaca-software/40kdc-data";
 
+import {
+  abilities,
+  detachments,
+  factions,
+  units,
+} from "./runtime-dataset";
 import type {
   BaselineDamageCell,
   ProfilePolicyV1,

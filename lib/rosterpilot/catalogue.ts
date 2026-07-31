@@ -5,8 +5,14 @@ import type {
   NewRecruitFactionCatalogue,
 } from "./catalogue-types";
 
-export const newRecruitCatalogueMappings =
+export let newRecruitCatalogueMappings =
   catalogueJson as NewRecruitCatalogueManifest;
+
+export function activateNewRecruitCatalogueMappings(
+  manifest: NewRecruitCatalogueManifest,
+): void {
+  newRecruitCatalogueMappings = structuredClone(manifest);
+}
 
 export function getNewRecruitFactionCatalogue(
   factionId: string,
