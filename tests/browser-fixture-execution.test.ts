@@ -80,6 +80,11 @@ test("registered source text cannot pass without successful execution evidence",
             automatedBy: "tests/fixture.test.ts",
             testName: "registered fixture executes",
           },
+          {
+            id: "registered-fixture-alias",
+            automatedBy: "tests/fixture.test.ts",
+            testName: "registered fixture executes",
+          },
         ],
       })}\n`,
     );
@@ -132,6 +137,37 @@ test("registered source text cannot pass without successful execution evidence",
       );
     assert.equal(passedWithoutOptionalJunitFile.results[0].status, "pass");
     assert.equal(passedWithoutOptionalJunitFile.observations[0].file, null);
+
+    const passedAliasesWithoutOptionalJunitFile =
+      await executeBrowserFixtureRegistry(
+        {
+          projectRoot,
+          registryPath,
+          fixtureIds: [
+            "registered-fixture",
+            "registered-fixture-alias",
+          ],
+        },
+        {
+          run: async () => ({
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            outputExceeded: false,
+            stdout: junit("registered fixture executes").replace(
+              ' file="tests/fixture.test.ts"',
+              "",
+            ),
+            stderr: "",
+          }),
+        },
+      );
+    assert.deepEqual(
+      passedAliasesWithoutOptionalJunitFile.results.map(
+        (result) => result.status,
+      ),
+      ["pass", "pass"],
+    );
 
     const skipped = await executeBrowserFixtureRegistry(
       {
