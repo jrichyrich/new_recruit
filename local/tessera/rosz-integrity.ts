@@ -16,6 +16,18 @@ export type RoszGameplaySnapshot = {
   selections: string[];
 };
 
+type ParsedSelection = {
+  ancestry: string[];
+  entryId: string;
+  entryGroupId: string;
+  name: string;
+  type: string;
+  group: string;
+  from: string;
+  number: number | null;
+  costs: string[];
+};
+
 function decodeXml(value: string): string {
   return value
     .replaceAll("&quot;", '"')
@@ -43,6 +55,47 @@ function normalized(value: string | undefined): string {
     .replace(/\s+/g, " ")
     .trim()
     .toLocaleLowerCase();
+}
+
+function normalizedSelectionName(value: string): string {
+  return normalized(value).replace(/^\d+\.\s+/, "");
+}
+
+function semanticAncestryIdentity(value: string): string {
+  const [entryId = "", name = "", type = ""] = value.split("|");
+  return [
+    entryId,
+    normalizedSelectionName(name),
+    normalized(type),
+  ].join("|");
+}
+
+function semanticCosts(costs: string[]): string[] {
+  return costs
+    .map((cost) => JSON.parse(cost) as {
+      typeId: string;
+      name: string;
+      value: number | null;
+    })
+    .filter((cost) => cost.value !== 0)
+    .map((cost) => JSON.stringify(cost))
+    .sort();
+}
+
+function semanticSelections(snapshot: RoszGameplaySnapshot): string[] {
+  return snapshot.selections
+    .map((serialized) => {
+      const selection = JSON.parse(serialized) as ParsedSelection;
+      return JSON.stringify({
+        ancestry: selection.ancestry.map(semanticAncestryIdentity),
+        entryId: selection.entryId,
+        name: normalizedSelectionName(selection.name),
+        type: selection.type,
+        number: selection.number,
+        costs: semanticCosts(selection.costs),
+      });
+    })
+    .sort();
 }
 
 function optionalInteger(value: string | undefined): number | null {
@@ -226,7 +279,10 @@ export function compareRoszGameplaySnapshots(
   if (JSON.stringify(expected.catalogues) !== JSON.stringify(observed.catalogues)) {
     mismatches.push("catalogue");
   }
-  if (JSON.stringify(expected.selections) !== JSON.stringify(observed.selections)) {
+  if (
+    JSON.stringify(semanticSelections(expected)) !==
+    JSON.stringify(semanticSelections(observed))
+  ) {
     mismatches.push("selection-tree");
   }
   return mismatches;

@@ -292,6 +292,36 @@ test("ROSZ gameplay snapshots detect Warlord, enhancement, and equipment drift",
   assert.deepEqual(mismatches, ["selection-tree"]);
 });
 
+test("ROSZ gameplay snapshots tolerate New Recruit selection metadata enrichment", async () => {
+  const candidate = roster(
+    "adeptus-custodes",
+    "Gameplay Snapshot Metadata",
+  );
+  const exported = sourceContent(await exportRoster(candidate, "rosz"));
+  const enriched = enrichedContent(exported, (xml) =>
+    xml
+      .replace(
+        /name="\d+\.\s+([^"]*Point limit)"/,
+        'name="$1"',
+      )
+      .replace(
+        /name="Warlord" entryId="([^"]+)" from="entry"/,
+        'name="Warlord" entryId="$1" entryGroupId="new-recruit-group" group="Wargear" from="group"',
+      )
+      .replace(
+        /<cost name="pts" typeId="[^"]+" value="0"\s*\/>/,
+        "",
+      ),
+  );
+  assert.deepEqual(
+    compareRoszGameplaySnapshots(
+      inspectRoszGameplaySnapshot(exported),
+      inspectRoszGameplaySnapshot(enriched),
+    ),
+    [],
+  );
+});
+
 test("New Recruit enrichment drift is rejected before persistent reuse", async () => {
   const candidate = roster(
     "adeptus-custodes",
