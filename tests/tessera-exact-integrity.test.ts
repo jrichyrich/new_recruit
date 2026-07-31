@@ -17,6 +17,7 @@ import {
   buildRoster,
   exportRoster,
   inspectEnrichedRosz,
+  rosterExecutionFingerprint,
   type NewRecruitDelivery,
   type ResultEnvelope,
   type RosterDraftV1,
@@ -447,7 +448,7 @@ test("a concrete pinned no-context upload runs exact simulation with an explicit
   }
 });
 
-test("a raw standalone ROSZ baseline supports a hash-verified paired player revision", async () => {
+test("a context-verified uploaded ROSZ preserves its canonical identity across a paired player revision", async () => {
   const player = roster(
     "adeptus-custodes",
     "Raw Baseline Player",
@@ -483,7 +484,7 @@ test("a raw standalone ROSZ baseline supports a hash-verified paired player revi
   const rawUploaded = sourceContent(
     await exportRoster(opponent, "rosz"),
   );
-  const profilePolicy = policyFor(player);
+  const profilePolicy = policyFor(player, opponent);
   const deliver = artifactDelivery(directory);
   let deliveryCalls = 0;
   let enrichmentCalls = 0;
@@ -543,6 +544,7 @@ test("a raw standalone ROSZ baseline supports a hash-verified paired player revi
         executionMode: "simulate",
         analysisMode: "quick",
         profilePolicy,
+        opponentRosterContext: opponent,
         outputDirectory: path.join(directory, "baseline"),
         allowOutsideRoot: true,
       },
@@ -613,9 +615,7 @@ test("a raw standalone ROSZ baseline supports a hash-verified paired player revi
       [],
     );
     assert.equal(
-      roszGameplaySnapshotSha256(
-        inspectRoszGameplaySnapshot(frozenSource),
-      ),
+      rosterExecutionFingerprint(opponent),
       frozenOpponent.fingerprint,
     );
 
@@ -657,6 +657,11 @@ test("a raw standalone ROSZ baseline supports a hash-verified paired player revi
       compared.data.revisedReports[0].opponents[0]
         ?.enrichedRoszSha256,
       frozenOpponent.enrichedRoszSha256,
+    );
+    assert.equal(
+      compared.data.revisedReports[0].opponents[0]
+        ?.sourceRoszSha256,
+      frozenOpponent.sourceRoszSha256,
     );
     assert.equal(enrichmentCalls, 1);
     assert.equal(deliveryCalls, 2);

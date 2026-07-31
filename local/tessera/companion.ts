@@ -196,6 +196,13 @@ export type TesseraAnalysisOptions = WriteOptions & {
     opponent: TesseraPreparedRoster | null;
     sourceAttempt: number;
   };
+  /**
+   * Internal paired-revision checkpoint for an opponent whose exact source
+   * and enriched archives were already verified against the baseline receipt.
+   * Unlike `preparedReuse`, this does not imply that the revised player has
+   * already been prepared.
+   */
+  frozenOpponentReuse?: TesseraPreparedRoster;
   frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
   sessionId?: string;
   allowPointMismatch?: boolean;
@@ -3430,7 +3437,8 @@ export async function analyzeRosterMatchup(
   let frozenUploadedSourcePath: string | null = null;
   if (
     opponent.kind === "rosz" &&
-    !options.preparedReuse?.opponent
+    !options.preparedReuse?.opponent &&
+    !options.frozenOpponentReuse
   ) {
     if (!uploadedPreflight) {
       return {
@@ -3641,9 +3649,12 @@ export async function analyzeRosterMatchup(
     if (!uploadedPreflight) {
       throw new Error("Uploaded ROSZ preflight was not retained.");
     }
-    if (options.preparedReuse?.opponent) {
+    const frozenOpponentReuse =
+      options.preparedReuse?.opponent ??
+      options.frozenOpponentReuse;
+    if (frozenOpponentReuse) {
       const reused = await verifiedPreparedRosterReuse(
-        options.preparedReuse.opponent,
+        frozenOpponentReuse,
         options.opponentRosterContext ?? null,
       );
       if (!reused.ok || !reused.data) {
@@ -4564,6 +4575,9 @@ export async function analyzeRosterMatchup(
     profilePolicyHash: profilePolicy
       ? profilePolicyHash(profilePolicy)
       : null,
+    frozenProfileRequirements: structuredClone(
+      enrichedProfileRequirements,
+    ),
     runtime: getRuntimeProvenance(),
     tesseraUiIdentity:
       tesseraUiIdentities.size === 0
@@ -5369,6 +5383,11 @@ export async function compareRosterRevision(
           opponent.enrichedRoszSha256,
         ),
     ) ||
+    (
+      baseline.profilePolicyHash !== null &&
+      baseline.profilePolicyHash !== undefined &&
+      !Array.isArray(baseline.frozenProfileRequirements)
+    ) ||
     !baseline.tesseraUiIdentity
   ) {
     return {
@@ -5612,7 +5631,10 @@ export async function compareRosterRevision(
       warnings: validation.warnings,
     };
   }
-  const verifiedOpponentPaths: string[] = [];
+  const verifiedOpponentArtifacts: Array<{
+    sourcePath: string;
+    enrichedPath: string;
+  }> = [];
   for (const opponent of baseline.opponents) {
     const verified = await verifyFrozenExactRosterArtifacts(
       baselineReportDirectory,
@@ -5633,7 +5655,7 @@ export async function compareRosterRevision(
         warnings: validation.warnings,
       };
     }
-    verifiedOpponentPaths.push(verified.enrichedPath);
+    verifiedOpponentArtifacts.push(verified);
   }
 
   const outputDirectory =
@@ -5761,13 +5783,19 @@ export async function compareRosterRevision(
         };
     const revised = await analyzeRosterMatchup(
       revisedRoster,
-      { kind: "rosz", path: verifiedOpponentPaths[index] },
+      {
+        kind: "rosz",
+        path: verifiedOpponentArtifacts[index].enrichedPath,
+      },
       {
         ...options,
         executionMode: "simulate",
         experimental: undefined,
         profilePolicy: revisionProfilePolicy,
         profilePolicyPath: undefined,
+        frozenProfileRequirements: structuredClone(
+          baseline.frozenProfileRequirements ?? [],
+        ),
         outputDirectory: path.join(
           outputDirectory,
           `opponent-${index + 1}-${safeName(opponent.rosterName)}`,
@@ -5778,6 +5806,25 @@ export async function compareRosterRevision(
         allowPointMismatch: baseline.configuration.allowPointMismatch,
         includeChangeCandidates: false,
         frozenScenarioContract: frozenScenarioContract.data,
+        frozenOpponentReuse: {
+          rosterId: opponent.fingerprint!,
+          rosterName: opponent.rosterName,
+          listUrl: null,
+          sourceRoszPath:
+            verifiedOpponentArtifacts[index].sourcePath,
+          enrichedRoszPath:
+            verifiedOpponentArtifacts[index].enrichedPath,
+          sourceRoszSha256: opponent.sourceRoszSha256,
+          enrichedRoszSha256: opponent.enrichedRoszSha256,
+          summary: structuredClone(opponent.summary),
+          fingerprint: opponent.fingerprint,
+          units: structuredClone(opponent.units ?? []),
+          cacheReused: true,
+          connectorEvents: [],
+          catalogueProvenance: opponent.catalogueProvenance
+            ? structuredClone(opponent.catalogueProvenance)
+            : undefined,
+        },
         verifiedUploadedArtifactCapability:
           grantVerifiedUploadedArtifactCapability(),
       },
@@ -5803,15 +5850,11 @@ export async function compareRosterRevision(
         revisedOpponent.summary,
         opponent.summary,
       ) ||
-      (
-        opponent.kind === "rosz" &&
-        revisedOpponent.fingerprint !== opponent.fingerprint
-      ) ||
-      (
-        opponent.kind === "rosz" &&
-        revisedOpponent.enrichedRoszSha256 !==
-          opponent.enrichedRoszSha256
-      )
+      revisedOpponent.fingerprint !== opponent.fingerprint ||
+      revisedOpponent.sourceRoszSha256 !==
+        opponent.sourceRoszSha256 ||
+      revisedOpponent.enrichedRoszSha256 !==
+        opponent.enrichedRoszSha256
     ) {
       return {
         ok: false,

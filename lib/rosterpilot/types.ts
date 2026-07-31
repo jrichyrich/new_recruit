@@ -696,6 +696,12 @@ export type TesseraMatchupReport = {
     retryable: boolean;
   }>;
   profilePolicyHash?: string | null;
+  /**
+   * Complete profile inventory used to validate the frozen policy. Paired
+   * revisions retain this inventory so removing a profiled unit does not
+   * silently change the policy contract.
+   */
+  frozenProfileRequirements?: TesseraProfileRequirement[];
   runtime?: RuntimeProvenance;
   tesseraUiIdentity?: string | null;
   connectorEvents?: ConnectorEvent[];
