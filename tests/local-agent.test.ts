@@ -174,7 +174,7 @@ test("LaunchAgent rendering quotes paths and exposes no credential values", () =
 
 test("local agent reports providers through a user-only transport", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-status-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-status-"),
   );
   const socketPath = path.join(directory, "agent.sock");
   const spoolDirectory = path.join(directory, "spool");
@@ -246,7 +246,7 @@ test("local agent reports providers through a user-only transport", async () => 
 
 test("local agent owns detached Tessera run-worker launches", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-run-worker-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-run-worker-"),
   );
   const spoolDirectory = path.join(directory, "spool");
   const jobDirectory = path.join(directory, "run-fixture");
@@ -327,7 +327,7 @@ writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
 
 test("local agent rejects incompatible protocol versions", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-version-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-version-"),
   );
   const socketPath = path.join(directory, "agent.sock");
   const spoolDirectory = path.join(directory, "spool");
@@ -392,7 +392,7 @@ test("local agent rejects incompatible protocol versions", async () => {
 
 test("local agent returns browser artifacts without returning credentials or paths", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-delivery-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-delivery-"),
   );
   const socketPath = path.join(directory, "agent.sock");
   const brokerPath = path.join(directory, "broker");
@@ -538,7 +538,7 @@ process.stdout.write(JSON.stringify({
 
 test("local agent returns sanitized Tessera matrix results", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-tessera-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-tessera-"),
   );
   const brokerPath = path.join(directory, "broker");
   const workerPath = path.join(directory, "tessera-worker.mjs");
@@ -611,7 +611,7 @@ process.stdout.write(JSON.stringify({
 
 test("explicit fake Tessera workers keep one-shot EOF behavior and frozen contracts", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-session-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-session-"),
   );
   const brokerPath = path.join(directory, "broker");
   const workerPath = path.join(directory, "tessera-worker.mjs");
@@ -704,7 +704,7 @@ process.stdout.write(JSON.stringify({
 
 test("persistent Tessera sessions reuse one worker and reset poisoned contexts", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-persistent-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-persistent-"),
   );
   const workerPath = path.join(directory, "tessera-worker.mjs");
   const workerLog = path.join(directory, "worker.log");
@@ -833,7 +833,7 @@ test("persistent Tessera sessions reuse one worker and reset poisoned contexts",
 
 test("Tessera certification profile state survives a graceful local-agent restart until explicit close", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-restart-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-restart-"),
   );
   const workerPath = path.join(directory, "tessera-worker.mjs");
   const workerLog = path.join(directory, "worker.log");
@@ -930,7 +930,7 @@ test("Tessera certification profile state survives a graceful local-agent restar
 
 test("persistent Tessera sessions are deleted after their bounded expiry", async () => {
   const directory = await mkdtemp(
-    path.join("/private/tmp", "rosterpilot-agent-expiry-"),
+    path.join(os.tmpdir(), "rosterpilot-agent-expiry-"),
   );
   const workerPath = path.join(directory, "tessera-worker.mjs");
   const workerLog = path.join(directory, "worker.log");
