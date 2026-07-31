@@ -111,6 +111,9 @@ import {
   inspectRoszGameplaySnapshot,
   roszGameplaySnapshotSha256,
 } from "./rosz-integrity";
+import {
+  createTesseraSavedListReuse,
+} from "./saved-list-reuse";
 
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -4186,6 +4189,32 @@ export async function analyzeRosterMatchup(
         path.join(os.tmpdir(), "rosterpilot-tessera-"),
       );
       try {
+        const savedListReuse =
+          preparedPlayer.enrichedRoszSha256 &&
+          preparedPlayer.fingerprint &&
+          prepared.enrichedRoszSha256 &&
+          prepared.fingerprint
+            ? createTesseraSavedListReuse({
+                runId: mutationRunId,
+                profilePolicy,
+                player: {
+                  enrichedRoszSha256:
+                    preparedPlayer.enrichedRoszSha256,
+                  rosterExecutionFingerprint:
+                    preparedPlayer.fingerprint,
+                  expectedUnitCount:
+                    preparedPlayer.summary.units.length,
+                },
+                opponent: {
+                  enrichedRoszSha256:
+                    prepared.enrichedRoszSha256,
+                  rosterExecutionFingerprint:
+                    prepared.fingerprint,
+                  expectedUnitCount:
+                    prepared.summary.units.length,
+                },
+              })
+            : null;
         const result: TesseraBrowserResult = await (
           dependencies.runBrowser ?? runTesseraViaAgent
         )({
@@ -4199,6 +4228,7 @@ export async function analyzeRosterMatchup(
           metrics: configuration.metrics,
           profilePolicy,
           frozenScenarioContract: options.frozenScenarioContract,
+          savedListReuse,
           sessionId: options.sessionId,
         });
         Object.assign(settings, result.settings);

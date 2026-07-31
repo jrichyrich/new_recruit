@@ -806,6 +806,20 @@ test("consolidates a full 16-matrix run into four complete scenarios with stable
       "mean-kills",
       "mean-damage",
     ]);
+    assert.equal(
+      browserInputs[0]?.savedListReuse?.player
+        .rosterExecutionFingerprint,
+      rosterExecutionFingerprint(player),
+    );
+    assert.equal(
+      browserInputs[0]?.savedListReuse?.opponent
+        .rosterExecutionFingerprint,
+      rosterExecutionFingerprint(opponent),
+    );
+    assert.equal(
+      browserInputs[0]?.savedListReuse?.player.runId,
+      browserInputs[0]?.savedListReuse?.opponent.runId,
+    );
 
     const scenarios = analyzed.data.simulation.scenarios ?? [];
     assert.equal(scenarios.length, 4);

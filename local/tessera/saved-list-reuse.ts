@@ -19,6 +19,35 @@ export type TesseraSavedListReuse = {
   opponent: TesseraSavedListReuseSide;
 };
 
+export function createTesseraSavedListReuse(input: {
+  runId: string;
+  profilePolicy: ProfilePolicyV1 | null | undefined;
+  player: Omit<
+    TesseraSavedListReuseSide,
+    "runId" | "scopedProfilePolicySha256"
+  >;
+  opponent: Omit<
+    TesseraSavedListReuseSide,
+    "runId" | "scopedProfilePolicySha256"
+  >;
+}): TesseraSavedListReuse {
+  const scopedProfilePolicySha256 =
+    scopedTesseraProfilePolicySha256(input.profilePolicy);
+  return {
+    schemaVersion: 1,
+    player: {
+      ...input.player,
+      runId: input.runId,
+      scopedProfilePolicySha256,
+    },
+    opponent: {
+      ...input.opponent,
+      runId: input.runId,
+      scopedProfilePolicySha256,
+    },
+  };
+}
+
 export type TesseraSavedListReuseAction = {
   name: string;
   expectedUnitCount: number;

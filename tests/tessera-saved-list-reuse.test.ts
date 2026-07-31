@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { runTesseraBrowserMatchup } from "../local/tessera/browser";
 import {
+  createTesseraSavedListReuse,
   deterministicTesseraSavedListName,
   scopedTesseraProfilePolicySha256,
   tesseraSavedListReuseValidationError,
@@ -63,6 +64,31 @@ test("Tessera saved-list identities give an explicit policy-free scope a stable 
       entries: [],
     }),
   );
+});
+
+test("Tessera exact children freeze one shared run and policy identity", () => {
+  const reuse = createTesseraSavedListReuse({
+    runId: "shared-stress-run",
+    profilePolicy: null,
+    player: {
+      enrichedRoszSha256: "a".repeat(64),
+      rosterExecutionFingerprint: "b".repeat(64),
+      expectedUnitCount: 12,
+    },
+    opponent: {
+      enrichedRoszSha256: "c".repeat(64),
+      rosterExecutionFingerprint: "d".repeat(64),
+      expectedUnitCount: 8,
+    },
+  });
+  assert.equal(reuse.player.runId, "shared-stress-run");
+  assert.equal(reuse.opponent.runId, "shared-stress-run");
+  assert.equal(
+    reuse.player.scopedProfilePolicySha256,
+    reuse.opponent.scopedProfilePolicySha256,
+  );
+  assert.equal(reuse.player.expectedUnitCount, 12);
+  assert.equal(reuse.opponent.expectedUnitCount, 8);
 });
 
 test("Tessera saved-list reuse rejects incomplete identity inputs before browser work", () => {
