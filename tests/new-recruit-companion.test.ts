@@ -544,6 +544,20 @@ test("direct New Recruit delivery rejects a verified enriched roster from a drif
     );
     assert.equal(result.data?.catalogueProvenance?.status, "drift");
     assert.equal(result.data?.connectorEvents?.[0]?.outcome, "verified");
+    const retainedEnriched = result.data?.artifacts.find(
+      (artifact) => artifact.format === "new-recruit-enriched-rosz",
+    );
+    assert.ok(retainedEnriched?.written);
+    assert.match(
+      result.violations[0]?.message ?? "",
+      new RegExp(
+        retainedEnriched!.written.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      ),
+    );
+    assert.match(
+      result.violations[0]?.message ?? "",
+      /manually reviewed or imported for an explicit diagnostic/i,
+    );
     assert.ok(
       result.data?.artifacts.some(
         (artifact) =>

@@ -1098,6 +1098,13 @@ export async function deliverRosterToNewRecruit(
           : "New Recruit reused an existing roster state; no import occurred.",
     );
     if (catalogueProvenanceViolation) {
+      const retainedEnriched = delivery.artifacts.find(
+        (artifact) => artifact.format === "new-recruit-enriched-rosz",
+      );
+      if (retainedEnriched?.written) {
+        catalogueProvenanceViolation.message +=
+          ` A profile-rich diagnostic copy was retained at ${retainedEnriched.written}. It may be manually reviewed or imported for an explicit diagnostic, but remains blocked from automatic downstream use.`;
+      }
       return {
         ok: false,
         data: delivery,
