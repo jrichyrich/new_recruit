@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const setupFile = fileURLToPath(import.meta.url);
 const defaultProjectRoot = path.resolve(path.dirname(setupFile), "..");
@@ -124,7 +124,9 @@ export function renderCodexConfig({
   nodeExecutable,
   projectRoot,
 }) {
-  const loader = path.join(projectRoot, "node_modules", "tsx", "dist", "loader.mjs");
+  const loader = pathToFileURL(
+    path.join(projectRoot, "node_modules", "tsx", "dist", "loader.mjs"),
+  ).href;
   const server = path.join(projectRoot, "mcp", "stdio.ts");
   const dataEnvironment = localDataBundleEnvironment(projectRoot);
   const dataEnvironmentToml = Object.entries(dataEnvironment)
@@ -156,13 +158,15 @@ export function renderClaudeConfig({
           command: nodeExecutable,
           args: [
             "--import",
-            path.join(
-              projectRoot,
-              "node_modules",
-              "tsx",
-              "dist",
-              "loader.mjs",
-            ),
+            pathToFileURL(
+              path.join(
+                projectRoot,
+                "node_modules",
+                "tsx",
+                "dist",
+                "loader.mjs",
+              ),
+            ).href,
             path.join(projectRoot, "mcp", "stdio.ts"),
           ],
           cwd: projectRoot,
@@ -203,6 +207,8 @@ function defaultRun(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: capture ? "utf8" : undefined,
+    shell:
+      process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command),
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
   return {
@@ -301,13 +307,15 @@ function runNpmScript(name, args, dependencies, capture = false) {
 }
 
 function runRosterPilot(action, dependencies) {
-  const loader = path.join(
-    dependencies.projectRoot,
-    "node_modules",
-    "tsx",
-    "dist",
-    "loader.mjs",
-  );
+  const loader = pathToFileURL(
+    path.join(
+      dependencies.projectRoot,
+      "node_modules",
+      "tsx",
+      "dist",
+      "loader.mjs",
+    ),
+  ).href;
   return dependencies.run(
     dependencies.nodeExecutable,
     [

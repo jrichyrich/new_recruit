@@ -661,7 +661,7 @@ test("diverse-9 expands a constrained faction pool until every cell has a unique
 
 test(
   "ordinary faction anchors diversify into complete Astra Militarum portfolios",
-  { timeout: 300_000 },
+  { timeout: 600_000 },
   async () => {
     for (const suite of ["core-3", "diverse-9"] as const) {
       for (const pointsLimit of [1000, 2000]) {

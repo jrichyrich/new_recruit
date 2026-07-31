@@ -1,8 +1,6 @@
-name: Roster data freshness
+name: Certification review package
 
 on:
-  schedule:
-    - cron: "17 11 * * *"
   workflow_dispatch:
     inputs:
       official_reconciliation_evidence:
@@ -23,14 +21,14 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: roster-data-refresh
+  group: rosterpilot-certification-review-package
   cancel-in-progress: false
 
 jobs:
-  refresh:
+  package:
     runs-on: ubuntu-latest
     env:
       ROSTERPILOT_DATA_SIGNING_KEY_ID: ${{ vars.ROSTERPILOT_DATA_SIGNING_KEY_ID }}
@@ -48,7 +46,7 @@ jobs:
 
       - run: npm ci
 
-      - name: Prepare the immutable channel worktree
+      - name: Prepare the current immutable channel snapshot
         id: channel
         shell: bash
         run: |
@@ -71,7 +69,8 @@ jobs:
           echo "root=$channel_root" >> "$GITHUB_OUTPUT"
           echo "previous_manifest=$previous_manifest" >> "$GITHUB_OUTPUT"
 
-      - name: Build, classify, and certify the candidate bundle
+      - name: Build the candidate and preserve review evidence
+        id: prepare
         shell: bash
         env:
           OFFICIAL_EVIDENCE_INPUT: ${{ inputs.official_reconciliation_evidence }}
@@ -100,9 +99,7 @@ jobs:
             test -n "$official_evidence" && test -n "$official_source" && test -n "$official_receipt"
             if [[ "$official_evidence" == https://* ]]; then
               evidence_file="$RUNNER_TEMP/rosterpilot-official-overlay.json"
-              curl --fail --show-error --silent --location \
-                "$official_evidence" \
-                --output "$evidence_file"
+              curl --fail --show-error --silent --location "$official_evidence" --output "$evidence_file"
             else
               evidence_file="$GITHUB_WORKSPACE/$official_evidence"
             fi
@@ -130,42 +127,46 @@ jobs:
           elif test -n "$OFFICIAL_UNAVAILABLE_REASON"; then
             args+=(--official-authority-unavailable "$OFFICIAL_UNAVAILABLE_REASON")
           fi
+          set +e
           npm run data:prepare-update -- "${args[@]}"
+          prepare_status=$?
+          set -e
+          echo "status=$prepare_status" >> "$GITHUB_OUTPUT"
+          test -f "$RUNNER_TEMP/rosterpilot-certification-review/review-package.json"
 
-      - name: Preserve blocked certification review evidence
-        if: failure()
+      - name: Prove the review workflow did not rewrite or publish
+        run: |
+          git diff --exit-code
+          test -z "$(git status --short)"
+          if test "${{ steps.prepare.outputs.status }}" = "0"; then
+            echo "The candidate passed publication gates and did not require an expert-review package." >&2
+            exit 1
+          fi
+
+      - name: Preserve the certification review package
         uses: actions/upload-artifact@v4
         with:
           name: rosterpilot-certification-review-${{ github.run_id }}
           path: ${{ runner.temp }}/rosterpilot-certification-review
-          if-no-files-found: ignore
+          if-no-files-found: error
           include-hidden-files: false
           retention-days: 90
 
-      - name: Prove routine refresh did not rewrite the application checkout
-        run: |
-          git diff --exit-code
-          test -z "$(git status --short)"
-
-      - name: Publish the signed stable channel
+      - name: Summarize the human review gate
         shell: bash
         run: |
-          set -euo pipefail
-          channel_root="${{ steps.channel.outputs.root }}"
-          git -C "$channel_root" config user.name "github-actions[bot]"
-          git -C "$channel_root" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C "$channel_root" add bundles channels
-          if git -C "$channel_root" diff --cached --quiet; then
-            echo "The signed channel is already current."
-            exit 0
-          fi
-          git -C "$channel_root" commit -m "Publish verified roster data bundle"
-          git -C "$channel_root" push origin HEAD:data-bundles
-
-      - name: Preserve the published bundle as a workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rosterpilot-data-channel-${{ github.run_id }}
-          path: ${{ steps.channel.outputs.root }}
-          include-hidden-files: false
-          retention-days: 30
+          node -e '
+            const fs = require("fs");
+            const path = process.env.RUNNER_TEMP + "/rosterpilot-certification-review/review-package.json";
+            const value = JSON.parse(fs.readFileSync(path, "utf8"));
+            const lines = [
+              "## Certification review package ready",
+              "",
+              `Candidate: \`${value.candidate.bundleId}\``,
+              `Classification: \`${value.candidate.classification}\``,
+              `Review-blocked factions: ${value.failedFactions.length}`,
+              "",
+              "No data channel was published. Download the workflow artifact and follow its README.md.",
+            ];
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+          '

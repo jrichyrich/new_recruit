@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
@@ -58,6 +59,7 @@ type PrepareArgs = {
   officialExtractionReceipt: string | null;
   officialExtractorTrustedKeys: string;
   officialAuthorityUnavailableReason: string | null;
+  reviewPackageDir: string | null;
   skipRefresh: boolean;
 };
 
@@ -132,6 +134,8 @@ Options:
   --official-authority-unavailable <reason>
                                Explicit degraded authority for a genesis
                                channel with no prior verified binding.
+  --review-package-dir <path>  Preserve a hash-inventoried certification review
+                               package when expert review blocks publication.
   --no-refresh                 Bundle the current checkout without live checks.
   -h, --help                   Show help without checking or changing data.
 
@@ -230,6 +234,7 @@ export function parsePrepareDataBundleArgs(
     officialExtractorTrustedKeys:
       "data/official-extractor-trusted-keys.json",
     officialAuthorityUnavailableReason: null,
+    reviewPackageDir: null,
     skipRefresh: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -290,6 +295,13 @@ export function parsePrepareDataBundleArgs(
       index += 1;
     } else if (argument === "--official-authority-unavailable") {
       parsed.officialAuthorityUnavailableReason = requiredValue(
+        argv,
+        index,
+        argument,
+      );
+      index += 1;
+    } else if (argument === "--review-package-dir") {
+      parsed.reviewPackageDir = requiredValue(
         argv,
         index,
         argument,
@@ -657,6 +669,183 @@ type CandidateCertificationResult = {
   }>;
 };
 
+type PartialRollForwardIdentity = {
+  engineDataSchemaVersion: number;
+  semanticHashes: {
+    globalHash: string;
+    methodologyHash: string;
+  };
+};
+
+export function partialRollForwardBlockReason(
+  previous: PartialRollForwardIdentity,
+  candidate: PartialRollForwardIdentity,
+): string | null {
+  if (
+    previous.engineDataSchemaVersion !==
+    candidate.engineDataSchemaVersion
+  ) {
+    return "the engine data schema changed";
+  }
+  if (
+    previous.semanticHashes.globalHash !==
+    candidate.semanticHashes.globalHash
+  ) {
+    return "the global shard semantics changed";
+  }
+  if (
+    previous.semanticHashes.methodologyHash !==
+    candidate.semanticHashes.methodologyHash
+  ) {
+    return "the certification methodology changed";
+  }
+  return null;
+}
+
+function sha256File(filename: string): string {
+  return createHash("sha256")
+    .update(readFileSync(filename))
+    .digest("hex");
+}
+
+function packageFileInventory(
+  root: string,
+  directory: string = root,
+): Array<{ path: string; sha256: string }> {
+  return readdirSync(directory, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) => {
+      const filename = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        return packageFileInventory(root, filename);
+      }
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error(
+          `Certification review package contains an unsupported entry: ${filename}.`,
+        );
+      }
+      return [{
+        path: path.relative(root, filename).split(path.sep).join("/"),
+        sha256: sha256File(filename),
+      }];
+    });
+}
+
+export type CertificationReviewPackageInput = {
+  outputDirectory: string;
+  candidateRoot: string;
+  candidateManifestPath: string;
+  candidateUpdateReportPath: string;
+  candidate: CandidateBuildSummary;
+  certification: CandidateCertificationResult;
+  createdAt: string;
+};
+
+export function writeCertificationReviewPackage(
+  input: CertificationReviewPackageInput,
+): string {
+  if (
+    existsSync(input.outputDirectory) &&
+    readdirSync(input.outputDirectory).length > 0
+  ) {
+    throw new Error(
+      `Certification review package directory is not empty: ${input.outputDirectory}.`,
+    );
+  }
+  mkdirSync(input.outputDirectory, { recursive: true });
+  const candidateDirectory = path.join(
+    input.outputDirectory,
+    "candidate",
+  );
+  mkdirSync(candidateDirectory, { recursive: true });
+  copyFileSync(
+    input.candidateManifestPath,
+    path.join(candidateDirectory, "manifest.json"),
+  );
+  copyFileSync(
+    input.candidateUpdateReportPath,
+    path.join(candidateDirectory, "update-report.json"),
+  );
+  copyFileSync(
+    path.join(
+      input.candidateRoot,
+      "data",
+      "certification-manifest.json",
+    ),
+    path.join(
+      input.outputDirectory,
+      "certification-manifest.pending.json",
+    ),
+  );
+  const reportsDirectory = path.join(
+    input.candidateRoot,
+    ".certification-data-bundle",
+  );
+  if (!existsSync(reportsDirectory)) {
+    throw new Error(
+      "Certification review was requested, but no certification reports were produced.",
+    );
+  }
+  cpSync(
+    reportsDirectory,
+    path.join(input.outputDirectory, "reports"),
+    { recursive: true },
+  );
+  const failedFactions = input.certification.failedFactions
+    .map((entry) => entry.factionId)
+    .sort();
+  writeFileSync(
+    path.join(input.outputDirectory, "README.md"),
+    [
+      "# RosterPilot certification review package",
+      "",
+      `Candidate bundle: \`${input.candidate.bundleId}\``,
+      `Classification: \`${input.candidate.classification}\``,
+      `Generated: \`${input.createdAt}\``,
+      "",
+      "This package is evidence for human review. It is not an approval and cannot publish a data channel.",
+      "",
+      "Review each affected faction report, especially the `CERTIFICATION_EXPERT_REVIEW_PENDING` case, its exact `reviewBinding`, semantic evidence, draft assertions, mapping baseline, representative builds, and canonical ROSZ results. An authorized Warhammer reviewer may then copy the accepted binding into the reviewed certification manifest in a separate pull request, set `status` to `reviewed`, update `reviewedAt`, and remove any invalidation reason.",
+      "",
+      "After that review PR passes `npm run certify:manifest:check` and deterministic certification, rerun the normal Roster data freshness workflow. Never edit this package to make it look approved.",
+      "",
+      `Review-blocked factions (${failedFactions.length}):`,
+      "",
+      ...failedFactions.map((factionId) => `- \`${factionId}\``),
+      "",
+    ].join("\n"),
+  );
+  const files = packageFileInventory(input.outputDirectory);
+  const packagePath = path.join(
+    input.outputDirectory,
+    "review-package.json",
+  );
+  writeFileSync(
+    packagePath,
+    stableJson({
+      schemaVersion: 1,
+      packageKind: "rosterpilot-certification-review",
+      createdAt: input.createdAt,
+      status: "review-required",
+      candidate: {
+        bundleId: input.candidate.bundleId,
+        classification: input.candidate.classification,
+        affectedFactions: [...input.candidate.affectedFactions].sort(),
+      },
+      failedFactions: input.certification.failedFactions
+        .map((entry) => ({
+          factionId: entry.factionId,
+          reason: entry.reason.split(input.candidateRoot).join("<candidate>"),
+        }))
+        .sort((left, right) =>
+          left.factionId.localeCompare(right.factionId),
+        ),
+      files,
+    }),
+  );
+  return packagePath;
+}
+
 function certifyCandidate(
   root: string,
   plan: DataBundleValidationPlan,
@@ -705,23 +894,41 @@ function certifyCandidate(
     ".certification-data-bundle",
   );
   if (plan.fullCertification) {
-    run(
-      "npm",
-      [
-        "run",
-        "certify",
-        "--",
-        "--tier",
-        "deterministic",
-        "--portfolio",
-        "--require-status",
-        "pass",
-        "--out-dir",
-        outDir,
-      ],
-      { cwd: root, env: environment },
-    );
-    return { failedFactions: [] };
+    try {
+      run(
+        "npm",
+        [
+          "run",
+          "certify",
+          "--",
+          "--tier",
+          "deterministic",
+          "--portfolio",
+          "--require-status",
+          "pass",
+          "--out-dir",
+          outDir,
+        ],
+        { cwd: root, env: environment },
+      );
+      return { failedFactions: [] };
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : String(error);
+      const manifest = readJson<{
+        factions: Array<{ id: string }>;
+      }>(path.join(root, "data", "certification-manifest.json"));
+      return {
+        failedFactions: manifest.factions
+          .map((faction) => ({
+            factionId: faction.id,
+            reason,
+          }))
+          .sort((left, right) =>
+            left.factionId.localeCompare(right.factionId),
+          ),
+      };
+    }
   }
   for (const factionId of plan.certificationFactions) {
     try {
@@ -865,6 +1072,7 @@ export async function prepareDataBundleUpdate(
     officialExtractionReceipt?: string | null;
     officialExtractorTrustedKeys?: string | null;
     officialAuthorityUnavailableReason?: string | null;
+    reviewPackageDirectory?: string | null;
     skipRefresh?: boolean;
     freshness?: LiveDataFreshness;
     environment?: NodeJS.ProcessEnv;
@@ -1115,6 +1323,36 @@ export async function prepareDataBundleUpdate(
     );
     let promotionOutput = finalOutput;
     if (certification.failedFactions.length > 0) {
+      const reviewPackagePath = options.reviewPackageDirectory
+        ? writeCertificationReviewPackage({
+            outputDirectory: options.reviewPackageDirectory,
+            candidateRoot,
+            candidateManifestPath: finalCandidate.manifestPath,
+            candidateUpdateReportPath: path.join(
+              finalOutput,
+              "channels",
+              `${options.channel}.update.json`,
+            ),
+            candidate: finalCandidate,
+            certification,
+            createdAt,
+          })
+        : null;
+      const partialBlockReason = partialRollForwardBlockReason(
+        readJson<PartialRollForwardIdentity>(previousManifest),
+        readJson<PartialRollForwardIdentity>(
+          finalCandidate.manifestPath,
+        ),
+      );
+      if (partialBlockReason) {
+        throw new Error(
+          `Certification review is required and partial roll-forward is unsafe because ${partialBlockReason}. No signed channel was promoted.${
+            reviewPackagePath
+              ? ` Review package: ${reviewPackagePath}.`
+              : " Run again with --review-package-dir to preserve the exact review evidence."
+          }`,
+        );
+      }
       const partialOutput = path.join(
         stagingParent,
         "partial-output",
@@ -1237,6 +1475,9 @@ export async function runPrepareDataBundleCli(
       args.officialExtractorTrustedKeys,
     officialAuthorityUnavailableReason:
       args.officialAuthorityUnavailableReason,
+    reviewPackageDirectory: args.reviewPackageDir
+      ? resolvedPath(root, args.reviewPackageDir)
+      : null,
     skipRefresh: args.skipRefresh,
     freshness: options.freshness,
     environment,

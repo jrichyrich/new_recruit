@@ -448,6 +448,14 @@ export async function executeBrowserFixtureRegistry(
     processResult.outputExceeded ||
     processResult.signal !== null ||
     processResult.exitCode !== 0;
+  const registeredTestNameFiles = new Map<string, Set<string>>();
+  for (const fixture of selected) {
+    const files = registeredTestNameFiles.get(fixture.testName) ?? new Set();
+    files.add(
+      canonicalRelativePath(options.projectRoot, fixture.automatedBy),
+    );
+    registeredTestNameFiles.set(fixture.testName, files);
+  }
   const results = selected.map<BrowserFixtureExecutionResult>(
     (fixture) => {
       const registeredFile = canonicalRelativePath(
@@ -457,10 +465,12 @@ export async function executeBrowserFixtureRegistry(
       const matches = observed.filter(
         (result) =>
           result.name === fixture.testName &&
-          observedRelativePath(
+          (observedRelativePath(
             options.projectRoot,
             result.file,
-          ) === registeredFile,
+          ) === registeredFile ||
+            (result.file === null &&
+              registeredTestNameFiles.get(fixture.testName)?.size === 1)),
       );
       if (sourceChanged) {
         return {

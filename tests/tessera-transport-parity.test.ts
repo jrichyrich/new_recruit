@@ -9,6 +9,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -22,6 +23,32 @@ import type {
 import { createRosterPilotMcpServer } from "../mcp/server";
 
 const run = promisify(execFile);
+
+function jobsModuleHookFiles(stubPath: string) {
+  return {
+    preload: [
+      'import { register } from "node:module";',
+      'register(new URL("./hooks.mjs", import.meta.url), import.meta.url, {',
+      `  data: { stubUrl: ${JSON.stringify(pathToFileURL(stubPath).href)} },`,
+      "});",
+      "",
+    ].join("\n"),
+    hooks: [
+      "let stubUrl;",
+      "export function initialize(data) { stubUrl = data.stubUrl; }",
+      "export function resolve(specifier, context, nextResolve) {",
+      "  if (",
+      '    specifier === "../local/tessera/jobs" &&',
+      '    context.parentURL?.endsWith("/cli/rosterpilot.ts")',
+      "  ) {",
+      "    return { url: stubUrl, shortCircuit: true };",
+      "  }",
+      "  return nextResolve(specifier, context);",
+      "}",
+      "",
+    ].join("\n"),
+  };
+}
 
 function notInvoked(code: string) {
   return {
@@ -556,7 +583,9 @@ test("CLI simulate compatibility starts a durable job with centralized defaults"
   const rosterPath = path.join(temporaryDirectory, "roster.json");
   const capturePath = path.join(temporaryDirectory, "capture.json");
   const preloadPath = path.join(temporaryDirectory, "preload.mjs");
+  const hooksPath = path.join(temporaryDirectory, "hooks.mjs");
   const stubPath = path.join(temporaryDirectory, "jobs-stub.mjs");
+  const hookFiles = jobsModuleHookFiles(stubPath);
   try {
     await Promise.all([
       writeFile(
@@ -565,23 +594,9 @@ test("CLI simulate compatibility starts a durable job with centralized defaults"
       ),
       writeFile(
         preloadPath,
-        [
-          'import { registerHooks } from "node:module";',
-          `const stubUrl = ${JSON.stringify(new URL(`file://${stubPath}`).href)};`,
-          "registerHooks({",
-          "  resolve(specifier, context, nextResolve) {",
-          "    if (",
-          '      specifier === "../local/tessera/jobs" &&',
-          '      context.parentURL?.endsWith("/cli/rosterpilot.ts")',
-          "    ) {",
-          "      return { url: stubUrl, shortCircuit: true };",
-          "    }",
-          "    return nextResolve(specifier, context);",
-          "  },",
-          "});",
-          "",
-        ].join("\n"),
+        hookFiles.preload,
       ),
+      writeFile(hooksPath, hookFiles.hooks),
       writeFile(
         stubPath,
         [
@@ -611,9 +626,9 @@ test("CLI simulate compatibility starts a durable job with centralized defaults"
       process.execPath,
       [
         "--import",
-        preloadPath,
-        "--import",
         "tsx",
+        "--import",
+        preloadPath,
         path.join(process.cwd(), "cli/rosterpilot.ts"),
         "tessera",
         "stress-test",
@@ -699,13 +714,15 @@ test("CLI exact routes report missing opponent scope and accept an exact roster"
   );
   const capturePath = path.join(temporaryDirectory, "capture.jsonl");
   const preloadPath = path.join(temporaryDirectory, "preload.mjs");
+  const hooksPath = path.join(temporaryDirectory, "hooks.mjs");
   const stubPath = path.join(temporaryDirectory, "jobs-stub.mjs");
+  const hookFiles = jobsModuleHookFiles(stubPath);
   const cliPath = path.join(process.cwd(), "cli/rosterpilot.ts");
   const commonArguments = [
     "--import",
-    preloadPath,
-    "--import",
     "tsx",
+    "--import",
+    preloadPath,
     cliPath,
     "tessera",
   ];
@@ -722,23 +739,9 @@ test("CLI exact routes report missing opponent scope and accept an exact roster"
       ),
       writeFile(
         preloadPath,
-        [
-          'import { registerHooks } from "node:module";',
-          `const stubUrl = ${JSON.stringify(new URL(`file://${stubPath}`).href)};`,
-          "registerHooks({",
-          "  resolve(specifier, context, nextResolve) {",
-          "    if (",
-          '      specifier === "../local/tessera/jobs" &&',
-          '      context.parentURL?.endsWith("/cli/rosterpilot.ts")',
-          "    ) {",
-          "      return { url: stubUrl, shortCircuit: true };",
-          "    }",
-          "    return nextResolve(specifier, context);",
-          "  },",
-          "});",
-          "",
-        ].join("\n"),
+        hookFiles.preload,
       ),
+      writeFile(hooksPath, hookFiles.hooks),
       writeFile(
         stubPath,
         [
@@ -905,7 +908,9 @@ test("CLI stress resume leaves omitted suite and analysis strategy unset", async
   );
   const capturePath = path.join(temporaryDirectory, "capture.json");
   const preloadPath = path.join(temporaryDirectory, "preload.mjs");
+  const hooksPath = path.join(temporaryDirectory, "hooks.mjs");
   const stubPath = path.join(temporaryDirectory, "jobs-stub.mjs");
+  const hookFiles = jobsModuleHookFiles(stubPath);
 
   try {
     await Promise.all([
@@ -915,23 +920,9 @@ test("CLI stress resume leaves omitted suite and analysis strategy unset", async
       ),
       writeFile(
         preloadPath,
-        [
-          'import { registerHooks } from "node:module";',
-          `const stubUrl = ${JSON.stringify(new URL(`file://${stubPath}`).href)};`,
-          "registerHooks({",
-          "  resolve(specifier, context, nextResolve) {",
-          "    if (",
-          '      specifier === "../local/tessera/jobs" &&',
-          '      context.parentURL?.endsWith("/cli/rosterpilot.ts")',
-          "    ) {",
-          "      return { url: stubUrl, shortCircuit: true };",
-          "    }",
-          "    return nextResolve(specifier, context);",
-          "  },",
-          "});",
-          "",
-        ].join("\n"),
+        hookFiles.preload,
       ),
+      writeFile(hooksPath, hookFiles.hooks),
       writeFile(
         stubPath,
         [
@@ -967,9 +958,9 @@ test("CLI stress resume leaves omitted suite and analysis strategy unset", async
       process.execPath,
       [
         "--import",
-        preloadPath,
-        "--import",
         "tsx",
+        "--import",
+        preloadPath,
         path.join(process.cwd(), "cli/rosterpilot.ts"),
         "tessera",
         "stress-test",

@@ -136,6 +136,31 @@ also retains a 30-day workflow artifact. Application releases contain one
 verified bootstrap bundle for offline startup; changing that bootstrap is a
 release action, not a routine refresh.
 
+### Expert-review packages
+
+Semantic publication remains blocked when an affected faction has a pending
+expert review, even if its deterministic roster, mapping-baseline, and ROSZ
+checks pass. Run the manual `Certification review package` workflow in that
+case. It executes the same isolated refresh, signed candidate build, manifest
+synchronization, and affected-scope certification as the publisher, but it
+never pushes the data channel. When review is the only remaining gate it
+uploads a hash-inventoried artifact containing:
+
+- the exact signed candidate manifest and update report;
+- the synchronized pending certification manifest;
+- every affected faction certification report and detached report hash; and
+- a SHA-256 inventory plus reviewer instructions.
+
+An authorized Warhammer reviewer must inspect the pending case's exact
+`reviewBinding`, semantic evidence, assertions, mapping baseline,
+representative builds, and canonical ROSZ evidence. The reviewer then copies
+only accepted bindings into `data/certification-manifest.json` in a separate
+pull request, changes those entries to `reviewed`, records `reviewedAt`, and
+removes stale invalidation reasons. The review PR must pass
+`npm run certify:manifest:check` and deterministic certification before the
+normal `Roster data freshness` workflow is rerun. A review package is evidence,
+not an approval, and the packaging workflow cannot publish a bundle.
+
 ## Application-release bootstrap and key rotation
 
 Prepare the bootstrap and its public trust registry together only from the
