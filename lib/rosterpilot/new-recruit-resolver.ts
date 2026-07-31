@@ -96,7 +96,153 @@ type EquipmentGroup = {
   }>;
 };
 
+const MAX_DEFAULT_GROUP_SEARCH_STATES = 4_096;
 const MAX_GROUP_LOADOUT_RECURSIVE_CANDIDATES = 512;
+
+function exactDefaultEquipmentGroups(
+  selection: NewRecruitUnitInput,
+  models:
+    | ReadonlyArray<{
+        name: string;
+        min?: number;
+        max?: number;
+        default_weapon_ids?: readonly string[];
+        is_leader_model?: boolean;
+      }>
+    | undefined,
+): EquipmentGroup[] | null {
+  if (
+    !models ||
+    models.length === 0 ||
+    models.some(
+      (model) => (model.default_weapon_ids?.length ?? 0) === 0,
+    )
+  ) {
+    return null;
+  }
+  const selectedById = new Map<
+    string,
+    NewRecruitUnitInput["equipment"][number]
+  >();
+  for (const equipment of selection.equipment) {
+    if (equipment.count <= 0) continue;
+    const current = selectedById.get(equipment.itemId);
+    selectedById.set(equipment.itemId, {
+      ...equipment,
+      count: (current?.count ?? 0) + equipment.count,
+    });
+  }
+  const residual = new Map(
+    [...selectedById].map(([itemId, equipment]) => [
+      itemId,
+      equipment.count,
+    ]),
+  );
+  const defaultIds = new Set(
+    models.flatMap((model) => [
+      ...(model.default_weapon_ids ?? []),
+    ]),
+  );
+  if ([...residual.keys()].some((itemId) => !defaultIds.has(itemId))) {
+    return null;
+  }
+  const ranges = models.map((model) => {
+    const minimum = Math.max(0, Math.floor(model.min ?? 0));
+    return {
+      minimum,
+      maximum: Math.max(
+        minimum,
+        Math.min(
+          selection.modelCount,
+          Math.floor(model.max ?? minimum),
+        ),
+      ),
+    };
+  });
+  const suffixMinimum = new Array<number>(models.length + 1).fill(0);
+  const suffixMaximum = new Array<number>(models.length + 1).fill(0);
+  for (let index = models.length - 1; index >= 0; index -= 1) {
+    suffixMinimum[index] =
+      suffixMinimum[index + 1] + ranges[index].minimum;
+    suffixMaximum[index] =
+      suffixMaximum[index + 1] + ranges[index].maximum;
+  }
+  const counts = new Array<number>(models.length).fill(0);
+  let searchedStates = 0;
+  const assign = (index: number, modelsLeft: number): boolean => {
+    searchedStates += 1;
+    if (searchedStates > MAX_DEFAULT_GROUP_SEARCH_STATES) return false;
+    if (index === models.length) {
+      return (
+        modelsLeft === 0 &&
+        [...residual.values()].every((count) => count === 0)
+      );
+    }
+    const range = ranges[index];
+    const minimum = Math.max(
+      range.minimum,
+      modelsLeft - suffixMaximum[index + 1],
+    );
+    const maximum = Math.min(
+      range.maximum,
+      modelsLeft - suffixMinimum[index + 1],
+    );
+    if (minimum > maximum) return false;
+    const perModel = new Map<string, number>();
+    for (const itemId of models[index].default_weapon_ids ?? []) {
+      perModel.set(itemId, (perModel.get(itemId) ?? 0) + 1);
+    }
+    for (let count = maximum; count >= minimum; count -= 1) {
+      const fits = [...perModel].every(
+        ([itemId, perModelCount]) =>
+          (residual.get(itemId) ?? 0) >= perModelCount * count,
+      );
+      if (!fits) continue;
+      for (const [itemId, perModelCount] of perModel) {
+        residual.set(
+          itemId,
+          (residual.get(itemId) ?? 0) - perModelCount * count,
+        );
+      }
+      counts[index] = count;
+      if (assign(index + 1, modelsLeft - count)) return true;
+      for (const [itemId, perModelCount] of perModel) {
+        residual.set(
+          itemId,
+          (residual.get(itemId) ?? 0) + perModelCount * count,
+        );
+      }
+    }
+    counts[index] = 0;
+    return false;
+  };
+  if (!assign(0, selection.modelCount)) return null;
+  return models.flatMap((model, index) => {
+    const count = counts[index];
+    if (count <= 0) return [];
+    const equipmentCounts = new Map<string, number>();
+    for (const itemId of model.default_weapon_ids ?? []) {
+      equipmentCounts.set(
+        itemId,
+        (equipmentCounts.get(itemId) ?? 0) + count,
+      );
+    }
+    return [
+      {
+        modelName: model.name,
+        isLeaderModel: model.is_leader_model ?? null,
+        count,
+        equipment: [...equipmentCounts].map(
+          ([itemId, equipmentCount]) => ({
+            itemId,
+            name: selectedById.get(itemId)!.name,
+            count: equipmentCount,
+          }),
+        ),
+      },
+    ];
+  });
+}
 
 function groupLoadoutSearchIsTooComplex(
   models:
@@ -297,6 +443,11 @@ function equipmentGroups(
     ]),
   );
   const composition = dataset.unitCompositionOf(unit.raw);
+  const exactDefaultGroups = exactDefaultEquipmentGroups(
+    selection,
+    composition?.models,
+  );
+  if (exactDefaultGroups) return exactDefaultGroups;
   const aggregateFallback = (): EquipmentGroup[] | null => {
     if ((composition?.models.length ?? 0) > 1) return null;
     const model =

@@ -159,10 +159,60 @@ test("bounds combinatorial loadout resolution consistently across forced GC", ()
         multiRowMapping,
         multiRowSelection,
       );
-      return resolved.ok ? "resolved" : resolved.reason;
+      return resolved.ok
+        ? resolved.models.map((model) => ({
+            name: model.reference.name,
+            count: model.count,
+          }))
+        : resolved.reason;
     });
     assert.deepEqual(
-      [...new Set(multiRowOutcomes)],
+      [
+        ...new Set(
+          multiRowOutcomes.map((outcome) => JSON.stringify(outcome)),
+        ),
+      ],
+      [
+        JSON.stringify([
+          { name: "Devastator Sergeant", count: 1 },
+          { name: "Devastator Marine w/ Boltgun", count: 5 },
+        ]),
+      ],
+    );
+
+    const complexMultiRowOutcomes = Array.from(
+      { length: 24 },
+      () => {
+        forceGc();
+        const resolved = resolveNewRecruitUnit(
+          multiRowMapping,
+          {
+            ...multiRowSelection,
+            equipment: [
+              {
+                itemId: "bolt-pistol",
+                name: "Bolt pistol",
+                count: 6,
+              },
+              { itemId: "boltgun", name: "Boltgun", count: 5 },
+              {
+                itemId: "close-combat-weapon-devastator-squad",
+                name: "Close combat weapon",
+                count: 6,
+              },
+              {
+                itemId: "lascannon-devastator-squad",
+                name: "Lascannon",
+                count: 1,
+              },
+            ],
+          },
+        );
+        return resolved.ok ? "resolved" : resolved.reason;
+      },
+    );
+    assert.deepEqual(
+      [...new Set(complexMultiRowOutcomes)],
       [
         "The legal Devastator Squad loadout could not be decomposed into New Recruit model selections.",
       ],
