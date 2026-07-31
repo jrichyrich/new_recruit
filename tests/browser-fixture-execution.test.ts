@@ -109,6 +109,30 @@ test("registered source text cannot pass without successful execution evidence",
       /^[0-9a-f]{64}$/,
     );
 
+    const passedWithoutOptionalJunitFile =
+      await executeBrowserFixtureRegistry(
+        {
+          projectRoot,
+          registryPath,
+          fixtureIds: ["registered-fixture"],
+        },
+        {
+          run: async () => ({
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            outputExceeded: false,
+            stdout: junit("registered fixture executes").replace(
+              ' file="tests/fixture.test.ts"',
+              "",
+            ),
+            stderr: "",
+          }),
+        },
+      );
+    assert.equal(passedWithoutOptionalJunitFile.results[0].status, "pass");
+    assert.equal(passedWithoutOptionalJunitFile.observations[0].file, null);
+
     const skipped = await executeBrowserFixtureRegistry(
       {
         projectRoot,
