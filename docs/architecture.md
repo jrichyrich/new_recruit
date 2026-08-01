@@ -167,6 +167,12 @@ storage. The orchestrator never handles premium keys: only the isolated,
 session-scoped Tessera worker may retrieve the dedicated Keychain item. The key
 stays only in that worker's memory, and the worker enters it only after
 verifying the exact Tessera origin and locating its visible Licence key field.
+Before any Tessera browser or licence-key work, both the per-user agent and the
+isolated Tessera worker reopen the player and opponent archives. Each archive
+must identify New Recruit as its generator, contain units and embedded
+profiles, and give every top-level unit at least one Unit profile and one
+Melee or Ranged weapon profile. This is a profile-readiness boundary, not a
+claim that embedded characteristic values equal another rules source.
 
 Opponent scope selects one of three non-overlapping routes:
 
@@ -293,10 +299,14 @@ incomparable runs.
 
 Canonical New Recruit delivery always obtains the enriched archive and compares
 its observed game-system and faction-catalogue identity with the roster's
-snapshot. A deployment lag or unexpected advance is scoped to that faction's
-delivery: construction and unrelated factions remain available, the remote
-mutation is inventoried, and the artifact is not accepted for Tessera or cache
-reuse.
+snapshot. Catalogue drift remains fail-closed by default. An explicit
+diagnostic may accept only a forward game-system-revision mismatch when all
+identity fields are present and the exact faction catalogue still matches. A
+qualifying post-mutation artifact is retained in a separate provisional
+namespace so a new diagnostic run can recover it without repeating the
+non-idempotent New Recruit mutation. Other drift, missing identity, and
+incomplete profiles remain blocked. Construction and unrelated factions remain
+available, and every remote outcome is inventoried.
 
 `resumeManifestPath` (CLI `--resume`) continues the same run ID and attempt
 history. Once its five-attempt budget is exhausted, `restartManifestPath` (CLI
@@ -314,9 +324,12 @@ and exposes
 queued, running, needs-input, complete, degraded, inconclusive, failed, and
 cancelled states. Status can include the retained result. Profile resolution
 is allowed only while stopped, freezes a validated policy in the job bundle,
-and requires a subsequent resume. External stress-manifest v1/v2/v3 recovery
-is copied into the run bundle, verified, and migrated to portable v3 before it
-is adopted; subsequent recovery uses only the shared durable job. Exact jobs
+and requires a subsequent resume. An external stress manifest from v1, v2, or
+v3 is copied into the run bundle, verified, and migrated to portable v3 before
+it is adopted; subsequent recovery uses only the shared durable job. Recovery
+does not widen the frozen request. In particular, `catalogueDriftMode` is part
+of the request hash; resume and restart inherit it and cannot enable or change
+the diagnostic choice. Exact jobs
 freeze and reverify prepared player and
 opponent archives for zero-redelivery resume; `restart-from` copies those
 archives into the new run but starts simulation evidence from a clean stage.
@@ -409,6 +422,14 @@ Verified New Recruit artifacts are stored in a local content-addressed cache
 keyed by roster execution/export compatibility identities. Reuse requires the
 relevant semantic hashes, file hash, and exact enriched summary to match; raw
 provenance movement alone does not invalidate an otherwise compatible entry.
+Trusted and provisional artifacts are separate. A provisional receipt is
+integrity-sealed and binds export and execution fingerprints, frozen source
+data, source and enriched hashes, the enriched summary, observed catalogue
+comparison, per-unit profile-coverage hash, and connector evidence. Every
+lookup recomputes those values. A provisional entry is never returned through
+the trusted-cache loader and is accepted downstream only when the current
+identity matches or the frozen request explicitly allows the narrow
+forward-revision diagnostic.
 Remote list URLs are retained in a local run inventory and are never deleted
 automatically. A stress run also
 reuses one isolated, session-scoped Tessera worker across its proxy requests.
@@ -829,6 +850,12 @@ The companion fails closed:
 - missing companion, browser, or credential stops before import;
 - unverified authentication stops before import;
 - changed selectors or import failures return explicit error codes;
+- catalogue drift blocks downstream use by default; only an explicitly frozen
+  diagnostic may accept a newer game-system revision while exact faction
+  catalogue identity, complete provenance, roster identity, and per-unit
+  profiles still verify, and that evidence remains provisional;
+- a profileless or partially profiled player or opponent archive stops at both
+  the agent and worker boundary before Tessera browser or licence-key activity;
 - exact Tessera opponents outside the 5% points tolerance stop unless the
   caller explicitly allows an unmatched directional analysis;
 - stress testing completes local validation, mapping preflight, and output-path

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { BrowserContext } from "playwright-core";
 
@@ -6,6 +7,7 @@ import type {
   ProfilePolicyV1,
   TesseraFrozenScenarioContract,
 } from "../../lib/rosterpilot";
+import { validateTesseraReadyRosz } from "../../lib/rosterpilot";
 import {
   classifyTesseraAutomationFailure,
   invalidatesCachedTesseraLicenseKey,
@@ -96,6 +98,27 @@ async function retrieveLicenseKey(brokerPath: string): Promise<string> {
 }
 
 function failure(error: unknown): WorkerFailure {
+  const terminalInputCode =
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    [
+      "TESSERA_INPUT_NOT_PROFILE_RICH",
+      "TESSERA_INPUT_PROFILES_INCOMPLETE",
+    ].includes(error.code)
+      ? error.code
+      : null;
+  if (terminalInputCode) {
+    return {
+      ok: false,
+      code: terminalInputCode,
+      message:
+        error instanceof Error
+          ? error.message
+          : "A Tessera input failed profile-readiness validation.",
+    };
+  }
   const { code, message } = classifyTesseraAutomationFailure(error);
   return {
     ok: false,
@@ -105,6 +128,7 @@ function failure(error: unknown): WorkerFailure {
 }
 
 async function analyzeOnce(input: WorkerRequest): Promise<TesseraBrowserResult> {
+  await validateWorkerInputs(input);
   const licenseKey = await retrieveLicenseKey(input.brokerPath);
   return runTesseraBrowserMatchup({
     profileDirectory: input.profileDirectory,
@@ -120,6 +144,17 @@ async function analyzeOnce(input: WorkerRequest): Promise<TesseraBrowserResult> 
     frozenScenarioContract: input.frozenScenarioContract,
     savedListReuse: input.savedListReuse,
   });
+}
+
+async function validateWorkerInputs(
+  input: WorkerRequest,
+): Promise<void> {
+  const [player, opponent] = await Promise.all([
+    readFile(input.playerRoszPath),
+    readFile(input.opponentRoszPath),
+  ]);
+  validateTesseraReadyRosz(player);
+  validateTesseraReadyRosz(opponent);
 }
 
 async function runOneShotWorker(): Promise<void> {
@@ -179,6 +214,7 @@ async function runPersistentWorker(): Promise<void> {
         response = { ok: true, action: "reset" };
       } else if (envelope.action === "analyze") {
         const input = envelope.request;
+        await validateWorkerInputs(input);
         if (
           (brokerPath && brokerPath !== input.brokerPath) ||
           (profileDirectory &&

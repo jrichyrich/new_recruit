@@ -26,6 +26,7 @@ import { pathToFileURL } from "node:url";
 import {
   withDataBundleSnapshotLease,
 } from "../../lib/rosterpilot/data-operations";
+import { validateTesseraReadyRosz } from "../../lib/rosterpilot";
 import {
   LOCAL_AGENT_MAX_FRAME_BYTES,
   LOCAL_AGENT_PROTOCOL_VERSION,
@@ -776,6 +777,40 @@ export async function startLocalAgent(
   async function performTessera(
     payload: LocalAgentTesseraPayload,
   ): Promise<LocalAgentTesseraResult> {
+    const playerContent = Buffer.from(
+      payload.playerRoszBase64,
+      "base64",
+    );
+    const opponentContent = Buffer.from(
+      payload.opponentRoszBase64,
+      "base64",
+    );
+    for (const [side, content] of [
+      ["player", playerContent],
+      ["opponent", opponentContent],
+    ] as const) {
+      try {
+        validateTesseraReadyRosz(content);
+      } catch (error) {
+        const code =
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          typeof error.code === "string"
+            ? error.code
+            : "TESSERA_INPUT_NOT_PROFILE_RICH";
+        throw Object.assign(
+          new Error(
+            `The ${side} Tessera archive failed final profile-readiness validation: ${
+              error instanceof Error
+                ? error.message
+                : "invalid enriched ROSZ"
+            }`,
+          ),
+          { code },
+        );
+      }
+    }
     const temporary = await mkdtemp(
       path.join(os.tmpdir(), "rosterpilot-agent-tessera-"),
     );
@@ -793,12 +828,12 @@ export async function startLocalAgent(
         await Promise.all([
           writeFile(
             playerPath,
-            Buffer.from(payload.playerRoszBase64, "base64"),
+            playerContent,
             { flag: "wx" },
           ),
           writeFile(
             opponentPath,
-            Buffer.from(payload.opponentRoszBase64, "base64"),
+            opponentContent,
             { flag: "wx" },
           ),
         ]);

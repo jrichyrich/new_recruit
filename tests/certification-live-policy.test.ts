@@ -83,6 +83,11 @@ function enrichedArchive(roster: RosterDraftV1): Uint8Array {
     bySelection.set(requirement.selectionId, entries);
   }
   const selections = roster.units.map((unit) => {
+    const requiredProfiles = `
+        <profiles>
+          <profile name="${xmlEscape(unit.name)}" typeName="Unit"/>
+          <profile name="Fixture weapon" typeName="Melee Weapons"/>
+        </profiles>`;
     const profiles = (bySelection.get(unit.selectionId) ?? [])
       .map(
         (requirement, index) => `
@@ -101,6 +106,7 @@ function enrichedArchive(roster: RosterDraftV1): Uint8Array {
     return `
       <selection id="${xmlEscape(unit.selectionId)}" name="${xmlEscape(unit.name)}" number="1" type="unit">
         <cost name="pts" value="${unit.points}"/>
+        ${requiredProfiles}
         <selections>
           <selection id="${xmlEscape(unit.selectionId)}-models" name="${xmlEscape(unit.name)}" number="${unit.modelCount}" type="model"/>
           ${profiles}

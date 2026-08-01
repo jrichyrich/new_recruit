@@ -228,6 +228,13 @@ ROSTERPILOT_DATA_CHANNEL_URL=https://data.example.test/channels/stable.json \
   --require-live
 ```
 
+Live canaries reject catalogue drift by default. An operator may add
+`--verified-catalogue-drift-diagnostic` only for an explicitly authorized
+diagnostic through a newer game-system revision. The durable request freezes
+that choice and still requires complete provenance, exact faction-catalogue
+identity, and complete per-unit Unit and weapon profiles; it is not a general
+catalogue-drift override.
+
 The uploaded-roster canary also requires four runner-local fixture paths:
 
 ```text
@@ -323,8 +330,14 @@ values are not stored in reports.
 - The weekly self-hosted rotation shards all factions; declared unsupported
   capabilities remain visible and create no remote list.
 - The release workflow adds the complete ordered local opponent matrix and
-  uses `--require-status pass`; pending expert review or any other degraded
-  result therefore blocks release even when no product assertion failed.
+  first runs `npm run verify`, then runs the inexpensive distinct-faction exact
+  Tessera canary against the exact signed bundle on the credential-bearing
+  self-hosted Mac. That release smoke uses the explicitly frozen forward-only
+  catalogue diagnostic and writes its report under ignored `.certification/`
+  storage for upload as a workflow artifact. Only after both gates pass does
+  the workflow run the matrix with `--require-status pass`; pending expert
+  review or any other degraded result therefore blocks release even when no
+  product assertion failed.
 - `npm run certify:trend -- --input <reports> --out <trend.md>` aggregates pass
   rate, latest faction state, mapping conflicts, mutation/reuse counts, and
   uncertain outcomes.

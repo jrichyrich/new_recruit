@@ -60,6 +60,7 @@ import {
   createLiveCanaryRunRequest,
   evaluateLiveCanaryReadiness,
   liveCanaryDefinition,
+  type LiveCanaryCatalogueDriftMode,
   type LiveCanaryDefinition,
   type LiveCanaryId,
   type LiveCanaryPathReadiness,
@@ -154,6 +155,7 @@ export type RunRotatingLiveCanaryInput = {
   pollMs?: number;
   forcedClientTimeoutMs?: number;
   expectedBundleId?: string;
+  catalogueDriftMode?: LiveCanaryCatalogueDriftMode;
 };
 
 type TerminalTesseraRun = {
@@ -930,6 +932,7 @@ async function runAdaptiveNineCanary(input: {
   maxWaitMs: number;
   pollMs: number;
   forcedClientTimeoutMs: number;
+  catalogueDriftMode: LiveCanaryCatalogueDriftMode;
   dependencies: LiveCanaryRunnerDependencies;
 }): Promise<void> {
   const player = requireRoster(
@@ -1020,6 +1023,7 @@ async function runAdaptiveNineCanary(input: {
     playerRoster: player,
     portfolioPreview: preview.data,
     profilePolicyPath: policy.path,
+    catalogueDriftMode: input.catalogueDriftMode,
   });
   const job = await input.dependencies.startRun(request, {
     outputDirectory: path.join(
@@ -1214,6 +1218,7 @@ async function runDistinctFactionCanary(input: {
   profilePolicyPath: string;
   maxWaitMs: number;
   pollMs: number;
+  catalogueDriftMode: LiveCanaryCatalogueDriftMode;
   dependencies: LiveCanaryRunnerDependencies;
 }): Promise<void> {
   const player = requireRoster(
@@ -1301,6 +1306,7 @@ async function runDistinctFactionCanary(input: {
     playerRoster: player,
     opponentRoster: opponent,
     profilePolicyPath: policy.path,
+    catalogueDriftMode: input.catalogueDriftMode,
   });
   const exactRoute =
     request.kind === "exact" &&
@@ -1455,6 +1461,7 @@ async function runUploadedRevisionCanary(input: {
   revisedRosterPath: string;
   maxWaitMs: number;
   pollMs: number;
+  catalogueDriftMode: LiveCanaryCatalogueDriftMode;
   dependencies: LiveCanaryRunnerDependencies;
 }): Promise<void> {
   const [player, opponentContext, revised, opponentRosz] =
@@ -1578,6 +1585,7 @@ async function runUploadedRevisionCanary(input: {
     opponentRosterContext: opponentContext,
     opponentRoszPath: input.opponentRoszPath,
     profilePolicyPath: policy.path,
+    catalogueDriftMode: input.catalogueDriftMode,
   });
   const job = await input.dependencies.startRun(request, {
     outputDirectory: path.join(
@@ -1661,6 +1669,7 @@ async function runUploadedRevisionCanary(input: {
     {
       executionMode: "simulate",
       experimental: false,
+      catalogueDriftMode: input.catalogueDriftMode,
       profilePolicyPath:
         terminal.job.profilePolicyPath ??
         policy.path,
@@ -1810,6 +1819,8 @@ export async function runRotatingLiveCanary(
   const pollMs = input.pollMs ?? 2_000;
   const forcedClientTimeoutMs =
     input.forcedClientTimeoutMs ?? 100;
+  const catalogueDriftMode =
+    input.catalogueDriftMode ?? "reject";
   try {
     if (
       definition.id ===
@@ -1822,6 +1833,7 @@ export async function runRotatingLiveCanary(
         maxWaitMs,
         pollMs,
         forcedClientTimeoutMs,
+        catalogueDriftMode,
         dependencies,
       });
     } else if (
@@ -1834,6 +1846,7 @@ export async function runRotatingLiveCanary(
         profilePolicyPath,
         maxWaitMs,
         pollMs,
+        catalogueDriftMode,
         dependencies,
       });
     } else {
@@ -1871,6 +1884,7 @@ export async function runRotatingLiveCanary(
         revisedRosterPath,
         maxWaitMs,
         pollMs,
+        catalogueDriftMode,
         dependencies,
       });
     }

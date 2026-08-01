@@ -44,6 +44,7 @@ type StressOptions = {
   outputDirectory?: string;
   overwrite: boolean;
   experimental: boolean;
+  catalogueDriftMode?: "reject" | "diagnostic";
 };
 
 function notInvoked(code: string) {
@@ -333,6 +334,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         outputDirectory: "exports/revision",
         overwrite: true,
         experimental: true,
+        catalogueDriftMode: "reject",
       },
     });
 
@@ -414,6 +416,19 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     });
 
     await client.callTool({
+      name: "stress_test_roster_against_faction",
+      arguments: {
+        playerRoster: built.data,
+        factionId: "necrons",
+        resumeManifestPath: "/fixture/diagnostic-manifest.json",
+      },
+    });
+    assert.equal(
+      stressTests[2]?.options.catalogueDriftMode,
+      undefined,
+    );
+
+    await client.callTool({
       name: "compare_stress_test_revision",
       arguments: {
         baselineReportPath: "/fixture/stress.json",
@@ -430,6 +445,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         outputDirectory: "exports/stress-revision",
         overwrite: true,
         experimental: true,
+        catalogueDriftMode: undefined,
       },
     });
   } finally {

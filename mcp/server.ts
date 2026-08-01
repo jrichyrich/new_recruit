@@ -100,6 +100,7 @@ type ServerOptions = {
       options: {
         outputDirectory: string;
         overwrite: boolean;
+        catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<TesseraPreparedRoster>>;
     analyze: (
@@ -132,6 +133,7 @@ type ServerOptions = {
         profilePolicyPath?: string;
         executionMode?: "simulate";
         experimental: boolean;
+        catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<TesseraRevisionComparisonReport>>;
     buildAndAnalyze?: (
@@ -139,6 +141,7 @@ type ServerOptions = {
       options: {
         outputDirectory?: string;
         overwrite: boolean;
+        catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<BuildAndAnalyzeRosterResult>>;
     stressTest?: (
@@ -173,6 +176,7 @@ type ServerOptions = {
       options: {
         outputDirectory?: string;
         overwrite: boolean;
+        catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<BuildAndStressRosterResult>>;
     compareStressRevision?: (
@@ -183,6 +187,7 @@ type ServerOptions = {
         overwrite: boolean;
         executionMode?: "simulate";
         experimental: boolean;
+        catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<TesseraStressRevisionReport>>;
   };
@@ -281,6 +286,14 @@ function shouldStartDurableTesseraRun(
     executionMode === "simulate" ||
     (executionMode === undefined && experimental)
   );
+}
+
+function requestedCatalogueDriftMode(
+  requested: boolean | undefined,
+  inheritFrozenPolicy = false,
+): "reject" | "diagnostic" | undefined {
+  if (requested === true) return "diagnostic";
+  return inheritFrozenPolicy ? undefined : "reject";
 }
 
 function inProgressJobContent(job: TesseraRunJob) {
@@ -1017,6 +1030,9 @@ export function createRosterPilotMcpServer(
           roster: RosterDraftSchema,
           outputDirectory: z.string().default("exports/tessera"),
           overwrite: z.boolean().default(false),
+          verifiedCatalogueDriftDiagnostic: z
+            .boolean()
+            .default(false),
         },
         annotations: {
           readOnlyHint: false,
@@ -1025,11 +1041,23 @@ export function createRosterPilotMcpServer(
           openWorldHint: true,
         },
       },
-      async ({ roster, outputDirectory, overwrite }) =>
+      async ({
+        roster,
+        outputDirectory,
+        overwrite,
+        verifiedCatalogueDriftDiagnostic,
+      }) =>
         resultContent(
           await options.tesseraCompanion!.prepare(
             roster as RosterDraftV1,
-            { outputDirectory, overwrite },
+            {
+              outputDirectory,
+              overwrite,
+              catalogueDriftMode:
+                verifiedCatalogueDriftDiagnostic
+                  ? "diagnostic"
+                  : "reject",
+            },
           ),
         ),
     );
@@ -1217,6 +1245,9 @@ export function createRosterPilotMcpServer(
               .default("compact"),
             overwrite: z.boolean().default(false),
             experimental: z.boolean().default(false),
+            verifiedCatalogueDriftDiagnostic: z
+              .boolean()
+              .default(false),
           },
           annotations: {
             readOnlyHint: false,
@@ -1241,6 +1272,7 @@ export function createRosterPilotMcpServer(
           responseDetail,
           overwrite,
           experimental,
+          verifiedCatalogueDriftDiagnostic,
         }) => {
           if (
             options.tesseraRunJobs &&
@@ -1273,6 +1305,10 @@ export function createRosterPilotMcpServer(
                   overwrite,
                   executionMode: "simulate",
                   experimental: false,
+                  catalogueDriftMode:
+                    requestedCatalogueDriftMode(
+                      verifiedCatalogueDriftDiagnostic,
+                    ),
                 },
               },
               { outputDirectory },
@@ -1296,7 +1332,14 @@ export function createRosterPilotMcpServer(
                 executionMode,
                 experimental,
               },
-              { outputDirectory, overwrite },
+              {
+                outputDirectory,
+                overwrite,
+                catalogueDriftMode:
+                  requestedCatalogueDriftMode(
+                    verifiedCatalogueDriftDiagnostic,
+                  ),
+              },
             );
           return detailedResultContent(
             result,
@@ -1324,6 +1367,9 @@ export function createRosterPilotMcpServer(
               .enum(["simulate"])
               .optional(),
             experimental: z.boolean().default(false),
+            verifiedCatalogueDriftDiagnostic: z
+              .boolean()
+              .default(false),
           },
           annotations: {
             readOnlyHint: false,
@@ -1340,6 +1386,7 @@ export function createRosterPilotMcpServer(
           profilePolicyPath,
           executionMode,
           experimental,
+          verifiedCatalogueDriftDiagnostic,
         }) => {
           if (options.tesseraRunJobs) {
             const job = await options.tesseraRunJobs.start(
@@ -1353,6 +1400,10 @@ export function createRosterPilotMcpServer(
                   profilePolicyPath,
                   executionMode: "simulate",
                   experimental: false,
+                  catalogueDriftMode:
+                    requestedCatalogueDriftMode(
+                      verifiedCatalogueDriftDiagnostic,
+                    ),
                 },
               },
               { outputDirectory },
@@ -1373,6 +1424,10 @@ export function createRosterPilotMcpServer(
                   ? { executionMode }
                   : {}),
                 experimental,
+                catalogueDriftMode:
+                  requestedCatalogueDriftMode(
+                    verifiedCatalogueDriftDiagnostic,
+                  ),
               },
             ),
           );
@@ -1445,6 +1500,9 @@ export function createRosterPilotMcpServer(
               .optional(),
             overwrite: z.boolean().default(false),
             experimental: z.boolean().default(false),
+            verifiedCatalogueDriftDiagnostic: z
+              .boolean()
+              .default(false),
           },
           annotations: {
             readOnlyHint: false,
@@ -1473,6 +1531,7 @@ export function createRosterPilotMcpServer(
           executionMode,
           overwrite,
           experimental,
+          verifiedCatalogueDriftDiagnostic,
         }) => {
           if (
             options.tesseraRunJobs &&
@@ -1512,6 +1571,14 @@ export function createRosterPilotMcpServer(
                   overwrite,
                   executionMode: "simulate",
                   experimental: false,
+                  catalogueDriftMode:
+                    requestedCatalogueDriftMode(
+                      verifiedCatalogueDriftDiagnostic,
+                      Boolean(
+                        resumeManifestPath ||
+                        restartManifestPath,
+                      ),
+                    ),
                 },
               },
               { outputDirectory },
@@ -1539,7 +1606,18 @@ export function createRosterPilotMcpServer(
                 executionMode,
                 experimental,
               },
-              { outputDirectory, overwrite },
+              {
+                outputDirectory,
+                overwrite,
+                catalogueDriftMode:
+                  requestedCatalogueDriftMode(
+                    verifiedCatalogueDriftDiagnostic,
+                    Boolean(
+                      resumeManifestPath ||
+                      restartManifestPath,
+                    ),
+                  ),
+              },
             );
           return detailedResultContent(
             result,
@@ -1637,9 +1715,13 @@ export function createRosterPilotMcpServer(
                   overwrite,
                   experimental: false,
                   catalogueDriftMode:
-                    verifiedCatalogueDriftDiagnostic
-                      ? "diagnostic"
-                      : "reject",
+                    requestedCatalogueDriftMode(
+                      verifiedCatalogueDriftDiagnostic,
+                      Boolean(
+                        resumeManifestPath ||
+                        restartManifestPath,
+                      ),
+                    ),
                 },
               },
               { outputDirectory },
@@ -1662,9 +1744,13 @@ export function createRosterPilotMcpServer(
                 overwrite,
                 experimental,
                 catalogueDriftMode:
-                  verifiedCatalogueDriftDiagnostic
-                    ? "diagnostic"
-                    : "reject",
+                  requestedCatalogueDriftMode(
+                    verifiedCatalogueDriftDiagnostic,
+                    Boolean(
+                      resumeManifestPath ||
+                      restartManifestPath,
+                    ),
+                  ),
               },
             );
           return detailedResultContent(
@@ -1696,6 +1782,9 @@ export function createRosterPilotMcpServer(
               .enum(["simulate"])
               .optional(),
             experimental: z.boolean().default(false),
+            verifiedCatalogueDriftDiagnostic: z
+              .boolean()
+              .default(false),
           },
           annotations: {
             readOnlyHint: false,
@@ -1712,6 +1801,7 @@ export function createRosterPilotMcpServer(
           overwrite,
           executionMode,
           experimental,
+          verifiedCatalogueDriftDiagnostic,
         }) => {
           if (options.tesseraRunJobs) {
             const job = await options.tesseraRunJobs.start(
@@ -1724,6 +1814,11 @@ export function createRosterPilotMcpServer(
                   outputDirectory,
                   executionMode: "simulate",
                   experimental: false,
+                  catalogueDriftMode:
+                    requestedCatalogueDriftMode(
+                      verifiedCatalogueDriftDiagnostic,
+                      true,
+                    ),
                 },
               },
               { outputDirectory },
@@ -1741,6 +1836,11 @@ export function createRosterPilotMcpServer(
                   ? { executionMode }
                   : {}),
                 experimental,
+                catalogueDriftMode:
+                  requestedCatalogueDriftMode(
+                    verifiedCatalogueDriftDiagnostic,
+                    true,
+                  ),
               },
             );
           return detailedResultContent(
@@ -1798,6 +1898,9 @@ export function createRosterPilotMcpServer(
         profilePolicyPath: z.string().min(1).optional(),
         analysisMode: z.enum(["quick", "full"]).default("full"),
         allowPointMismatch: z.boolean().default(false),
+        verifiedCatalogueDriftDiagnostic: z
+          .boolean()
+          .default(false),
       }),
       z.object({
         kind: z.literal("stress"),
@@ -1812,6 +1915,9 @@ export function createRosterPilotMcpServer(
         profilePolicyPath: z.string().min(1).optional(),
         resumeManifestPath: z.string().min(1).optional(),
         restartManifestPath: z.string().min(1).optional(),
+        verifiedCatalogueDriftDiagnostic: z
+          .boolean()
+          .default(false),
       }),
       z.object({
         kind: z.literal("build-and-stress"),
@@ -1831,6 +1937,9 @@ export function createRosterPilotMcpServer(
         allowReadinessWarnings: z.boolean().default(false),
         resumeManifestPath: z.string().min(1).optional(),
         restartManifestPath: z.string().min(1).optional(),
+        verifiedCatalogueDriftDiagnostic: z
+          .boolean()
+          .default(false),
       }),
       z.object({
         kind: z.literal("build-and-analyze"),
@@ -1845,17 +1954,26 @@ export function createRosterPilotMcpServer(
         executionMode: jobExecutionModeSchema,
         profilePolicyPath: z.string().min(1).optional(),
         allowReadinessWarnings: z.boolean().default(false),
+        verifiedCatalogueDriftDiagnostic: z
+          .boolean()
+          .default(false),
       }),
       z.object({
         kind: z.literal("exact-revision"),
         baselineReportPath: z.string().min(1),
         revisedRoster: RosterDraftSchema,
         profilePolicyPath: z.string().min(1).optional(),
+        verifiedCatalogueDriftDiagnostic: z
+          .boolean()
+          .default(false),
       }),
       z.object({
         kind: z.literal("stress-revision"),
         baselineReportPath: z.string().min(1),
         revisedRoster: RosterDraftSchema,
+        verifiedCatalogueDriftDiagnostic: z
+          .boolean()
+          .default(false),
       }),
     ]);
 
@@ -1898,6 +2016,10 @@ export function createRosterPilotMcpServer(
               profilePolicyPath: request.profilePolicyPath,
               analysisMode: request.analysisMode,
               allowPointMismatch: request.allowPointMismatch,
+              catalogueDriftMode:
+                request.verifiedCatalogueDriftDiagnostic
+                  ? "diagnostic"
+                  : "reject",
               opponentRosterContext:
                 request.opponent.kind === "rosz"
                   ? (
@@ -1924,6 +2046,14 @@ export function createRosterPilotMcpServer(
               resumeManifestPath: request.resumeManifestPath,
               restartManifestPath:
                 request.restartManifestPath,
+              catalogueDriftMode:
+                requestedCatalogueDriftMode(
+                  request.verifiedCatalogueDriftDiagnostic,
+                  Boolean(
+                    request.resumeManifestPath ||
+                    request.restartManifestPath,
+                  ),
+                ),
             },
           };
         } else if (request.kind === "build-and-stress") {
@@ -1948,6 +2078,16 @@ export function createRosterPilotMcpServer(
               restartManifestPath:
                 request.restartManifestPath,
             },
+            options: {
+              catalogueDriftMode:
+                requestedCatalogueDriftMode(
+                  request.verifiedCatalogueDriftDiagnostic,
+                  Boolean(
+                    request.resumeManifestPath ||
+                    request.restartManifestPath,
+                  ),
+                ),
+            },
           };
         } else if (request.kind === "build-and-analyze") {
           normalized = {
@@ -1968,6 +2108,12 @@ export function createRosterPilotMcpServer(
               allowReadinessWarnings:
                 request.allowReadinessWarnings,
             },
+            options: {
+              catalogueDriftMode:
+                request.verifiedCatalogueDriftDiagnostic
+                  ? "diagnostic"
+                  : "reject",
+            },
           };
         } else if (request.kind === "exact-revision") {
           normalized = {
@@ -1979,6 +2125,10 @@ export function createRosterPilotMcpServer(
               executionMode: "simulate",
               experimental: false,
               profilePolicyPath: request.profilePolicyPath,
+              catalogueDriftMode:
+                request.verifiedCatalogueDriftDiagnostic
+                  ? "diagnostic"
+                  : "reject",
             },
           };
         } else {
@@ -1990,6 +2140,11 @@ export function createRosterPilotMcpServer(
             options: {
               executionMode: "simulate",
               experimental: false,
+              catalogueDriftMode:
+                requestedCatalogueDriftMode(
+                  request.verifiedCatalogueDriftDiagnostic,
+                  true,
+                ),
             },
           };
         }

@@ -302,8 +302,11 @@ npm run rosterpilot -- new-recruit deliver \
 Every canonical delivery downloads and verifies New Recruit's profile-rich
 `.rosz`. RosterPilot compares the live game-system and faction-catalogue
 identity in that archive with the immutable bundle used to build the roster;
-a lagging or unexpectedly advanced New Recruit catalogue is retained as
-diagnostic/inventory evidence but rejected for downstream use. Use
+a lagging or otherwise mismatched New Recruit catalogue is rejected for
+downstream use. When the only mismatch is a newer game-system revision and the
+archive has exact faction-catalogue identity plus complete per-unit profiles,
+it is retained separately as provisional recovery evidence. Ordinary delivery
+and trusted-cache reuse remain blocked. Use
 `--no-pretty` to import without downloading HTML. Existing files are never
 replaced unless `--overwrite` is supplied. Use
 `npm run rosterpilot -- new-recruit forget` to delete the dedicated credential.
@@ -408,6 +411,25 @@ npm run rosterpilot -- tessera analyze \
 `status: prepared`. The old `--experimental` flag remains a deprecated
 compatibility alias for simulation.
 
+For an explicitly authorized live-deployment diagnostic, add
+`--verified-catalogue-drift-diagnostic` to the Tessera command:
+
+```bash
+npm run rosterpilot -- tessera stress-test \
+  --file roster.json \
+  --against-faction aeldari \
+  --execution-mode simulate \
+  --verified-catalogue-drift-diagnostic
+```
+
+This is not a general drift override. It accepts only an observed newer
+game-system revision while the game-system ID, exact faction-catalogue identity
+and revision, all provenance fields, roster identity, and complete per-unit
+Unit and weapon profiles still verify. The result keeps both identities and a
+provisional warning; embedded characteristics remain live New Recruit evidence,
+not frozen-rule verification. This flag applies only to Tessera workflows, not
+`new-recruit deliver`.
+
 #### Build against an exact known roster
 
 Use `build-and-analyze` when the requested army should be constructed from the
@@ -483,6 +505,13 @@ npm run rosterpilot -- tessera start-run \
   --execution-mode simulate \
   --out-dir exports/tessera/runs
 ```
+
+Put `--verified-catalogue-drift-diagnostic` on `tessera start-run` when that
+narrow diagnostic is explicitly authorized. The choice is frozen with the job
+and cannot be added by `run-resume` or `--restart-from`. For MCP, set
+`start_tessera_run.request.verifiedCatalogueDriftDiagnostic` to `true`. A fresh
+diagnostic job can reuse a revalidated provisional artifact instead of
+uploading the same list again.
 
 The start command returns immediately with a generated
 `run-<uuid>/tessera-run.json` job path. Use that exact path for later actions:
@@ -688,8 +717,13 @@ uncached `diverse-9` run can create one player copy plus six to nine proxy
 copies. Verified enriched artifacts are cached by execution fingerprint and
 roster export compatibility identity, with their relevant semantic hashes,
 content hash, and exact summary checked before reuse. Raw provenance movement
-alone does not invalidate a compatible entry. Staged deep dives reuse those
-same copies. Remote list URLs are retained
+alone does not invalidate a compatible trusted entry. Revision-only provisional
+artifacts live in a separate integrity-sealed store and are never returned by
+the trusted-cache loader. Both the local agent and isolated worker reopen the
+player and opponent archives before Tessera browser or licence-key activity;
+every top-level unit must have embedded Unit and weapon profiles. Never use the
+profileless source `.rosz` as a substitute. Staged deep dives reuse the same
+verified copies. Remote list URLs are retained
 in `~/Library/Application Support/RosterPilot/new-recruit-run-inventory.json`;
 RosterPilot never deletes remote lists automatically. To clean them up, inspect
 that inventory, open the recorded URLs in New Recruit, and delete only the

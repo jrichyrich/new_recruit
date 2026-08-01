@@ -89,12 +89,17 @@ function enrichedContent(
   return zipSync({ [filename]: strToU8(xml) });
 }
 
-function fullyEnrichedContent(source: Uint8Array): Uint8Array {
+function fullyEnrichedContent(
+  source: Uint8Array,
+  mutate: (xml: string) => string = (xml) => xml,
+): Uint8Array {
   const entries = unzipSync(source);
   const [filename, content] = Object.entries(entries)[0];
-  let xml = strFromU8(content).replace(
-    'generatedBy="RosterPilot"',
-    'generatedBy="https://newrecruit.eu"',
+  let xml = mutate(
+    strFromU8(content).replace(
+      'generatedBy="RosterPilot"',
+      'generatedBy="https://newrecruit.eu"',
+    ),
   );
   const insertions: number[] = [];
   let selectionDepth = 0;
@@ -136,7 +141,10 @@ function artifactDelivery(
     await mkdir(directory, { recursive: true });
     const exported = await exportRoster(candidate, "rosz");
     const source = sourceContent(exported);
-    const enriched = enrichedContent(source, mutateEnriched);
+    const enriched = fullyEnrichedContent(
+      source,
+      mutateEnriched,
+    );
     const sourcePath = path.join(directory, "source.rosz");
     const enrichedPath = path.join(directory, "enriched.rosz");
     await Promise.all([
@@ -774,6 +782,75 @@ test("uploaded ROSZ enrichment uses preflight-frozen bytes after the original pa
     assert.ok(analyzed.data && "preparation" in analyzed.data);
     assert.ok(analyzed.data.preparation);
     assert.equal(analyzed.data.preparation.remoteMutations, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a raw profileless upload is enriched but an incomplete enriched handoff is rejected", async () => {
+  const player = roster(
+    "adeptus-custodes",
+    "Profile Boundary Player",
+  );
+  const opponent = roster(
+    "aeldari",
+    "Profile Boundary Opponent",
+  );
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-profile-boundary-"),
+  );
+  const uploadedPath = path.join(directory, "opponent.rosz");
+  const rawUploaded = sourceContent(
+    await exportRoster(opponent, "rosz"),
+  );
+  const deliverPlayer = artifactDelivery(directory);
+  let enrichmentCalls = 0;
+  try {
+    await writeFile(uploadedPath, rawUploaded);
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "rosz", path: uploadedPath },
+      {
+        executionMode: "prepare-only",
+        opponentRosterContext: opponent,
+        outputDirectory: path.join(directory, "report"),
+        allowOutsideRoot: true,
+      },
+      {
+        deliver: deliverPlayer,
+        enrich: async (_sourcePath, options = {}) => {
+          enrichmentCalls += 1;
+          const incomplete = enrichedContent(rawUploaded);
+          const outputDirectory =
+            options.outputDirectory ?? directory;
+          await mkdir(outputDirectory, { recursive: true });
+          const enrichedPath = path.join(
+            outputDirectory,
+            "incomplete-enriched.rosz",
+          );
+          await writeFile(enrichedPath, incomplete);
+          return {
+            ok: true,
+            data: {
+              listUrl: null,
+              imported: true,
+              sessionReused: true,
+              connectorEvents: [],
+              enrichedRoszPath: enrichedPath,
+              summary: inspectEnrichedRosz(incomplete),
+            },
+            violations: [],
+            warnings: [],
+          };
+        },
+      },
+    );
+    assert.equal(analyzed.ok, false);
+    assert.equal(
+      analyzed.violations[0]?.code,
+      "TESSERA_ROSZ_PROFILES_INCOMPLETE",
+    );
+    assert.equal(enrichmentCalls, 1);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -17,6 +17,7 @@ import {
   deliverRosterToNewRecruit,
   probeNewRecruitLiveUi,
 } from "../local/new-recruit/companion";
+import { prepareRosterForTessera } from "../local/tessera/companion";
 import {
   newRecruitUiIdentityFingerprint,
   safeNewRecruitUiIdentity,
@@ -38,7 +39,11 @@ async function chromeAvailable(): Promise<boolean> {
 
 async function enrichedArchiveForRoster(
   roster: NonNullable<ReturnType<typeof buildRoster>["data"]>,
-  options: { gameSystemRevision?: number } = {},
+  options: {
+    gameSystemRevision?: number;
+    catalogueId?: string;
+    omitProfilesForUnit?: number;
+  } = {},
 ): Promise<Uint8Array> {
   const exported = await exportRoster(roster, "rosz");
   assert.equal(exported.ok, true);
@@ -57,9 +62,39 @@ async function enrichedArchiveForRoster(
       `gameSystemRevision="${options.gameSystemRevision}"`,
     );
   }
+  if (options.catalogueId !== undefined) {
+    xml = xml.replace(
+      /catalogueId="[^"]+"/,
+      `catalogueId="${options.catalogueId}"`,
+    );
+  }
+  const profiles =
+    '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Melee Weapons"/></profiles>';
+  let selectionDepth = 0;
+  let topLevelUnit = -1;
   xml = xml.replace(
-    /<\/roster>\s*$/,
-    '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Melee Weapons"/></profiles></roster>',
+    /<selection\b[^>]*>|<\/selection>/g,
+    (token) => {
+      if (token === "</selection>") {
+        selectionDepth -= 1;
+        return token;
+      }
+      const topLevel = selectionDepth === 0;
+      const selfClosing = token.endsWith("/>");
+      const topLevelRosterUnit =
+        topLevel && /\btype="(?:unit|model)"/.test(token);
+      if (topLevelRosterUnit) topLevelUnit += 1;
+      const includeProfiles =
+        topLevelRosterUnit &&
+        topLevelUnit !== options.omitProfilesForUnit;
+      if (selfClosing) {
+        return includeProfiles
+          ? `${token.slice(0, -2)}>${profiles}</selection>`
+          : token;
+      }
+      selectionDepth += 1;
+      return includeProfiles ? `${token}${profiles}` : token;
+    },
   );
   files[entry!] = strToU8(xml);
   return zipSync(files);
@@ -461,6 +496,7 @@ test("direct New Recruit delivery accepts only a matching verified catalogue ide
       {
         platform: "darwin",
         browserAvailable: true,
+        provisionalArtifactStore: async () => {},
         agentDeliver: async () => ({
           worker: {
             ok: true,
@@ -516,6 +552,7 @@ test("direct New Recruit delivery rejects a verified enriched roster from a drif
       {
         platform: "darwin",
         browserAvailable: true,
+        provisionalArtifactStore: async () => {},
         agentDeliver: async () => ({
           worker: {
             ok: true,
@@ -565,6 +602,300 @@ test("direct New Recruit delivery rejects a verified enriched roster from a drif
       ),
     );
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("direct New Recruit delivery permits verified catalogue drift only in diagnostic mode", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-catalogue-drift-diagnostic-"),
+  );
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!, {
+      gameSystemRevision:
+        built.data!.sourceData.newRecruit.gameSystemRevision + 1,
+    });
+    const result = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        mutationReceiptMode: "external",
+        catalogueDriftMode: "diagnostic",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        provisionalArtifactStore: async () => {},
+        agentDeliver: async () => ({
+          worker: {
+            ok: true,
+            uiIdentity: "f".repeat(64),
+            imported: true,
+            sessionReused: false,
+            listUrl:
+              "https://www.newrecruit.eu/app/Lists/catalogue-drift-diagnostic-fixture",
+            verification: {
+              name: true,
+              faction: true,
+              points: true,
+              units: [],
+              mismatches: [],
+            },
+          },
+          enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, true, JSON.stringify(result.violations));
+    assert.equal(result.violations.length, 0);
+    assert.equal(result.data?.catalogueProvenance?.status, "drift");
+    assert.ok(
+      result.warnings.some(
+        (warning) =>
+          warning.code ===
+          "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",
+      ),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("diagnostic mode still rejects faction-catalogue drift", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-catalogue-id-drift-"),
+  );
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!, {
+      catalogueId: "unexpected-faction-catalogue",
+    });
+    const result = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        mutationReceiptMode: "external",
+        catalogueDriftMode: "diagnostic",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        agentDeliver: async () => ({
+          worker: {
+            ok: true,
+            uiIdentity: "a".repeat(64),
+            imported: true,
+            sessionReused: false,
+            listUrl:
+              "https://www.newrecruit.eu/app/Lists/catalogue-id-drift-fixture",
+            verification: {
+              name: true,
+              faction: true,
+              points: true,
+              units: [],
+              mismatches: [],
+            },
+          },
+          enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.violations[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_DRIFT",
+    );
+    assert.equal(result.data?.catalogueProvenance?.status, "drift");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("direct delivery rejects a partially profiled enriched roster", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-partial-profiles-"),
+  );
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!, {
+      omitProfilesForUnit: 0,
+    });
+    const result = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        mutationReceiptMode: "external",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        agentDeliver: async () => ({
+          worker: {
+            ok: true,
+            uiIdentity: "b".repeat(64),
+            imported: true,
+            sessionReused: false,
+            listUrl:
+              "https://www.newrecruit.eu/app/Lists/partial-profile-fixture",
+            verification: {
+              name: true,
+              faction: true,
+              points: true,
+              units: [],
+              mismatches: [],
+            },
+          },
+          enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.violations[0]?.code,
+      "ENRICHED_ROSZ_VERIFICATION_FAILED",
+    );
+    assert.match(
+      result.violations[0]?.message ?? "",
+      /complete per-unit model\/weapon profiles/i,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a strict revision-drift failure is reused provisionally by a later diagnostic preparation", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Provisional reuse fixture",
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-provisional-reuse-"),
+  );
+  const previousSupport = process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+  process.env.ROSTERPILOT_SUPPORT_DIRECTORY = path.join(
+    directory,
+    "support",
+  );
+  let deliveryCalls = 0;
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!, {
+      gameSystemRevision:
+        built.data!.sourceData.newRecruit.gameSystemRevision + 1,
+    });
+    const first = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: path.join(directory, "first"),
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        mutationRunId: "provisional-first",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        runtimeIssue: () => null,
+        agentDeliver: async () => {
+          deliveryCalls += 1;
+          return {
+            worker: {
+              ok: true,
+              uiIdentity: "c".repeat(64),
+              imported: true,
+              sessionReused: false,
+              listUrl:
+                "https://www.newrecruit.eu/app/Lists/provisional-reuse-fixture",
+              verification: {
+                name: true,
+                faction: true,
+                points: true,
+                units: [],
+                mismatches: [],
+              },
+            },
+            enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+          };
+        },
+      },
+    );
+    assert.equal(first.ok, false);
+    assert.equal(
+      first.violations[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_DRIFT",
+    );
+
+    const diagnostic = await prepareRosterForTessera(
+      built.data!,
+      {
+        outputDirectory: path.join(directory, "diagnostic"),
+        allowOutsideRoot: true,
+        mutationRunId: "provisional-second",
+        catalogueDriftMode: "diagnostic",
+      },
+      { runtimeIssue: () => null },
+    );
+    assert.equal(
+      diagnostic.ok,
+      true,
+      JSON.stringify(diagnostic.violations),
+    );
+    assert.equal(diagnostic.data?.cacheReused, true);
+    assert.ok(
+      diagnostic.warnings.some(
+        (warning) =>
+          warning.code === "NEW_RECRUIT_PROVISIONAL_CACHE_REUSED",
+      ),
+    );
+    assert.equal(deliveryCalls, 1);
+
+    const strictAgain = await prepareRosterForTessera(
+      built.data!,
+      {
+        outputDirectory: path.join(directory, "strict-again"),
+        allowOutsideRoot: true,
+        mutationRunId: "provisional-third",
+      },
+      { runtimeIssue: () => null },
+    );
+    assert.equal(strictAgain.ok, false);
+    assert.equal(
+      strictAgain.violations[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_DRIFT",
+    );
+    assert.equal(deliveryCalls, 1);
+  } finally {
+    if (previousSupport === undefined) {
+      delete process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+    } else {
+      process.env.ROSTERPILOT_SUPPORT_DIRECTORY = previousSupport;
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });

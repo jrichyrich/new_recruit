@@ -1,6 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
-  access,
   lstat,
   mkdir,
   readdir,
@@ -366,6 +365,42 @@ function runtimeIdentitySha256(
       runtime.dataFreshnessCheckedAt ?? null,
     dataGeneratedAt: runtime.dataGeneratedAt ?? null,
   });
+}
+
+export function durableTesseraRuntimeAdmissionIssue(
+  runtime: RuntimeProvenance,
+): { code: "RUNTIME_RESTART_REQUIRED"; message: string } | null {
+  if (runtime.stale) {
+    return {
+      code: "RUNTIME_RESTART_REQUIRED",
+      message:
+        "RosterPilot source changed after this MCP or CLI process started. Restart the MCP process and run `rosterpilot agent ensure-current` before starting Tessera; no job or external mutation was launched.",
+    };
+  }
+  const agent = runtime.localAgentObservedStatus;
+  if (!agent?.available) return null;
+  const buildChanged =
+    agent.runtimeBuildId !== null &&
+    agent.runtimeBuildId !== runtime.buildId;
+  const sourceChanged =
+    agent.runtimeSourceFingerprint !== null &&
+    agent.runtimeSourceFingerprint !==
+      runtime.sourceFingerprintNow;
+  if (buildChanged || sourceChanged) {
+    return {
+      code: "RUNTIME_RESTART_REQUIRED",
+      message:
+        "The local agent and this MCP or CLI process were built from different RosterPilot source. Run `rosterpilot agent ensure-current`, restart the MCP process, and start the Tessera run again; no job or external mutation was launched.",
+    };
+  }
+  return null;
+}
+
+function assertDurableRuntimeAdmission(
+  runtime: RuntimeProvenance,
+): void {
+  const issue = durableTesseraRuntimeAdmissionIssue(runtime);
+  if (issue) throw jobError(issue.code, issue.message);
 }
 
 async function jobRuntimeProvenance(): Promise<RuntimeProvenance> {
@@ -2408,6 +2443,7 @@ async function refreshUnstartedQueuedRuntime(
     return document;
   }
   const runtimeProvenance = await jobRuntimeProvenance();
+  assertDurableRuntimeAdmission(runtimeProvenance);
   const runtimeIdentity =
     runtimeIdentitySha256(runtimeProvenance);
   const refreshed: TesseraRunJobDocument = {
@@ -3486,6 +3522,9 @@ export async function startTesseraRun(
       frozenInputs.artifacts,
     );
     const runtimeProvenance = await jobRuntimeProvenance();
+    if (options.launch !== false) {
+      assertDurableRuntimeAdmission(runtimeProvenance);
+    }
     const jobPath = path.join(jobDirectory, "tessera-run.json");
     const document: TesseraRunJobDocument = {
       schemaVersion: 1,
@@ -3735,7 +3774,7 @@ export async function getTesseraRunStatus(
 function withResumePolicy(
   request: TesseraRunRequest,
   profilePolicyPath: string | null,
-  manifestPath: string | null,
+  manifestPath: string | null | undefined,
   preparedCheckpoint: TesseraRunPreparedCheckpoint | null,
 ): TesseraRunRequest {
   if (request.kind === "stress") {
@@ -3744,9 +3783,12 @@ function withResumePolicy(
       profilePolicyPath:
         profilePolicyPath ??
         request.options?.profilePolicyPath,
-      resumeManifestPath:
-        manifestPath ?? request.options?.resumeManifestPath,
     };
+    if (manifestPath === null) {
+      delete options.resumeManifestPath;
+    } else if (manifestPath !== undefined) {
+      options.resumeManifestPath = manifestPath;
+    }
     if (options.resumeManifestPath) {
       delete options.restartManifestPath;
     }
@@ -3756,20 +3798,25 @@ function withResumePolicy(
     };
   }
   if (request.kind === "build-and-stress") {
-    const resumeManifestPath =
-      manifestPath ??
-      request.input.resumeManifestPath ??
-      request.options?.resumeManifestPath;
     const input = {
       ...request.input,
       profilePolicyPath:
         profilePolicyPath ??
         request.input.profilePolicyPath,
-      resumeManifestPath,
     };
     const options = {
       ...request.options,
     };
+    const resumeManifestPath =
+      manifestPath === undefined
+        ? input.resumeManifestPath ?? options.resumeManifestPath
+        : manifestPath ?? undefined;
+    if (resumeManifestPath) {
+      input.resumeManifestPath = resumeManifestPath;
+    } else if (manifestPath === null) {
+      delete input.resumeManifestPath;
+      delete options.resumeManifestPath;
+    }
     if (resumeManifestPath) {
       delete input.restartManifestPath;
       if (
@@ -3840,6 +3887,62 @@ function withResumePolicy(
           : request.options?.preparedReuse,
     },
   };
+}
+
+async function resumableWorkflowManifestPath(
+  document: TesseraRunJobDocument,
+): Promise<string | null> {
+  if (
+    !document.manifestPath ||
+    path.resolve(document.manifestPath) ===
+      path.resolve(document.requestPath)
+  ) {
+    return null;
+  }
+  const resolved = await assertFilesystemPathInsideJob(
+    document.jobDirectory,
+    document.manifestPath,
+    "Workflow manifest",
+  );
+  const receipt = document.artifactReceipts.find(
+    (candidate) =>
+      candidate.kind === "workflow-manifest" &&
+      path.resolve(
+        document.jobDirectory,
+        candidate.path,
+      ) === resolved,
+  );
+  try {
+    const metadata = await lstat(resolved);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw jobError(
+        "TESSERA_RUN_MANIFEST_DRIFT",
+        "The retained Tessera workflow manifest is not a regular file.",
+      );
+    }
+    if (!receipt) {
+      throw jobError(
+        "TESSERA_RUN_MANIFEST_DRIFT",
+        "The retained Tessera workflow manifest has no durable hash receipt.",
+      );
+    }
+    if ((await fileSha256(resolved)) !== receipt.sha256) {
+      throw jobError(
+        "TESSERA_RUN_MANIFEST_DRIFT",
+        "The retained Tessera workflow manifest changed after it was receipted.",
+      );
+    }
+    return resolved;
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+    if (receipt) {
+      throw jobError(
+        "TESSERA_RUN_MANIFEST_DRIFT",
+        "The receipted Tessera workflow manifest is missing.",
+      );
+    }
+    return null;
+  }
 }
 
 function assertResumeControlOptionsMatch(
@@ -3960,6 +4063,11 @@ export async function restartTesseraRunFrom(
         "An active or queued Tessera run must be completed or cancelled before restart-from.",
       );
     }
+    if (options.launch !== false) {
+      assertDurableRuntimeAdmission(
+        await jobRuntimeProvenance(),
+      );
+    }
     const sourceJobSha256 = await fileSha256(resolved);
     const restarted = await startTesseraRun(
       freshSimulationRequest(source.request),
@@ -4035,7 +4143,11 @@ export async function restartTesseraRunFrom(
     if (options.launch === false) {
       return publicJob(restartedDocument);
     }
-    return publicJob(await launchWorker(restartedDocument));
+    return publicJob(
+      await launchWorker(
+        await refreshUnstartedQueuedRuntime(restartedDocument),
+      ),
+    );
   } finally {
     await release();
   }
@@ -4103,6 +4215,9 @@ export async function resumeTesseraRun(
       );
     }
     const runtimeProvenance = await jobRuntimeProvenance();
+    if (options.launch !== false) {
+      assertDurableRuntimeAdmission(runtimeProvenance);
+    }
     const currentRuntimeIdentity =
       runtimeIdentitySha256(runtimeProvenance);
     const priorAttempt = document.attemptHistory.find(
@@ -4118,15 +4233,8 @@ export async function resumeTesseraRun(
         "Runtime identity changed after this simulation stage began. Use restart-from so evidence from different runtimes is not mixed.",
       );
     }
-    let resumableManifestPath: string | null = null;
-    if (document.manifestPath) {
-      try {
-        await access(document.manifestPath);
-        resumableManifestPath = document.manifestPath;
-      } catch {
-        resumableManifestPath = null;
-      }
-    }
+    const resumableManifestPath =
+      await resumableWorkflowManifestPath(document);
     const nextAttempt = document.attempt + 1;
     const resumedRequest = optionsOutputDirectory(
       withResumePolicy(
@@ -4162,7 +4270,9 @@ export async function resumeTesseraRun(
       profilePolicySha256,
       artifactReceipts:
         document.artifactReceipts.filter(
-          (receipt) => receipt.kind === "profile-scaffold",
+          (receipt) =>
+            receipt.kind === "profile-scaffold" ||
+            receipt.kind === "workflow-manifest",
         ),
       runtimeProvenance,
       runtimeIdentitySha256: currentRuntimeIdentity,
@@ -4235,10 +4345,12 @@ export async function resolveTesseraRunProfiles(
       ),
       artifact,
     ].sort((left, right) => left.path.localeCompare(right.path));
+    const resumableManifestPath =
+      await resumableWorkflowManifestPath(document);
     const updatedRequest = withResumePolicy(
       document.request,
       artifact.path,
-      document.manifestPath,
+      resumableManifestPath,
       document.preparedCheckpoint,
     );
     const requestSha256 = canonicalSha256(updatedRequest);

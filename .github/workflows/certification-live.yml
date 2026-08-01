@@ -33,7 +33,10 @@ jobs:
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
         (
-          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'daily') ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            (inputs.cadence == 'daily' || inputs.cadence == 'release')
+          ) ||
           (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
         )
       }}
@@ -60,7 +63,10 @@ jobs:
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
         (
-          (github.event_name == 'workflow_dispatch' && inputs.cadence == 'daily') ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            (inputs.cadence == 'daily' || inputs.cadence == 'release')
+          ) ||
           (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
         )
       }}
@@ -400,7 +406,107 @@ jobs:
           include-hidden-files: true
           retention-days: 90
 
+  release-quality:
+    if: >-
+      ${{
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        github.event_name == 'workflow_dispatch' &&
+        inputs.cadence == 'release'
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+      - name: Run the complete repository verification gate
+        run: npm run verify
+
+  release-tessera-smoke:
+    needs:
+      - post-activation-bundle
+      - live-release-prerequisites
+      - release-quality
+    if: >-
+      ${{
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        github.event_name == 'workflow_dispatch' &&
+        inputs.cadence == 'release'
+      }}
+    runs-on:
+      - self-hosted
+      - macOS
+      - rosterpilot-live
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install the verified application data release
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.live-release-prerequisites.outputs.release_artifact_name }}
+          path: ${{ runner.temp }}/rosterpilot-application-assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.live-release-prerequisites.outputs.release_run_id }}
+
+      - name: Verify and configure the exact release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="$RUNNER_TEMP/rosterpilot-application-assets"
+          npm run data:bundle:verify-release -- \
+            --bootstrap-dir "$assets/data/bootstrap-data-bundle" \
+            --trusted-keys "$assets/data/data-bundle-trusted-keys.json" \
+            --hosted-assets-dir "$assets/public/data-bundles"
+          echo "ROSTERPILOT_DATA_TRUSTED_KEYS_FILE=$assets/data/data-bundle-trusted-keys.json" >> "$GITHUB_ENV"
+          echo "ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY=$assets/data/bootstrap-data-bundle" >> "$GITHUB_ENV"
+
+      - name: Ensure the local agent is current
+        run: npm run rosterpilot -- agent ensure-current
+      - name: Prime the exact signed bundle
+        env:
+          ROSTERPILOT_DATA_CHANNEL_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles/channels/stable.json
+        run: npm run rosterpilot -- data refresh --force
+      - name: Restart the agent against the primed data store
+        run: npm run rosterpilot -- agent restart
+      - name: Run the release Tessera smoke canary
+        env:
+          ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          ROSTERPILOT_DATA_CHANNEL_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles/channels/stable.json
+          ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
+        run: >-
+          npm run certify:canary --
+          --canary death-guard-vs-orks-exact-1000
+          --out-dir .certification/release-smoke
+          --expected-bundle-id "${{ needs.post-activation-bundle.outputs.bundle_id }}"
+          --verified-catalogue-drift-diagnostic
+          --require-live
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tessera-smoke
+          path: .certification/release-smoke/death-guard-vs-orks-exact-1000
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
   release-certification:
+    needs:
+      - release-tessera-smoke
     if: >-
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&

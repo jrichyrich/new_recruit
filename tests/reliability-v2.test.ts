@@ -38,6 +38,21 @@ import {
   validateProfilePolicy,
 } from "../local/tessera/profile-policy";
 
+function xmlAttribute(value: string | number): string {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function enrichedUnitSelection(
+  unit: RosterDraftV1["units"][number],
+): string {
+  const name = xmlAttribute(unit.name);
+  return `<selection id="${xmlAttribute(unit.selectionId)}" name="${name}" number="${unit.modelCount}" type="model"><cost name="pts" value="${unit.points}"/><profiles><profile name="${name}" typeName="Unit"/><profile name="Fixture weapon" typeName="Melee Weapons"/></profiles></selection>`;
+}
+
 test("canonical intent terms and mixed-threat context survive roster building", async () => {
   const parsed = parseRosterPrompt(
     "Build a 1,000 point Custodes roster with mobility, durability, and mixed threat coverage.",
@@ -325,10 +340,9 @@ test("New Recruit cache verifies hashes and exact enriched summaries", async () 
     const enrichedPath = path.join(directory, "enriched.rosz");
     const xml = `<?xml version="1.0"?><roster name="${built.data.name}" generatedBy="https://newrecruit.eu"><cost name="pts" value="${built.data.totalPoints}"/><forces><force name="${built.data.factionName}" catalogueName="${built.data.factionName}"><selections>${built.data.units
       .map(
-        (unit) =>
-          `<selection id="${unit.selectionId}" name="${unit.name}" number="${unit.modelCount}" type="model"><cost name="pts" value="${unit.points}"/></selection>`,
+        (unit) => enrichedUnitSelection(unit),
       )
-      .join("")}</selections></force></forces><profiles><profile name="Fixture weapon" typeName="Melee Weapons"/></profiles></roster>`;
+      .join("")}</selections></force></forces></roster>`;
     const archive = zipSync({
       "fixture.ros": strToU8(xml),
     });
@@ -532,10 +546,9 @@ test("New Recruit cache ignores Tessera policy but scopes roster changes to one 
     );
     const xml = `<?xml version="1.0"?><roster name="${candidate.name}" generatedBy="https://newrecruit.eu"><cost name="pts" value="${candidate.totalPoints}"/><forces><force name="${candidate.factionName}" catalogueName="${candidate.factionName}"><selections>${candidate.units
       .map(
-        (unit) =>
-          `<selection id="${unit.selectionId}" name="${unit.name}" number="${unit.modelCount}" type="model"><cost name="pts" value="${unit.points}"/></selection>`,
+        (unit) => enrichedUnitSelection(unit),
       )
-      .join("")}</selections></force></forces><profiles><profile name="Fixture weapon" typeName="Melee Weapons"/></profiles></roster>`;
+      .join("")}</selections></force></forces></roster>`;
     const archive = zipSync({ "fixture.ros": strToU8(xml) });
     await Promise.all([
       writeFile(sourcePath, archive),

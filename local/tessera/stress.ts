@@ -406,6 +406,9 @@ const PreparedRosterSchema = z.object({
 const StressConfigurationSchema = z.object({
   suite: z.enum(["core-3", "diverse-9"]),
   analysisStrategy: z.enum(["staged", "full-all"]),
+  catalogueDriftMode: z
+    .enum(["reject", "diagnostic"])
+    .default("reject"),
   pointsTolerancePercent: z.number().nonnegative(),
   proxyWeights: z.literal("equal"),
   screeningMetric: z.literal("half-wipe-probability"),
@@ -2013,6 +2016,8 @@ function stressConfiguration(
     analysisStrategy:
       options.analysisStrategy ??
       (suite === "core-3" ? "full-all" : "staged"),
+    catalogueDriftMode:
+      options.catalogueDriftMode ?? "reject",
     pointsTolerancePercent: 5,
     proxyWeights: "equal",
     screeningMetric: "half-wipe-probability",
@@ -6386,6 +6391,13 @@ export async function runRosterStressTest(
         validation.warnings,
       );
     }
+    if (options.catalogueDriftMode === undefined) {
+      options = {
+        ...options,
+        catalogueDriftMode:
+          manifest.configuration.catalogueDriftMode,
+      };
+    }
     resumed = !restarting;
     manifest.cachedLiveUpdateCheck =
       freshnessAtEntry?.data ??
@@ -6407,6 +6419,9 @@ export async function runRosterStressTest(
           analysisStrategy:
             options.analysisStrategy ??
             manifest.configuration.analysisStrategy,
+          catalogueDriftMode:
+            options.catalogueDriftMode ??
+            manifest.configuration.catalogueDriftMode,
         },
         manifest.profilePolicyHash,
       );
@@ -6418,6 +6433,9 @@ export async function runRosterStressTest(
           analysisStrategy:
             options.analysisStrategy ??
             manifest.configuration.analysisStrategy,
+          catalogueDriftMode:
+            options.catalogueDriftMode ??
+            manifest.configuration.catalogueDriftMode,
         },
         configuration.profilePolicyHash,
       );
@@ -6493,7 +6511,7 @@ export async function runRosterStressTest(
     ) {
       return failure(
         "TESSERA_STRESS_RESUME_MISMATCH",
-        "The resume manifest does not match this player roster, opponent faction, suite, and analysis strategy.",
+        "The resume manifest does not match this player roster, opponent faction, suite, analysis strategy, or catalogue-drift policy.",
         validation.warnings,
       );
     }
@@ -7416,6 +7434,22 @@ export async function compareRosterStressRevision(
       validation.warnings,
     );
   }
+  if (
+    options.catalogueDriftMode !== undefined &&
+    options.catalogueDriftMode !==
+      baseline.configuration.catalogueDriftMode
+  ) {
+    return failure(
+      "TESSERA_STRESS_REVISION_CONFIGURATION_CHANGED",
+      "The paired revision must use the catalogue-drift policy frozen in the baseline stress report.",
+      validation.warnings,
+    );
+  }
+  options = {
+    ...options,
+    catalogueDriftMode:
+      baseline.configuration.catalogueDriftMode,
+  };
   if (
     sharedSourcePin(baseline.missionReadiness.sourceData) !==
     sharedSourcePin(baseline.portfolio.sourceData)

@@ -48,6 +48,11 @@ export type EnrichedUnitProfileCoverage = {
   complete: boolean;
 };
 
+export type TesseraReadyRosz = {
+  summary: EnrichedRoszSummary;
+  unitProfileCoverage: EnrichedUnitProfileCoverage[];
+};
+
 function decodeXml(value: string): string {
   return value
     .replaceAll("&quot;", '"')
@@ -336,6 +341,52 @@ export function inspectEnrichedUnitProfileCoverage(
   });
 }
 
+/**
+ * Final transport-boundary check for an archive that is about to be handed to
+ * Tessera. This proves New Recruit origin and profile readiness; it does not
+ * claim that embedded characteristic values match a separate rules source.
+ */
+export function validateTesseraReadyRosz(
+  content: Uint8Array,
+): TesseraReadyRosz {
+  const summary = inspectEnrichedRosz(content);
+  if (!/newrecruit\.eu/i.test(summary.generatedBy)) {
+    throw Object.assign(
+      new Error(
+        "The Tessera input is not a New Recruit enriched ROSZ.",
+      ),
+      { code: "TESSERA_INPUT_NOT_PROFILE_RICH" },
+    );
+  }
+  if (
+    summary.units.length === 0 ||
+    summary.profileCount === 0 ||
+    summary.weaponProfileCount === 0
+  ) {
+    throw Object.assign(
+      new Error(
+        "The Tessera input does not contain units with embedded model and weapon profiles.",
+      ),
+      { code: "TESSERA_INPUT_NOT_PROFILE_RICH" },
+    );
+  }
+  const unitProfileCoverage = inspectEnrichedUnitProfileCoverage(
+    content,
+  );
+  const incomplete = unitProfileCoverage.filter(
+    (unit) => !unit.complete,
+  );
+  if (incomplete.length > 0) {
+    throw Object.assign(
+      new Error(
+        `The Tessera input has incomplete per-unit profiles for ${incomplete.map((unit) => unit.name).join(", ")}.`,
+      ),
+      { code: "TESSERA_INPUT_PROFILES_INCOMPLETE" },
+    );
+  }
+  return { summary, unitProfileCoverage };
+}
+
 function multiset(
   units: Array<{
     name: string;
@@ -559,6 +610,31 @@ export function compareNewRecruitCatalogueProvenance(
     mismatches,
     missing: [...new Set(missing)],
   };
+}
+
+/**
+ * The only catalogue drift that an explicit Tessera diagnostic may accept is
+ * a forward-only game-system revision change. The game-system ID and exact
+ * faction catalogue identity/revision must still match, and New Recruit must
+ * expose every identity field needed to prove that distinction.
+ */
+export function isForwardGameSystemRevisionOnlyDrift(
+  comparison: NewRecruitCatalogueProvenanceComparison,
+): boolean {
+  if (
+    comparison.status !== "drift" ||
+    comparison.missing.length > 0 ||
+    comparison.mismatches.length !== 1
+  ) {
+    return false;
+  }
+  const [mismatch] = comparison.mismatches;
+  return (
+    mismatch.field === "game-system-revision" &&
+    typeof mismatch.expected === "number" &&
+    typeof mismatch.observed === "number" &&
+    mismatch.observed > mismatch.expected
+  );
 }
 
 /**
@@ -786,6 +862,21 @@ export function validateEnrichedRosz(
   }
   if (summary.profileCount === 0 || summary.weaponProfileCount === 0) {
     mismatches.push("embedded model/weapon profiles");
+  }
+  const incompleteProfiles = inspectEnrichedUnitProfileCoverage(
+    content,
+  ).filter((unit) => !unit.complete);
+  if (incompleteProfiles.length > 0) {
+    mismatches.push(
+      `complete per-unit model/weapon profiles for ${incompleteProfiles
+        .map(
+          (unit) =>
+            `${unit.name} (${unit.modelCount} model${
+              unit.modelCount === 1 ? "" : "s"
+            })`,
+        )
+        .join(", ")}`,
+    );
   }
   const includePoints = expected.units.every(
     (unit) => unit.points !== undefined,

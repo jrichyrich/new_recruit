@@ -100,14 +100,33 @@ function delivery(input: {
 function enrichedRosz(source: Uint8Array): Uint8Array {
   const entries = unzipSync(source);
   const [filename, bytes] = Object.entries(entries)[0];
+  const profiles =
+    '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/></profiles>';
+  let selectionDepth = 0;
   const xml = strFromU8(bytes)
     .replace(
       'generatedBy="RosterPilot"',
       'generatedBy="https://newrecruit.eu"',
     )
     .replace(
-      "</roster>",
-      '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/></profiles></roster>',
+      /<selection\b[^>]*>|<\/selection>/g,
+      (token) => {
+        if (token === "</selection>") {
+          selectionDepth -= 1;
+          return token;
+        }
+        const topLevelUnit =
+          selectionDepth === 0 &&
+          /\btype="(?:unit|model)"/.test(token);
+        const selfClosing = token.endsWith("/>");
+        if (selfClosing) {
+          return topLevelUnit
+            ? `${token.slice(0, -2)}>${profiles}</selection>`
+            : token;
+        }
+        selectionDepth += 1;
+        return topLevelUnit ? `${token}${profiles}` : token;
+      },
     );
   return zipSync({ [filename]: strToU8(xml) });
 }
@@ -720,18 +739,7 @@ test("Tessera preparation seals mutation receipts before delivery and records ca
         assert.ok(exported.ok && exported.data);
         assert.notEqual(typeof exported.data.content, "string");
         const source = exported.data.content as Uint8Array;
-        const entries = unzipSync(source);
-        const [filename, bytes] = Object.entries(entries)[0];
-        const xml = strFromU8(bytes)
-          .replace(
-            'generatedBy="RosterPilot"',
-            'generatedBy="https://newrecruit.eu"',
-          )
-          .replace(
-            "</roster>",
-            '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/></profiles></roster>',
-          );
-        const enriched = zipSync({ [filename]: strToU8(xml) });
+        const enriched = enrichedRosz(source);
         const outputDirectory =
           options.outputDirectory ?? directory;
         await mkdir(outputDirectory, { recursive: true });

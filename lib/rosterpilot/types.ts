@@ -1384,6 +1384,7 @@ export type TesseraStressFinding = {
 export type TesseraStressConfiguration = {
   suite: TesseraStressSuite;
   analysisStrategy: TesseraStressAnalysisStrategy;
+  catalogueDriftMode: "reject" | "diagnostic";
   pointsTolerancePercent: number;
   proxyWeights: "equal";
   screeningMetric: "half-wipe-probability";

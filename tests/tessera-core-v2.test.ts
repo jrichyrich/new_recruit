@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { strToU8, zipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 
 import {
   analyzeMissionReadiness,
@@ -405,6 +405,14 @@ function enrichedFixture(
         unit.name,
       )}" number="1" type="unit">
         <cost name="pts" value="${unit.points}"/>
+        <profiles>
+          <profile name="${xmlAttribute(
+            unit.name,
+          )} model" typeName="Unit"/>
+          <profile name="${xmlAttribute(
+            unit.name,
+          )} weapon" typeName="Ranged Weapons"/>
+        </profiles>
         <selections>
           <selection name="${xmlAttribute(
             unit.name,
@@ -449,12 +457,56 @@ function enrichedFixture(
       </selections>
     </force>
   </forces>
-  <profiles>
-    <profile name="Fixture model" typeName="Unit"/>
-    <profile name="Fixture weapon" typeName="Ranged Weapons"/>
-  </profiles>
 </roster>`;
   return zipSync({ "fixture.ros": strToU8(xml) });
+}
+
+async function canonicalEnrichedRoszFixture(
+  roster: RosterDraftV1,
+  gameSystemRevisionOffset = 0,
+): Promise<Uint8Array> {
+  const exported = await exportRoster(roster, "rosz");
+  assert.equal(exported.ok, true);
+  assert.ok(exported.data);
+  assert.notEqual(typeof exported.data.content, "string");
+  const files = unzipSync(exported.data.content as Uint8Array);
+  const entry = Object.keys(files).find((name) => /\.ros$/i.test(name));
+  assert.ok(entry);
+  let xml = strFromU8(files[entry!])
+    .replace(
+      /generatedBy="[^"]*"/,
+      'generatedBy="https://newrecruit.eu"',
+    )
+    .replace(
+      /gameSystemRevision="\d+"/,
+      `gameSystemRevision="${
+        roster.sourceData.newRecruit.gameSystemRevision +
+        gameSystemRevisionOffset
+      }"`,
+    );
+  const profiles =
+    '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/></profiles>';
+  let selectionDepth = 0;
+  xml = xml.replace(
+    /<selection\b[^>]*>|<\/selection>/g,
+    (token) => {
+      if (token === "</selection>") {
+        selectionDepth -= 1;
+        return token;
+      }
+      const topLevelRosterUnit =
+        selectionDepth === 0 &&
+        /\btype="(?:unit|model)"/.test(token);
+      const selfClosing = token.endsWith("/>");
+      if (!selfClosing) selectionDepth += 1;
+      if (!topLevelRosterUnit) return token;
+      return selfClosing
+        ? `${token.slice(0, -2)}>${profiles}</selection>`
+        : `${token}${profiles}`;
+    },
+  );
+  files[entry!] = strToU8(xml);
+  return zipSync(files);
 }
 
 function uploadedRoszFixture(
@@ -462,6 +514,7 @@ function uploadedRoszFixture(
   options: {
     concreteCatalogue: boolean;
     profiledUnitCount: number;
+    gameSystemRevisionOffset?: number;
     catalogueRevisionOffset?: number;
   },
 ): Uint8Array {
@@ -498,7 +551,10 @@ function uploadedRoszFixture(
         newRecruitCatalogue.gameSystem.id,
       )}" gameSystemName="${xmlAttribute(
         newRecruitCatalogue.gameSystem.name,
-      )}" gameSystemRevision="${roster.sourceData.newRecruit.gameSystemRevision}"`
+      )}" gameSystemRevision="${
+        roster.sourceData.newRecruit.gameSystemRevision +
+        (options.gameSystemRevisionOffset ?? 0)
+      }"`
     : "";
   const catalogueIdentity = options.concreteCatalogue
     ? ` catalogueId="${xmlAttribute(
@@ -1856,6 +1912,215 @@ test("uploaded ROSZ points are preflighted before external mutation", async () =
 });
 
 test(
+  "uploaded ROSZ accepts only explicit forward game-system revision diagnostics without canonical context",
+  async () => {
+    const player = roster(
+      "adeptus-custodes",
+      1_000,
+      "Revision Diagnostic Player",
+    );
+    const opponent = roster(
+      "necrons",
+      1_000,
+      "Revision Diagnostic Opponent",
+    );
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "tessera-upload-revision-diagnostic-"),
+    );
+    const forwardPath = path.join(directory, "forward-opponent.rosz");
+    const backwardPath = path.join(directory, "backward-opponent.rosz");
+    await Promise.all([
+      writeFile(
+        forwardPath,
+        uploadedRoszFixture(opponent, {
+          concreteCatalogue: true,
+          profiledUnitCount: opponent.units.length,
+          gameSystemRevisionOffset: 1,
+        }),
+      ),
+      writeFile(
+        backwardPath,
+        uploadedRoszFixture(opponent, {
+          concreteCatalogue: true,
+          profiledUnitCount: opponent.units.length,
+          gameSystemRevisionOffset: -1,
+        }),
+      ),
+    ]);
+    let deliveryCalls = 0;
+    const artifactDelivery = artifactDeliveryDependency(directory);
+    const dependencies = {
+      deliver: async (
+        candidate: RosterDraftV1,
+        options: NewRecruitDeliveryOptions = {},
+      ) => {
+        deliveryCalls += 1;
+        return artifactDelivery(candidate, options);
+      },
+    };
+    try {
+      const strict = await analyzeRosterMatchup(
+        player,
+        { kind: "rosz", path: forwardPath },
+        {
+          outputDirectory: path.join(directory, "strict"),
+          allowOutsideRoot: true,
+        },
+        dependencies,
+      );
+      assert.equal(strict.ok, false);
+      assert.equal(
+        strict.violations[0]?.code,
+        "TESSERA_ROSZ_GAME_SYSTEM_MISMATCH",
+      );
+      assert.equal(deliveryCalls, 0);
+
+      const backward = await analyzeRosterMatchup(
+        player,
+        { kind: "rosz", path: backwardPath },
+        {
+          catalogueDriftMode: "diagnostic",
+          outputDirectory: path.join(directory, "backward"),
+          allowOutsideRoot: true,
+        },
+        dependencies,
+      );
+      assert.equal(backward.ok, false);
+      assert.equal(
+        backward.violations[0]?.code,
+        "TESSERA_ROSZ_GAME_SYSTEM_MISMATCH",
+      );
+      assert.equal(deliveryCalls, 0);
+
+      const diagnostic = await analyzeRosterMatchup(
+        player,
+        { kind: "rosz", path: forwardPath },
+        {
+          catalogueDriftMode: "diagnostic",
+          outputDirectory: path.join(directory, "diagnostic"),
+          allowOutsideRoot: true,
+        },
+        dependencies,
+      );
+      assert.equal(
+        diagnostic.ok,
+        true,
+        JSON.stringify(diagnostic.violations),
+      );
+      assert.equal(diagnostic.data?.status, "prepared");
+      assert.equal(deliveryCalls, 1);
+      assert.equal(
+        diagnostic.data?.opponents[0]?.catalogueProvenance?.status,
+        "drift",
+      );
+      assert.deepEqual(
+        diagnostic.data?.opponents[0]?.catalogueProvenance?.mismatches.map(
+          (mismatch) => mismatch.field,
+        ),
+        ["game-system-revision"],
+      );
+      assert.ok(
+        diagnostic.data?.warnings.some((warning) =>
+          warning.includes(
+            "Diagnostic mode accepted the identity-verified, profile-complete uploaded opponent despite a newer game-system revision",
+          ),
+        ),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "canonical uploaded ROSZ diagnostic accepts frozen revision 7 versus enriched revision 8 through preflight",
+  async () => {
+    const player = roster(
+      "adeptus-custodes",
+      1_000,
+      "Context Revision Player",
+    );
+    const opponent = roster(
+      "necrons",
+      1_000,
+      "Context Revision Opponent",
+    );
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "tessera-context-revision-diagnostic-"),
+    );
+    const uploadedPath = path.join(directory, "enriched-revision-8.rosz");
+    await writeFile(
+      uploadedPath,
+      await canonicalEnrichedRoszFixture(opponent, 1),
+    );
+    let deliveryCalls = 0;
+    const artifactDelivery = artifactDeliveryDependency(directory);
+    const dependencies = {
+      deliver: async (
+        candidate: RosterDraftV1,
+        options: NewRecruitDeliveryOptions = {},
+      ) => {
+        deliveryCalls += 1;
+        return artifactDelivery(candidate, options);
+      },
+    };
+    try {
+      const strict = await analyzeRosterMatchup(
+        player,
+        { kind: "rosz", path: uploadedPath },
+        {
+          opponentRosterContext: opponent,
+          outputDirectory: path.join(directory, "strict"),
+          allowOutsideRoot: true,
+        },
+        dependencies,
+      );
+      assert.equal(strict.ok, false);
+      assert.equal(
+        strict.violations[0]?.code,
+        "TESSERA_ROSZ_GAME_SYSTEM_MISMATCH",
+      );
+      assert.equal(deliveryCalls, 0);
+
+      const diagnostic = await analyzeRosterMatchup(
+        player,
+        { kind: "rosz", path: uploadedPath },
+        {
+          opponentRosterContext: opponent,
+          catalogueDriftMode: "diagnostic",
+          outputDirectory: path.join(directory, "diagnostic"),
+          allowOutsideRoot: true,
+        },
+        dependencies,
+      );
+      assert.equal(
+        diagnostic.ok,
+        true,
+        JSON.stringify(diagnostic.violations),
+      );
+      assert.equal(diagnostic.data?.status, "prepared");
+      assert.equal(deliveryCalls, 1);
+      assert.equal(
+        diagnostic.data?.opponents[0]?.fingerprint,
+        rosterExecutionFingerprint(opponent),
+      );
+      assert.equal(
+        diagnostic.data?.opponents[0]?.catalogueProvenance?.status,
+        "drift",
+      );
+      assert.deepEqual(
+        diagnostic.data?.opponents[0]?.catalogueProvenance?.mismatches.map(
+          (mismatch) => mismatch.field,
+        ),
+        ["game-system-revision"],
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "raw uploaded ROSZ without verifiable provenance stops before player delivery",
   async () => {
     const player = roster(
@@ -1888,6 +2153,7 @@ test(
         { kind: "rosz", path: uploadedPath },
         {
           executionMode: "simulate",
+          catalogueDriftMode: "diagnostic",
           profilePolicy: profilePolicyFor(player),
           outputDirectory: path.join(directory, "report"),
           allowOutsideRoot: true,
@@ -1949,6 +2215,7 @@ test(
         { kind: "rosz", path: uploadedPath },
         {
           executionMode: "simulate",
+          catalogueDriftMode: "diagnostic",
           profilePolicy: profilePolicyFor(player),
           outputDirectory: path.join(directory, "report"),
           allowOutsideRoot: true,
@@ -1999,6 +2266,7 @@ test(
       uploadedRoszFixture(opponent, {
         concreteCatalogue: true,
         profiledUnitCount: 1,
+        gameSystemRevisionOffset: 1,
       }),
     );
     let deliveryCalls = 0;
@@ -2009,6 +2277,7 @@ test(
         { kind: "rosz", path: uploadedPath },
         {
           opponentRosterContext: opponent,
+          catalogueDriftMode: "diagnostic",
           outputDirectory: path.join(directory, "report"),
           allowOutsideRoot: true,
         },

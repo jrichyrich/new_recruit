@@ -109,6 +109,25 @@ function flag(args: Args, key: string): boolean {
   return args[key] === true || value(args, key) === "true";
 }
 
+function requestedCatalogueDriftMode(
+  args: Args,
+  inheritFrozenPolicy = false,
+): "reject" | "diagnostic" | undefined {
+  if (
+    args["verified-catalogue-drift-diagnostic"] ===
+    undefined
+  ) {
+    return inheritFrozenPolicy ? undefined : "reject";
+  }
+  if (flag(
+    args,
+    "verified-catalogue-drift-diagnostic",
+  )) {
+    return "diagnostic";
+  }
+  return inheritFrozenPolicy ? undefined : "reject";
+}
+
 function list(args: Args, key: string): string[] {
   const found = args[key];
   if (!found || found === true) return [];
@@ -250,19 +269,19 @@ Usage:
   rosterpilot tessera status
   rosterpilot tessera configure
   rosterpilot tessera forget
-  rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera]
+  rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera] [--verified-catalogue-drift-diagnostic]
   rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
   rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
-  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--portfolio-preview preview.json]
+  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
   rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
   rosterpilot tessera run-resume --job exports/tessera/runs/run-.../tessera-run.json [--restart-from] [--out-dir exports/tessera]
   rosterpilot tessera resolve-profiles --job ... --profile-policy profiles.json
   rosterpilot tessera run-cancel --job exports/tessera/runs/run-.../tessera-run.json
-  rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--profile-policy profiles.json] [--out-dir exports/tessera]
-  rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--out-dir exports/tessera] [--overwrite]
+  rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera]
+  rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera] [--overwrite]
   rosterpilot mcp
 
 Writes are restricted to the current directory unless --allow-outside-root is supplied.
@@ -272,6 +291,10 @@ Use --restart-from with a different --out-dir after a five-attempt budget is
 exhausted; verified prepared artifacts are reused, but simulation stages start fresh.
 Stress tests default to the diverse-9 suite and staged analysis; results are
 directional robustness ranges, not game win probabilities.
+--verified-catalogue-drift-diagnostic is not a general drift override. It
+accepts only a newer game-system revision with exact faction-catalogue identity
+and complete per-unit profiles. Set it when starting a durable run; resume
+cannot enable it, and retained artifacts remain provisional.
 `);
 }
 
@@ -667,6 +690,12 @@ async function main(): Promise<void> {
                   path.resolve(opponentContextFile),
                 )
               : undefined,
+            catalogueDriftMode: flag(
+              args,
+              "verified-catalogue-drift-diagnostic",
+            )
+              ? "diagnostic"
+              : "reject",
           },
         };
       } else if (runKind === "stress") {
@@ -702,6 +731,12 @@ async function main(): Promise<void> {
                   portfolioPreviewPath,
                 )
               : undefined,
+            catalogueDriftMode: flag(
+              args,
+              "verified-catalogue-drift-diagnostic",
+            )
+              ? "diagnostic"
+              : "reject",
           },
         };
       } else if (runKind === "build-and-stress") {
@@ -736,6 +771,14 @@ async function main(): Promise<void> {
               args,
               "allow-readiness-warnings",
             ),
+          },
+          options: {
+            catalogueDriftMode: flag(
+              args,
+              "verified-catalogue-drift-diagnostic",
+            )
+              ? "diagnostic"
+              : "reject",
           },
         };
       } else if (runKind === "build-and-analyze") {
@@ -781,6 +824,14 @@ async function main(): Promise<void> {
               args,
               "allow-readiness-warnings",
             ),
+          },
+          options: {
+            catalogueDriftMode: flag(
+              args,
+              "verified-catalogue-drift-diagnostic",
+            )
+              ? "diagnostic"
+              : "reject",
           },
         };
       } else {
@@ -935,6 +986,13 @@ async function main(): Promise<void> {
               outputDirectory,
               executionMode: "simulate",
               experimental: false,
+              catalogueDriftMode:
+                requestedCatalogueDriftMode(
+                  args,
+                  Boolean(
+                    resumeManifestPath || restartManifest,
+                  ),
+                ),
             },
           },
           {
@@ -989,6 +1047,13 @@ async function main(): Promise<void> {
         {
           overwrite: flag(args, "overwrite"),
           allowOutsideRoot: flag(args, "allow-outside-root"),
+          catalogueDriftMode:
+            requestedCatalogueDriftMode(
+              args,
+              Boolean(
+                resumeManifestPath || restartManifest,
+              ),
+            ),
         },
       );
       if (flag(args, "full-json") || !result.data) {
@@ -1082,6 +1147,12 @@ async function main(): Promise<void> {
               outputDirectory,
               executionMode: "simulate",
               experimental: false,
+              catalogueDriftMode: flag(
+                args,
+                "verified-catalogue-drift-diagnostic",
+              )
+                ? "diagnostic"
+                : "reject",
             },
           },
           {
@@ -1098,6 +1169,12 @@ async function main(): Promise<void> {
           outputDirectory,
           overwrite: flag(args, "overwrite"),
           allowOutsideRoot: flag(args, "allow-outside-root"),
+          catalogueDriftMode: flag(
+            args,
+            "verified-catalogue-drift-diagnostic",
+          )
+            ? "diagnostic"
+            : "reject",
         },
       );
       print(
@@ -1132,6 +1209,8 @@ async function main(): Promise<void> {
               value(args, "profile-policy"),
             executionMode: "simulate",
             experimental: false,
+            catalogueDriftMode:
+              requestedCatalogueDriftMode(args),
           },
         },
         {
@@ -1164,6 +1243,8 @@ async function main(): Promise<void> {
             outputDirectory,
             executionMode: "simulate",
             experimental: false,
+            catalogueDriftMode:
+              requestedCatalogueDriftMode(args, true),
           },
         },
         {
@@ -1185,6 +1266,12 @@ async function main(): Promise<void> {
         outputDirectory,
         overwrite: flag(args, "overwrite"),
         allowOutsideRoot: flag(args, "allow-outside-root"),
+        catalogueDriftMode: flag(
+          args,
+          "verified-catalogue-drift-diagnostic",
+        )
+          ? "diagnostic"
+          : "reject",
       });
       print(result);
       if (!result.ok) process.exitCode = 2;
@@ -1284,12 +1371,13 @@ async function main(): Promise<void> {
               outputDirectory,
               executionMode: "simulate",
               experimental: false,
-              catalogueDriftMode: flag(
-                args,
-                "verified-catalogue-drift-diagnostic",
-              )
-                ? "diagnostic"
-                : "reject",
+              catalogueDriftMode:
+                requestedCatalogueDriftMode(
+                  args,
+                  Boolean(
+                    resumeManifestPath || restartManifest,
+                  ),
+                ),
             },
           },
           {
@@ -1327,12 +1415,13 @@ async function main(): Promise<void> {
             | "simulate"
             | undefined,
           experimental: flag(args, "experimental"),
-          catalogueDriftMode: flag(
-            args,
-            "verified-catalogue-drift-diagnostic",
-          )
-            ? "diagnostic"
-            : "reject",
+          catalogueDriftMode:
+            requestedCatalogueDriftMode(
+              args,
+              Boolean(
+                resumeManifestPath || restartManifest,
+              ),
+            ),
         },
       );
       print(

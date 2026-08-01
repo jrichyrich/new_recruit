@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   compareNewRecruitCatalogueProvenance,
   getNewRecruitFactionSummary,
+  isForwardGameSystemRevisionOnlyDrift,
   newRecruitCatalogue,
   prepareNewRecruitHandoff,
   inspectEnrichedRosz,
@@ -45,6 +46,7 @@ import {
   beginNewRecruitMutationReceipt,
   beginNewRecruitRoszMutationReceipt,
   newRecruitRoszMutationSubject,
+  storeNewRecruitProvisionalArtifact,
   type NewRecruitMutationFinalization,
   type NewRecruitMutationTransaction,
 } from "./cache";
@@ -75,8 +77,9 @@ export type NewRecruitDeliveryOptions = WriteOptions & {
   mutationSubjectRoster?: RosterDraftV1;
   /**
    * Explicit diagnostic escape hatch for a profile-rich archive that passed
-   * semantic delivery verification but reports a newer New Recruit catalogue
-   * revision. Drifted artifacts are never promoted into the persistent cache.
+   * identity and profile-readiness verification but reports a newer New
+   * Recruit game-system revision. Drifted artifacts are never promoted into
+   * the trusted persistent cache.
    */
   catalogueDriftMode?: "reject" | "diagnostic";
 };
@@ -85,6 +88,7 @@ export type NewRecruitCompanionDependencies = {
   platform?: NodeJS.Platform;
   browserAvailable?: boolean;
   agentDeliver?: typeof deliverThroughLocalAgent;
+  provisionalArtifactStore?: typeof storeNewRecruitProvisionalArtifact;
   runtimeIssue?: typeof runtimeRestartIssue;
 };
 
@@ -907,6 +911,12 @@ export async function deliverRosterToNewRecruit(
       message: string;
       severity: "error";
     } | null = null;
+    const catalogueProvenanceWarnings: Array<{
+      code: string;
+      message: string;
+      severity: "warn";
+    }> = [];
+    let retainForwardDriftProvisional = false;
     if (includeEnriched) {
       if (!agent.enrichedRoszBase64) {
         throw new Error(
@@ -956,6 +966,10 @@ export async function deliverRosterToNewRecruit(
             );
           delivery.catalogueProvenance = catalogueProvenance;
           if (catalogueProvenance.status === "drift") {
+            retainForwardDriftProvisional =
+              isForwardGameSystemRevisionOnlyDrift(
+                catalogueProvenance,
+              );
             const mismatchSummary = catalogueProvenance.mismatches
               .map(
                 (mismatch) =>
@@ -964,12 +978,26 @@ export async function deliverRosterToNewRecruit(
                   }`,
               )
               .join("; ");
-            catalogueProvenanceViolation = {
-              code: "NEW_RECRUIT_CATALOGUE_DRIFT",
-              message:
-                `New Recruit created or reused the list, but its verified export does not match data bundle ${draft.sourceData.bundleId}: ${mismatchSummary}. The remote list was retained for inventory and was not accepted for downstream use.`,
-              severity: "error",
-            };
+            if (
+              options.catalogueDriftMode === "diagnostic" &&
+              isForwardGameSystemRevisionOnlyDrift(
+                catalogueProvenance,
+              )
+            ) {
+              catalogueProvenanceWarnings.push({
+                code: "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",
+                message:
+                  `Diagnostic mode accepted New Recruit's identity-verified, profile-complete enriched roster despite a newer game-system revision: ${mismatchSummary}. The faction catalogue still matches exactly; embedded characteristic values remain live New Recruit evidence, so the artifact stays provisional.`,
+                severity: "warn",
+              });
+            } else {
+              catalogueProvenanceViolation = {
+                code: "NEW_RECRUIT_CATALOGUE_DRIFT",
+                message:
+                  `New Recruit created or reused the list, but its verified export does not match data bundle ${draft.sourceData.bundleId}: ${mismatchSummary}. The remote list was retained for inventory and was not accepted for downstream use.`,
+                severity: "error",
+              };
+            }
           } else if (catalogueProvenance.status === "unverifiable") {
             catalogueProvenanceViolation = {
               code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNVERIFIABLE",
@@ -993,8 +1021,8 @@ export async function deliverRosterToNewRecruit(
         await finalizeMutationEvent(
           failedVerificationEvent,
           worker.imported
-            ? "New Recruit reported a remote import, but the enriched ROSZ failed gameplay-identity verification."
-            : "New Recruit did not import a new list; the returned enriched ROSZ failed gameplay-identity verification.",
+            ? "New Recruit reported a remote import, but the enriched ROSZ failed identity or profile-readiness verification."
+            : "New Recruit did not import a new list; the returned enriched ROSZ failed identity or profile-readiness verification.",
         );
         let diagnosticWarning: {
           code: string;
@@ -1093,6 +1121,31 @@ export async function deliverRosterToNewRecruit(
       verified: true,
     });
     delivery.connectorEvents = [verifiedMutationEvent];
+    if (retainForwardDriftProvisional) {
+      try {
+        await (
+          dependencies.provisionalArtifactStore ??
+          storeNewRecruitProvisionalArtifact
+        )(draft, {
+          ok: catalogueProvenanceViolation === null,
+          data: delivery,
+          violations: catalogueProvenanceViolation
+            ? [catalogueProvenanceViolation]
+            : [],
+          warnings: [
+            ...validation.warnings,
+            ...catalogueProvenanceWarnings,
+          ],
+        });
+      } catch {
+        catalogueProvenanceWarnings.push({
+          code: "NEW_RECRUIT_PROVISIONAL_CACHE_WRITE_FAILED",
+          message:
+            "The revision-only enriched roster was retained in the run output but could not be added to the provisional reuse store.",
+          severity: "warn",
+        });
+      }
+    }
     await finalizeMutationEvent(
       verifiedMutationEvent,
       catalogueProvenanceViolation
@@ -1115,14 +1168,20 @@ export async function deliverRosterToNewRecruit(
         ok: false,
         data: delivery,
         violations: [catalogueProvenanceViolation],
-        warnings: validation.warnings,
+        warnings: [
+          ...validation.warnings,
+          ...catalogueProvenanceWarnings,
+        ],
       };
     }
     return {
       ok: true,
       data: delivery,
       violations: [],
-      warnings: validation.warnings,
+      warnings: [
+        ...validation.warnings,
+        ...catalogueProvenanceWarnings,
+      ],
     };
   } catch (error) {
     let receiptFailure: unknown = null;

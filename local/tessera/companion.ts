@@ -13,10 +13,12 @@ import {
   inspectEnrichedRosz,
   inspectEnrichedProfileRequirements,
   inspectEnrichedUnitProfileCoverage,
+  isForwardGameSystemRevisionOnlyDrift,
   newRecruitCatalogue,
   rosterExecutionFingerprint,
   searchUnits,
   validateRoster,
+  validateTesseraReadyRosz,
   type EnrichedRoszSummary,
   type ExportArtifact,
   type ConnectorEvent,
@@ -67,6 +69,7 @@ import {
   acquireDirectoryLease,
   beginNewRecruitMutationReceipt,
   loadNewRecruitCache,
+  loadNewRecruitProvisionalArtifact,
   recordNewRecruitReuseReceipt,
   storeNewRecruitCache,
   type NewRecruitMutationTransaction,
@@ -418,7 +421,8 @@ export async function prepareRosterForTessera(
   let delivery: Awaited<ReturnType<typeof deliverRosterToNewRecruit>>;
   try {
     const persisted = managesPersistentCache
-      ? await loadNewRecruitCache(roster)
+      ? (await loadNewRecruitCache(roster)) ??
+        (await loadNewRecruitProvisionalArtifact(roster))
       : null;
     if (persisted) {
       delivery = persisted;
@@ -615,7 +619,10 @@ export async function prepareRosterForTessera(
           }`,
       )
       .join("; ");
-    if (options.catalogueDriftMode !== "diagnostic") {
+    const diagnosticDriftAccepted =
+      options.catalogueDriftMode === "diagnostic" &&
+      isForwardGameSystemRevisionOnlyDrift(catalogueProvenance);
+    if (!diagnosticDriftAccepted) {
       return {
         ok: false,
         data: prepared,
@@ -633,7 +640,7 @@ export async function prepareRosterForTessera(
     preparationWarnings.push({
       code: "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",
       message:
-        `Diagnostic mode accepted a semantically verified New Recruit archive despite catalogue drift: ${mismatchSummary}. Results remain provisional, retain both catalogue identities, and are not promoted into the persistent preparation cache.`,
+        `Diagnostic mode accepted an identity-verified, profile-complete New Recruit archive despite a newer game-system revision: ${mismatchSummary}. The faction catalogue still matches exactly; embedded characteristic values remain live New Recruit evidence, so results retain both identities and stay provisional.`,
       severity: "warn",
     });
   }
@@ -656,6 +663,14 @@ export async function prepareRosterForTessera(
     source.written,
     enriched.written,
     roster.name,
+    {
+      ignoredMismatches:
+        isForwardGameSystemRevisionOnlyDrift(
+          catalogueProvenance,
+        )
+          ? ["game-system"]
+          : [],
+    },
   );
   if (gameplayIntegrity) {
     return {
@@ -811,6 +826,88 @@ function factionIdentityForUploadedSummary(
   return matched?.[0] ?? summary.factionName;
 }
 
+type UploadedRoszCatalogueProvenance = NonNullable<
+  TesseraPreparedRoster["catalogueProvenance"]
+>;
+
+function uploadedRoszCatalogueProvenance(
+  summary: EnrichedRoszSummary,
+  playerRoster: RosterDraftV1,
+  opponentRosterContext: RosterDraftV1 | undefined,
+  observedFactionId: string | null,
+): UploadedRoszCatalogueProvenance | null {
+  const expectedFactionId =
+    opponentRosterContext?.factionId ?? observedFactionId;
+  if (!expectedFactionId) return null;
+  const factionCatalogue = getNewRecruitFactionSummary(
+    expectedFactionId,
+  );
+  if (!factionCatalogue?.catalogue.id) return null;
+  const sourceRoster = opponentRosterContext ?? playerRoster;
+  return compareNewRecruitCatalogueProvenance(summary, {
+    releaseId: sourceRoster.sourceData.releaseId,
+    gameSystem: {
+      id: newRecruitCatalogue.gameSystem.id,
+      name: newRecruitCatalogue.gameSystem.name,
+      revision:
+        sourceRoster.sourceData.newRecruit.gameSystemRevision,
+    },
+    catalogue: {
+      id: factionCatalogue.catalogue.id,
+      name: factionCatalogue.catalogue.name,
+      revision: opponentRosterContext
+        ? opponentRosterContext.sourceData.newRecruit.catalogueRevision
+        : factionCatalogue.catalogue.revision,
+    },
+  });
+}
+
+function acceptsUploadedRoszRevisionDiagnostic(
+  comparison: UploadedRoszCatalogueProvenance | null,
+  catalogueDriftMode: TesseraAnalysisOptions["catalogueDriftMode"],
+): comparison is UploadedRoszCatalogueProvenance {
+  if (
+    catalogueDriftMode !== "diagnostic" ||
+    !comparison ||
+    !isForwardGameSystemRevisionOnlyDrift(comparison) ||
+    comparison.pinned.catalogue.revision === null ||
+    !comparison.observed
+  ) {
+    return false;
+  }
+  const matchingCatalogues = comparison.observed.catalogues.filter(
+    (catalogue) => catalogue.id === comparison.pinned.catalogue.id,
+  );
+  return (
+    comparison.observed.catalogues.length === 1 &&
+    matchingCatalogues.length === 1 &&
+    matchingCatalogues[0].revision ===
+      comparison.pinned.catalogue.revision
+  );
+}
+
+function appendUploadedRoszRevisionDiagnosticWarning(
+  warnings: RosterIssue[],
+  comparison: UploadedRoszCatalogueProvenance,
+): void {
+  if (
+    warnings.some(
+      (warning) =>
+        warning.code ===
+        "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",
+    )
+  ) {
+    return;
+  }
+  const mismatch = comparison.mismatches[0];
+  warnings.push({
+    code: "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",
+    message:
+      `Diagnostic mode accepted the identity-verified, profile-complete uploaded opponent despite a newer game-system revision: ${mismatch.field} expected ${mismatch.expected}, observed ${mismatch.observed ?? "missing"}. The faction catalogue still matches exactly; embedded characteristic values remain live New Recruit evidence, so results retain both identities and stay provisional.`,
+    severity: "warn",
+  });
+}
+
 type UploadedRoszPreflight = {
   content: Buffer;
   summary: EnrichedRoszSummary;
@@ -825,6 +922,8 @@ async function inspectUploadedRoszPreflight(
   playerRoster: RosterDraftV1,
   opponentRosterContext: RosterDraftV1 | undefined,
   uploadedArtifactProvenanceVerified = false,
+  catalogueDriftMode: TesseraAnalysisOptions["catalogueDriftMode"] =
+    "reject",
 ): Promise<ResultEnvelope<UploadedRoszPreflight>> {
   let content: Buffer;
   try {
@@ -898,7 +997,43 @@ async function inspectUploadedRoszPreflight(
   }
 
   let factionId: string | null = null;
+  let catalogueProvenance: UploadedRoszCatalogueProvenance | null =
+    null;
+  let diagnosticRevisionDriftAccepted = false;
   if (!uploadedArtifactProvenanceVerified) {
+    const observedFactionCatalogues = Object.entries(
+      newRecruitCatalogue.factions,
+    ).flatMap(([candidateFactionId, faction]) => {
+      const catalogue = gameplaySnapshot.catalogues.find(
+        (candidate) =>
+          candidate.id === faction.catalogue.id,
+      );
+      return catalogue
+        ? [
+            {
+              factionId: candidateFactionId,
+              expected: faction.catalogue,
+              catalogue,
+            },
+          ]
+        : [];
+    });
+    const observedFactionId =
+      gameplaySnapshot.catalogues.length === 1 &&
+      observedFactionCatalogues.length === 1
+        ? observedFactionCatalogues[0].factionId
+        : null;
+    catalogueProvenance = uploadedRoszCatalogueProvenance(
+      summary,
+      playerRoster,
+      opponentRosterContext,
+      observedFactionId,
+    );
+    diagnosticRevisionDriftAccepted =
+      acceptsUploadedRoszRevisionDiagnostic(
+        catalogueProvenance,
+        catalogueDriftMode,
+      );
     if (
       gameplaySnapshot.gameSystem.id === null ||
       gameplaySnapshot.gameSystem.revision === null
@@ -913,26 +1048,18 @@ async function inspectUploadedRoszPreflight(
       gameplaySnapshot.gameSystem.id !==
         newRecruitCatalogue.gameSystem.id ||
       gameplaySnapshot.gameSystem.revision !==
-        playerRoster.sourceData.newRecruit.gameSystemRevision
+        (opponentRosterContext ?? playerRoster).sourceData.newRecruit
+          .gameSystemRevision
     ) {
-      violations.push({
-        code: "TESSERA_ROSZ_GAME_SYSTEM_MISMATCH",
-        message:
-          `The uploaded ROSZ game system ${gameplaySnapshot.gameSystem.id}@${gameplaySnapshot.gameSystem.revision} does not match the frozen bundle's ${newRecruitCatalogue.gameSystem.id}@${playerRoster.sourceData.newRecruit.gameSystemRevision}.`,
-        severity: "error",
-      });
+      if (!diagnosticRevisionDriftAccepted) {
+        violations.push({
+          code: "TESSERA_ROSZ_GAME_SYSTEM_MISMATCH",
+          message:
+            `The uploaded ROSZ game system ${gameplaySnapshot.gameSystem.id}@${gameplaySnapshot.gameSystem.revision} does not match the frozen bundle's ${newRecruitCatalogue.gameSystem.id}@${(opponentRosterContext ?? playerRoster).sourceData.newRecruit.gameSystemRevision}.`,
+          severity: "error",
+        });
+      }
     }
-    const observedFactionCatalogues = Object.entries(
-      newRecruitCatalogue.factions,
-    ).flatMap(([factionId, faction]) => {
-      const catalogue = gameplaySnapshot.catalogues.find(
-        (candidate) =>
-          candidate.id === faction.catalogue.id,
-      );
-      return catalogue
-        ? [{ factionId, expected: faction.catalogue, catalogue }]
-        : [];
-    });
     if (
       gameplaySnapshot.catalogues.length !== 1 ||
       observedFactionCatalogues.length !== 1
@@ -965,7 +1092,6 @@ async function inspectUploadedRoszPreflight(
     content,
   ).filter((unit) => !unit.complete);
   if (
-    !uploadedArtifactProvenanceVerified &&
     summary.profileCount > 0 &&
     summary.weaponProfileCount > 0 &&
     incompleteProfiles.length > 0
@@ -1056,6 +1182,12 @@ async function inspectUploadedRoszPreflight(
         const gameplayMismatches = compareRoszGameplaySnapshots(
           inspectRoszGameplaySnapshot(canonicalContent),
           inspectRoszGameplaySnapshot(content),
+        ).filter(
+          (mismatch) =>
+            !(
+              diagnosticRevisionDriftAccepted &&
+              mismatch === "game-system"
+            ),
         );
         if (gameplayMismatches.length > 0) {
           violations.push({
@@ -1079,6 +1211,15 @@ async function inspectUploadedRoszPreflight(
   }
 
   const warnings: RosterIssue[] = [];
+  if (
+    diagnosticRevisionDriftAccepted &&
+    catalogueProvenance
+  ) {
+    appendUploadedRoszRevisionDiagnosticWarning(
+      warnings,
+      catalogueProvenance,
+    );
+  }
   if (!opponentRosterContext) {
     warnings.push({
       code: "TESSERA_ROSZ_LEGALITY_UNVERIFIED",
@@ -1221,6 +1362,24 @@ async function inspectPreparedProfileRequirements(
             code: "TESSERA_PREPARED_PROFILES_MISSING",
             message:
               `The prepared archive for ${prepared.rosterName} does not contain embedded model and weapon profiles.`,
+            severity: "error",
+          },
+        ],
+        warnings: [],
+      };
+    }
+    const incompleteProfiles = inspectEnrichedUnitProfileCoverage(
+      content,
+    ).filter((unit) => !unit.complete);
+    if (incompleteProfiles.length > 0) {
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: "TESSERA_PREPARED_PROFILES_INCOMPLETE",
+            message:
+              `The prepared archive for ${prepared.rosterName} has incomplete per-unit model/weapon profiles for ${incompleteProfiles.map((unit) => unit.name).join(", ")}.`,
             severity: "error",
           },
         ],
@@ -1406,16 +1565,18 @@ async function verifyRoszGameplayArtifacts(
   sourcePath: string,
   enrichedPath: string,
   rosterName: string,
+  options: { ignoredMismatches?: string[] } = {},
 ): Promise<RosterIssue | null> {
   try {
     const [source, enriched] = await Promise.all([
       readFile(sourcePath),
       readFile(enrichedPath),
     ]);
+    const ignored = new Set(options.ignoredMismatches ?? []);
     const mismatches = compareRoszGameplaySnapshots(
       inspectRoszGameplaySnapshot(source),
       inspectRoszGameplaySnapshot(enriched),
-    );
+    ).filter((mismatch) => !ignored.has(mismatch));
     if (mismatches.length > 0) {
       return {
         code: "TESSERA_ROSZ_ENRICHMENT_DRIFT",
@@ -1491,6 +1652,7 @@ async function materializePreparedRosterArtifacts(
 async function verifiedPreparedRosterReuse(
   prepared: TesseraPreparedRoster,
   roster: RosterDraftV1 | null,
+  catalogueDriftMode: "reject" | "diagnostic" | undefined,
 ): Promise<ResultEnvelope<TesseraPreparedRoster>> {
   const expectedFingerprint = roster
     ? rosterExecutionFingerprint(roster)
@@ -1532,10 +1694,20 @@ async function verifiedPreparedRosterReuse(
         "A durable exact-run checkpoint archive changed after it was recorded.",
       );
     }
-    const actualSummary = inspectEnrichedRosz(enriched);
+    const actualSummary = validateTesseraReadyRosz(enriched).summary;
+    const ignoredGameplayMismatches =
+      catalogueDriftMode === "diagnostic" &&
+      prepared.catalogueProvenance &&
+      isForwardGameSystemRevisionOnlyDrift(
+        prepared.catalogueProvenance,
+      )
+        ? new Set(["game-system"])
+        : new Set<string>();
     const gameplayMismatches = compareRoszGameplaySnapshots(
       inspectRoszGameplaySnapshot(source),
       inspectRoszGameplaySnapshot(enriched),
+    ).filter(
+      (mismatch) => !ignoredGameplayMismatches.has(mismatch),
     );
     if (
       gameplayMismatches.length > 0 ||
@@ -1884,10 +2056,82 @@ async function prepareUploadedRosz(
       warnings,
     };
   }
+  let catalogueProvenance:
+    | UploadedRoszCatalogueProvenance
+    | undefined;
+  let diagnosticRevisionDriftAccepted = false;
+  if (!uploadedArtifactProvenanceVerified) {
+    const comparison = uploadedRoszCatalogueProvenance(
+      prepared.summary,
+      playerRoster,
+      opponentRosterContext,
+      preflight.factionId,
+    );
+    if (!comparison) {
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: opponentRosterContext
+              ? "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNAVAILABLE"
+              : "TESSERA_ROSZ_PROVENANCE_UNVERIFIABLE",
+            message: opponentRosterContext
+              ? "The canonical opponent context does not have a pinned New Recruit catalogue identity."
+              : "The enriched uploaded opponent does not expose one supported pinned faction catalogue identity.",
+            severity: "error",
+          },
+        ],
+        warnings,
+      };
+    }
+    catalogueProvenance = comparison;
+    diagnosticRevisionDriftAccepted =
+      acceptsUploadedRoszRevisionDiagnostic(
+        comparison,
+        options.catalogueDriftMode,
+      );
+    if (
+      comparison.status !== "matched" &&
+      !diagnosticRevisionDriftAccepted
+    ) {
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: opponentRosterContext
+              ? comparison.status === "drift"
+                ? "NEW_RECRUIT_CATALOGUE_DRIFT"
+                : "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNVERIFIABLE"
+              : comparison.status === "drift"
+                ? "TESSERA_ROSZ_DATA_PIN_MISMATCH"
+                : "TESSERA_ROSZ_PROVENANCE_UNVERIFIABLE",
+            message: opponentRosterContext
+              ? "The enriched uploaded opponent does not prove the canonical opponent context's pinned catalogue identity."
+              : "The enriched uploaded opponent does not retain the frozen source's pinned game-system and faction catalogue identity.",
+            severity: "error",
+          },
+        ],
+        warnings,
+      };
+    }
+    if (diagnosticRevisionDriftAccepted) {
+      appendUploadedRoszRevisionDiagnosticWarning(
+        warnings,
+        comparison,
+      );
+    }
+  }
   const gameplayIntegrity = await verifyRoszGameplayArtifacts(
     frozenSourcePath,
     prepared.enrichedRoszPath,
     prepared.rosterName,
+    {
+      ignoredMismatches: diagnosticRevisionDriftAccepted
+        ? ["game-system"]
+        : [],
+    },
   );
   if (gameplayIntegrity) {
     return {
@@ -1897,180 +2141,43 @@ async function prepareUploadedRosz(
       warnings,
     };
   }
-  if (!uploadedArtifactProvenanceVerified) {
-    try {
-      const preparedContent = await readFile(
-        prepared.enrichedRoszPath,
-      );
-      const incompleteProfiles =
-        inspectEnrichedUnitProfileCoverage(preparedContent).filter(
-          (unit) => !unit.complete,
-        );
-      if (incompleteProfiles.length > 0) {
-        return {
-          ok: false,
-          data: null,
-          violations: [
-            {
-              code: "TESSERA_ROSZ_PROFILES_INCOMPLETE",
-              message:
-                `The enriched uploaded opponent has incomplete per-unit model/weapon profiles for ${incompleteProfiles.map((unit) => unit.name).join(", ")}.`,
-              severity: "error",
-            },
-          ],
-          warnings,
-        };
-      }
-    } catch (error) {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          {
-            code: "TESSERA_ROSZ_PROFILE_INVENTORY_INVALID",
-            message:
-              error instanceof Error
-                ? error.message
-                : "The enriched uploaded opponent profile inventory could not be verified.",
-            severity: "error",
-          },
-        ],
-        warnings,
-      };
-    }
+  try {
+    const preparedContent = await readFile(
+      prepared.enrichedRoszPath,
+    );
+    validateTesseraReadyRosz(preparedContent);
+  } catch (error) {
+    const coded = error as { code?: unknown };
+    const code =
+      coded.code === "TESSERA_INPUT_PROFILES_INCOMPLETE"
+        ? "TESSERA_ROSZ_PROFILES_INCOMPLETE"
+        : coded.code === "TESSERA_INPUT_NOT_PROFILE_RICH"
+          ? "TESSERA_ROSZ_PROFILES_MISSING"
+          : "TESSERA_ROSZ_PROFILE_INVENTORY_INVALID";
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code,
+          message:
+            error instanceof Error
+              ? error.message
+              : "The enriched uploaded opponent profile inventory could not be verified.",
+          severity: "error",
+        },
+      ],
+      warnings,
+    };
   }
 
-  let catalogueProvenance:
-    TesseraPreparedRoster["catalogueProvenance"] | undefined;
   if (
-    opponentRosterContext &&
-    !uploadedArtifactProvenanceVerified
+    pendingPersistentCacheStore &&
+    (
+      uploadedArtifactProvenanceVerified ||
+      catalogueProvenance?.status === "matched"
+    )
   ) {
-    const factionCatalogue = getNewRecruitFactionSummary(
-      opponentRosterContext.factionId,
-    );
-    if (!factionCatalogue?.catalogue.id) {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          {
-            code: "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNAVAILABLE",
-            message:
-              "The canonical opponent context does not have a pinned New Recruit catalogue identity.",
-            severity: "error",
-          },
-        ],
-        warnings,
-      };
-    }
-    catalogueProvenance = compareNewRecruitCatalogueProvenance(
-      prepared.summary,
-      {
-        releaseId: opponentRosterContext.sourceData.releaseId,
-        gameSystem: {
-          id: newRecruitCatalogue.gameSystem.id,
-          name: newRecruitCatalogue.gameSystem.name,
-          revision:
-            opponentRosterContext.sourceData.newRecruit.gameSystemRevision,
-        },
-        catalogue: {
-          id: factionCatalogue.catalogue.id,
-          name: factionCatalogue.catalogue.name,
-          revision:
-            opponentRosterContext.sourceData.newRecruit.catalogueRevision,
-        },
-      },
-    );
-    if (catalogueProvenance.status !== "matched") {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          {
-            code:
-              catalogueProvenance.status === "drift"
-                ? "NEW_RECRUIT_CATALOGUE_DRIFT"
-                : "NEW_RECRUIT_CATALOGUE_PROVENANCE_UNVERIFIABLE",
-            message:
-              "The enriched uploaded opponent does not prove the canonical opponent context's pinned catalogue identity.",
-            severity: "error",
-          },
-        ],
-        warnings,
-      };
-    }
-  } else if (!uploadedArtifactProvenanceVerified) {
-    const observed = prepared.summary.observedNewRecruitCatalogue;
-    if (
-      effectiveExecutionMode(options) === "simulate" &&
-      (
-        preflight.factionId === null ||
-        (
-          (
-            summary.profileCount === 0 ||
-            summary.weaponProfileCount === 0
-          ) &&
-          !observed
-        )
-      )
-    ) {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          {
-            code: "TESSERA_ROSZ_PROVENANCE_UNVERIFIABLE",
-            message:
-              "Simulation requires the frozen source and any New Recruit-enriched opponent to retain a compatible 11th-edition game-system and pinned faction catalogue identity.",
-            severity: "error",
-          },
-        ],
-        warnings,
-      };
-    }
-    const factionCatalogue = preflight.factionId
-      ? getNewRecruitFactionSummary(preflight.factionId)
-      : null;
-    if (observed && factionCatalogue?.catalogue.id) {
-      catalogueProvenance = compareNewRecruitCatalogueProvenance(
-        prepared.summary,
-        {
-          releaseId: playerRoster.sourceData.releaseId,
-          gameSystem: {
-            id: newRecruitCatalogue.gameSystem.id,
-            name: newRecruitCatalogue.gameSystem.name,
-            revision:
-              playerRoster.sourceData.newRecruit.gameSystemRevision,
-          },
-          catalogue: {
-            id: factionCatalogue.catalogue.id,
-            name: factionCatalogue.catalogue.name,
-            revision: factionCatalogue.catalogue.revision,
-          },
-        },
-      );
-      if (catalogueProvenance.status !== "matched") {
-        return {
-          ok: false,
-          data: null,
-          violations: [
-            {
-              code:
-                catalogueProvenance.status === "drift"
-                  ? "TESSERA_ROSZ_DATA_PIN_MISMATCH"
-                  : "TESSERA_ROSZ_PROVENANCE_UNVERIFIABLE",
-              message:
-                "The enriched uploaded opponent does not retain the frozen source's pinned game-system and faction catalogue identity.",
-              severity: "error",
-            },
-          ],
-          warnings,
-        };
-      }
-    }
-  }
-  if (pendingPersistentCacheStore) {
     let releaseCacheStoreLease: (() => Promise<void>) | null =
       null;
     try {
@@ -3202,6 +3309,7 @@ export async function analyzeRosterMatchup(
       hasVerifiedUploadedArtifactCapability(
         options.verifiedUploadedArtifactCapability,
       ),
+      options.catalogueDriftMode,
     );
     if (!inspected.ok || !inspected.data) {
       return {
@@ -3492,9 +3600,10 @@ export async function analyzeRosterMatchup(
     frozenUploadedSourcePath = frozen.data;
   }
   const player = options.preparedReuse
-    ? await verifiedPreparedRosterReuse(
+      ? await verifiedPreparedRosterReuse(
         options.preparedReuse.player,
         playerRoster,
+        options.catalogueDriftMode,
       )
     : await prepareRosterForTessera(
         playerRoster,
@@ -3566,6 +3675,7 @@ export async function analyzeRosterMatchup(
       ? await verifiedPreparedRosterReuse(
           options.preparedReuse.opponent,
           opponent.roster,
+          options.catalogueDriftMode,
         )
       : await prepareRosterForTessera(
           opponent.roster,
@@ -3677,6 +3787,7 @@ export async function analyzeRosterMatchup(
       const reused = await verifiedPreparedRosterReuse(
         frozenOpponentReuse,
         options.opponentRosterContext ?? null,
+        options.catalogueDriftMode,
       );
       if (!reused.ok || !reused.data) {
         return {
@@ -5296,7 +5407,9 @@ async function verifyFrozenExactRosterArtifacts(
     sourceRoszSha256?: string;
     enrichedRoszSha256?: string;
     summary: EnrichedRoszSummary;
+    catalogueProvenance?: TesseraPreparedRoster["catalogueProvenance"];
   },
+  catalogueDriftMode: "reject" | "diagnostic" | undefined,
 ): Promise<
   | {
       sourcePath: string;
@@ -5328,13 +5441,23 @@ async function verifyFrozenExactRosterArtifacts(
     ) {
       return "A frozen archive content hash differs from its receipt.";
     }
-    const actualSummary = inspectEnrichedRosz(enriched);
+    const actualSummary = validateTesseraReadyRosz(enriched).summary;
     if (!summariesGameplayCompatible(actualSummary, prepared.summary)) {
       return "The enriched archive summary differs from the frozen report.";
     }
+    const ignoredGameplayMismatches =
+      catalogueDriftMode === "diagnostic" &&
+      prepared.catalogueProvenance &&
+      isForwardGameSystemRevisionOnlyDrift(
+        prepared.catalogueProvenance,
+      )
+        ? new Set(["game-system"])
+        : new Set<string>();
     const gameplayMismatches = compareRoszGameplaySnapshots(
       inspectRoszGameplaySnapshot(source),
       inspectRoszGameplaySnapshot(enriched),
+    ).filter(
+      (mismatch) => !ignoredGameplayMismatches.has(mismatch),
     );
     if (gameplayMismatches.length > 0) {
       return `The source and enriched archives differ in ${gameplayMismatches.join(", ")}.`;
@@ -5643,6 +5766,7 @@ export async function compareRosterRevision(
     await verifyFrozenExactRosterArtifacts(
       baselineReportDirectory,
       baseline.player,
+      options.catalogueDriftMode,
     );
   if (typeof verifiedPlayerArtifacts === "string") {
     return {
@@ -5667,6 +5791,7 @@ export async function compareRosterRevision(
     const verified = await verifyFrozenExactRosterArtifacts(
       baselineReportDirectory,
       opponent,
+      options.catalogueDriftMode,
     );
     if (typeof verified === "string") {
       return {

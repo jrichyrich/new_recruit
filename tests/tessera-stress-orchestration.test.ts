@@ -180,7 +180,8 @@ async function enrichedFixture(
       const candidateIndex = candidate.units.findIndex(
         (unit, index) =>
           index >= nextUnitIndex &&
-          xmlAttribute(unit.name) === name,
+          xmlAttribute(unit.name).toLocaleLowerCase() ===
+            name.toLocaleLowerCase(),
       );
       if (candidateIndex >= 0) {
         unitIndex = candidateIndex;
@@ -529,6 +530,7 @@ test("default stress outputs are unique and recovery paths fail closed", async (
       {
         suite: "core-3",
         executionMode: "prepare-only",
+        catalogueDriftMode: "diagnostic",
         profilePolicyPath: policyPath,
         outputDirectory: path.relative(
           directory,
@@ -554,6 +556,10 @@ test("default stress outputs are unique and recovery paths fail closed", async (
     ) as {
       schemaVersion: number;
       portfolioSha256: string;
+      configuration: {
+        catalogueDriftMode?: "reject" | "diagnostic";
+      };
+      playerPreparationStartedAt?: string | null;
       portfolio: {
         sourceData: RosterDraftV1["sourceData"];
         items: Array<{
@@ -562,6 +568,14 @@ test("default stress outputs are unique and recovery paths fail closed", async (
       };
     };
     assert.equal(seededManifest.schemaVersion, 3);
+    assert.equal(
+      seeded.data.configuration.catalogueDriftMode,
+      "diagnostic",
+    );
+    assert.equal(
+      seededManifest.configuration.catalogueDriftMode,
+      "diagnostic",
+    );
     assert.match(seededManifest.portfolioSha256, /^[0-9a-f]{64}$/);
     assert.equal(
       seededManifest.portfolioSha256,
@@ -576,6 +590,107 @@ test("default stress outputs are unique and recovery paths fail closed", async (
       player.sourceData.official.authority,
       "manifest round trips must retain official-authority provenance before resume",
     );
+
+    const attemptsBeforePolicyChange = deliveryAttempts;
+    const changedPolicy = await runRosterStressTest(
+      player,
+      {
+        kind: "faction",
+        factionId: "aeldari",
+      },
+      {
+        suite: "core-3",
+        executionMode: "prepare-only",
+        catalogueDriftMode: "reject",
+        profilePolicyPath: policyPath,
+        resumeManifestPath: manifestPath,
+        rootDir: directory,
+      },
+      { deliver: failDelivery },
+    );
+    assert.equal(changedPolicy.ok, false);
+    assert.equal(
+      changedPolicy.violations[0]?.code,
+      "TESSERA_STRESS_RESUME_MISMATCH",
+    );
+    assert.equal(deliveryAttempts, attemptsBeforePolicyChange);
+
+    const legacyPolicyManifest = structuredClone(seededManifest);
+    delete legacyPolicyManifest.configuration.catalogueDriftMode;
+    const legacyPolicyManifestPath = path.join(
+      reservedDirectory,
+      "legacy-policy-stress-manifest.json",
+    );
+    await writeFile(
+      legacyPolicyManifestPath,
+      `${JSON.stringify(legacyPolicyManifest, null, 2)}\n`,
+    );
+    const widenedLegacyPolicy = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        executionMode: "prepare-only",
+        catalogueDriftMode: "diagnostic",
+        profilePolicyPath: policyPath,
+        resumeManifestPath: legacyPolicyManifestPath,
+        rootDir: directory,
+      },
+      { deliver: failDelivery },
+    );
+    assert.equal(widenedLegacyPolicy.ok, false);
+    assert.equal(
+      widenedLegacyPolicy.violations[0]?.code,
+      "TESSERA_STRESS_RESUME_MISMATCH",
+    );
+    assert.equal(deliveryAttempts, attemptsBeforePolicyChange);
+
+    const inheritedPolicyManifest = structuredClone(seededManifest);
+    inheritedPolicyManifest.playerPreparationStartedAt = null;
+    const inheritedPolicyManifestPath = path.join(
+      reservedDirectory,
+      "inherited-policy-stress-manifest.json",
+    );
+    await writeFile(
+      inheritedPolicyManifestPath,
+      `${JSON.stringify(inheritedPolicyManifest, null, 2)}\n`,
+    );
+    const deliveredPolicyModes: Array<
+      NewRecruitDeliveryOptions["catalogueDriftMode"]
+    > = [];
+    const captureInheritedPolicy = async (
+      _roster: RosterDraftV1,
+      options?: NewRecruitDeliveryOptions,
+    ): Promise<ResultEnvelope<NewRecruitDelivery>> => {
+      deliveredPolicyModes.push(options?.catalogueDriftMode);
+      return {
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code: "FIXTURE_DELIVERY_STOP",
+            message:
+              "Fixture records the recovered policy before stopping.",
+            severity: "error",
+          },
+        ],
+        warnings: [],
+      };
+    };
+    const inheritedPolicy = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        executionMode: "prepare-only",
+        profilePolicyPath: policyPath,
+        resumeManifestPath: inheritedPolicyManifestPath,
+        rootDir: directory,
+      },
+      { deliver: captureInheritedPolicy },
+    );
+    assert.equal(inheritedPolicy.ok, false);
+    assert.deepEqual(deliveredPolicyModes, ["diagnostic"]);
 
     const attemptsBeforeCollision = deliveryAttempts;
     const collision = await runRosterStressTest(
@@ -623,6 +738,10 @@ test("default stress outputs are unique and recovery paths fail closed", async (
       { deliver: failDelivery },
     );
     assert.equal(resumed.data?.runId, seededRunId);
+    assert.equal(
+      resumed.data?.configuration.catalogueDriftMode,
+      "diagnostic",
+    );
     const manifestsAfterResume = (
       await readdir(
         path.join(directory, "exports", "tessera"),
@@ -701,6 +820,10 @@ test("default stress outputs are unique and recovery paths fail closed", async (
     );
     assert.ok(restarted.data);
     assert.notEqual(restarted.data.runId, seededRunId);
+    assert.equal(
+      restarted.data.configuration.catalogueDriftMode,
+      "diagnostic",
+    );
     const manifestsAfterRestart = (
       await readdir(
         path.join(directory, "exports", "tessera"),
@@ -915,6 +1038,7 @@ test("durable jobs adopt verified stress manifests v1, v2, and v3", async () => 
   for (const version of [1, 2, 3] as const) {
     const legacy = structuredClone(current);
     legacy.schemaVersion = version;
+    delete legacy.configuration.catalogueDriftMode;
     if (version < 3) delete legacy.portfolioSha256;
     const candidatePath = path.join(
       baselineDirectory,
@@ -955,6 +1079,10 @@ test("durable jobs adopt verified stress manifests v1, v2, and v3", async () => 
       await readFile(adopted, "utf8"),
     );
     assert.equal(migrated.schemaVersion, 3);
+    assert.equal(
+      migrated.configuration.catalogueDriftMode,
+      "reject",
+    );
     assert.match(migrated.portfolioSha256, /^[0-9a-f]{64}$/);
   }
   const baselineReportArtifact = baseline.data.artifacts.find(
@@ -1024,6 +1152,9 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     [player.name, player],
   ]);
   const delivered: string[] = [];
+  const deliveredPolicyModes: Array<
+    NewRecruitDeliveryOptions["catalogueDriftMode"]
+  > = [];
   const browserInputs: TesseraBrowserInput[] = [];
   let driftMeanDamageScenario = false;
   let omitFightBrowserRuns = 0;
@@ -1033,6 +1164,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     options: NewRecruitDeliveryOptions = {},
   ): Promise<ResultEnvelope<NewRecruitDelivery>> => {
     delivered.push(candidate.name);
+    deliveredPolicyModes.push(options.catalogueDriftMode);
     rostersByName.set(candidate.name, candidate);
     const outputDirectory =
       options.outputDirectory ?? directory;
@@ -1180,6 +1312,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
         suite: "core-3",
         analysisStrategy: "staged",
         experimental: true,
+        catalogueDriftMode: "diagnostic",
         profilePolicyPath,
         outputDirectory: "baseline",
         rootDir: directory,
@@ -1229,6 +1362,10 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
       3,
     );
     assert.equal(delivered.length, 4);
+    assert.deepEqual(
+      deliveredPolicyModes,
+      Array(4).fill("diagnostic"),
+    );
     assert.equal(new Set(delivered).size, 4);
     assert.equal(browserInputs.length, 6);
     assert.equal(browserInputs[0].frozenScenarioContract, null);
@@ -1788,6 +1925,26 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     assert.equal(browserInputs.length, 7);
     await writeFile(revisedBaselinePath, baselineContent);
 
+    const policyMismatchComparison =
+      await compareRosterStressRevision(
+        revisedBaselinePath,
+        revised,
+        {
+          experimental: true,
+          catalogueDriftMode: "reject",
+          outputDirectory: "policy-mismatch-revision",
+          rootDir: directory,
+        },
+        { deliver, runBrowser },
+      );
+    assert.equal(policyMismatchComparison.ok, false);
+    assert.equal(
+      policyMismatchComparison.violations[0]?.code,
+      "TESSERA_STRESS_REVISION_CONFIGURATION_CHANGED",
+    );
+    assert.equal(delivered.length, 4);
+    assert.equal(browserInputs.length, 7);
+
     const frozenArtifact =
       resumed.data?.frozenOpponentArtifacts[0];
     assert.ok(frozenArtifact);
@@ -1917,6 +2074,12 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
       "paired preparation still counts only the newly prepared player",
     );
     assert.equal(delivered.length, 7);
+    assert.ok(
+      deliveredPolicyModes.every(
+        (mode) => mode === "diagnostic",
+      ),
+      JSON.stringify(deliveredPolicyModes),
+    );
     assert.equal(browserInputs.length, 22);
     const revisionJsonArtifact = compared.data.artifacts.find(
       (artifact) => artifact.format === "stress-revision-json",

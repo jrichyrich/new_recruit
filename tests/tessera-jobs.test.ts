@@ -16,6 +16,7 @@ import test from "node:test";
 
 import {
   buildRoster,
+  type RuntimeProvenance,
   type TesseraMatchupReport,
 } from "../lib/rosterpilot";
 import {
@@ -25,6 +26,7 @@ import {
 } from "../local/tessera/exact-report-integrity";
 import {
   cancelTesseraRun,
+  durableTesseraRuntimeAdmissionIssue,
   executeTesseraRunJob,
   getTesseraRunStatus,
   resolveTesseraRunProfiles,
@@ -138,6 +140,61 @@ function hasErrorCode(expected: string): (error: unknown) => boolean {
     );
 }
 
+test("durable Tessera runtime admission rejects stale or mismatched launchers", () => {
+  const runtime: RuntimeProvenance = {
+    rosterPilotVersion: "fixture",
+    rulesPackageVersion: "fixture",
+    stressGeneratorVersion: "fixture",
+    processStartedAt: "2026-07-31T00:00:00.000Z",
+    gitHead: "fixture",
+    sourceFingerprintAtStart: "source",
+    sourceFingerprintNow: "source",
+    buildId: "build",
+    stale: false,
+    localAgentObservedStatus: {
+      available: true,
+      version: "fixture",
+      protocolVersion: 10,
+      protocolCompatible: true,
+      projectDirectory: "/fixture",
+      nodeExecutable: "/fixture/node",
+      browserAvailable: true,
+      brokerAvailable: true,
+      runtimeBuildId: "build",
+      runtimeSourceFingerprint: "source",
+      statusErrorCode: null,
+    },
+  };
+  assert.equal(durableTesseraRuntimeAdmissionIssue(runtime), null);
+  assert.equal(
+    durableTesseraRuntimeAdmissionIssue({
+      ...runtime,
+      stale: true,
+    })?.code,
+    "RUNTIME_RESTART_REQUIRED",
+  );
+  assert.equal(
+    durableTesseraRuntimeAdmissionIssue({
+      ...runtime,
+      localAgentObservedStatus: {
+        ...runtime.localAgentObservedStatus!,
+        runtimeBuildId: "different-build",
+      },
+    })?.code,
+    "RUNTIME_RESTART_REQUIRED",
+  );
+  assert.equal(
+    durableTesseraRuntimeAdmissionIssue({
+      ...runtime,
+      localAgentObservedStatus: {
+        ...runtime.localAgentObservedStatus!,
+        available: false,
+      },
+    }),
+    null,
+  );
+});
+
 test("durable Tessera jobs reserve isolated bundles and retain guided recovery state", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "rosterpilot-tessera-job-"),
@@ -209,6 +266,92 @@ test("durable Tessera jobs reserve isolated bundles and retain guided recovery s
   assert.equal(resumed.status, "queued");
   assert.equal(resumed.attempt, 2);
   assert.equal(resumed.profilePolicyPath, resolved.profilePolicyPath);
+  const resumedDocument = await readJobDocument(job.requestPath);
+  assert.equal(resumedDocument.request.kind, "stress");
+  if (resumedDocument.request.kind !== "stress") {
+    throw new Error("Expected a resumed stress request.");
+  }
+  assert.equal(
+    resumedDocument.request.options?.resumeManifestPath,
+    undefined,
+  );
+  await executeMockedAttempt(
+    job.requestPath,
+    {
+      ok: true,
+      data: null,
+      violations: [],
+      warnings: [],
+    },
+    {
+      inspectRequest: (request) => {
+        assert.equal(request.kind, "stress");
+        if (request.kind !== "stress") {
+          throw new Error("Expected an executed stress request.");
+        }
+        assert.equal(
+          request.options?.resumeManifestPath,
+          undefined,
+        );
+        assert.equal(
+          request.options?.profilePolicyPath,
+          resolved.profilePolicyPath,
+        );
+      },
+    },
+  );
+  assert.equal(
+    (await getTesseraRunStatus(job.requestPath)).job.status,
+    "complete",
+  );
+});
+
+test("durable Tessera resume rejects an unreceipted workflow manifest", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-unreceipted-manifest-"),
+  );
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Unreceipted manifest fixture",
+  });
+  assert.ok(built.ok && built.data);
+  const job = await startTesseraRun(
+    {
+      kind: "stress",
+      playerRoster: built.data,
+      factionId: "aeldari",
+      options: {
+        suite: "core-3",
+        executionMode: "prepare-only",
+      },
+    },
+    {
+      outputDirectory: path.join(root, "runs"),
+      rootDir: root,
+      launch: false,
+    },
+  );
+  await cancelTesseraRun(job.requestPath);
+  assert.ok(job.manifestPath);
+  await mkdir(path.dirname(job.manifestPath!), { recursive: true });
+  await writeFile(
+    job.manifestPath!,
+    `${JSON.stringify({
+      schemaVersion: 3,
+      manifestKind: "tessera-stress-run",
+    })}\n`,
+  );
+  await assert.rejects(
+    resumeTesseraRun(job.requestPath, { launch: false }),
+    (error: unknown) =>
+      Boolean(
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "TESSERA_RUN_MANIFEST_DRIFT",
+      ),
+  );
 });
 
 test("fresh stress jobs bind one frozen portfolio through execution and recovery", async () => {
@@ -511,13 +654,20 @@ test("stress resume converts frozen restart recovery into one resume policy", as
   await mkdir(path.dirname(cancelled.manifestPath), {
     recursive: true,
   });
-  await writeFile(
-    cancelled.manifestPath,
-    `${JSON.stringify({
+  const manifestContent = `${JSON.stringify({
       schemaVersion: 3,
       manifestKind: "tessera-stress-run",
-    })}\n`,
-  );
+    })}\n`;
+  await writeFile(cancelled.manifestPath, manifestContent);
+  cancelled.artifactReceipts.push({
+    kind: "workflow-manifest",
+    attempt: cancelled.attempt,
+    path: path.relative(
+      cancelled.jobDirectory,
+      cancelled.manifestPath,
+    ),
+    sha256: sha256(manifestContent),
+  });
   cancelled.request.options = {
     ...cancelled.request.options,
     restartManifestPath: cancelled.manifestPath,
@@ -535,6 +685,12 @@ test("stress resume converts frozen restart recovery into one resume policy", as
   assert.equal(
     resumed.request.options?.resumeManifestPath,
     cancelled.manifestPath,
+  );
+  assert.equal(
+    resumed.artifactReceipts.some(
+      (receipt) => receipt.kind === "workflow-manifest",
+    ),
+    true,
   );
   assert.equal(
     "restartManifestPath" in (resumed.request.options ?? {}),
@@ -588,13 +744,20 @@ test("build-and-stress resume removes restart recovery from both request layers"
   await mkdir(path.dirname(cancelled.manifestPath), {
     recursive: true,
   });
-  await writeFile(
-    cancelled.manifestPath,
-    `${JSON.stringify({
+  const manifestContent = `${JSON.stringify({
       schemaVersion: 3,
       manifestKind: "tessera-stress-run",
-    })}\n`,
-  );
+    })}\n`;
+  await writeFile(cancelled.manifestPath, manifestContent);
+  cancelled.artifactReceipts.push({
+    kind: "workflow-manifest",
+    attempt: cancelled.attempt,
+    path: path.relative(
+      cancelled.jobDirectory,
+      cancelled.manifestPath,
+    ),
+    sha256: sha256(manifestContent),
+  });
   cancelled.request.input.restartManifestPath =
     cancelled.manifestPath;
   delete cancelled.request.input.resumeManifestPath;

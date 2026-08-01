@@ -50,16 +50,12 @@ function fixtureRosz(generatedBy = "https://newrecruit.eu"): Uint8Array {
   <cost name="pts" value="100"/>
   <forces><force name="Imperium - Adeptus Custodes" catalogueName="Imperium - Adeptus Custodes">
     <selections>
-      <selection name="Blade Champion" number="1" type="model"/>
-      <selection name="Custodian Guard" number="1" type="unit"><selections>
+      <selection name="Blade Champion" number="1" type="model"><profiles><profile name="Blade Champion" typeName="Unit"/><profile name="Vaultswords" typeName="Melee Weapons"/></profiles></selection>
+      <selection name="Custodian Guard" number="1" type="unit"><profiles><profile name="Custodian Guard" typeName="Unit"/><profile name="Guardian Spear" typeName="Melee Weapons"/></profiles><selections>
         <selection name="Custodian Guard (Guardian Spear)" number="5" type="model"/>
       </selections></selection>
     </selections>
   </force></forces>
-  <profiles>
-    <profile name="Blade Champion" typeName="Unit"/>
-    <profile name="Vaultswords" typeName="Melee Weapons"/>
-  </profiles>
 </roster>`;
   return zipSync({ "fixture.ros": strToU8(xml) });
 }
@@ -86,8 +82,8 @@ test("validates a New Recruit enriched roster and exact model multiset", () => {
       { name: "Custodian Guard", modelCount: 5 },
     ],
   });
-  assert.equal(summary.profileCount, 2);
-  assert.equal(summary.weaponProfileCount, 1);
+  assert.equal(summary.profileCount, 4);
+  assert.equal(summary.weaponProfileCount, 2);
   assert.deepEqual(summary.units, [
     { name: "Blade Champion", modelCount: 1 },
     { name: "Custodian Guard", modelCount: 5 },
@@ -332,6 +328,7 @@ async function writeDeliveryFor(
       (unit) =>
         `<selection id="${unit.selectionId}" name="${unit.name}" number="1" type="unit">
           <cost name="pts" value="${unit.points}"/>
+          <profiles><profile name="${unit.name}" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/></profiles>
           <selections><selection name="${unit.name}" number="${unit.modelCount}" type="model"/></selections>
         </selection>`,
     )
@@ -342,10 +339,6 @@ async function writeDeliveryFor(
   <forces><force name="${faction.catalogue.name}" catalogueId="${faction.catalogue.id}" catalogueName="${faction.catalogue.name}" catalogueRevision="${roster.sourceData.newRecruit.catalogueRevision ?? 0}">
     <selections>${selections}</selections>
   </force></forces>
-  <profiles>
-    <profile name="Fixture model" typeName="Unit"/>
-    <profile name="Fixture weapon" typeName="Ranged Weapons"/>
-  </profiles>
 </roster>`;
   const content = zipSync({ "fixture.ros": strToU8(xml) });
   await mkdir(outputDirectory, { recursive: true });
@@ -419,7 +412,7 @@ test("prepares enriched handoff and writes a prepare-only matchup report", async
         "Player-matchup.receipt.json",
       ],
     );
-    assert.equal(inspectEnrichedRosz(fixtureRosz()).weaponProfileCount, 1);
+    assert.equal(inspectEnrichedRosz(fixtureRosz()).weaponProfileCount, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ import {
   LIVE_CANARY_IDS,
   liveCanaryDefinition,
   type LiveCanaryId,
+  type LiveCanaryCatalogueDriftMode,
 } from "../local/certification/live-canaries";
 import {
   runRotatingLiveCanary,
@@ -25,6 +26,7 @@ type ParsedArguments = {
   pollMs: number | undefined;
   forcedClientTimeoutMs: number | undefined;
   expectedBundleId: string | undefined;
+  catalogueDriftMode: LiveCanaryCatalogueDriftMode;
   requireLive: boolean;
   help: boolean;
 };
@@ -71,6 +73,8 @@ Options:
   --poll-ms <milliseconds>          Durable-job status polling interval.
   --forced-client-timeout-ms <ms>   Custodes/Aeldari client timeout boundary.
   --expected-bundle-id <sha256>     Require and freeze this activated bundle.
+  --verified-catalogue-drift-diagnostic
+                                      Explicitly allow only verified forward game-system-revision drift.
   --require-live                    Require bundle-bound live release evidence.
   --help                            Show this help.
 
@@ -127,6 +131,7 @@ async function unavailablePreflightReport(input: {
     pollMs: input.args.pollMs,
     forcedClientTimeoutMs:
       input.args.forcedClientTimeoutMs,
+    catalogueDriftMode: input.args.catalogueDriftMode,
     // Force readiness to stop before any external connector mutation. The
     // report is then specialized with the exact data preflight failure below.
     environment: {
@@ -205,6 +210,8 @@ function parseArguments(argv: string[]): ParsedArguments {
   let pollMs: number | undefined;
   let forcedClientTimeoutMs: number | undefined;
   let expectedBundleId: string | undefined;
+  let catalogueDriftMode: LiveCanaryCatalogueDriftMode =
+    "reject";
   let requireLive = false;
   let showHelp = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -241,6 +248,11 @@ function parseArguments(argv: string[]): ParsedArguments {
       expectedBundleId = value;
     } else if (token === "--require-live") {
       requireLive = true;
+    } else if (
+      token ===
+      "--verified-catalogue-drift-diagnostic"
+    ) {
+      catalogueDriftMode = "diagnostic";
     } else if (token === "--help" || token === "-h") {
       showHelp = true;
     } else {
@@ -255,6 +267,7 @@ function parseArguments(argv: string[]): ParsedArguments {
     pollMs,
     forcedClientTimeoutMs,
     expectedBundleId,
+    catalogueDriftMode,
     requireLive,
     help: showHelp,
   };
@@ -367,6 +380,7 @@ async function main(): Promise<void> {
         forcedClientTimeoutMs:
           args.forcedClientTimeoutMs,
         expectedBundleId: args.expectedBundleId,
+        catalogueDriftMode: args.catalogueDriftMode,
       }),
       args,
     );

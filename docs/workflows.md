@@ -165,8 +165,14 @@ npm run rosterpilot -- new-recruit deliver \
 Delivery creates a new list, verifies its name, faction, points, and units, and
 always downloads a profile-rich `.rosz` to compare New Recruit's observed
 game-system and faction-catalogue revisions with the build's frozen data
-bundle. Catalogue drift fails closed after recording the remote outcome, so a
-resume cannot create a duplicate. Pretty HTML remains optional. Delivery never
+bundle. Delivery rejects all catalogue drift by default after recording the
+remote outcome. When the only mismatch is an observed newer game-system
+revision, the game-system ID and exact faction-catalogue identity and revision
+still match, no provenance field is missing, and every top-level unit has
+embedded Unit and weapon profiles, RosterPilot also retains an integrity-sealed
+provisional artifact. It is not placed in the trusted cache and does not
+authorize Tessera by itself. The mutation receipt prevents a retry from
+creating a duplicate list. Pretty HTML remains optional. Delivery never
 replaces or deletes an existing list.
 
 ## Workflow 3: exact-list Tessera comparison
@@ -212,6 +218,15 @@ so it creates new list copies as part of this explicitly requested workflow.
 source roster; change candidates remain suggestions until a revised roster is
 explicitly saved and compared. `--experimental` remains a deprecated
 compatibility alias for simulation.
+
+For an explicitly requested live-deployment diagnostic, pass
+`--verified-catalogue-drift-diagnostic`. This is not a general drift override:
+older revisions, faction-catalogue drift, identity mismatches, missing
+provenance, and incomplete per-unit profiles still fail closed. Accepted
+archives and results retain both frozen and observed identities plus
+`TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC`; embedded characteristic values
+are live New Recruit evidence, not proof that they equal the frozen rules
+bundle.
 
 After explicitly approving and saving a revised canonical roster, start the
 paired exact comparison against the baseline's frozen opponent, profile policy,
@@ -567,6 +582,15 @@ npm run rosterpilot -- tessera start-run \
   --out-dir exports/tessera/runs
 ```
 
+Set `--verified-catalogue-drift-diagnostic` when the durable run is started if
+the user explicitly authorized that narrow diagnostic. The choice is frozen
+and hash-bound with the request; `run-resume` and `--restart-from` cannot enable
+or change it. For MCP, set
+`start_tessera_run.request.verifiedCatalogueDriftDiagnostic` to `true`. A job
+started without it must be replaced by a newly started diagnostic job, which
+can reuse the revalidated provisional artifact without another New Recruit
+upload.
+
 The response contains the generated
 `run-<uuid>/tessera-run.json`. That job document is the authority for later
 operations:
@@ -639,6 +663,12 @@ REST, OpenAPI, and the public website do not expose these operations.
   `diverse-9` proxies stops the run.
 - Missing mappings still allow canonical JSON, text, and printable HTML.
 - Missing local automation still preserves the source `.rosz`.
+- `NEW_RECRUIT_PROVISIONAL_CACHE_REUSED` means a hash- and
+  profile-revalidated provisional artifact was reused and no new remote list
+  was created.
+- `TESSERA_INPUT_NOT_PROFILE_RICH` and
+  `TESSERA_INPUT_PROFILES_INCOMPLETE` stop before Tessera browser or licence-key
+  activity; never substitute the source `.rosz` for the enriched archive.
 - A checkout, protocol, build, or stale-runtime mismatch directs the user to
   `agent ensure-current`; the original mismatch remains visible after repair.
 - Tessera UI changes preserve verified handoff files. A requested simulation

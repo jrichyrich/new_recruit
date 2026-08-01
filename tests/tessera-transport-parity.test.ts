@@ -247,6 +247,7 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
               roster: opponent.data,
             },
             executionMode: "simulate",
+            verifiedCatalogueDriftDiagnostic: true,
           },
         },
       }),
@@ -277,7 +278,7 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
       );
     }
     assert.equal(requests.length, 2);
-    for (const request of requests) {
+    for (const [index, request] of requests.entries()) {
       assert.equal(request.kind, "exact");
       if (request.kind !== "exact") {
         throw new Error("Expected an exact Tessera request.");
@@ -288,6 +289,10 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
       }
       assert.equal(request.opponent.roster.id, opponent.data.id);
       assert.equal(request.options?.executionMode, "simulate");
+      assert.equal(
+        request.options?.catalogueDriftMode,
+        index === 0 ? "reject" : "diagnostic",
+      );
     }
   } finally {
     await client.close();
@@ -518,6 +523,10 @@ test("simulate-mode MCP matchup tools start durable jobs without synchronous fal
       stressRequest.options?.executionMode,
       "simulate",
     );
+    assert.equal(
+      stressRequest.options?.catalogueDriftMode,
+      "reject",
+    );
 
     const buildAndStressRequest = requests[2];
     assert.equal(buildAndStressRequest.kind, "build-and-stress");
@@ -533,6 +542,19 @@ test("simulate-mode MCP matchup tools start durable jobs without synchronous fal
       buildAndStressRequest.input.executionMode,
       "simulate",
     );
+    assert.equal(
+      buildAndStressRequest.options?.catalogueDriftMode,
+      "reject",
+    );
+    const stressRevisionRequest = requests[5];
+    assert.equal(stressRevisionRequest.kind, "stress-revision");
+    if (stressRevisionRequest.kind !== "stress-revision") {
+      throw new Error("Expected a stress-revision job request.");
+    }
+    assert.equal(
+      stressRevisionRequest.options?.catalogueDriftMode,
+      undefined,
+    );
     const adoptedStressRequest = requests[6];
     assert.equal(adoptedStressRequest.kind, "stress");
     if (adoptedStressRequest.kind !== "stress") {
@@ -546,6 +568,88 @@ test("simulate-mode MCP matchup tools start durable jobs without synchronous fal
       adoptedStressRequest.options?.executionMode,
       "simulate",
     );
+    assert.equal(
+      adoptedStressRequest.options?.catalogueDriftMode,
+      undefined,
+    );
+
+    const recoveredBuildAndStress = await client.callTool({
+      name: "build_and_stress_roster_against_faction",
+      arguments: {
+        prompt: "Build a 1,000-point Custodes roster",
+        playerFaction: "adeptus-custodes",
+        againstFaction: "aeldari",
+        pointsLimit: 1000,
+        resumeManifestPath:
+          "/fixture/build-and-stress-manifest.json",
+      },
+    });
+    assert.equal(recoveredBuildAndStress.isError, undefined);
+    const recoveredBuildRequest = requests[7];
+    assert.equal(recoveredBuildRequest.kind, "build-and-stress");
+    if (recoveredBuildRequest.kind !== "build-and-stress") {
+      throw new Error("Expected a recovered build-and-stress request.");
+    }
+    assert.equal(
+      recoveredBuildRequest.options?.catalogueDriftMode,
+      undefined,
+    );
+
+    const genericRecoveryResponses = [
+      await client.callTool({
+        name: "start_tessera_run",
+        arguments: {
+          request: {
+            kind: "stress",
+            playerRoster: player.data,
+            factionId: "aeldari",
+            resumeManifestPath:
+              "/fixture/generic-stress-manifest.json",
+          },
+        },
+      }),
+      await client.callTool({
+        name: "start_tessera_run",
+        arguments: {
+          request: {
+            kind: "build-and-stress",
+            prompt: "Build a 1,000-point Custodes roster",
+            playerFaction: "adeptus-custodes",
+            againstFaction: "aeldari",
+            pointsLimit: 1000,
+            restartManifestPath:
+              "/fixture/generic-build-stress-manifest.json",
+          },
+        },
+      }),
+      await client.callTool({
+        name: "start_tessera_run",
+        arguments: {
+          request: {
+            kind: "stress-revision",
+            baselineReportPath:
+              "/fixture/generic-stress-baseline.json",
+            revisedRoster: player.data,
+          },
+        },
+      }),
+    ];
+    assert.ok(
+      genericRecoveryResponses.every(
+        (response) => response.isError === undefined,
+      ),
+    );
+    for (const request of requests.slice(8, 11)) {
+      assert.ok(
+        request.kind === "stress" ||
+          request.kind === "build-and-stress" ||
+          request.kind === "stress-revision",
+      );
+      assert.equal(
+        request.options?.catalogueDriftMode,
+        undefined,
+      );
+    }
 
     const restarted = await client.callTool({
       name: "resume_tessera_run",
@@ -638,6 +742,7 @@ test("CLI simulate compatibility starts a durable job with centralized defaults"
         "aeldari",
         "--execution-mode",
         "simulate",
+        "--verified-catalogue-drift-diagnostic",
         "--out-dir",
         temporaryDirectory,
         "--allow-outside-root",
@@ -677,6 +782,10 @@ test("CLI simulate compatibility starts a durable job with centralized defaults"
     assert.equal(
       captured.request.options?.executionMode,
       "simulate",
+    );
+    assert.equal(
+      captured.request.options?.catalogueDriftMode,
+      "diagnostic",
     );
     assert.equal(
       captured.options.outputDirectory,
@@ -890,7 +999,7 @@ test("CLI exact routes report missing opponent scope and accept an exact roster"
   }
 });
 
-test("CLI stress resume leaves omitted suite and analysis strategy unset", async () => {
+test("CLI stress recovery and revision preserve omitted frozen settings", async () => {
   const player = buildRoster({
     faction: "adeptus-custodes",
     pointsLimit: 1000,
@@ -932,9 +1041,12 @@ test("CLI stress resume leaves omitted suite and analysis strategy unset", async
           "  writeFileSync(",
           "    process.env.ROSTERPILOT_CLI_CAPTURE,",
           "    JSON.stringify({",
+          "      kind: request.kind,",
           "      suiteType: typeof request.options.suite,",
           "      analysisStrategyType:",
           "        typeof request.options.analysisStrategy,",
+          "      catalogueDriftModeType:",
+          "        typeof request.options.catalogueDriftMode,",
           "      resumeManifestPath:",
           "        request.options.resumeManifestPath,",
           "    }),",
@@ -983,15 +1095,54 @@ test("CLI stress resume leaves omitted suite and analysis strategy unset", async
     const captured = JSON.parse(
       await readFile(capturePath, "utf8"),
     ) as {
+      kind: string;
       suiteType: string;
       analysisStrategyType: string;
+      catalogueDriftModeType: string;
       resumeManifestPath: string;
     };
     assert.deepEqual(captured, {
+      kind: "stress",
       suiteType: "undefined",
       analysisStrategyType: "undefined",
+      catalogueDriftModeType: "undefined",
       resumeManifestPath: path.resolve(manifestPath),
     });
+
+    await run(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--import",
+        preloadPath,
+        path.join(process.cwd(), "cli/rosterpilot.ts"),
+        "tessera",
+        "compare-stress-revision",
+        "--baseline-report",
+        path.join(temporaryDirectory, "stress-baseline.json"),
+        "--revised-roster",
+        rosterPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          ROSTERPILOT_CLI_CAPTURE: capturePath,
+        },
+      },
+    );
+    const revisionCapture = JSON.parse(
+      await readFile(capturePath, "utf8"),
+    ) as {
+      kind: string;
+      catalogueDriftModeType: string;
+    };
+    assert.equal(revisionCapture.kind, "stress-revision");
+    assert.equal(
+      revisionCapture.catalogueDriftModeType,
+      "undefined",
+    );
   } finally {
     await rm(temporaryDirectory, {
       recursive: true,

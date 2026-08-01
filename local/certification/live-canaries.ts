@@ -408,7 +408,11 @@ export function evaluateLiveCanaryReadiness(input: {
   });
 }
 
-type LiveCanaryRouteInput =
+export type LiveCanaryCatalogueDriftMode =
+  | "reject"
+  | "diagnostic";
+
+type LiveCanaryRouteInput = (
   | {
       id: "custodes-vs-adaptive-nine-aeldari-2000";
       playerRoster: RosterDraftV1;
@@ -427,7 +431,10 @@ type LiveCanaryRouteInput =
       opponentRosterContext: RosterDraftV1;
       opponentRoszPath: string;
       profilePolicyPath: string;
-    };
+    }
+) & {
+  catalogueDriftMode?: LiveCanaryCatalogueDriftMode;
+};
 
 /**
  * Produces the exact durable-run request represented by a canary definition.
@@ -437,6 +444,8 @@ type LiveCanaryRouteInput =
 export function createLiveCanaryRunRequest(
   input: LiveCanaryRouteInput,
 ): TesseraRunRequest {
+  const catalogueDriftMode =
+    input.catalogueDriftMode ?? "reject";
   if (
     input.id ===
     "custodes-vs-adaptive-nine-aeldari-2000"
@@ -450,6 +459,7 @@ export function createLiveCanaryRunRequest(
         analysisStrategy: "staged",
         executionMode: "simulate",
         experimental: false,
+        catalogueDriftMode,
         profilePolicyPath: input.profilePolicyPath,
         portfolioPreview: input.portfolioPreview,
       },
@@ -467,6 +477,7 @@ export function createLiveCanaryRunRequest(
         executionMode: "simulate",
         experimental: false,
         analysisMode: "full",
+        catalogueDriftMode,
         profilePolicyPath: input.profilePolicyPath,
       },
     };
@@ -482,6 +493,7 @@ export function createLiveCanaryRunRequest(
       executionMode: "simulate",
       experimental: false,
       analysisMode: "full",
+      catalogueDriftMode,
       profilePolicyPath: input.profilePolicyPath,
       opponentRosterContext: input.opponentRosterContext,
     },

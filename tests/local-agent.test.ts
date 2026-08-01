@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
@@ -14,6 +15,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { strToU8, zipSync } from "fflate";
 
 import {
   LOCAL_AGENT_PROTOCOL_VERSION,
@@ -32,6 +34,13 @@ import {
 import { FrameDecoder, encodeFrame } from "../local/agent/framing";
 import { renderLaunchAgent } from "../local/agent/lifecycle";
 import { startLocalAgent } from "../local/agent/server";
+
+function tesseraReadyRoszBase64(name: string): string {
+  const xml = `<?xml version="1.0"?><roster name="${name}" generatedBy="https://newrecruit.eu"><cost name="pts" value="100"/><forces><force name="Fixture" catalogueName="Fixture"><selections><selection name="Fixture unit" number="1" type="unit"><profiles><profile name="Fixture unit" typeName="Unit"/><profile name="Fixture blade" typeName="Melee Weapons"/></profiles><selections><selection name="Fixture model" number="1" type="model"/></selections></selection></selections></force></forces></roster>`;
+  return Buffer.from(
+    zipSync({ "fixture.ros": strToU8(xml) }),
+  ).toString("base64");
+}
 
 async function writePersistentTesseraWorkerFixture(
   filename: string,
@@ -557,8 +566,8 @@ const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 if (
   basename(input.playerRoszPath) !== "player.rosz" ||
   basename(input.opponentRoszPath) !== "opponent.rosz" ||
-  readFileSync(input.playerRoszPath, "utf8") !== "player" ||
-  readFileSync(input.opponentRoszPath, "utf8") !== "opponent"
+  readFileSync(input.playerRoszPath).length === 0 ||
+  readFileSync(input.opponentRoszPath).length === 0
 ) {
   throw new Error("role-specific Tessera inputs were not materialized");
 }
@@ -590,10 +599,10 @@ process.stdout.write(JSON.stringify({
     const result = await runTesseraThroughLocalAgent(
       {
         playerFilename: "enriched.rosz",
-        playerRoszBase64: Buffer.from("player").toString("base64"),
+        playerRoszBase64: tesseraReadyRoszBase64("Player"),
         playerName: "Player",
         opponentFilename: "enriched.rosz",
-        opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+        opponentRoszBase64: tesseraReadyRoszBase64("Opponent"),
         opponentName: "Opponent",
       },
       { spoolDirectory },
@@ -605,6 +614,125 @@ process.stdout.write(JSON.stringify({
     );
   } finally {
     await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("local agent rejects profileless Tessera inputs before invoking the worker", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-agent-tessera-readiness-"),
+  );
+  const workerPath = path.join(directory, "tessera-worker.mjs");
+  const workerMarker = path.join(directory, "worker-invoked");
+  await writeFile(
+    workerPath,
+    `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(workerMarker)}, "invoked");
+process.stdout.write(JSON.stringify({ ok: true, data: { cells: [] } }));
+`,
+  );
+  const spoolDirectory = path.join(directory, "spool");
+  const running = await startLocalAgent({
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath: path.join(directory, "unused-broker"),
+    tesseraWorkerPath: workerPath,
+  });
+  try {
+    await assert.rejects(
+      runTesseraThroughLocalAgent(
+        {
+          playerFilename: "source.rosz",
+          playerRoszBase64: Buffer.from("profileless").toString(
+            "base64",
+          ),
+          playerName: "Player",
+          opponentFilename: "enriched.rosz",
+          opponentRoszBase64: tesseraReadyRoszBase64("Opponent"),
+          opponentName: "Opponent",
+        },
+        { spoolDirectory },
+      ),
+      (error: unknown) =>
+        error instanceof LocalAgentError &&
+        error.code === "TESSERA_INPUT_NOT_PROFILE_RICH",
+    );
+    await assert.rejects(access(workerMarker), { code: "ENOENT" });
+  } finally {
+    await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("isolated Tessera worker preserves terminal profile-readiness codes", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-worker-readiness-"),
+  );
+  const playerPath = path.join(directory, "profileless.rosz");
+  const opponentPath = path.join(directory, "opponent.rosz");
+  const profilelessXml = `<?xml version="1.0"?><roster name="Profileless" generatedBy="https://newrecruit.eu"><cost name="pts" value="100"/><forces><force name="Fixture" catalogueName="Fixture"><selections><selection name="Fixture unit" number="1" type="unit"><selections><selection name="Fixture model" number="1" type="model"/></selections></selection></selections></force></forces></roster>`;
+  await Promise.all([
+    writeFile(
+      playerPath,
+      Buffer.from(
+        zipSync({ "profileless.ros": strToU8(profilelessXml) }),
+      ),
+    ),
+    writeFile(
+      opponentPath,
+      Buffer.from(tesseraReadyRoszBase64("Opponent"), "base64"),
+    ),
+  ]);
+  const result = await new Promise<{
+    exitCode: number | null;
+    stdout: string;
+    stderr: string;
+  }>((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.resolve("local/tessera/worker.ts"),
+      ],
+      {
+        cwd: path.resolve("."),
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.once("error", reject);
+    child.once("close", (exitCode) =>
+      resolve({
+        exitCode,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      }),
+    );
+    child.stdin.end(
+      JSON.stringify({
+        brokerPath: path.join(directory, "unused-broker"),
+        profileDirectory: path.join(directory, "profile"),
+        playerRoszPath: playerPath,
+        playerName: "Player",
+        opponentRoszPath: opponentPath,
+        opponentName: "Opponent",
+      }),
+    );
+  });
+  try {
+    assert.equal(result.exitCode, 2, result.stderr);
+    const response = JSON.parse(result.stdout) as {
+      ok: boolean;
+      code: string;
+    };
+    assert.equal(response.ok, false);
+    assert.equal(response.code, "TESSERA_INPUT_NOT_PROFILE_RICH");
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -654,10 +782,10 @@ process.stdout.write(JSON.stringify({
   });
   const payload = {
     playerFilename: "player.rosz",
-    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerRoszBase64: tesseraReadyRoszBase64("Player"),
     playerName: "Player",
     opponentFilename: "opponent.rosz",
-    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentRoszBase64: tesseraReadyRoszBase64("Opponent"),
     opponentName: "Opponent",
     sessionId: "stress-run-fixture",
     frozenScenarioContract: [
@@ -747,10 +875,10 @@ test("persistent Tessera sessions reuse one worker and reset poisoned contexts",
   };
   const payload = {
     playerFilename: "player.rosz",
-    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerRoszBase64: tesseraReadyRoszBase64("Player"),
     playerName: "Player",
     opponentFilename: "opponent.rosz",
-    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentRoszBase64: tesseraReadyRoszBase64("Opponent"),
     opponentName: "Opponent",
     sessionId: "persistent-fixture",
     frozenScenarioContract,
@@ -848,10 +976,10 @@ test("Tessera certification profile state survives a graceful local-agent restar
   };
   const payload = {
     playerFilename: "player.rosz",
-    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerRoszBase64: tesseraReadyRoszBase64("Player"),
     playerName: "Player",
     opponentFilename: "opponent.rosz",
-    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentRoszBase64: tesseraReadyRoszBase64("Opponent"),
     opponentName: "Opponent",
     sessionId: "restart-fixture",
   };
@@ -947,10 +1075,10 @@ test("persistent Tessera sessions are deleted after their bounded expiry", async
   });
   const payload = {
     playerFilename: "player.rosz",
-    playerRoszBase64: Buffer.from("player").toString("base64"),
+    playerRoszBase64: tesseraReadyRoszBase64("Player"),
     playerName: "Player",
     opponentFilename: "opponent.rosz",
-    opponentRoszBase64: Buffer.from("opponent").toString("base64"),
+    opponentRoszBase64: tesseraReadyRoszBase64("Opponent"),
     opponentName: "Opponent",
     sessionId: "expiry-fixture",
   };

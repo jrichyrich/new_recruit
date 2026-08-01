@@ -66,6 +66,13 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
       rather than the faction catalogue.
     A missing faction and missing exact roster is not enough scope; report
     `OPPONENT_SCOPE_REQUIRED` instead of choosing a faction.
+    Set `verifiedCatalogueDriftDiagnostic: true` only when the user explicitly
+    asks to test through a verified forward game-system-revision mismatch.
+    Never infer this permission. Require the same game-system ID, exact
+    faction-catalogue identity and revision, complete provenance, and complete
+    per-unit model and weapon profiles. Preserve the diagnostic warning and
+    both identities; do not describe the artifact as trusted or its
+    characteristic values as frozen-rule verified.
 14. Prefer durable simulation jobs over waiting synchronously. After
     `start_tessera_run`, poll `get_tessera_run_status`. For `needs-input`, show
     the structured choices, call `resolve_tessera_profiles`, and then
@@ -76,6 +83,10 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
     hash-verified frozen inputs, never prior simulation evidence. Use
     `cancel_tessera_run` only when the user asks to stop the run. Cancellation
     retains the run bundle and never deletes New Recruit lists.
+    Put the diagnostic choice on the initial `start_tessera_run` request. Never
+    add it during resume or restart. If an earlier default job stopped on
+    qualifying drift, start a new diagnostic job so it can reuse the
+    provisional artifact without another New Recruit mutation.
 15. Explain that Tessera preparation may create verified New Recruit list
     copies to obtain profile-rich `.rosz` files. Never describe a client or
     Codex timeout as a failed workflow; return the run ID and current durable
@@ -132,6 +143,9 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   successful export.
 - Browser-assisted import is allowed only when the user explicitly asks to
   upload or import the roster and browser control is available.
+- Treat `TESSERA_INPUT_NOT_PROFILE_RICH` and
+  `TESSERA_INPUT_PROFILES_INCOMPLETE` as terminal handoff failures. Never
+  manually substitute the source `.rosz` for the enriched archive.
 - Credential configuration and removal are manual terminal operations. Never
   ask the user to place a password in chat or an MCP argument.
 - The macOS companion may request Keychain authorization when its dedicated

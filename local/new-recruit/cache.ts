@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   copyFile,
   mkdir,
+  readdir,
   readFile,
   rename,
   rm,
@@ -11,15 +12,21 @@ import {
 import path from "node:path";
 
 import {
+  compareNewRecruitCatalogueProvenance,
+  getNewRecruitFactionSummary,
+  isForwardGameSystemRevisionOnlyDrift,
+  newRecruitCatalogue,
   type ConnectorEvent,
   rosterExportFingerprint,
   rosterExecutionFingerprint,
   rosterSourceDataCompatibleForExport,
   type EnrichedRoszSummary,
   type NewRecruitDelivery,
+  type NewRecruitCatalogueProvenanceComparison,
   type ResultEnvelope,
   type RosterDraftV1,
   validateEnrichedRoszGameplayIdentity,
+  validateTesseraReadyRosz,
 } from "../../lib/rosterpilot";
 import { rosterPilotSupportDirectory } from "../agent/paths";
 import { safeNewRecruitUiIdentity } from "./ui-identity";
@@ -47,6 +54,28 @@ type CacheReceiptV3 = Omit<CacheReceiptV2, "schemaVersion"> & {
 };
 
 type CacheReceipt = CacheReceiptV2 | CacheReceiptV3;
+
+type ProvisionalCacheReceiptV1 = {
+  schemaVersion: 1;
+  cacheKind: "new-recruit-provisional-enriched-roster";
+  reason: "forward-game-system-revision-only";
+  cacheKey: string;
+  createdAt: string;
+  exportFingerprint: string;
+  executionFingerprint: string;
+  sourceData: RosterDraftV1["sourceData"];
+  rosterId: string;
+  rosterName: string;
+  uiIdentity: string | null;
+  listUrl: string | null;
+  sourceRoszSha256: string;
+  enrichedRoszSha256: string;
+  enrichedSummary: EnrichedRoszSummary;
+  catalogueProvenance: NewRecruitCatalogueProvenanceComparison;
+  profileCoverageSha256: string;
+  connectorEvents: ConnectorEvent[];
+  integritySha256: string;
+};
 
 type RunInventoryV1 = {
   schemaVersion: 1;
@@ -344,6 +373,14 @@ function cacheRoot(): string {
 
 function mutationReceiptRoot(): string {
   return path.join(cacheRoot(), "mutation-receipts");
+}
+
+function provisionalCacheRoot(cacheKey?: string): string {
+  return path.join(
+    cacheRoot(),
+    "provisional",
+    ...(cacheKey ? [cacheKey] : []),
+  );
 }
 
 function mutationReceiptPath(cacheKey: string): string {
@@ -1720,6 +1757,314 @@ function cachedDelivery(
       },
     ],
   };
+}
+
+function provisionalCatalogueComparison(
+  roster: RosterDraftV1,
+  summary: EnrichedRoszSummary,
+): NewRecruitCatalogueProvenanceComparison | null {
+  const faction = getNewRecruitFactionSummary(roster.factionId);
+  if (!faction?.catalogue.id) return null;
+  return compareNewRecruitCatalogueProvenance(summary, {
+    releaseId: roster.sourceData.releaseId,
+    gameSystem: {
+      id: newRecruitCatalogue.gameSystem.id,
+      name: newRecruitCatalogue.gameSystem.name,
+      revision: roster.sourceData.newRecruit.gameSystemRevision,
+    },
+    catalogue: {
+      id: faction.catalogue.id,
+      name: faction.catalogue.name,
+      revision: roster.sourceData.newRecruit.catalogueRevision,
+    },
+  });
+}
+
+function validProvisionalReceipt(
+  value: unknown,
+): value is ProvisionalCacheReceiptV1 {
+  if (!value || typeof value !== "object") return false;
+  const receipt = value as Partial<ProvisionalCacheReceiptV1>;
+  return (
+    receipt.schemaVersion === 1 &&
+    receipt.cacheKind ===
+      "new-recruit-provisional-enriched-roster" &&
+    receipt.reason === "forward-game-system-revision-only" &&
+    isSha256(receipt.cacheKey) &&
+    isIsoDate(receipt.createdAt) &&
+    isSha256(receipt.exportFingerprint) &&
+    isSha256(receipt.executionFingerprint) &&
+    Boolean(receipt.sourceData) &&
+    typeof receipt.sourceData === "object" &&
+    typeof receipt.rosterId === "string" &&
+    receipt.rosterId.length > 0 &&
+    typeof receipt.rosterName === "string" &&
+    receipt.rosterName.length > 0 &&
+    (receipt.uiIdentity === null ||
+      typeof receipt.uiIdentity === "string") &&
+    (receipt.listUrl === null ||
+      typeof receipt.listUrl === "string") &&
+    isSha256(receipt.sourceRoszSha256) &&
+    isSha256(receipt.enrichedRoszSha256) &&
+    Boolean(receipt.enrichedSummary) &&
+    typeof receipt.enrichedSummary === "object" &&
+    Boolean(receipt.catalogueProvenance) &&
+    typeof receipt.catalogueProvenance === "object" &&
+    isForwardGameSystemRevisionOnlyDrift(
+      receipt.catalogueProvenance as NewRecruitCatalogueProvenanceComparison,
+    ) &&
+    isSha256(receipt.profileCoverageSha256) &&
+    Array.isArray(receipt.connectorEvents) &&
+    receipt.connectorEvents.every(isConnectorEvent) &&
+    typeof receipt.integritySha256 === "string" &&
+    integrityMatches(receipt as ProvisionalCacheReceiptV1)
+  );
+}
+
+function provisionalDelivery(
+  roster: RosterDraftV1,
+  directory: string,
+  receipt: ProvisionalCacheReceiptV1,
+): ResultEnvelope<NewRecruitDelivery> {
+  return {
+    ok: true,
+    data: {
+      rosterId: roster.id,
+      rosterName: receipt.rosterName,
+      uiIdentity: safeNewRecruitUiIdentity(receipt.uiIdentity),
+      listUrl: receipt.listUrl,
+      imported: false,
+      sessionReused: true,
+      cacheReused: true,
+      connectorEvents: [
+        ...receipt.connectorEvents,
+        {
+          schemaVersion: 1,
+          eventId: crypto.randomUUID(),
+          recordedAt: new Date().toISOString(),
+          provider: "new-recruit",
+          action: "prepare",
+          origin: "manifest-reuse",
+          outcome: "reused",
+          remoteId: receipt.listUrl,
+          contentSha256: receipt.enrichedRoszSha256,
+        },
+      ],
+      verification: null,
+      enrichedSummary: receipt.enrichedSummary,
+      catalogueProvenance: receipt.catalogueProvenance,
+      artifacts: [
+        {
+          format: "rosterpilot-source-rosz",
+          filename: "source.rosz",
+          mimeType: "application/zip",
+          written: path.join(directory, "source.rosz"),
+        },
+        {
+          format: "new-recruit-enriched-rosz",
+          filename: "enriched.rosz",
+          mimeType: "application/zip",
+          written: path.join(directory, "enriched.rosz"),
+        },
+      ],
+    },
+    violations: [],
+    warnings: [
+      {
+        code: "NEW_RECRUIT_PROVISIONAL_CACHE_REUSED",
+        message:
+          "Reused a hash-verified provisional New Recruit artifact; no remote list was created. Tessera must revalidate its forward-only revision drift before use.",
+        severity: "warn",
+      },
+    ],
+  };
+}
+
+export async function storeNewRecruitProvisionalArtifact(
+  roster: RosterDraftV1,
+  delivery: ResultEnvelope<NewRecruitDelivery>,
+): Promise<void> {
+  if (!delivery.data?.enrichedSummary) return;
+  const sourcePath = delivery.data.artifacts.find(
+    (artifact) =>
+      artifact.format === "rosterpilot-source-rosz" ||
+      artifact.format === "rosz",
+  )?.written;
+  const enrichedPath = delivery.data.artifacts.find(
+    (artifact) => artifact.format === "new-recruit-enriched-rosz",
+  )?.written;
+  if (!sourcePath || !enrichedPath) return;
+  const [sourceContent, enrichedContent] = await Promise.all([
+    readFile(sourcePath),
+    readFile(enrichedPath),
+  ]);
+  const readiness = validateTesseraReadyRosz(enrichedContent);
+  if (
+    canonical(readiness.summary) !==
+    canonical(delivery.data.enrichedSummary)
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_PROVISIONAL_ARTIFACT_DRIFT",
+      "The provisional New Recruit artifact summary changed before it could be retained.",
+    );
+  }
+  const catalogueProvenance = provisionalCatalogueComparison(
+    roster,
+    readiness.summary,
+  );
+  if (
+    !catalogueProvenance ||
+    !isForwardGameSystemRevisionOnlyDrift(catalogueProvenance)
+  ) {
+    return;
+  }
+  const sourceRoszSha256 = crypto
+    .createHash("sha256")
+    .update(sourceContent)
+    .digest("hex");
+  const enrichedRoszSha256 = crypto
+    .createHash("sha256")
+    .update(enrichedContent)
+    .digest("hex");
+  const cacheKey = newRecruitCacheKey(roster);
+  const parent = provisionalCacheRoot(cacheKey);
+  const destination = path.join(parent, enrichedRoszSha256);
+  const temporary = path.join(
+    parent,
+    `.${enrichedRoszSha256}.${crypto.randomUUID()}.tmp`,
+  );
+  await mkdir(temporary, { recursive: true, mode: 0o700 });
+  try {
+    const temporarySource = path.join(temporary, "source.rosz");
+    const temporaryEnriched = path.join(temporary, "enriched.rosz");
+    await Promise.all([
+      copyFile(sourcePath, temporarySource),
+      copyFile(enrichedPath, temporaryEnriched),
+    ]);
+    const receipt: ProvisionalCacheReceiptV1 = sealIntegrity({
+      schemaVersion: 1,
+      cacheKind: "new-recruit-provisional-enriched-roster",
+      reason: "forward-game-system-revision-only",
+      cacheKey,
+      createdAt: new Date().toISOString(),
+      exportFingerprint: rosterExportFingerprint(roster),
+      executionFingerprint: rosterExecutionFingerprint(roster),
+      sourceData: roster.sourceData,
+      rosterId: roster.id,
+      rosterName: delivery.data.rosterName,
+      uiIdentity: safeNewRecruitUiIdentity(delivery.data.uiIdentity),
+      listUrl: delivery.data.listUrl,
+      sourceRoszSha256,
+      enrichedRoszSha256,
+      enrichedSummary: readiness.summary,
+      catalogueProvenance,
+      profileCoverageSha256: sha256Text(
+        canonical(readiness.unitProfileCoverage),
+      ),
+      connectorEvents: delivery.data.connectorEvents ?? [],
+    });
+    await atomicWriteJson(
+      path.join(temporary, "receipt.json"),
+      receipt,
+    );
+    try {
+      await rename(temporary, destination);
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? error.code
+          : null;
+      if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+    }
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+export async function loadNewRecruitProvisionalArtifact(
+  roster: RosterDraftV1,
+): Promise<ResultEnvelope<NewRecruitDelivery> | null> {
+  const cacheKey = newRecruitCacheKey(roster);
+  const parent = provisionalCacheRoot(cacheKey);
+  let directories: string[];
+  try {
+    directories = (await readdir(parent, { withFileTypes: true }))
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          !entry.isSymbolicLink() &&
+          /^[0-9a-f]{64}$/.test(entry.name),
+      )
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return null;
+  }
+  const candidates: Array<{
+    directory: string;
+    receipt: ProvisionalCacheReceiptV1;
+  }> = [];
+  for (const name of directories) {
+    const directory = path.join(parent, name);
+    try {
+      const receipt = JSON.parse(
+        await readFile(path.join(directory, "receipt.json"), "utf8"),
+      ) as unknown;
+      if (!validProvisionalReceipt(receipt)) continue;
+      if (
+        receipt.cacheKey !== cacheKey ||
+        receipt.enrichedRoszSha256 !== name ||
+        receipt.exportFingerprint !== rosterExportFingerprint(roster) ||
+        receipt.executionFingerprint !==
+          rosterExecutionFingerprint(roster) ||
+        !sourceDataMatchesForExport(receipt.sourceData, roster.sourceData)
+      ) {
+        continue;
+      }
+      const sourcePath = path.join(directory, "source.rosz");
+      const enrichedPath = path.join(directory, "enriched.rosz");
+      if (
+        receipt.sourceRoszSha256 !== (await sha256(sourcePath)) ||
+        receipt.enrichedRoszSha256 !== (await sha256(enrichedPath))
+      ) {
+        continue;
+      }
+      const readiness = validateTesseraReadyRosz(
+        await readFile(enrichedPath),
+      );
+      if (
+        canonical(readiness.summary) !==
+          canonical(receipt.enrichedSummary) ||
+        sha256Text(canonical(readiness.unitProfileCoverage)) !==
+          receipt.profileCoverageSha256
+      ) {
+        continue;
+      }
+      const currentComparison = provisionalCatalogueComparison(
+        roster,
+        readiness.summary,
+      );
+      if (
+        !currentComparison ||
+        (
+          currentComparison.status !== "matched" &&
+          !isForwardGameSystemRevisionOnlyDrift(currentComparison)
+        )
+      ) {
+        continue;
+      }
+      candidates.push({ directory, receipt });
+    } catch {
+      continue;
+    }
+  }
+  candidates.sort((left, right) =>
+    right.receipt.createdAt.localeCompare(left.receipt.createdAt),
+  );
+  const selected = candidates[0];
+  return selected
+    ? provisionalDelivery(roster, selected.directory, selected.receipt)
+    : null;
 }
 
 export async function loadNewRecruitCache(

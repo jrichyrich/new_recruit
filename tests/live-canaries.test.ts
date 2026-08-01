@@ -203,6 +203,22 @@ test("the daily workflow serially routes every named live canary", async () => {
     workflow,
     /Install the verified application data release[\s\S]*actions\/download-artifact@v4/,
   );
+  const postActivation = workflow.slice(
+    workflow.indexOf("post-activation-bundle:"),
+    workflow.indexOf("live-release-prerequisites:"),
+  );
+  assert.match(
+    postActivation,
+    /inputs\.cadence == 'release'/,
+  );
+  const livePrerequisites = workflow.slice(
+    workflow.indexOf("live-release-prerequisites:"),
+    workflow.indexOf("daily-canary:"),
+  );
+  assert.match(
+    livePrerequisites,
+    /inputs\.cadence == 'release'/,
+  );
   assert.match(
     workflow,
     /npm run data:rollback-after-canary --/,
@@ -225,6 +241,43 @@ test("the daily workflow serially routes every named live canary", async () => {
   assert.doesNotMatch(
     dailyWorkflow,
     /renamed-mirror|--tier live --faction/,
+  );
+  assert.doesNotMatch(
+    dailyWorkflow,
+    /--verified-catalogue-drift-diagnostic/,
+  );
+  const releaseQuality = workflow.slice(
+    workflow.indexOf("release-quality:"),
+    workflow.indexOf("release-tessera-smoke:"),
+  );
+  assert.match(releaseQuality, /npm run verify/);
+  const releaseSmoke = workflow.slice(
+    workflow.indexOf("release-tessera-smoke:"),
+    workflow.indexOf("release-certification:"),
+  );
+  assert.match(
+    releaseSmoke,
+    /--canary death-guard-vs-orks-exact-1000/,
+  );
+  assert.match(
+    releaseSmoke,
+    /needs:\s+- post-activation-bundle\s+- live-release-prerequisites\s+- release-quality/,
+  );
+  assert.match(
+    releaseSmoke,
+    /--verified-catalogue-drift-diagnostic/,
+  );
+  assert.match(releaseSmoke, /--require-live/);
+  assert.match(
+    releaseSmoke,
+    /\.certification\/release-smoke/,
+  );
+  const releaseCertification = workflow.slice(
+    workflow.indexOf("release-certification:"),
+  );
+  assert.match(
+    releaseCertification,
+    /needs:\s+- release-tessera-smoke/,
   );
 });
 
@@ -254,6 +307,7 @@ test("bundle-provider preflight failures emit checksummed unavailable release ev
         root,
         "--expected-bundle-id",
         expectedBundleId,
+        "--verified-catalogue-drift-diagnostic",
         "--require-live",
       ],
       {
@@ -398,6 +452,7 @@ test("live canary requests route through durable stress and exact modes", () => 
   assert.equal(stress.options?.analysisStrategy, "staged");
   assert.equal(stress.options?.executionMode, "simulate");
   assert.equal(stress.options?.experimental, false);
+  assert.equal(stress.options?.catalogueDriftMode, "reject");
   assert.equal(stress.options?.portfolioPreview, preview);
 
   const exact = createLiveCanaryRunRequest({
@@ -417,6 +472,19 @@ test("live canary requests route through durable stress and exact modes", () => 
       ? exact.opponent.roster.factionId
       : exact.playerRoster.factionId,
   );
+  assert.equal(exact.options?.catalogueDriftMode, "reject");
+
+  const diagnosticExact = createLiveCanaryRunRequest({
+    id: "death-guard-vs-orks-exact-1000",
+    playerRoster: deathGuard,
+    opponentRoster: orks,
+    profilePolicyPath: "/fixtures/policy.json",
+    catalogueDriftMode: "diagnostic",
+  });
+  assert.equal(
+    diagnosticExact.options?.catalogueDriftMode,
+    "diagnostic",
+  );
 
   const uploaded = createLiveCanaryRunRequest({
     id: "uploaded-multiprofile-exact-paired-revision",
@@ -433,6 +501,10 @@ test("live canary requests route through durable stress and exact modes", () => 
   assert.equal(
     uploaded.options?.opponentRosterContext,
     orks,
+  );
+  assert.equal(
+    uploaded.options?.catalogueDriftMode,
+    "reject",
   );
 });
 
