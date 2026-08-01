@@ -12,6 +12,9 @@ import {
   getNewRecruitConnectionStatus,
 } from "../local/new-recruit/companion";
 import {
+  restoreNewRecruitMutationArtifactFromTesseraRun,
+} from "../local/new-recruit/cache";
+import {
   analyzeRosterMatchup,
   compareRosterRevision,
   getTesseraConnectionStatus,
@@ -85,6 +88,11 @@ const server = createRosterPilotMcpServer({
     status: getTesseraRunStatus,
     resume: resumeTesseraRun,
     resolveProfiles: resolveTesseraRunProfiles,
+    restoreNewRecruitArtifact: (roster, jobPath) =>
+      restoreNewRecruitMutationArtifactFromTesseraRun({
+        roster,
+        jobPath,
+      }),
     cancel: cancelTesseraRun,
   },
 });

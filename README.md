@@ -565,7 +565,8 @@ RosterPilot does not substitute guessed values.
 
 The equivalent local MCP tools are `start_tessera_run`,
 `get_tessera_run_status`, `resume_tessera_run`,
-`resolve_tessera_profiles`, and `cancel_tessera_run`. Existing simulate-mode
+`resolve_tessera_profiles`, `restore_tessera_new_recruit_artifact`, and
+`cancel_tessera_run`. Existing simulate-mode
 matchup tools return an in-progress durable job reference instead of treating
 a client timeout as workflow failure. MCP restart uses
 `resume_tessera_run` with `restartFrom: true`.
@@ -899,8 +900,12 @@ The local MCP exposes `get_tessera_connection_status`,
 `preview_faction_stress_portfolio`, and
 `build_and_stress_roster_against_faction`. Durable background control is
 available through `start_tessera_run`, `get_tessera_run_status`,
-`resume_tessera_run`, `resolve_tessera_profiles`, and
-`cancel_tessera_run`. Hosted MCP, REST, OpenAPI, and the website omit all of
+`resume_tessera_run`, `resolve_tessera_profiles`,
+`restore_tessera_new_recruit_artifact`, and `cancel_tessera_run`. The restore
+tool performs a hash-bound, local-only migration of a retained pre-recovery
+Tessera artifact into the support-owned, content-addressed recovery store; it
+cannot upload, create a list, or simulate. Hosted MCP,
+REST, OpenAPI, and the website omit all of
 them; there is no public stress-test UI. Each stress run
 uses one isolated, session-scoped Tessera worker across proxy requests. That
 worker owns one live browser context and retains the premium key only in its

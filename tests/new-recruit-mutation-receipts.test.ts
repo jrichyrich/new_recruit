@@ -33,6 +33,7 @@ import {
   reconcileNewRecruitMutationReceipt,
   reconcileNewRecruitRoszMutationReceipt,
   recordNewRecruitReuseReceipt,
+  restoreNewRecruitMutationArtifactFromTesseraRun,
   storeNewRecruitCache,
 } from "../local/new-recruit/cache";
 import {
@@ -245,6 +246,106 @@ test("New Recruit writes a sealed pending receipt before browser activity", asyn
         (await readNewRecruitMutationReceipt(candidate))
           ?.attempts[0].outcome,
         "not-created",
+      );
+    },
+  );
+});
+
+test("created-artifact retention failure seals evidence and releases its lease", async () => {
+  await withSupportDirectory(
+    "new-recruit-retention-failure",
+    async (supportDirectory) => {
+      const candidate = roster();
+      const exported = await exportRoster(candidate, "rosz");
+      assert.ok(exported.ok && exported.data);
+      const source = Buffer.from(exported.data.content);
+      const enriched = enrichedRosz(source);
+      const sourcePath = path.join(supportDirectory, "source.rosz");
+      await mkdir(supportDirectory, { recursive: true });
+      await writeFile(sourcePath, source);
+      const sourceSha256 = crypto
+        .createHash("sha256")
+        .update(source)
+        .digest("hex");
+      const event = connectorEvent({
+        id: "retention-failure-event",
+        origin: "new-remote",
+        outcome: "verified",
+        remoteId:
+          "https://www.newrecruit.eu/app/Lists/retention-failure",
+      });
+      event.contentSha256 = crypto
+        .createHash("sha256")
+        .update(enriched)
+        .digest("hex");
+      const transaction =
+        await beginNewRecruitMutationReceipt({
+          roster: candidate,
+          runId: "retention-failure-run",
+          expectedSourceRoszSha256: sourceSha256,
+        });
+      const result = delivery({
+        roster: candidate,
+        event,
+        imported: true,
+      });
+      assert.ok(result.data);
+      result.data.enrichedSummary = inspectEnrichedRosz(enriched);
+      result.data.artifacts = [
+        {
+          format: "rosterpilot-source-rosz",
+          filename: "source.rosz",
+          mimeType: "application/zip",
+          written: sourcePath,
+        },
+      ];
+      await assert.rejects(
+        transaction.finalizeDelivery(result),
+        (error: unknown) =>
+          Boolean(
+            error &&
+              typeof error === "object" &&
+              "code" in error &&
+              error.code ===
+                "NEW_RECRUIT_MUTATION_ARTIFACT_REQUIRED",
+          ),
+      );
+      const receipt =
+        await readNewRecruitMutationReceipt(candidate);
+      assert.equal(receipt?.attempts[0]?.outcome, "created");
+      assert.equal(
+        receipt?.attempts[0]?.recoveryArtifact,
+        null,
+      );
+      await assert.rejects(
+        readFile(
+          receiptLockOwnerFilename(
+            supportDirectory,
+            candidate,
+          ),
+          "utf8",
+        ),
+        (error: unknown) =>
+          Boolean(
+            error &&
+              typeof error === "object" &&
+              "code" in error &&
+              error.code === "ENOENT",
+          ),
+      );
+      await assert.rejects(
+        beginNewRecruitMutationReceipt({
+          roster: candidate,
+          runId: "must-not-redeliver",
+        }),
+        (error: unknown) =>
+          Boolean(
+            error &&
+              typeof error === "object" &&
+              "code" in error &&
+              error.code ===
+                "NEW_RECRUIT_MUTATION_ALREADY_CREATED",
+          ),
       );
     },
   );
@@ -540,6 +641,7 @@ test("uploaded profileless ROSZ uses a content-addressed durable mutation subjec
       );
       const sourcePath = path.join(directory, "uploaded.rosz");
       await writeFile(sourcePath, source);
+      let agentCalls = 0;
       try {
         const result = await enrichRoszThroughNewRecruit(
           sourcePath,
@@ -552,6 +654,7 @@ test("uploaded profileless ROSZ uses a content-addressed durable mutation subjec
             platform: "darwin",
             browserAvailable: true,
             agentDeliver: async () => {
+              agentCalls += 1;
               const pending =
                 await readNewRecruitRoszMutationReceipt(
                   subject,
@@ -601,6 +704,9 @@ test("uploaded profileless ROSZ uses a content-addressed durable mutation subjec
           "created",
         );
         assert.ok(
+          receipt?.attempts.at(-1)?.recoveryArtifact,
+        );
+        assert.ok(
           (await readNewRecruitRunInventory()).entries.some(
             (entry) =>
               entry.runId === "uploaded-rosz-run" &&
@@ -609,6 +715,34 @@ test("uploaded profileless ROSZ uses a content-addressed durable mutation subjec
               entry.outcome === "created",
           ),
         );
+        await rm(result.data!.enrichedRoszPath, { force: true });
+        const reused = await enrichRoszThroughNewRecruit(
+          sourcePath,
+          {
+            outputDirectory: path.join(directory, "enriched"),
+            allowOutsideRoot: true,
+            mutationRunId: "uploaded-rosz-reuse",
+          },
+          {
+            platform: "linux",
+            browserAvailable: false,
+            agentDeliver: async () => {
+              agentCalls += 1;
+              throw new Error(
+                "uploaded ROSZ recovery must not redeliver",
+              );
+            },
+          },
+        );
+        assert.equal(reused.ok, true);
+        assert.ok(
+          reused.warnings.some(
+            (warning) =>
+              warning.code ===
+              "NEW_RECRUIT_MUTATION_ARTIFACT_REUSED",
+          ),
+        );
+        assert.equal(agentCalls, 1);
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
@@ -866,7 +1000,7 @@ test("Tessera preparation seals mutation receipts before delivery and records ca
 test("uncertain receipts block redelivery until guided reconciliation", async () => {
   await withSupportDirectory(
     "new-recruit-reconcile-receipt",
-    async () => {
+    async (supportDirectory) => {
       const candidate = roster("aeldari");
       const first = await beginNewRecruitMutationReceipt({
         roster: candidate,
@@ -914,6 +1048,19 @@ test("uncertain receipts block redelivery until guided reconciliation", async ()
         roster: candidate,
         runId: "retry-run",
       });
+      const exported = await exportRoster(candidate, "rosz");
+      assert.ok(exported.ok && exported.data);
+      const source = Buffer.from(exported.data.content);
+      const enriched = enrichedRosz(source);
+      const sourcePath = path.join(supportDirectory, "source.rosz");
+      const enrichedPath = path.join(
+        supportDirectory,
+        "enriched.rosz",
+      );
+      await Promise.all([
+        writeFile(sourcePath, source),
+        writeFile(enrichedPath, enriched),
+      ]);
       const createdEvent = connectorEvent({
         id: "created-event",
         origin: "new-remote",
@@ -921,12 +1068,34 @@ test("uncertain receipts block redelivery until guided reconciliation", async ()
         remoteId:
           "https://www.newrecruit.eu/app/Lists/created",
       });
+      createdEvent.contentSha256 = crypto
+        .createHash("sha256")
+        .update(enriched)
+        .digest("hex");
+      const createdDelivery = delivery({
+        roster: candidate,
+        event: createdEvent,
+        imported: true,
+      });
+      assert.ok(createdDelivery.data);
+      createdDelivery.data.enrichedSummary =
+        inspectEnrichedRosz(enriched);
+      createdDelivery.data.artifacts = [
+        {
+          format: "rosterpilot-source-rosz",
+          filename: "source.rosz",
+          mimeType: "application/zip",
+          written: sourcePath,
+        },
+        {
+          format: "new-recruit-enriched-rosz",
+          filename: "enriched.rosz",
+          mimeType: "application/zip",
+          written: enrichedPath,
+        },
+      ];
       await retry.finalizeDelivery(
-        delivery({
-          roster: candidate,
-          event: createdEvent,
-          imported: true,
-        }),
+        createdDelivery,
       );
 
       const inventory = await readNewRecruitRunInventory();
@@ -958,6 +1127,142 @@ test("uncertain receipts block redelivery until guided reconciliation", async ()
                 "NEW_RECRUIT_MUTATION_ALREADY_CREATED",
           ),
       );
+    },
+  );
+});
+
+test("a legacy created receipt restores its exact retained Tessera artifact without redelivery", async () => {
+  await withSupportDirectory(
+    "new-recruit-legacy-artifact-restore",
+    async (supportDirectory) => {
+      const candidate = roster();
+      const exported = await exportRoster(candidate, "rosz");
+      assert.ok(exported.ok && exported.data);
+      const source = exported.data.content as Uint8Array;
+      const enrichedEntries = unzipSync(enrichedRosz(source));
+      const [enrichedName, enrichedBytes] = Object.entries(enrichedEntries)[0];
+      const enriched = zipSync({
+        [enrichedName]: strToU8(
+          strFromU8(enrichedBytes).replace(
+            /gameSystemRevision="\d+"/,
+            `gameSystemRevision="${candidate.sourceData.newRecruit.gameSystemRevision + 1}"`,
+          ),
+        ),
+      });
+      const sourceSha256 = crypto
+        .createHash("sha256")
+        .update(source)
+        .digest("hex");
+      const enrichedSha256 = crypto
+        .createHash("sha256")
+        .update(enriched)
+        .digest("hex");
+      const runId = "legacy-created-run";
+      const transaction = await beginNewRecruitMutationReceipt({
+        roster: candidate,
+        runId,
+        expectedSourceRoszSha256: sourceSha256,
+      });
+      const event: ConnectorEvent = {
+        schemaVersion: 1,
+        eventId: "legacy-created-event",
+        recordedAt: new Date().toISOString(),
+        provider: "new-recruit",
+        action: "prepare",
+        origin: "new-remote",
+        outcome: "verified",
+        remoteId: "https://www.newrecruit.eu/app/Lists/legacy-created",
+        contentSha256: enrichedSha256,
+      };
+      await transaction.finalize({
+        outcome: "created",
+        connectorEvent: event,
+        message: "Legacy release created and verified the list.",
+      });
+      const before = await readNewRecruitMutationReceipt(candidate);
+      assert.equal(before?.attempts[0]?.recoveryArtifact, null);
+
+      const jobRoot = path.join(supportDirectory, "legacy-job");
+      const artifacts = path.join(jobRoot, "artifacts", "attempt-1", "player");
+      await mkdir(artifacts, { recursive: true });
+      const sourcePath = path.join(artifacts, "source.rosz");
+      const enrichedPath = path.join(artifacts, "enriched.rosz");
+      const jobPath = path.join(jobRoot, "tessera-run.json");
+      await Promise.all([
+        writeFile(sourcePath, source),
+        writeFile(enrichedPath, enriched),
+        writeFile(
+          jobPath,
+          `${JSON.stringify({
+            schemaVersion: 1,
+            jobKind: "rosterpilot-tessera-run",
+            runId,
+            jobDirectory: jobRoot,
+            requestPath: jobPath,
+          }, null, 2)}\n`,
+        ),
+      ]);
+
+      const restored =
+        await restoreNewRecruitMutationArtifactFromTesseraRun({
+          roster: candidate,
+          jobPath,
+        });
+      assert.equal(restored.ok, true);
+      assert.ok(
+        restored.warnings.some(
+          (warning) =>
+            warning.code === "NEW_RECRUIT_LEGACY_ARTIFACT_RESTORED",
+        ),
+      );
+      const after = await readNewRecruitMutationReceipt(candidate);
+      assert.equal(
+        after?.attempts[0]?.recoveryArtifact?.sourceRoszSha256,
+        sourceSha256,
+      );
+      assert.equal(
+        after?.attempts[0]?.recoveryArtifact?.enrichedRoszSha256,
+        enrichedSha256,
+      );
+      await rm(
+        after!.attempts[0]!.recoveryArtifact!.enrichedRoszPath,
+        { force: true },
+      );
+      const rebound =
+        await restoreNewRecruitMutationArtifactFromTesseraRun({
+          roster: candidate,
+          jobPath,
+        });
+      assert.equal(rebound.ok, true);
+      assert.ok(
+        rebound.warnings.some(
+          (warning) =>
+            warning.code ===
+            "NEW_RECRUIT_LEGACY_ARTIFACT_RESTORED",
+        ),
+      );
+
+      let redeliveryCalls = 0;
+      const prepared = await prepareRosterForTessera(
+        { ...candidate, name: "Renamed legacy recovery" },
+        {
+          outputDirectory: path.join(supportDirectory, "prepared"),
+          allowOutsideRoot: true,
+          mutationRunId: "legacy-restored-diagnostic",
+          catalogueDriftMode: "diagnostic",
+        },
+        {
+          runtimeIssue: () => null,
+          persistentCacheDelivery: true,
+          deliver: async () => {
+            redeliveryCalls += 1;
+            throw new Error("legacy restore must prevent redelivery");
+          },
+        },
+      );
+      assert.equal(prepared.ok, true, JSON.stringify(prepared.violations));
+      assert.equal(prepared.data?.cacheReused, true);
+      assert.equal(redeliveryCalls, 0);
     },
   );
 });

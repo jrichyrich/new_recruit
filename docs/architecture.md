@@ -297,6 +297,19 @@ suite, strategy, or
 simulation setting. This prevents a resumed result from silently mixing
 incomparable runs.
 
+A created mutation receipt first copies the verified source/enriched pair into
+a content-addressed, support-owned recovery directory, then seals its absolute
+paths and both content hashes before the outcome is finalized. Resume rehashes
+and revalidates those regular, non-symlink files when the ordinary cache is
+unavailable, so a provisional-cache write failure or moved run output cannot
+strand a verified remote mutation or trigger another delivery. The same
+contract covers canonical rosters and content-addressed uploaded opponent ROSZ
+subjects. Releases from before this receipt field can be repaired only from an
+explicitly supplied durable Tessera job whose run ID, directory, roster
+identity, and ROSZ hashes all match; the repair writes local recovery state and
+performs no browser or network activity. Missing, changed, ambiguous, or
+incompatible evidence remains fail-closed.
+
 Canonical New Recruit delivery always obtains the enriched archive and compares
 its observed game-system and faction-catalogue identity with the roster's
 snapshot. Catalogue drift remains fail-closed by default. An explicit

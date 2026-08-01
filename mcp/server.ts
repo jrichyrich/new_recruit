@@ -227,6 +227,10 @@ type ServerOptions = {
         }>;
       },
     ) => Promise<TesseraRunJob>;
+    restoreNewRecruitArtifact?: (
+      roster: RosterDraftV1,
+      jobPath: string,
+    ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
     cancel: (jobPath: string) => Promise<TesseraRunJob>;
   };
   freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
@@ -2234,6 +2238,57 @@ export function createRosterPilotMcpServer(
           ),
         ),
     );
+
+    if (options.tesseraRunJobs.restoreNewRecruitArtifact) {
+      server.registerTool(
+        "restore_tessera_new_recruit_artifact",
+        {
+          title: "Restore a retained New Recruit artifact",
+          description:
+            "Repair a legacy created-mutation receipt from one exact durable Tessera job. This verifies sealed hashes and writes only local recovery state; it never opens New Recruit or Tessera, creates a list, uploads a roster, or starts a simulation.",
+          inputSchema: {
+            roster: RosterDraftSchema,
+            jobPath: z.string().min(1),
+          },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async ({ roster, jobPath }) => {
+          try {
+            return resultContent(
+              await options.tesseraRunJobs!.restoreNewRecruitArtifact!(
+                roster as RosterDraftV1,
+                jobPath,
+              ),
+            );
+          } catch (error) {
+            const coded = error as { code?: unknown };
+            return resultContent({
+              ok: false,
+              data: null,
+              violations: [
+                {
+                  code:
+                    typeof coded.code === "string"
+                      ? coded.code
+                      : "NEW_RECRUIT_LEGACY_ARTIFACT_RESTORE_FAILED",
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "The retained legacy artifact could not be restored.",
+                  severity: "error" as const,
+                },
+              ],
+              warnings: [],
+            });
+          }
+        },
+      );
+    }
 
     server.registerTool(
       "cancel_tessera_run",

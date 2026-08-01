@@ -550,7 +550,7 @@ test("direct matchup analysis retains a failed catalogue-provenance report", asy
     path.join(os.tmpdir(), "tessera-direct-catalogue-drift-"),
   );
   try {
-    const delivery = deliveryFor(player, directory);
+    const delivery = await writeDeliveryFor(player, directory);
     delivery.data!.enrichedSummary!.observedNewRecruitCatalogue = {
       source: "new-recruit-enriched-rosz",
       gameSystem: {
@@ -579,10 +579,23 @@ test("direct matchup analysis retains a failed catalogue-provenance report", asy
     assert.equal(analyzed.ok, false);
     assert.equal(analyzed.data?.status, "failed");
     assert.equal(analyzed.data?.preparation?.status, "failed");
-    assert.equal(
-      analyzed.data?.player.enrichedRoszPath,
-      path.join(directory, "enriched.rosz"),
+    assert.ok(
+      analyzed.data?.player.enrichedRoszPath.startsWith(
+        path.join(directory, "player", "artifacts"),
+      ),
     );
+    assert.match(
+      analyzed.data?.player.sourceRoszSha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.match(
+      analyzed.data?.player.enrichedRoszSha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    await Promise.all([
+      access(analyzed.data!.player.sourceRoszPath),
+      access(analyzed.data!.player.enrichedRoszPath),
+    ]);
     assert.equal(
       analyzed.data?.failures?.[0]?.code,
       "NEW_RECRUIT_CATALOGUE_DRIFT",
@@ -748,7 +761,7 @@ test("missing live catalogue identity fails closed with prepared data", async ()
     path.join(os.tmpdir(), "tessera-catalogue-unverifiable-"),
   );
   try {
-    const delivery = deliveryFor(player, directory);
+    const delivery = await writeDeliveryFor(player, directory);
     delete delivery.data!.enrichedSummary!.observedNewRecruitCatalogue;
     const prepared = await prepareRosterForTessera(
       player,

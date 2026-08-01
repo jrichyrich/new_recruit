@@ -83,6 +83,13 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
     hash-verified frozen inputs, never prior simulation evidence. Use
     `cancel_tessera_run` only when the user asks to stop the run. Cancellation
     retains the run bundle and never deletes New Recruit lists.
+    If a pre-recovery job instead stops with
+    `NEW_RECRUIT_MUTATION_ALREADY_CREATED`, do not deliver again. When the exact
+    originating `tessera-run.json` and unchanged roster are available, use
+    `restore_tessera_new_recruit_artifact` to verify and migrate the retained
+    hash-bound ROSZ pair locally, surface its warnings, and then resume only if
+    the user still wants the run continued. This repair never opens New Recruit
+    or Tessera and never starts a simulation.
     Put the diagnostic choice on the initial `start_tessera_run` request. Never
     add it during resume or restart. If an earlier default job stopped on
     qualifying drift, start a new diagnostic job so it can reuse the

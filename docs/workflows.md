@@ -625,10 +625,16 @@ remote lists.
 
 The matching local MCP tools are `start_tessera_run`,
 `get_tessera_run_status`, `resume_tessera_run`,
-`resolve_tessera_profiles`, and `cancel_tessera_run`. The job path is opaque
-caller state and must be copied exactly from the start response. The CLI reads
-the policy from `--profile-policy`; the MCP resolution tool accepts the
-validated structured policy object.
+`resolve_tessera_profiles`, `restore_tessera_new_recruit_artifact`, and
+`cancel_tessera_run`. The job path is opaque caller state and must be copied
+exactly from the start response. The CLI reads the policy from
+`--profile-policy`; the MCP resolution tool accepts the validated structured
+policy object. The restore tool is only for a legacy
+`NEW_RECRUIT_MUTATION_ALREADY_CREATED` receipt: pass the unchanged roster and
+the exact retained `tessera-run.json`. It verifies the job binding, mutation
+receipt, gameplay identity, and both sealed ROSZ hashes before writing local
+recovery state. It never contacts New Recruit or Tessera and never starts a
+simulation.
 Simulate-mode compatibility commands use this same background coordinator and
 return an in-progress job reference; losing the initiating CLI/MCP client does
 not mark the workflow failed. MCP restart is
@@ -652,7 +658,7 @@ them as `tessera analyze`, `tessera build-and-analyze`, `tessera stress-test`,
 `build_and_analyze_roster_matchup`, `stress_test_roster_against_faction`,
 `preview_faction_stress_portfolio`,
 `build_and_stress_roster_against_faction`, and
-`compare_stress_test_revision`, plus the five job tools above. Hosted MCP,
+`compare_stress_test_revision`, plus the six job tools above. Hosted MCP,
 REST, OpenAPI, and the public website do not expose these operations.
 
 ## Safe recovery
@@ -666,6 +672,16 @@ REST, OpenAPI, and the public website do not expose these operations.
 - `NEW_RECRUIT_PROVISIONAL_CACHE_REUSED` means a hash- and
   profile-revalidated provisional artifact was reused and no new remote list
   was created.
+- `NEW_RECRUIT_MUTATION_ARTIFACT_REUSED` means the ordinary cache was missing,
+  but the created-mutation receipt's content-addressed, support-owned
+  source/enriched pair was rehashed, identity-checked, and reused without a new
+  remote list. This applies to canonical rosters and uploaded opponent ROSZ
+  subjects.
+- `NEW_RECRUIT_LEGACY_ARTIFACT_RESTORED` means an explicitly supplied legacy
+  Tessera job matched the created receipt and both sealed ROSZ hashes, and its
+  artifact was migrated into local recovery state without New Recruit,
+  Tessera, upload, or simulation activity. Missing, changed, or ambiguous
+  evidence remains blocked.
 - `TESSERA_INPUT_NOT_PROFILE_RICH` and
   `TESSERA_INPUT_PROFILES_INCOMPLETE` stop before Tessera browser or licence-key
   activity; never substitute the source `.rosz` for the enriched archive.

@@ -69,9 +69,11 @@ import {
   acquireDirectoryLease,
   beginNewRecruitMutationReceipt,
   loadNewRecruitCache,
+  loadNewRecruitMutationRecoveryArtifact,
   loadNewRecruitProvisionalArtifact,
   recordNewRecruitReuseReceipt,
   storeNewRecruitCache,
+  storeNewRecruitProvisionalArtifact,
   type NewRecruitMutationTransaction,
 } from "../new-recruit/cache";
 import {
@@ -422,7 +424,8 @@ export async function prepareRosterForTessera(
   try {
     const persisted = managesPersistentCache
       ? (await loadNewRecruitCache(roster)) ??
-        (await loadNewRecruitProvisionalArtifact(roster))
+        (await loadNewRecruitProvisionalArtifact(roster)) ??
+        (await loadNewRecruitMutationRecoveryArtifact(roster))
       : null;
     if (persisted) {
       delivery = persisted;
@@ -485,6 +488,27 @@ export async function prepareRosterForTessera(
         pendingPersistentCacheStore = delivery.ok;
       }
       await mutationTransaction?.finalizeDelivery(delivery);
+      if (
+        mutationTransaction &&
+        delivery.data?.catalogueProvenance &&
+        isForwardGameSystemRevisionOnlyDrift(
+          delivery.data.catalogueProvenance,
+        )
+      ) {
+        try {
+          await storeNewRecruitProvisionalArtifact(
+            roster,
+            delivery,
+          );
+        } catch {
+          delivery.warnings.push({
+            code: "NEW_RECRUIT_PROVISIONAL_CACHE_WRITE_FAILED",
+            message:
+              "The revision-only enriched roster was retained by the mutation receipt but could not be added to the provisional reuse store.",
+            severity: "warn",
+          });
+        }
+      }
     }
   } catch (error) {
     if (mutationTransaction) {
@@ -539,7 +563,6 @@ export async function prepareRosterForTessera(
     (artifact) => artifact.format === "new-recruit-enriched-rosz",
   );
   if (
-    !delivery.ok ||
     !delivery.data ||
     !source ||
     !enriched ||
@@ -562,6 +585,10 @@ export async function prepareRosterForTessera(
       warnings: delivery.warnings,
     };
   }
+  const [sourceContent, enrichedContent] = await Promise.all([
+    readFile(source.written),
+    readFile(enriched.written),
+  ]);
   const prepared: TesseraPreparedRoster = {
     rosterId: roster.id,
     rosterName: roster.name,
@@ -569,6 +596,8 @@ export async function prepareRosterForTessera(
     listUrl: delivery.data.listUrl,
     sourceRoszPath: source.written,
     enrichedRoszPath: enriched.written,
+    sourceRoszSha256: sha256(sourceContent),
+    enrichedRoszSha256: sha256(enrichedContent),
     summary: delivery.data.enrichedSummary,
     fingerprint: rosterExecutionFingerprint(roster),
     units: canonicalUnits(roster, "player"),
@@ -677,6 +706,24 @@ export async function prepareRosterForTessera(
       ok: false,
       data: prepared,
       violations: [gameplayIntegrity],
+      warnings: preparationWarnings,
+    };
+  }
+  if (!delivery.ok) {
+    return {
+      ok: false,
+      data: prepared,
+      violations:
+        delivery.violations.length > 0
+          ? delivery.violations
+          : [
+              {
+                code: "TESSERA_HANDOFF_INCOMPLETE",
+                message:
+                  "New Recruit returned verified recovery artifacts, but the delivery did not pass its acceptance checks.",
+                severity: "error",
+              },
+            ],
       warnings: preparationWarnings,
     };
   }
@@ -3615,12 +3662,25 @@ export async function analyzeRosterMatchup(
         dependencies,
       );
   if (!player.ok || !player.data) {
+    let failedPlayer = player.data;
+    if (failedPlayer) {
+      try {
+        failedPlayer = await materializePreparedRosterArtifacts(
+          failedPlayer,
+          path.join(outputDirectory, "player"),
+          options,
+        );
+      } catch {
+        // The original verified paths and hashes remain visible in the failed
+        // report; the durable job layer will refuse an out-of-bundle path.
+      }
+    }
     return {
       ok: false,
-      data: player.data
+      data: failedPlayer
         ? failedPreparationReport({
             playerRoster,
-            player: player.data,
+            player: failedPlayer,
             simulationRequested,
             configuration,
             profilePolicy,
@@ -3687,23 +3747,36 @@ export async function analyzeRosterMatchup(
           dependencies,
         );
     if (!prepared.ok || !prepared.data) {
-      const preparedOpponent = prepared.data
+      let failedOpponent = prepared.data;
+      if (failedOpponent) {
+        try {
+          failedOpponent = await materializePreparedRosterArtifacts(
+            failedOpponent,
+            path.join(outputDirectory, "opponent"),
+            options,
+          );
+        } catch {
+          // Preserve the verified paths in the failed report; the durable job
+          // layer still enforces confinement before checkpointing them.
+        }
+      }
+      const preparedOpponent = failedOpponent
         ? [
             {
               kind: "roster" as const,
-              rosterName: prepared.data.rosterName,
-              sourceRoszPath: prepared.data.sourceRoszPath,
-              enrichedRoszPath: prepared.data.enrichedRoszPath,
+              rosterName: failedOpponent.rosterName,
+              sourceRoszPath: failedOpponent.sourceRoszPath,
+              enrichedRoszPath: failedOpponent.enrichedRoszPath,
               sourceRoszSha256:
-                prepared.data.sourceRoszSha256,
+                failedOpponent.sourceRoszSha256,
               enrichedRoszSha256:
-                prepared.data.enrichedRoszSha256,
-              summary: prepared.data.summary,
+                failedOpponent.enrichedRoszSha256,
+              summary: failedOpponent.summary,
               fingerprint: rosterExecutionFingerprint(opponent.roster),
               units: canonicalUnits(opponent.roster, "opponent"),
-              cacheReused: prepared.data.cacheReused,
-              connectorEvents: prepared.data.connectorEvents,
-              catalogueProvenance: prepared.data.catalogueProvenance,
+              cacheReused: failedOpponent.cacheReused,
+              connectorEvents: failedOpponent.connectorEvents,
+              catalogueProvenance: failedOpponent.catalogueProvenance,
             },
           ]
         : [];

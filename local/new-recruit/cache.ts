@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   copyFile,
+  lstat,
   mkdir,
   readdir,
   readFile,
@@ -25,6 +26,7 @@ import {
   type NewRecruitCatalogueProvenanceComparison,
   type ResultEnvelope,
   type RosterDraftV1,
+  validateEnrichedRosz,
   validateEnrichedRoszGameplayIdentity,
   validateTesseraReadyRosz,
 } from "../../lib/rosterpilot";
@@ -129,6 +131,21 @@ export type NewRecruitMutationAttempt = {
   connectorEvent: ConnectorEvent | null;
   inventoryEventId: string | null;
   message: string | null;
+  /**
+   * Hash-bound local recovery evidence for a verified source/enriched pair.
+   * Older receipts legitimately omit this field and require explicit legacy
+   * restoration; new receipts persist it before a created outcome is sealed.
+   */
+  recoveryArtifact?: NewRecruitMutationRecoveryArtifact | null;
+};
+
+export type NewRecruitMutationRecoveryArtifact = {
+  schemaVersion: 1;
+  artifactKind: "new-recruit-enriched-rosz";
+  sourceRoszPath: string;
+  sourceRoszSha256: string;
+  enrichedRoszPath: string;
+  enrichedRoszSha256: string;
 };
 
 export type NewRecruitCanonicalMutationReceipt = {
@@ -177,6 +194,7 @@ export type NewRecruitMutationFinalization = {
   outcome: Exclude<NewRecruitMutationOutcome, "pending">;
   connectorEvent: ConnectorEvent | null;
   message: string;
+  recoveryArtifact?: NewRecruitMutationRecoveryArtifact | null;
 };
 
 export type NewRecruitMutationResolution = {
@@ -222,6 +240,70 @@ async function sha256(filename: string): Promise<string> {
     .createHash("sha256")
     .update(await readFile(filename))
     .digest("hex");
+}
+
+function validMutationRecoveryArtifact(
+  value: unknown,
+): value is NewRecruitMutationRecoveryArtifact {
+  if (!value || typeof value !== "object") return false;
+  const artifact = value as Partial<NewRecruitMutationRecoveryArtifact>;
+  return (
+    artifact.schemaVersion === 1 &&
+    artifact.artifactKind === "new-recruit-enriched-rosz" &&
+    typeof artifact.sourceRoszPath === "string" &&
+    path.isAbsolute(artifact.sourceRoszPath) &&
+    typeof artifact.enrichedRoszPath === "string" &&
+    path.isAbsolute(artifact.enrichedRoszPath) &&
+    isSha256(artifact.sourceRoszSha256) &&
+    isSha256(artifact.enrichedRoszSha256)
+  );
+}
+
+async function verifiedRegularFileSha256(
+  filename: string,
+  label: string,
+): Promise<string> {
+  return (await readVerifiedRegularFile(filename, label)).sha256;
+}
+
+async function readVerifiedRegularFile(
+  filename: string,
+  label: string,
+): Promise<{ content: Buffer; sha256: string }> {
+  let before;
+  try {
+    before = await lstat(filename);
+  } catch {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_MISSING",
+      `The retained ${label} recovery artifact is missing. No new New Recruit list was created.`,
+    );
+  }
+  if (!before.isFile() || before.isSymbolicLink()) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+      `The retained ${label} recovery artifact is not a regular non-symlink file. No new New Recruit list was created.`,
+    );
+  }
+  const content = await readFile(filename);
+  const after = await lstat(filename).catch(() => null);
+  if (
+    !after?.isFile() ||
+    after.isSymbolicLink() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeMs !== after.mtimeMs
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+      `The retained ${label} recovery artifact changed while it was read. No new New Recruit list was created.`,
+    );
+  }
+  return {
+    content,
+    sha256: crypto.createHash("sha256").update(content).digest("hex"),
+  };
 }
 
 function withoutIntegrity<T extends { integritySha256: string }>(
@@ -383,6 +465,14 @@ function provisionalCacheRoot(cacheKey?: string): string {
   );
 }
 
+function mutationArtifactRoot(cacheKey: string): string {
+  return path.join(
+    cacheRoot(),
+    "mutation-artifacts",
+    cacheKey,
+  );
+}
+
 function mutationReceiptPath(cacheKey: string): string {
   return path.join(mutationReceiptRoot(), `${cacheKey}.json`);
 }
@@ -450,7 +540,10 @@ function validMutationAttempt(
       (typeof attempt.inventoryEventId === "string" &&
         attempt.inventoryEventId.length > 0)) &&
     (attempt.message === null ||
-      typeof attempt.message === "string");
+      typeof attempt.message === "string") &&
+    (attempt.recoveryArtifact === undefined ||
+      attempt.recoveryArtifact === null ||
+      validMutationRecoveryArtifact(attempt.recoveryArtifact));
   if (!structurallyValid) return false;
   const event = attempt.connectorEvent;
   if (outcome === "pending") {
@@ -469,7 +562,11 @@ function validMutationAttempt(
       event.origin === "new-remote" &&
       event.outcome === "verified" &&
       attempt.inventoryEventId !== null &&
-      Boolean(attempt.message?.trim())
+      Boolean(attempt.message?.trim()) &&
+      (attempt.recoveryArtifact === undefined ||
+        attempt.recoveryArtifact === null ||
+        attempt.recoveryArtifact.enrichedRoszSha256 ===
+          event.contentSha256)
     );
   }
   if (outcome === "reused") {
@@ -1069,6 +1166,152 @@ function prepareEvent(
   );
 }
 
+async function recoveryArtifactForDelivery(
+  cacheKey: string,
+  expectedSourceRoszSha256: string | null,
+  delivery: ResultEnvelope<NewRecruitDelivery>,
+  event: ConnectorEvent | null,
+): Promise<NewRecruitMutationRecoveryArtifact> {
+  if (
+    !delivery.data?.enrichedSummary ||
+    !event ||
+    event.origin !== "new-remote" ||
+    event.outcome !== "verified" ||
+    !event.contentSha256
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_REQUIRED",
+      "A created New Recruit mutation cannot be finalized without verified enriched-artifact evidence.",
+    );
+  }
+  const sourceRoszPath = delivery.data.artifacts.find(
+    (artifact) =>
+      artifact.format === "rosterpilot-source-rosz" ||
+      artifact.format === "rosz",
+  )?.written;
+  const enrichedRoszPath = delivery.data.artifacts.find(
+    (artifact) => artifact.format === "new-recruit-enriched-rosz",
+  )?.written;
+  if (!sourceRoszPath || !enrichedRoszPath) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_REQUIRED",
+      "A created New Recruit mutation cannot be finalized without retained source and enriched ROSZ files.",
+    );
+  }
+  return persistMutationRecoveryArtifact({
+    cacheKey,
+    sourceRoszPath,
+    enrichedRoszPath,
+    expectedSourceRoszSha256,
+    expectedEnrichedRoszSha256: event.contentSha256,
+  });
+}
+
+async function copyRecoveryFile(input: {
+  source: string;
+  destination: string;
+  expectedSha256: string;
+  label: string;
+}): Promise<void> {
+  const existing = await lstat(input.destination).catch(() => null);
+  if (existing) {
+    const digest = await verifiedRegularFileSha256(
+      input.destination,
+      input.label,
+    );
+    if (digest !== input.expectedSha256) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+        `The content-addressed ${input.label} recovery artifact changed. No new New Recruit list was created.`,
+      );
+    }
+    return;
+  }
+  const temporary = `${input.destination}.${crypto.randomUUID()}.tmp`;
+  try {
+    await copyFile(input.source, temporary);
+    const digest = await verifiedRegularFileSha256(
+      temporary,
+      input.label,
+    );
+    if (digest !== input.expectedSha256) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+        `The ${input.label} recovery artifact changed while it was retained. No new New Recruit list was created.`,
+      );
+    }
+    await rename(temporary, input.destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function persistMutationRecoveryArtifact(input: {
+  cacheKey: string;
+  sourceRoszPath: string;
+  enrichedRoszPath: string;
+  expectedSourceRoszSha256: string | null;
+  expectedEnrichedRoszSha256: string;
+}): Promise<NewRecruitMutationRecoveryArtifact> {
+  const absoluteSource = path.resolve(input.sourceRoszPath);
+  const absoluteEnriched = path.resolve(input.enrichedRoszPath);
+  const [sourceRoszSha256, enrichedRoszSha256] = await Promise.all([
+    verifiedRegularFileSha256(absoluteSource, "source ROSZ"),
+    verifiedRegularFileSha256(absoluteEnriched, "enriched ROSZ"),
+  ]);
+  if (
+    (input.expectedSourceRoszSha256 !== null &&
+      input.expectedSourceRoszSha256 !== sourceRoszSha256) ||
+    input.expectedEnrichedRoszSha256 !== enrichedRoszSha256
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+      "The verified New Recruit connector hashes do not match the retained recovery artifacts.",
+    );
+  }
+  const directory = path.join(
+    mutationArtifactRoot(input.cacheKey),
+    `${sourceRoszSha256}-${enrichedRoszSha256}`,
+  );
+  const release = await acquireDirectoryLease(`${directory}.lock`);
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const metadata = await lstat(directory);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+        "The content-addressed New Recruit recovery location is not a regular directory.",
+      );
+    }
+    const retainedSource = path.join(directory, "source.rosz");
+    const retainedEnriched = path.join(directory, "enriched.rosz");
+    await Promise.all([
+      copyRecoveryFile({
+        source: absoluteSource,
+        destination: retainedSource,
+        expectedSha256: sourceRoszSha256,
+        label: "source ROSZ",
+      }),
+      copyRecoveryFile({
+        source: absoluteEnriched,
+        destination: retainedEnriched,
+        expectedSha256: enrichedRoszSha256,
+        label: "enriched ROSZ",
+      }),
+    ]);
+    return {
+      schemaVersion: 1,
+      artifactKind: "new-recruit-enriched-rosz",
+      sourceRoszPath: retainedSource,
+      sourceRoszSha256,
+      enrichedRoszPath: retainedEnriched,
+      enrichedRoszSha256,
+    };
+  } finally {
+    await release();
+  }
+}
+
 export function classifyNewRecruitMutationDelivery(
   delivery: ResultEnvelope<NewRecruitDelivery>,
 ): NewRecruitMutationFinalization {
@@ -1100,7 +1343,6 @@ export function classifyNewRecruitMutationDelivery(
     };
   }
   if (
-    delivery.ok &&
     delivery.data?.imported === true &&
     event?.origin === "new-remote" &&
     event.outcome === "verified"
@@ -1109,7 +1351,9 @@ export function classifyNewRecruitMutationDelivery(
       outcome: "created",
       connectorEvent: event,
       message:
-        "New Recruit created and verified a remote roster list.",
+        delivery.ok
+          ? "New Recruit created and verified a remote roster list."
+          : "New Recruit created and verified a remote roster list, but post-delivery acceptance failed closed.",
     };
   }
   if (
@@ -1144,6 +1388,21 @@ function validateMutationFinalization(
   finalization: NewRecruitMutationFinalization,
 ): void {
   const event = finalization.connectorEvent;
+  const recoveryArtifact = finalization.recoveryArtifact ?? null;
+  if (
+    recoveryArtifact &&
+    (
+      !validMutationRecoveryArtifact(recoveryArtifact) ||
+      !event ||
+      !["verified", "reused"].includes(event.outcome) ||
+      event.contentSha256 !== recoveryArtifact.enrichedRoszSha256
+    )
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_INVALID",
+      "A mutation recovery artifact requires matching verified New Recruit connector evidence.",
+    );
+  }
   if (
     finalization.outcome === "created" &&
     (!event ||
@@ -1247,7 +1506,9 @@ async function finalizeMutationAttempt(input: {
     if (
       attempt.outcome === input.finalization.outcome &&
       canonical(attempt.connectorEvent) ===
-        canonical(input.finalization.connectorEvent)
+        canonical(input.finalization.connectorEvent) &&
+      canonical(attempt.recoveryArtifact ?? null) ===
+        canonical(input.finalization.recoveryArtifact ?? null)
     ) {
       await ensureFinalizedInventory(input.receipt);
       return input.receipt;
@@ -1257,11 +1518,45 @@ async function finalizeMutationAttempt(input: {
       "The New Recruit mutation attempt was already finalized with a different outcome.",
     );
   }
+  const recoveryArtifact = input.finalization.recoveryArtifact ?? null;
+  if (recoveryArtifact) {
+    if (!validMutationRecoveryArtifact(recoveryArtifact)) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_ARTIFACT_INVALID",
+        "The New Recruit mutation recovery artifact receipt is malformed.",
+      );
+    }
+    const [sourceSha256, enrichedSha256] = await Promise.all([
+      verifiedRegularFileSha256(
+        recoveryArtifact.sourceRoszPath,
+        "source ROSZ",
+      ),
+      verifiedRegularFileSha256(
+        recoveryArtifact.enrichedRoszPath,
+        "enriched ROSZ",
+      ),
+    ]);
+    if (
+      sourceSha256 !== recoveryArtifact.sourceRoszSha256 ||
+      enrichedSha256 !== recoveryArtifact.enrichedRoszSha256 ||
+      (attempt.expectedSourceRoszSha256 !== null &&
+        attempt.expectedSourceRoszSha256 !== sourceSha256) ||
+      (input.finalization.connectorEvent?.contentSha256 !== null &&
+        input.finalization.connectorEvent?.contentSha256 !== undefined &&
+        input.finalization.connectorEvent.contentSha256 !== enrichedSha256)
+    ) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+        "The retained New Recruit recovery artifacts do not match the mutation receipt hashes.",
+      );
+    }
+  }
   const finalizedAt = new Date().toISOString();
   attempt.outcome = input.finalization.outcome;
   attempt.finalizedAt = finalizedAt;
   attempt.connectorEvent = input.finalization.connectorEvent;
   attempt.message = input.finalization.message;
+  attempt.recoveryArtifact = recoveryArtifact;
   attempt.inventoryEventId =
     input.finalization.outcome === "created" ||
     input.finalization.outcome === "reused"
@@ -1393,6 +1688,7 @@ async function beginMutationReceipt(input: {
       connectorEvent: null,
       inventoryEventId: null,
       message: null,
+      recoveryArtifact: null,
     };
     receipt = resealMutationReceipt({
       ...receipt,
@@ -1453,8 +1749,32 @@ async function beginMutationReceipt(input: {
         });
       },
       finalize,
-      finalizeDelivery: (delivery) =>
-        finalize(classifyNewRecruitMutationDelivery(delivery)),
+      finalizeDelivery: async (delivery) => {
+        const finalization = classifyNewRecruitMutationDelivery(delivery);
+        if (finalization.outcome !== "created") {
+          return finalize(finalization);
+        }
+        let recoveryArtifact: NewRecruitMutationRecoveryArtifact;
+        try {
+          recoveryArtifact = await recoveryArtifactForDelivery(
+            cacheKey,
+            input.descriptor.expectedSourceRoszSha256,
+            delivery,
+            finalization.connectorEvent,
+          );
+        } catch (error) {
+          // The remote creation evidence is still authoritative. Seal it and
+          // release the mutation lease before surfacing the local retention
+          // failure; an exact retained job can then repair the artifact without
+          // risking a duplicate delivery.
+          await finalize(finalization);
+          throw error;
+        }
+        return finalize({
+          ...finalization,
+          recoveryArtifact,
+        });
+      },
     };
   } catch (error) {
     await releaseOnce();
@@ -2065,6 +2385,452 @@ export async function loadNewRecruitProvisionalArtifact(
   return selected
     ? provisionalDelivery(roster, selected.directory, selected.receipt)
     : null;
+}
+
+/**
+ * Rehydrates a verified delivery directly from the sealed mutation ledger
+ * when the ordinary trusted/provisional cache is missing. This is strictly a
+ * local read path: it never opens New Recruit or creates another list.
+ */
+async function verifiedMutationRecoveryArtifact(
+  receipt: NewRecruitMutationReceipt | null,
+): Promise<{
+  attempt: NewRecruitMutationAttempt;
+  artifact: NewRecruitMutationRecoveryArtifact;
+  event: ConnectorEvent;
+  enrichedContent: Buffer;
+} | null> {
+  const attempt = receipt?.attempts.findLast(
+    (candidate) =>
+      candidate.outcome === "created" &&
+      candidate.recoveryArtifact != null,
+  );
+  const artifact = attempt?.recoveryArtifact;
+  const event = attempt?.connectorEvent;
+  if (!attempt || !artifact || !event) return null;
+  const [sourceSha256, enriched] = await Promise.all([
+    verifiedRegularFileSha256(
+      artifact.sourceRoszPath,
+      "source ROSZ",
+    ),
+    readVerifiedRegularFile(
+      artifact.enrichedRoszPath,
+      "enriched ROSZ",
+    ),
+  ]);
+  const enrichedSha256 = enriched.sha256;
+  const enrichedContent = enriched.content;
+  if (
+    sourceSha256 !== artifact.sourceRoszSha256 ||
+    enrichedSha256 !== artifact.enrichedRoszSha256 ||
+    event.contentSha256 !== enrichedSha256 ||
+    (attempt.expectedSourceRoszSha256 !== null &&
+      attempt.expectedSourceRoszSha256 !== sourceSha256)
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+      `The recovery artifacts recorded by run ${attempt.runId} changed after the New Recruit mutation was finalized. No new list was created.`,
+    );
+  }
+  return { attempt, artifact, event, enrichedContent };
+}
+
+export async function loadNewRecruitMutationRecoveryArtifact(
+  roster: RosterDraftV1,
+): Promise<ResultEnvelope<NewRecruitDelivery> | null> {
+  const receipt = await readNewRecruitMutationReceipt(roster);
+  const recovered = await verifiedMutationRecoveryArtifact(receipt);
+  if (!recovered) return null;
+  const { attempt, artifact, event, enrichedContent } = recovered;
+  const enrichedSha256 = artifact.enrichedRoszSha256;
+  const identity = validateEnrichedRoszGameplayIdentity(
+    enrichedContent,
+    roster,
+  );
+  const catalogueProvenance = provisionalCatalogueComparison(
+    roster,
+    identity.summary,
+  );
+  if (
+    !catalogueProvenance ||
+    (
+      catalogueProvenance.status !== "matched" &&
+      !isForwardGameSystemRevisionOnlyDrift(catalogueProvenance)
+    )
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ARTIFACT_INCOMPATIBLE",
+      `The recovery artifact recorded by run ${attempt.runId} no longer matches this roster's frozen New Recruit identity. No new list was created.`,
+    );
+  }
+  return {
+    ok: true,
+    data: {
+      rosterId: roster.id,
+      rosterName: identity.summary.rosterName,
+      uiIdentity: null,
+      listUrl: event.remoteId,
+      imported: false,
+      sessionReused: true,
+      cacheReused: true,
+      connectorEvents: [
+        event,
+        {
+          schemaVersion: 1,
+          eventId: crypto.randomUUID(),
+          recordedAt: new Date().toISOString(),
+          provider: "new-recruit",
+          action: "prepare",
+          origin: "manifest-reuse",
+          outcome: "reused",
+          remoteId: event.remoteId,
+          contentSha256: enrichedSha256,
+        },
+      ],
+      verification: null,
+      enrichedSummary: identity.summary,
+      catalogueProvenance,
+      artifacts: [
+        {
+          format: "rosterpilot-source-rosz",
+          filename: path.basename(artifact.sourceRoszPath),
+          mimeType: "application/zip",
+          written: artifact.sourceRoszPath,
+        },
+        {
+          format: "new-recruit-enriched-rosz",
+          filename: path.basename(artifact.enrichedRoszPath),
+          mimeType: "application/zip",
+          written: artifact.enrichedRoszPath,
+        },
+      ],
+    },
+    violations: [],
+    warnings: [
+      {
+        code: "NEW_RECRUIT_MUTATION_ARTIFACT_REUSED",
+        message:
+          `Reused the hash-verified artifacts retained by New Recruit mutation run ${attempt.runId}; no remote list was created.`,
+        severity: "warn",
+      },
+    ],
+  };
+}
+
+export async function loadNewRecruitRoszMutationRecoveryArtifact(input: {
+  subject: NewRecruitRoszMutationSubject;
+  expected: EnrichedRoszSummary;
+}): Promise<ResultEnvelope<NewRecruitDelivery> | null> {
+  const receipt = await readNewRecruitRoszMutationReceipt(input.subject);
+  const recovered = await verifiedMutationRecoveryArtifact(receipt);
+  if (!recovered) return null;
+  const { attempt, artifact, event, enrichedContent } = recovered;
+  const summary = validateEnrichedRosz(enrichedContent, {
+    name: input.expected.rosterName,
+    factionName: input.expected.factionName,
+    totalPoints: input.expected.totalPoints,
+    units: input.expected.units.map((unit) => ({
+      name: unit.name,
+      modelCount: unit.modelCount,
+      ...(unit.points === undefined
+        ? {}
+        : { points: unit.points }),
+    })),
+  });
+  return {
+    ok: true,
+    data: {
+      rosterId: receipt!.rosterId,
+      rosterName: summary.rosterName,
+      uiIdentity: null,
+      listUrl: event.remoteId,
+      imported: false,
+      sessionReused: true,
+      cacheReused: true,
+      connectorEvents: [
+        event,
+        {
+          schemaVersion: 1,
+          eventId: crypto.randomUUID(),
+          recordedAt: new Date().toISOString(),
+          provider: "new-recruit",
+          action: "prepare",
+          origin: "manifest-reuse",
+          outcome: "reused",
+          remoteId: event.remoteId,
+          contentSha256: artifact.enrichedRoszSha256,
+        },
+      ],
+      verification: null,
+      enrichedSummary: summary,
+      artifacts: [
+        {
+          format: "rosterpilot-source-rosz",
+          filename: path.basename(artifact.sourceRoszPath),
+          mimeType: "application/zip",
+          written: artifact.sourceRoszPath,
+        },
+        {
+          format: "new-recruit-enriched-rosz",
+          filename: path.basename(artifact.enrichedRoszPath),
+          mimeType: "application/zip",
+          written: artifact.enrichedRoszPath,
+        },
+      ],
+    },
+    violations: [],
+    warnings: [
+      {
+        code: "NEW_RECRUIT_MUTATION_ARTIFACT_REUSED",
+        message:
+          `Reused the hash-verified uploaded-ROSZ artifacts retained by New Recruit mutation run ${attempt.runId}; no remote list was created.`,
+        severity: "warn",
+      },
+    ],
+  };
+}
+
+async function regularRoszFilesInside(
+  root: string,
+  maximumDepth = 8,
+  maximumFiles = 1_000,
+): Promise<string[]> {
+  const files: string[] = [];
+  const visit = async (directory: string, depth: number): Promise<void> => {
+    if (depth > maximumDepth) return;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name);
+      const relative = path.relative(root, candidate);
+      if (
+        !relative ||
+        path.isAbsolute(relative) ||
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        entry.isSymbolicLink()
+      ) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await visit(candidate, depth + 1);
+      } else if (
+        entry.isFile() &&
+        candidate.toLocaleLowerCase().endsWith(".rosz")
+      ) {
+        files.push(candidate);
+        if (files.length > maximumFiles) {
+          throw failClosed(
+            "NEW_RECRUIT_LEGACY_ARTIFACT_AMBIGUOUS",
+            "The retained Tessera run contains too many ROSZ files for bounded legacy recovery.",
+          );
+        }
+      }
+    }
+  };
+  await visit(root, 0);
+  return files;
+}
+
+/**
+ * One-time, local-only migration for a created mutation from a release that
+ * predates recovery receipts. The exact durable Tessera job is supplied by
+ * the operator; this function never scans outside that job and performs no
+ * browser or network activity.
+ */
+export async function restoreNewRecruitMutationArtifactFromTesseraRun(input: {
+  roster: RosterDraftV1;
+  jobPath: string;
+}): Promise<ResultEnvelope<NewRecruitDelivery>> {
+  const jobPath = path.resolve(input.jobPath);
+  const jobRoot = path.dirname(jobPath);
+  const [jobMetadata, rootMetadata] = await Promise.all([
+    lstat(jobPath).catch(() => null),
+    lstat(jobRoot).catch(() => null),
+  ]);
+  if (
+    path.basename(jobPath) !== "tessera-run.json" ||
+    !jobMetadata?.isFile() ||
+    jobMetadata.isSymbolicLink() ||
+    !rootMetadata?.isDirectory() ||
+    rootMetadata.isSymbolicLink()
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_JOB_INVALID",
+      "Legacy recovery requires an exact regular tessera-run.json and its non-symlink job directory.",
+    );
+  }
+  let job: {
+    jobKind?: unknown;
+    runId?: unknown;
+    jobDirectory?: unknown;
+    requestPath?: unknown;
+  };
+  try {
+    job = JSON.parse(await readFile(jobPath, "utf8")) as typeof job;
+  } catch {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_JOB_INVALID",
+      "The supplied Tessera job manifest is not valid JSON.",
+    );
+  }
+  if (
+    job.jobKind !== "rosterpilot-tessera-run" ||
+    typeof job.runId !== "string" ||
+    typeof job.jobDirectory !== "string" ||
+    path.resolve(job.jobDirectory) !== jobRoot ||
+    typeof job.requestPath !== "string" ||
+    path.resolve(job.requestPath) !== jobPath
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_JOB_INVALID",
+      "The supplied Tessera job does not bind its run ID and job directory to this manifest.",
+    );
+  }
+  const receipt = await readNewRecruitMutationReceipt(input.roster);
+  const attempt = receipt?.attempts.find(
+    (candidate) =>
+      candidate.runId === job.runId && candidate.outcome === "created",
+  );
+  if (!receipt || !attempt || !attempt.connectorEvent) {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_RECEIPT_MISSING",
+      `No created New Recruit mutation receipt is bound to Tessera run ${job.runId}.`,
+    );
+  }
+  if (attempt.recoveryArtifact) {
+    try {
+      const recovered =
+        await loadNewRecruitMutationRecoveryArtifact(input.roster);
+      if (recovered) return recovered;
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (
+        code !== "NEW_RECRUIT_MUTATION_ARTIFACT_MISSING" &&
+        code !== "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED"
+      ) {
+        throw error;
+      }
+      // A moved or deleted old run can be rebound only through the exact job
+      // and hashes supplied below.
+    }
+  }
+  if (
+    !attempt.expectedSourceRoszSha256 ||
+    !attempt.connectorEvent.contentSha256
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_RECEIPT_INCOMPLETE",
+      "The legacy mutation receipt does not contain both source and enriched content hashes.",
+    );
+  }
+  const candidates = await regularRoszFilesInside(jobRoot);
+  const matches = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const digest = await verifiedRegularFileSha256(
+      candidate,
+      "legacy ROSZ",
+    );
+    const entries = matches.get(digest) ?? [];
+    entries.push(candidate);
+    matches.set(digest, entries);
+  }
+  const sourceMatches = matches.get(attempt.expectedSourceRoszSha256) ?? [];
+  const enrichedMatches =
+    matches.get(attempt.connectorEvent.contentSha256) ?? [];
+  if (sourceMatches.length !== 1 || enrichedMatches.length !== 1) {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_ARTIFACT_AMBIGUOUS",
+      `Tessera run ${job.runId} must contain exactly one source and one enriched ROSZ matching the sealed mutation hashes.`,
+    );
+  }
+  const sourceRoszPath = sourceMatches[0]!;
+  const enrichedRoszPath = enrichedMatches[0]!;
+  const identity = validateEnrichedRoszGameplayIdentity(
+    await readFile(enrichedRoszPath),
+    input.roster,
+  );
+  const catalogueProvenance = provisionalCatalogueComparison(
+    input.roster,
+    identity.summary,
+  );
+  if (
+    !catalogueProvenance ||
+    (
+      catalogueProvenance.status !== "matched" &&
+      !isForwardGameSystemRevisionOnlyDrift(catalogueProvenance)
+    )
+  ) {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_ARTIFACT_INCOMPATIBLE",
+      "Legacy recovery accepts only an identity-complete, profile-complete artifact with matching provenance or forward game-system-revision-only drift.",
+    );
+  }
+  const cacheKey = newRecruitCacheKey(input.roster);
+  const filename = mutationReceiptPath(cacheKey);
+  const release = await acquireDirectoryLease(
+    mutationReceiptLockPath(cacheKey),
+  );
+  try {
+    const current = await readMutationReceiptFile(filename);
+    if (!current) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_RECEIPT_MISSING",
+        "The mutation receipt disappeared during legacy artifact recovery.",
+      );
+    }
+    assertReceiptProvenance(current, input.roster);
+    const currentAttempt = current.attempts.find(
+      (candidate) =>
+        candidate.runId === job.runId && candidate.outcome === "created",
+    );
+    if (!currentAttempt) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_ATTEMPT_MISSING",
+        "The created mutation attempt disappeared during legacy artifact recovery.",
+      );
+    }
+    if (
+      currentAttempt.expectedSourceRoszSha256 !==
+        attempt.expectedSourceRoszSha256 ||
+      currentAttempt.connectorEvent?.contentSha256 !==
+        attempt.connectorEvent.contentSha256
+    ) {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_EVIDENCE_CONFLICT",
+        "The mutation evidence changed during legacy artifact recovery.",
+      );
+    }
+    const recoveryArtifact =
+      await persistMutationRecoveryArtifact({
+        cacheKey,
+        sourceRoszPath,
+        enrichedRoszPath,
+        expectedSourceRoszSha256:
+          attempt.expectedSourceRoszSha256,
+        expectedEnrichedRoszSha256:
+          attempt.connectorEvent.contentSha256,
+      });
+    currentAttempt.recoveryArtifact = recoveryArtifact;
+    const sealed = resealMutationReceipt(current);
+    await atomicWriteJson(filename, sealed);
+    await ensureFinalizedInventory(sealed);
+  } finally {
+    await release();
+  }
+  const restored =
+    await loadNewRecruitMutationRecoveryArtifact(input.roster);
+  if (!restored) {
+    throw failClosed(
+      "NEW_RECRUIT_LEGACY_ARTIFACT_RESTORE_FAILED",
+      "The verified legacy artifact could not be reopened from the mutation recovery store.",
+    );
+  }
+  restored.warnings.unshift({
+    code: "NEW_RECRUIT_LEGACY_ARTIFACT_RESTORED",
+    message:
+      `Restored the hash-verified artifact from Tessera run ${job.runId}; no New Recruit or Tessera activity occurred.`,
+    severity: "warn",
+  });
+  return restored;
 }
 
 export async function loadNewRecruitCache(

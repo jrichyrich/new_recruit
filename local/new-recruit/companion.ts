@@ -45,6 +45,8 @@ import {
 import {
   beginNewRecruitMutationReceipt,
   beginNewRecruitRoszMutationReceipt,
+  loadNewRecruitMutationRecoveryArtifact,
+  loadNewRecruitRoszMutationRecoveryArtifact,
   newRecruitRoszMutationSubject,
   storeNewRecruitProvisionalArtifact,
   type NewRecruitMutationFinalization,
@@ -1121,7 +1123,24 @@ export async function deliverRosterToNewRecruit(
       verified: true,
     });
     delivery.connectorEvents = [verifiedMutationEvent];
-    if (retainForwardDriftProvisional) {
+    if (mutationTransaction) {
+      mutationFinalizationAttempted = true;
+      await mutationTransaction.finalizeDelivery({
+        ok: catalogueProvenanceViolation === null,
+        data: delivery,
+        violations: catalogueProvenanceViolation
+          ? [catalogueProvenanceViolation]
+          : [],
+        warnings: [
+          ...validation.warnings,
+          ...catalogueProvenanceWarnings,
+        ],
+      });
+    }
+    if (
+      retainForwardDriftProvisional &&
+      options.mutationReceiptMode !== "external"
+    ) {
       try {
         await (
           dependencies.provisionalArtifactStore ??
@@ -1141,21 +1160,11 @@ export async function deliverRosterToNewRecruit(
         catalogueProvenanceWarnings.push({
           code: "NEW_RECRUIT_PROVISIONAL_CACHE_WRITE_FAILED",
           message:
-            "The revision-only enriched roster was retained in the run output but could not be added to the provisional reuse store.",
+            "The revision-only enriched roster was retained by the mutation receipt but could not be added to the provisional reuse store.",
           severity: "warn",
         });
       }
     }
-    await finalizeMutationEvent(
-      verifiedMutationEvent,
-      catalogueProvenanceViolation
-        ? worker.imported
-          ? "New Recruit created and verified a remote roster list, but its observed catalogue identity was rejected."
-          : "New Recruit reused an existing roster state, but its observed catalogue identity was rejected."
-        : worker.imported
-          ? "New Recruit created and verified a remote roster list."
-          : "New Recruit reused an existing roster state; no import occurred.",
-    );
     if (catalogueProvenanceViolation) {
       const retainedEnriched = delivery.artifacts.find(
         (artifact) => artifact.format === "new-recruit-enriched-rosz",
@@ -1184,6 +1193,7 @@ export async function deliverRosterToNewRecruit(
       ],
     };
   } catch (error) {
+    const coded = error as { code?: unknown };
     let receiptFailure: unknown = null;
     if (!mutationFinalizationAttempted) {
       const fallbackEvent =
@@ -1240,7 +1250,9 @@ export async function deliverRosterToNewRecruit(
           code:
             error instanceof LocalAgentError
               ? error.code
-              : "COMPANION_FAILED",
+              : typeof coded.code === "string"
+                ? coded.code
+                : "COMPANION_FAILED",
           message: error instanceof Error ? error.message : "Delivery failed.",
           severity: "error",
         },
@@ -1269,6 +1281,80 @@ export async function enrichRoszThroughNewRecruit(
     summary: ReturnType<typeof inspectEnrichedRosz>;
   }>
 > {
+  const source = await readFile(sourcePath);
+  let expected: ReturnType<typeof inspectEnrichedRosz>;
+  try {
+    expected = inspectEnrichedRosz(source);
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "INVALID_ROSZ",
+          message: error instanceof Error ? error.message : "Invalid .rosz file.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
+  const outputDirectory = options.outputDirectory ?? "exports/tessera";
+  const basename = path
+    .basename(sourcePath)
+    .replace(/\.rosz$/i, "")
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-");
+  const filename = `${basename}-new-recruit-enriched.rosz`;
+  const sourceRoszSha256 = crypto
+    .createHash("sha256")
+    .update(source)
+    .digest("hex");
+  const uploadedSubject = newRecruitRoszMutationSubject({
+    content: source,
+    rosterName: expected.rosterName,
+  });
+  try {
+    const recovered = options.mutationSubjectRoster
+      ? await loadNewRecruitMutationRecoveryArtifact(
+          options.mutationSubjectRoster,
+        )
+      : await loadNewRecruitRoszMutationRecoveryArtifact({
+          subject: uploadedSubject,
+          expected,
+        });
+    if (recovered?.data?.enrichedSummary) {
+      const enriched = recovered.data.artifacts.find(
+        (artifact) =>
+          artifact.format === "new-recruit-enriched-rosz",
+      );
+      if (!enriched) {
+        throw new Error(
+          "The mutation recovery receipt omitted its enriched ROSZ artifact.",
+        );
+      }
+      return {
+        ok: true,
+        data: {
+          listUrl: recovered.data.listUrl,
+          imported: false,
+          sessionReused: true,
+          connectorEvents:
+            recovered.data.connectorEvents ?? [],
+          enrichedRoszPath: enriched.written,
+          summary: recovered.data.enrichedSummary,
+        },
+        violations: [],
+        warnings: recovered.warnings,
+      };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [mutationReceiptViolation(error)],
+      warnings: [],
+    };
+  }
   const restartIssue = dependencies.runtimeIssue
     ? dependencies.runtimeIssue()
     : dependencies.agentDeliver
@@ -1299,30 +1385,6 @@ export async function enrichRoszThroughNewRecruit(
       warnings: [],
     };
   }
-  const source = await readFile(sourcePath);
-  let expected: ReturnType<typeof inspectEnrichedRosz>;
-  try {
-    expected = inspectEnrichedRosz(source);
-  } catch (error) {
-    return {
-      ok: false,
-      data: null,
-      violations: [
-        {
-          code: "INVALID_ROSZ",
-          message: error instanceof Error ? error.message : "Invalid .rosz file.",
-          severity: "error",
-        },
-      ],
-      warnings: [],
-    };
-  }
-  const outputDirectory = options.outputDirectory ?? "exports/tessera";
-  const basename = path
-    .basename(sourcePath)
-    .replace(/\.rosz$/i, "")
-    .replace(/[^\p{L}\p{N}._-]+/gu, "-");
-  const filename = `${basename}-new-recruit-enriched.rosz`;
   try {
     await resolveExportArtifactTargets(
       [
@@ -1355,10 +1417,6 @@ export async function enrichRoszThroughNewRecruit(
     };
   }
 
-  const sourceRoszSha256 = crypto
-    .createHash("sha256")
-    .update(source)
-    .digest("hex");
   const eventId = crypto.randomUUID();
   const eventRecordedAt = new Date().toISOString();
   let transaction: NewRecruitMutationTransaction | null = null;
@@ -1375,10 +1433,7 @@ export async function enrichRoszThroughNewRecruit(
             expectedSourceRoszSha256: sourceRoszSha256,
           })
         : await beginNewRecruitRoszMutationReceipt({
-            subject: newRecruitRoszMutationSubject({
-              content: source,
-              rosterName: expected.rosterName,
-            }),
+            subject: uploadedSubject,
             runId,
           });
     } catch (error) {
@@ -1501,12 +1556,42 @@ export async function enrichRoszThroughNewRecruit(
         .digest("hex"),
       verified: true,
     });
-    await finalize(
-      connectorEvent,
-      worker.imported
-        ? "New Recruit created and verified a remote list while enriching the uploaded ROSZ."
-        : "New Recruit reused an existing roster state while enriching the uploaded ROSZ; no import occurred.",
-    );
+    if (transaction) {
+      finalizationAttempted = true;
+      await transaction.finalizeDelivery({
+        ok: true,
+        data: {
+          rosterId:
+            options.mutationSubjectRoster?.id ??
+            `uploaded-rosz:${sourceRoszSha256}`,
+          rosterName: summary.rosterName,
+          uiIdentity: null,
+          listUrl: worker.listUrl,
+          imported: worker.imported,
+          sessionReused: worker.sessionReused,
+          cacheReused: false,
+          connectorEvents: [connectorEvent],
+          verification: null,
+          enrichedSummary: summary,
+          artifacts: [
+            {
+              format: "rosterpilot-source-rosz",
+              filename: path.basename(sourcePath),
+              mimeType: "application/zip",
+              written: path.resolve(sourcePath),
+            },
+            {
+              format: "new-recruit-enriched-rosz",
+              filename,
+              mimeType: "application/zip",
+              written,
+            },
+          ],
+        },
+        violations: [],
+        warnings: [],
+      });
+    }
     return {
       ok: true,
       data: {
@@ -1521,6 +1606,7 @@ export async function enrichRoszThroughNewRecruit(
       warnings: [],
     };
   } catch (error) {
+    const coded = error as { code?: unknown };
     let receiptFailure: unknown = null;
     if (!finalizationAttempted) {
       const fallbackEvent =
@@ -1562,7 +1648,9 @@ export async function enrichRoszThroughNewRecruit(
           code:
             error instanceof LocalAgentError
               ? error.code
-              : "ENRICHED_ROSZ_VERIFICATION_FAILED",
+              : typeof coded.code === "string"
+                ? coded.code
+                : "ENRICHED_ROSZ_VERIFICATION_FAILED",
           message:
             error instanceof Error
               ? error.message

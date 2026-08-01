@@ -141,6 +141,10 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
   assert.ok(opponent.ok && opponent.data);
 
   const requests: TesseraRunRequest[] = [];
+  const restorationCalls: Array<{
+    rosterId: string;
+    jobPath: string;
+  }> = [];
   let synchronousAnalyzeCalls = 0;
   const server = createRosterPilotMcpServer({
     tesseraCompanion: {
@@ -164,6 +168,33 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
       },
       resolveProfiles: async () => {
         throw new Error("Profile resolution was not expected.");
+      },
+      restoreNewRecruitArtifact: async (roster, jobPath) => {
+        restorationCalls.push({ rosterId: roster.id, jobPath });
+        return {
+          ok: true,
+          data: {
+            rosterId: roster.id,
+            rosterName: roster.name,
+            listUrl: null,
+            imported: false,
+            sessionReused: true,
+            cacheReused: true,
+            connectorEvents: [],
+            verification: null,
+            enrichedSummary: null,
+            catalogueProvenance: null,
+            artifacts: [],
+          },
+          violations: [],
+          warnings: [
+            {
+              code: "NEW_RECRUIT_LEGACY_ARTIFACT_RESTORED",
+              message: "Fixture local recovery completed.",
+              severity: "warn" as const,
+            },
+          ],
+        };
       },
       cancel: async () => {
         throw new Error("Job cancellation was not expected.");
@@ -294,6 +325,29 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
         index === 0 ? "reject" : "diagnostic",
       );
     }
+
+    const tools = await client.listTools();
+    assert.ok(
+      tools.tools.some(
+        (tool) =>
+          tool.name === "restore_tessera_new_recruit_artifact",
+      ),
+    );
+    const restored = await client.callTool({
+      name: "restore_tessera_new_recruit_artifact",
+      arguments: {
+        roster: player.data,
+        jobPath: "/fixture/prior/tessera-run.json",
+      },
+    });
+    assert.equal(restored.isError, false);
+    assert.deepEqual(restorationCalls, [
+      {
+        rosterId: player.data.id,
+        jobPath: "/fixture/prior/tessera-run.json",
+      },
+    ]);
+    assert.equal(requests.length, 2);
   } finally {
     await client.close();
     await server.close();

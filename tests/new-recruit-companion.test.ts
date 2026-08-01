@@ -17,6 +17,7 @@ import {
   deliverRosterToNewRecruit,
   probeNewRecruitLiveUi,
 } from "../local/new-recruit/companion";
+import { readNewRecruitMutationReceipt } from "../local/new-recruit/cache";
 import { prepareRosterForTessera } from "../local/tessera/companion";
 import {
   newRecruitUiIdentityFingerprint,
@@ -890,6 +891,192 @@ test("a strict revision-drift failure is reused provisionally by a later diagnos
       "NEW_RECRUIT_CATALOGUE_DRIFT",
     );
     assert.equal(deliveryCalls, 1);
+  } finally {
+    if (previousSupport === undefined) {
+      delete process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+    } else {
+      process.env.ROSTERPILOT_SUPPORT_DIRECTORY = previousSupport;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a created mutation recovers its retained artifacts when provisional persistence failed", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+    name: "Mutation artifact recovery fixture",
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-mutation-recovery-"),
+  );
+  const previousSupport = process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+  process.env.ROSTERPILOT_SUPPORT_DIRECTORY = path.join(
+    directory,
+    "support",
+  );
+  let agentCalls = 0;
+  let fallbackDeliveryCalls = 0;
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!, {
+      gameSystemRevision:
+        built.data!.sourceData.newRecruit.gameSystemRevision + 1,
+    });
+    const first = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: path.join(directory, "first"),
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: false,
+        mutationRunId: "mutation-recovery-first",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        runtimeIssue: () => null,
+        provisionalArtifactStore: async () => {
+          throw new Error("simulated provisional store failure");
+        },
+        agentDeliver: async () => {
+          agentCalls += 1;
+          return {
+            worker: {
+              ok: true,
+              uiIdentity: "d".repeat(64),
+              imported: true,
+              sessionReused: false,
+              listUrl:
+                "https://www.newrecruit.eu/app/Lists/mutation-recovery-fixture",
+              verification: {
+                name: true,
+                faction: true,
+                points: true,
+                units: [],
+                mismatches: [],
+              },
+            },
+            enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+          };
+        },
+      },
+    );
+    assert.equal(first.ok, false);
+    assert.equal(first.violations[0]?.code, "NEW_RECRUIT_CATALOGUE_DRIFT");
+    assert.ok(
+      first.warnings.some(
+        (warning) =>
+          warning.code === "NEW_RECRUIT_PROVISIONAL_CACHE_WRITE_FAILED",
+      ),
+    );
+    const receipt = await readNewRecruitMutationReceipt(built.data!);
+    assert.equal(receipt?.attempts[0]?.outcome, "created");
+    assert.ok(receipt?.attempts[0]?.recoveryArtifact);
+    assert.ok(
+      receipt!.attempts[0]!.recoveryArtifact!.enrichedRoszPath.startsWith(
+        path.join(
+          process.env.ROSTERPILOT_SUPPORT_DIRECTORY!,
+          "cache",
+          "new-recruit",
+          "v1",
+          "mutation-artifacts",
+        ),
+      ),
+    );
+    await rm(path.join(directory, "first"), {
+      recursive: true,
+      force: true,
+    });
+
+    const strictRecovery = await prepareRosterForTessera(
+      built.data!,
+      {
+        outputDirectory: path.join(directory, "strict-recovery"),
+        allowOutsideRoot: true,
+        mutationRunId: "mutation-recovery-strict",
+      },
+      {
+        runtimeIssue: () => null,
+        persistentCacheDelivery: true,
+        deliver: async () => {
+          fallbackDeliveryCalls += 1;
+          throw new Error("strict recovery must happen before delivery");
+        },
+      },
+    );
+    assert.equal(strictRecovery.ok, false);
+    assert.equal(
+      strictRecovery.violations[0]?.code,
+      "NEW_RECRUIT_CATALOGUE_DRIFT",
+    );
+    assert.ok(strictRecovery.data);
+    assert.match(
+      strictRecovery.data!.sourceRoszSha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.match(
+      strictRecovery.data!.enrichedRoszSha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.equal(fallbackDeliveryCalls, 0);
+
+    const recovered = await prepareRosterForTessera(
+      { ...built.data!, name: "Renamed recovery fixture" },
+      {
+        outputDirectory: path.join(directory, "recovered"),
+        allowOutsideRoot: true,
+        mutationRunId: "mutation-recovery-second",
+        catalogueDriftMode: "diagnostic",
+      },
+      {
+        runtimeIssue: () => null,
+        persistentCacheDelivery: true,
+        deliver: async () => {
+          fallbackDeliveryCalls += 1;
+          throw new Error("recovery must happen before delivery");
+        },
+      },
+    );
+    assert.equal(recovered.ok, true, JSON.stringify(recovered.violations));
+    assert.equal(recovered.data?.cacheReused, true);
+    assert.equal(recovered.data?.summary.rosterName, built.data!.name);
+    assert.ok(
+      recovered.warnings.some(
+        (warning) =>
+          warning.code === "NEW_RECRUIT_MUTATION_ARTIFACT_REUSED",
+      ),
+    );
+    assert.equal(agentCalls, 1);
+    assert.equal(fallbackDeliveryCalls, 0);
+
+    await writeFile(
+      receipt!.attempts[0]!.recoveryArtifact!.enrichedRoszPath,
+      Buffer.from("tampered"),
+    );
+    const tampered = await prepareRosterForTessera(
+      built.data!,
+      {
+        outputDirectory: path.join(directory, "tampered"),
+        allowOutsideRoot: true,
+        mutationRunId: "mutation-recovery-third",
+        catalogueDriftMode: "diagnostic",
+      },
+      {
+        runtimeIssue: () => null,
+        persistentCacheDelivery: true,
+        deliver: async () => {
+          fallbackDeliveryCalls += 1;
+          throw new Error("tampered recovery must fail before delivery");
+        },
+      },
+    );
+    assert.equal(tampered.ok, false);
+    assert.equal(
+      tampered.violations[0]?.code,
+      "NEW_RECRUIT_MUTATION_ARTIFACT_CHANGED",
+    );
+    assert.equal(fallbackDeliveryCalls, 0);
   } finally {
     if (previousSupport === undefined) {
       delete process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
