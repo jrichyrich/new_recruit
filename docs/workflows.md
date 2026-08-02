@@ -15,7 +15,8 @@ plan are documented in
 | Goal | Setup profile | Platforms | External side effect |
 | --- | --- | --- | --- |
 | Build, edit, validate, print, or save a roster | `core` | macOS, Linux, Windows | None |
-| Use RosterPilot through a local MCP client | `mcp` | macOS, Linux, Windows | None |
+| Use the ChatGPT/Codex personal plugin | `core`, then `plugin:local:install` | macOS owner machine | Installs a new local plugin version; no game-service action |
+| Use RosterPilot through a standalone local MCP client | `mcp` | macOS, Linux, Windows | None |
 | Export `.rosz` for manual New Recruit import | `core` | macOS, Linux, Windows | None until the player imports it |
 | Upload and verify a new New Recruit list | `new-recruit` | macOS | Creates a new list only after an explicit delivery command |
 | Compare known armies and collect Tessera simulations | `tessera` | macOS | Creates verified New Recruit list copies during profile enrichment, then runs Tessera only with `--execution-mode simulate` (the deprecated `--experimental` alias is still accepted) |
@@ -44,17 +45,51 @@ npm run setup -- --profile new-recruit
 npm run setup -- --profile tessera
 ```
 
-`new-recruit` includes `core` and `mcp`. `tessera` includes those capabilities
-plus New Recruit enrichment because Tessera needs profile-rich `.rosz` files.
-Installing a profile does not run a delivery or simulation.
+`new-recruit` includes `core` and local MCP readiness. `tessera` includes those
+capabilities plus New Recruit enrichment because Tessera needs profile-rich
+`.rosz` files. Installing a profile does not run a delivery or simulation.
 
-Setup also installs the repository's RosterPilot Codex skill into its
-hash-marked managed directory. Use `npm run skill:check` to inspect it and
-`npm run skill:install` to repair it. Setup never overwrites an unrelated
-unmanaged skill or edits a Codex plugin cache. The tracked installable plugin
-package is checked separately with `npm run plugin:check`; after publishing a
-new plugin version, reinstall it through its marketplace and start a new Codex
-task so the updated workflow is loaded.
+Choose one Codex MCP delivery path. `npm run setup -- --profile mcp` creates a
+project-local standalone entry when no personal plugin is registered. The
+supported ChatGPT/Codex owner-Mac path instead starts with core setup and then
+publishes the personal plugin:
+
+```bash
+npm run setup -- --profile core --refresh check
+npm run plugin:local:install
+```
+
+The operator-owned `~/.agents/plugins/marketplace.json` must be named
+`personal` and map `rosterpilot` to `./plugins/rosterpilot`. The installer
+verifies but never edits that registry or Codex's immutable cache. It also
+refuses a project-local `[mcp_servers.rosterpilot]` entry because that entry
+would take precedence over the plugin. See
+[Local ChatGPT/Codex personal plugin](./chatgpt-codex-plugin.md) for the exact
+prerequisites and switching procedure.
+
+Install browser-backed profiles only after the personal plugin is registered;
+setup then detects the plugin and does not create a shadowing standalone entry:
+
+```bash
+npm run setup -- --profile tessera --refresh skip
+npm run rosterpilot -- agent ensure-current
+npm run plugin:local:check
+npm run doctor -- --profile tessera --refresh skip
+npm run rosterpilot -- new-recruit status
+npm run rosterpilot -- tessera status
+```
+
+Use `--profile new-recruit` when Tessera is not needed. Plugin verification and
+browser readiness are separate gates: `plugin:local:check` audits the canonical
+skill, tracked package, managed skill, marketplace source, immutable cache,
+plugin registration, and MCP startup; it does not verify Keychain credentials
+or local-agent freshness. Start a new ChatGPT/Codex task after installation
+because existing tasks retain their original skill and tool snapshot.
+
+For repository and CI checks, `npm run plugin:check` proves only that the
+portable tracked plugin packages the canonical skill. `npm run skill:check`
+inspects the marker-protected standalone skill. Neither command publishes the
+machine-local personal plugin.
 
 Check the current machine without changing it:
 

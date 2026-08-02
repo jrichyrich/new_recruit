@@ -238,6 +238,11 @@ export function renderLaunchAgent(options: {
   const dataBundle = defaultLocalDataBundleEnvironment(
     options.projectDirectory,
   );
+  const bootstrapEnvironment = options.bootstrapDataBundleDirectory
+    ? `
+      <key>ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY</key>
+      <string>${xml(options.bootstrapDataBundleDirectory)}</string>`
+    : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -262,8 +267,7 @@ ${argumentsXml}
       <string>${xml(options.dataChannelUrl ?? dataBundle.channelUrl)}</string>
       <key>ROSTERPILOT_DATA_TRUSTED_KEYS_FILE</key>
       <string>${xml(options.dataTrustedKeysFile ?? dataBundle.trustedKeysFile)}</string>
-      <key>ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY</key>
-      <string>${xml(options.bootstrapDataBundleDirectory ?? dataBundle.bootstrapDirectory)}</string>
+${bootstrapEnvironment}
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -352,6 +356,12 @@ export async function installLocalAgent(): Promise<LifecycleResult> {
     await rename(temporaryBroker, broker);
   }
 
+  const dataBundle = defaultLocalDataBundleEnvironment(projectRoot);
+  const bootstrapDataBundleDirectory =
+    process.env.ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY ??
+    ((await exists(dataBundle.bootstrapDirectory))
+      ? dataBundle.bootstrapDirectory
+      : undefined);
   const plistContent = renderLaunchAgent({
     nodeExecutable: process.execPath,
     projectDirectory: projectRoot,
@@ -360,6 +370,7 @@ export async function installLocalAgent(): Promise<LifecycleResult> {
     profileDirectory: newRecruitProfileDirectory(),
     stdoutPath: path.join(logs, "agent.stdout.log"),
     stderrPath: path.join(logs, "agent.stderr.log"),
+    bootstrapDataBundleDirectory,
   });
   await writeFile(plist, plistContent, { mode: 0o600 });
   await launchctl(["bootout", launchDomain(), plist], true);

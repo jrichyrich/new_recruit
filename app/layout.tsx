@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "RosterPilot — Agentic Army Builder",
   description:
-    "Explore Warhammer 40,000 factions, draft rosters with a natural-language agent, validate the basics, and prepare clean New Recruit exports.",
+    "Build, inspect, modify, validate, explain, and export deterministic Warhammer 40,000 army rosters from official-first rules data.",
   openGraph: {
     title: "RosterPilot — Agentic Army Builder",
     description: "Build the army you mean to play.",

@@ -2,6 +2,7 @@
   "name": "rosterpilot",
   "version": "0.2.0",
   "private": true,
+  "description": "Build, inspect, modify, validate, explain, export, and optionally analyze Warhammer 40,000 army rosters.",
   "bin": {
     "rosterpilot": "./bin/rosterpilot.mjs"
   },
@@ -47,6 +48,8 @@
     "skill:check": "node scripts/manage-rosterpilot-skill.mjs --check",
     "plugin:sync": "node scripts/sync-rosterpilot-plugin.mjs",
     "plugin:check": "node scripts/sync-rosterpilot-plugin.mjs",
+    "plugin:local:install": "node scripts/manage-rosterpilot-personal-plugin.mjs",
+    "plugin:local:check": "node scripts/manage-rosterpilot-personal-plugin.mjs --check",
     "fixtures:sanitize": "node --import tsx scripts/sanitize-new-recruit-fixtures.ts",
     "fixtures:record-connector": "node --import tsx scripts/record-connector-fixture.ts"
   },

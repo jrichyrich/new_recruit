@@ -8,13 +8,15 @@ Runtime rules come from one immutable `DataBundleProvider` snapshot per data-con
 
 ## Build, Test, and Development Commands
 
-- `npm install` installs the pinned Node dependencies (Node 22.13+).
+- `npm ci` installs the lockfile-pinned Node dependencies (Node 22.13+).
 - `npm run dev` starts the local Vinext development server.
 - `npm run build` produces the deployable application build.
 - `npm test` runs TypeScript tests, builds the app, then validates rendered HTML.
 - `npm run lint` applies the Next.js ESLint configuration.
 - `npm run data:check` verifies faction builds and export coverage.
-- `npm run plugin:check` verifies that the installable plugin packages the canonical RosterPilot skill.
+- `npm run plugin:check` verifies portable tracked-package parity with the canonical RosterPilot skill.
+- `npm run plugin:local:check` audits the installed personal source, immutable Codex cache, registration, and effective MCP binding without changing them.
+- `npm run plugin:local:install` publishes the machine-local ChatGPT/Codex personal plugin. It changes per-user plugin state, requires the preconfigured `personal` marketplace, and requires a new task or app restart afterward.
 - `npm run rosterpilot -- status` exercises the CLI; `npm run mcp` starts the stdio MCP server.
 
 Run `npm run companion:build` only when changing the macOS automation companion. Browser-backed companion tests are opt-in; use the command documented in `README.md`.

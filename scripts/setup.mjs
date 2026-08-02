@@ -102,45 +102,93 @@ function quoteToml(value) {
   return JSON.stringify(value);
 }
 
-function localDataBundleEnvironment(projectRoot) {
-  return {
+export function localDataBundleEnvironment(
+  projectRoot,
+  options = {},
+) {
+  const environment = options.environment ?? process.env;
+  const pathExists = options.pathExists ?? existsSync;
+  const defaultBootstrapDirectory = path.join(
+    projectRoot,
+    "data",
+    "bootstrap-data-bundle",
+  );
+  const explicitBootstrapDirectory =
+    environment.ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY;
+  /** @type {Record<string, string>} */
+  const result = {
     ROSTERPILOT_DATA_CHANNEL_URL:
-      process.env.ROSTERPILOT_DATA_CHANNEL_URL ??
+      environment.ROSTERPILOT_DATA_CHANNEL_URL ??
       defaultDataBundleChannelUrl,
     ROSTERPILOT_DATA_TRUSTED_KEYS_FILE:
-      process.env.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE ??
+      environment.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE ??
       path.join(
         projectRoot,
         "data",
         "data-bundle-trusted-keys.json",
       ),
-    ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY:
-      process.env.ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY ??
-      path.join(projectRoot, "data", "bootstrap-data-bundle"),
+  };
+  if (
+    explicitBootstrapDirectory ||
+    pathExists(defaultBootstrapDirectory)
+  ) {
+    result.ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY =
+      explicitBootstrapDirectory ?? defaultBootstrapDirectory;
+  }
+  return result;
+}
+
+export function renderLocalMcpServerConfig({
+  nodeExecutable,
+  projectRoot,
+  environment = undefined,
+  pathExists = undefined,
+}) {
+  return {
+    command: nodeExecutable,
+    args: [
+      "--import",
+      pathToFileURL(
+        path.join(
+          projectRoot,
+          "node_modules",
+          "tsx",
+          "dist",
+          "loader.mjs",
+        ),
+      ).href,
+      path.join(projectRoot, "mcp", "stdio.ts"),
+    ],
+    cwd: projectRoot,
+    env: localDataBundleEnvironment(projectRoot, {
+      environment,
+      pathExists,
+    }),
   };
 }
 
 export function renderCodexConfig({
   nodeExecutable,
   projectRoot,
+  environment = undefined,
+  pathExists = undefined,
 }) {
-  const loader = pathToFileURL(
-    path.join(projectRoot, "node_modules", "tsx", "dist", "loader.mjs"),
-  ).href;
-  const server = path.join(projectRoot, "mcp", "stdio.ts");
-  const dataEnvironment = localDataBundleEnvironment(projectRoot);
-  const dataEnvironmentToml = Object.entries(dataEnvironment)
+  const server = renderLocalMcpServerConfig({
+    nodeExecutable,
+    projectRoot,
+    environment,
+    pathExists,
+  });
+  const dataEnvironmentToml = Object.entries(server.env)
     .map(([name, value]) => `${name} = ${quoteToml(value)}`)
     .join(", ");
   return [
+    "# RosterPilot standalone MCP configuration.",
+    "# Do not combine this entry with the rosterpilot@personal plugin in the same checkout.",
     "[mcp_servers.rosterpilot]",
-    `command = ${quoteToml(nodeExecutable)}`,
-    `args = [${[
-      "--import",
-      loader,
-      server,
-    ].map(quoteToml).join(", ")}]`,
-    `cwd = ${quoteToml(projectRoot)}`,
+    `command = ${quoteToml(server.command)}`,
+    `args = [${server.args.map(quoteToml).join(", ")}]`,
+    `cwd = ${quoteToml(server.cwd)}`,
     `env = { ${dataEnvironmentToml} }`,
     "",
   ].join("\n");
@@ -149,29 +197,19 @@ export function renderCodexConfig({
 export function renderClaudeConfig({
   nodeExecutable,
   projectRoot,
+  environment = undefined,
+  pathExists = undefined,
 }) {
-  const dataEnvironment = localDataBundleEnvironment(projectRoot);
+  const server = renderLocalMcpServerConfig({
+    nodeExecutable,
+    projectRoot,
+    environment,
+    pathExists,
+  });
   return JSON.stringify(
     {
       mcpServers: {
-        rosterpilot: {
-          command: nodeExecutable,
-          args: [
-            "--import",
-            pathToFileURL(
-              path.join(
-                projectRoot,
-                "node_modules",
-                "tsx",
-                "dist",
-                "loader.mjs",
-              ),
-            ).href,
-            path.join(projectRoot, "mcp", "stdio.ts"),
-          ],
-          cwd: projectRoot,
-          env: dataEnvironment,
-        },
+        rosterpilot: server,
       },
     },
     null,
@@ -199,6 +237,10 @@ Usage:
 Profiles are cumulative: mcp includes core; new-recruit includes core and mcp;
 tessera includes New Recruit preparation plus Tessera comparison readiness.
 The default profile is core and the default refresh mode is check.
+
+For the ChatGPT/Codex personal-plugin path, run the core profile first, then
+npm run plugin:local:install. Later profiles detect that registration and do
+not create a shadowing project-local MCP entry.
 `;
 }
 
@@ -298,7 +340,12 @@ async function askYesNo(question, dependencies) {
 function runNpmScript(name, args, dependencies, capture = false) {
   return dependencies.run(
     npmExecutable(dependencies.platform),
-    ["run", name, ...(args.length ? ["--", ...args] : [])],
+    [
+      "run",
+      ...(capture ? ["--silent"] : []),
+      name,
+      ...(args.length ? ["--", ...args] : []),
+    ],
     {
       capture,
       cwd: dependencies.projectRoot,
@@ -395,14 +442,77 @@ function configureMcp({ doctor, results }, dependencies) {
     nodeExecutable: dependencies.nodeExecutable,
     projectRoot: dependencies.projectRoot,
   });
+  const pluginCheck = runNpmScript(
+    "plugin:local:check",
+    [],
+    dependencies,
+    true,
+  );
+  let pluginReport = null;
+  try {
+    pluginReport = pluginCheck.stdout.trim()
+      ? JSON.parse(pluginCheck.stdout)
+      : null;
+  } catch {
+    pluginReport = null;
+  }
+  const personalPluginRegistered =
+    pluginReport?.installed?.pluginId === "rosterpilot@personal";
+
+  if (personalPluginRegistered) {
+    if (pluginReport.projectMcpShadow?.status === "shadowing") {
+      const message =
+        `project-local MCP configuration shadows rosterpilot@personal: ${pluginReport.projectMcpShadow.configPath}`;
+      if (!doctor) throw new SetupError(message);
+      addResult(
+        results,
+        "ChatGPT/Codex personal plugin",
+        "error",
+        message,
+        [
+          "Remove or rename only the project-local mcp_servers.rosterpilot entry, then rerun Doctor.",
+        ],
+      );
+    } else {
+      const ready =
+        !pluginCheck.error &&
+        pluginCheck.code === 0 &&
+        pluginReport.ok === true;
+      addResult(
+        results,
+        "ChatGPT/Codex personal plugin",
+        ready ? "ready" : "warning",
+        ready
+          ? "registered plugin owns the local RosterPilot MCP server; standalone configuration was skipped"
+          : "registered plugin needs repair; standalone configuration was skipped to avoid shadowing it",
+        ready
+          ? []
+          : [
+              'Run "npm run plugin:local:install", then start a new ChatGPT/Codex task.',
+            ],
+      );
+    }
+    outputLine(
+      dependencies.stdout,
+      "\nOptional Claude Desktop configuration (copy into its mcpServers configuration):",
+    );
+    outputLine(
+      dependencies.stdout,
+      renderClaudeConfig({
+        nodeExecutable: dependencies.nodeExecutable,
+        projectRoot: dependencies.projectRoot,
+      }),
+    );
+    return;
+  }
 
   if (doctor) {
     if (dependencies.fs.exists(configPath)) {
-      addResult(results, "Codex MCP", "ready", `${configPath} exists`);
+      addResult(results, "Standalone Codex MCP", "ready", `${configPath} exists`);
     } else {
       addResult(
         results,
-        "Codex MCP",
+        "Standalone Codex MCP",
         "warning",
         `configuration is absent; run npm run setup -- --profile mcp`,
         ['Run "npm run setup -- --profile mcp" to create the local Codex MCP configuration.'],
@@ -411,7 +521,7 @@ function configureMcp({ doctor, results }, dependencies) {
   } else if (dependencies.fs.exists(configPath)) {
     addResult(
       results,
-      "Codex MCP",
+      "Standalone Codex MCP",
       "warning",
       `${configPath} already exists and was not overwritten`,
     );
@@ -420,7 +530,7 @@ function configureMcp({ doctor, results }, dependencies) {
   } else {
     dependencies.fs.mkdir(configDirectory);
     dependencies.fs.write(configPath, config);
-    addResult(results, "Codex MCP", "ready", `created ${configPath}`);
+    addResult(results, "Standalone Codex MCP", "ready", `created ${configPath}`);
   }
 
   outputLine(

@@ -1,7 +1,7 @@
 {
   "name": "rosterpilot",
   "version": "0.2.0",
-  "description": "Build, validate, export, and explicitly compare Warhammer 40,000 army rosters with RosterPilot.",
+  "description": "Build, inspect, modify, validate, explain, export, and optionally analyze Warhammer 40,000 army rosters with RosterPilot.",
   "author": {
     "name": "RosterPilot"
   },
@@ -17,8 +17,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "RosterPilot",
-    "shortDescription": "Build and validate tabletop army rosters.",
-    "longDescription": "RosterPilot uses official-first, signed semantic data bundles and deterministic validation to build, modify, explain, export, and explicitly analyze Warhammer 40,000 rosters.",
+    "shortDescription": "Build and validate Warhammer 40,000 army rosters.",
+    "longDescription": "RosterPilot uses official-first signed semantic data bundles and deterministic legality rules to build, inspect, modify, validate, explain, and export Warhammer 40,000 rosters. New Recruit handoffs and local Tessera analysis run only when explicitly requested.",
     "developerName": "RosterPilot",
     "category": "Games",
     "capabilities": [

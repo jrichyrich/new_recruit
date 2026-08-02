@@ -1,16 +1,20 @@
 # RosterPilot
 
-RosterPilot is a deterministic Warhammer 40,000 roster engine with four surfaces:
+RosterPilot is a deterministic Warhammer 40,000 roster engine with five delivery surfaces:
 
 - a browser-based army builder;
 - the `rosterpilot` terminal command;
-- a local stdio MCP server for Codex, Claude Desktop, and other MCP clients;
+- an installable ChatGPT/Codex personal plugin backed by the local stdio MCP
+  server;
+- standalone local stdio MCP configuration for Codex, Claude Desktop, and
+  other MCP clients;
 - authenticated REST/OpenAPI and Streamable HTTP MCP endpoints for remote agents.
 
 See [Architecture](docs/architecture.md) for system boundaries, delivery
 workflow, authentication state, and credential flow diagrams. See the
 [Workflow guide](docs/workflows.md) for a task-oriented setup and command
-reference.
+reference, and [Local ChatGPT/Codex plugin setup](docs/chatgpt-codex-plugin.md)
+for the machine installation and ownership model.
 
 All 35 embedded Warhammer 40,000 11th Edition faction entries are searchable
 and buildable, including Space Marine chapter entries that inherit their parent
@@ -29,7 +33,8 @@ comparison, and known-faction stress testing are separate, explicit branches.
 | What you want to do | Setup | Platforms |
 | --- | --- | --- |
 | Build, validate, print, save JSON, or export `.rosz` | `npm run setup -- --profile core` | macOS, Linux, Windows |
-| Use the local MCP server | `npm run setup -- --profile mcp` | macOS, Linux, Windows |
+| Use the ChatGPT/Codex personal plugin | `npm run setup -- --profile core`, then `npm run plugin:local:install` | macOS owner machine |
+| Use a standalone local MCP client | `npm run setup -- --profile mcp` | macOS, Linux, Windows |
 | Upload and verify a New Recruit list | `npm run setup -- --profile new-recruit` | macOS |
 | Compare two known armies in Tessera | `npm run setup -- --profile tessera` | macOS |
 | Stress-test a roster against an unknown list from a known faction | `npm run setup -- --profile tessera` | macOS |
@@ -59,8 +64,8 @@ npm run dev
 ```
 
 For a guided first-time setup that installs the locked dependencies, verifies
-the compiled release data, checks live freshness, and optionally configures local
-MCP or New Recruit automation, run:
+the compiled release data, checks live freshness, and optionally configures a
+standalone local MCP client, New Recruit, or Tessera automation, run:
 
 ```bash
 npm run setup
@@ -86,6 +91,8 @@ npm run rosterpilot -- rebase --file roster.json --out rebased.json
 npm run rosterpilot -- export --file roster.json --format rosz --out roster.rosz
 npm run rosterpilot -- tessera stress-test --file roster.json --against-faction necrons --execution-mode simulate --out-dir exports/necrons-stress
 npm run mcp
+npm run plugin:local:check
+npm run plugin:local:install
 npm run data:check
 npm run data:check-latest
 npm run data:sync-check
@@ -115,7 +122,8 @@ npm run setup
 The interactive setup offers cumulative profiles:
 
 - `core` installs dependencies and verifies the engine and compiled release data;
-- `mcp` also creates a machine-local Codex MCP configuration;
+- `mcp` also creates a machine-local standalone Codex MCP configuration unless
+  `rosterpilot@personal` is already registered;
 - `new-recruit` also builds and optionally configures the macOS delivery
   companion.
 - `tessera` also prepares the New Recruit enrichment dependency and optionally
@@ -164,7 +172,27 @@ build identity, and runtime freshness, then uses the supported restart or
 installation lifecycle to repair the agent. Its result retains the original
 mismatch and the repair actions it performed.
 
-## Local MCP setup
+For ChatGPT/Codex on a fresh owner Mac, install the plugin before an
+MCP-inclusive browser-automation profile. This keeps the standalone
+`.codex/config.toml` path from shadowing the plugin-owned server:
+
+```bash
+npm run setup -- --profile core --refresh check
+npm run plugin:local:install
+npm run setup -- --profile tessera --refresh skip
+npm run rosterpilot -- agent ensure-current
+npm run plugin:local:check
+```
+
+Use `--profile new-recruit` instead of `tessera` when appropriate. Verify New
+Recruit and Tessera separately with their `status` commands, then open a new
+ChatGPT/Codex task. See the
+[personal-plugin guide](docs/chatgpt-codex-plugin.md) for prerequisites,
+switching from standalone MCP, and recovery.
+
+## Local MCP and ChatGPT/Codex setup
+
+### Standalone MCP clients
 
 This repository is the authoritative source for the RosterPilot engine, MCP
 server, skill, data manifests, and generated catalogue overlay. Run the MCP
@@ -178,16 +206,17 @@ npm run setup -- --profile mcp
 If `.codex/config.toml` does not exist, setup creates it as an ignored,
 machine-local file. It never overwrites an existing Codex configuration.
 Setup also prints a ready-to-copy Claude Desktop JSON block but does not edit
-Claude's global configuration.
+Claude's global configuration. This standalone Codex entry is an alternative
+to `rosterpilot@personal`: a project-local server with the same name takes
+precedence over the plugin.
 
-The server exposes:
-
-`get_data_status`, `check_data_freshness`, `get_data_update_status`,
-`refresh_data_now`, `rollback_data_bundle`, `rebase_roster`,
-`list_data_conflicts`, `get_new_recruit_capability`, `search_factions`,
-`compare_factions`, `search_units`, `build_roster`, `modify_roster`,
-`validate_roster`, `explain_roster`, `export_roster`, and
-`prepare_new_recruit_handoff`.
+The server exposes shared tools for rules and data status, faction and unit
+research, deterministic build/modify/validate/explain workflows, export and
+New Recruit handoff preparation, rebase and bundle controls, batch jobs, and
+optimization. The local stdio transport conditionally adds New Recruit and
+Tessera tools when their independently managed macOS agent is ready. The tool
+set is capability-driven and may grow; clients should discover it through MCP
+instead of relying on a fixed count.
 
 The shared provider checks the signed stable channel at startup. Long-lived
 runtimes schedule a 15-minute check, while request-driven runtimes check when
@@ -215,6 +244,29 @@ published plugin must then be republished and reinstalled through its
 marketplace so Codex creates a new cache version; setup never edits cached
 plugin files in place. Start a new Codex task after reinstalling so the new
 skill instructions are loaded.
+
+### ChatGPT/Codex personal plugin
+
+On the Mac that owns the default personal marketplace, use the supported local
+lifecycle commands instead of copying plugin files or editing Codex config by
+hand:
+
+```bash
+npm run plugin:local:check
+npm run plugin:local:install
+```
+
+The `personal` marketplace must already map `rosterpilot` from
+`./plugins/rosterpilot`, which resolves to `~/plugins/rosterpilot`, and the
+checkout must not contain a shadowing `[mcp_servers.rosterpilot]` entry. The
+installer verifies those preconditions, publishes a unique immutable cache
+version, probes the checkout-bound MCP server, and rolls back its managed state
+if publication fails. It does not create the marketplace, edit Codex's cache,
+or install/restart the New Recruit and Tessera LaunchAgent. Run `agent
+ensure-current` for those browser-backed capabilities, and open a new task (or
+restart the app) after publication. The complete order, ownership table, and
+recovery procedure are in the
+[personal-plugin guide](docs/chatgpt-codex-plugin.md).
 
 ## Remote agents
 
@@ -270,7 +322,9 @@ import a validated roster and download New Recruit's Pretty HTML. These tools
 are intentionally absent from hosted MCP, REST, OpenAPI, and the public
 website.
 
-Install the per-user local agent, then configure the credential through its
+The supported first-time path is `npm run setup -- --profile new-recruit` (or
+`--profile tessera` when both providers are needed). For lower-level repair,
+install the per-user local agent and configure the credential through its
 secure macOS dialog:
 
 ```bash
@@ -358,7 +412,9 @@ explicit routes:
 
 These routes are independent from ordinary roster building and New Recruit
 export. They run only after the corresponding explicit CLI or local MCP
-request:
+request. Use `npm run setup -- --profile tessera` for first-time local-agent
+and credential preparation; the commands below are status, repair, and
+operation controls:
 
 ```bash
 npm run rosterpilot -- tessera status

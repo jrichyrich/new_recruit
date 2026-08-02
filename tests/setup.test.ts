@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   SetupError,
   freshnessAction,
+  localDataBundleEnvironment,
   parseSetupArgs,
   renderClaudeConfig,
   renderCodexConfig,
@@ -42,6 +43,7 @@ function setupHarness(options: {
   freshnessState?: string;
   newRecruitAgentAvailable?: boolean;
   newRecruitAvailable?: boolean;
+  personalPluginReport?: Record<string, unknown>;
   platform?: string;
   runtimeDataProviderAvailable?: boolean;
   tesseraCredentialsConfigured?: boolean;
@@ -105,6 +107,17 @@ function setupHarness(options: {
         }),
         stderr: "",
       };
+    }
+    if (args.includes("plugin:local:check")) {
+      return options.personalPluginReport
+        ? {
+            code: options.personalPluginReport.ok === true ? 0 : 2,
+            stdout: args.includes("--silent")
+              ? JSON.stringify(options.personalPluginReport)
+              : `> rosterpilot@0.2.0 plugin:local:check\n> node scripts/manage-rosterpilot-personal-plugin.mjs --check\n\n${JSON.stringify(options.personalPluginReport)}`,
+            stderr: "",
+          }
+        : { code: 2, stdout: "", stderr: "plugin is not installed" };
     }
     if (args.some((entry) => entry.endsWith("cli/rosterpilot.ts"))) {
       const action = args.at(-1);
@@ -376,7 +389,7 @@ test("MCP renderers use the active executable and safely quote checkout paths", 
   );
   assert.match(codex, /ROSTERPILOT_DATA_CHANNEL_URL/);
   assert.match(codex, /data-bundle-trusted-keys\.json/);
-  assert.match(codex, /bootstrap-data-bundle/);
+  assert.doesNotMatch(codex, /bootstrap-data-bundle/);
   assert.match(
     claude.mcpServers.rosterpilot.env.ROSTERPILOT_DATA_CHANNEL_URL,
     /data-bundles\/channels\/stable\.json$/,
@@ -385,6 +398,98 @@ test("MCP renderers use the active executable and safely quote checkout paths", 
     claude.mcpServers.rosterpilot.env
       .ROSTERPILOT_DATA_TRUSTED_KEYS_FILE,
     /data-bundle-trusted-keys\.json$/,
+  );
+  assert.equal(
+    claude.mcpServers.rosterpilot.env
+      .ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY,
+    undefined,
+  );
+});
+
+test("MCP environment includes only real or explicitly configured bootstrap data", () => {
+  const projectRoot = "/tmp/Roster Pilot";
+  const defaultBootstrap = path.join(
+    projectRoot,
+    "data",
+    "bootstrap-data-bundle",
+  );
+  assert.equal(
+    localDataBundleEnvironment(projectRoot, {
+      environment: {},
+      pathExists: (candidate: string) => candidate === defaultBootstrap,
+    }).ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY,
+    defaultBootstrap,
+  );
+  assert.equal(
+    localDataBundleEnvironment(projectRoot, {
+      environment: {
+        ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY:
+          "/operator/missing-bootstrap",
+      },
+      pathExists: () => false,
+    }).ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY,
+    "/operator/missing-bootstrap",
+  );
+});
+
+test("MCP setup does not shadow a registered personal plugin", async () => {
+  const harness = setupHarness({
+    personalPluginReport: {
+      ok: true,
+      installed: { pluginId: "rosterpilot@personal" },
+      projectMcpShadow: { status: "absent" },
+    },
+  });
+  const result = await runSetup(
+    {
+      doctor: false,
+      help: false,
+      nonInteractive: true,
+      profile: "mcp",
+      refresh: "skip",
+    },
+    harness.dependencies,
+  );
+  assert.equal(harness.files.has(harness.configPath), false);
+  assert.equal(
+    harness.calls.some(
+      (call) =>
+        call.args.includes("plugin:local:check") &&
+        call.args.includes("--silent"),
+    ),
+    true,
+  );
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "ChatGPT/Codex personal plugin",
+    )?.status,
+    "ready",
+  );
+});
+
+test("MCP setup fails closed when project configuration shadows the personal plugin", async () => {
+  const configPath = '/tmp/Roster Pilot "fixture"/.codex/config.toml';
+  const harness = setupHarness({
+    configExists: true,
+    personalPluginReport: {
+      ok: false,
+      installed: { pluginId: "rosterpilot@personal" },
+      projectMcpShadow: { status: "shadowing", configPath },
+    },
+  });
+  await assert.rejects(
+    runSetup(
+      {
+        doctor: false,
+        help: false,
+        nonInteractive: true,
+        profile: "mcp",
+        refresh: "skip",
+      },
+      harness.dependencies,
+    ),
+    /project-local MCP configuration shadows rosterpilot@personal/,
   );
 });
 

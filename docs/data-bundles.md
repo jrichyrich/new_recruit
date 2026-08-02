@@ -332,7 +332,7 @@ it cannot install a bootstrap whose signing key is absent from the registry.
 
 ## Runtime activation and recovery
 
-Every surface uses the same provider contract. It checks the signed stable
+Every configured surface uses the same provider contract. It checks the signed stable
 channel on startup. Long-lived runtimes schedule a check every 15 minutes;
 request-driven runtimes also check when that interval is due on the next data
 operation. Stable-channel refresh does not block a build after bootstrap
@@ -436,11 +436,26 @@ Local CLI, MCP, agent, and worker surfaces additionally need:
 
 - the public registry in `data/data-bundle-trusted-keys.json`, or an equivalent
   file selected with `ROSTERPILOT_DATA_TRUSTED_KEYS_FILE`;
-- a bootstrap directory selected with
-  `ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY`, unless the application-release
-  default is present;
-- a writable application-support bundle store. Setup persists these non-secret
-  paths and the channel URL for the local MCP and agent runtime.
+- a bootstrap directory selected explicitly with
+  `ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY` or supplied by the
+  application-release default when that directory exists;
+- a writable application-support bundle store.
+
+Generated standalone MCP, personal-plugin MCP, and LaunchAgent environments
+always carry the signed-channel URL and trusted-public-key file. They include
+`ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY` only when the operator supplied
+it or when `data/bootstrap-data-bundle` exists in the checkout. Omitting a
+missing implicit default lets the runtime recover a previously installed
+signed bundle from its persistent store; if none is available, status reports
+that the signed provider is unavailable and the compiled application data
+remains active. An explicit override is preserved even when its target is
+unavailable, so initialization fails closed instead of silently substituting
+another bundle.
+
+The generated personal-plugin `.mcp.json` contains these non-secret public
+settings and absolute local executable paths. It is machine-local
+configuration, not a trust root: manifest signatures and the pinned public-key
+registry remain authoritative.
 
 Hosted Next.js and Cloudflare surfaces instead need:
 

@@ -174,11 +174,29 @@ test("LaunchAgent rendering quotes paths and exposes no credential values", () =
   assert.match(plist, /data-bundles\/channels\/stable\.json/);
   assert.match(plist, /ROSTERPILOT_DATA_TRUSTED_KEYS_FILE/);
   assert.match(plist, /data-bundle-trusted-keys\.json/);
-  assert.match(
+  assert.doesNotMatch(
     plist,
     /ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY/,
   );
   assert.doesNotMatch(plist, /password|cookie|access.?token/i);
+});
+
+test("LaunchAgent preserves an explicit bootstrap path even when unavailable", () => {
+  const plist = renderLaunchAgent({
+    nodeExecutable: "/opt/node/bin/node",
+    projectDirectory: "/tmp/RosterPilot",
+    brokerPath: "/tmp/broker",
+    socketPath: "/private/tmp/rosterpilot.sock",
+    profileDirectory: "/tmp/profile",
+    stdoutPath: "/tmp/stdout.log",
+    stderrPath: "/tmp/stderr.log",
+    bootstrapDataBundleDirectory: "/operator/missing-bootstrap",
+  });
+  assert.match(
+    plist,
+    /ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY/,
+  );
+  assert.match(plist, /\/operator\/missing-bootstrap/);
 });
 
 test("local agent reports providers through a user-only transport", async () => {

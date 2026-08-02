@@ -534,6 +534,60 @@ changes points in the middle of a build.
   the current verified pointer remains unchanged. See
   [`data-bundles.md`](data-bundles.md).
 
+## ChatGPT/Codex local integration boundary
+
+The canonical workflow source is `skills/rosterpilot/`.
+`plugins/rosterpilot/` is its source-synchronized, portable package and never
+contains a machine-specific MCP path. On the owner Mac,
+`plugin:local:install` materializes `~/plugins/rosterpilot`, assigns a unique
+build-metadata version, and adds a generated `.mcp.json` bound to the current
+Node executable and checkout. The operator-owned `personal` marketplace must
+already map `rosterpilot` to `./plugins/rosterpilot`; RosterPilot validates
+that registry but does not edit it.
+
+Codex creates and owns the immutable
+`$CODEX_HOME/plugins/cache/personal/rosterpilot/<version>` copy and the active
+MCP registration. RosterPilot invokes the Codex plugin lifecycle, then verifies
+the installed record and the effective stdio transport; it never patches a
+cache version in place. The marker-protected standalone skill at
+`$CODEX_HOME/skills/rosterpilot` is synchronized in the same publication
+transaction. Existing unmanaged skill and personal-source directories are
+never adopted without exact identity checks.
+
+A project-local `[mcp_servers.rosterpilot]` configuration is an alternative
+delivery path and takes precedence over the plugin-owned server. Setup skips
+creating it when `rosterpilot@personal` is already registered, while the plugin
+installer refuses to publish if a shadowing entry exists. A successful plugin
+reinstall affects new ChatGPT/Codex tasks only: an existing task retains the
+skill and MCP tool snapshot captured when it began.
+
+```mermaid
+flowchart LR
+    canonical["Canonical skill"]
+    package["Tracked portable plugin"]
+    publisher["Local personal-plugin publisher"]
+    registry["Operator-owned personal registry"]
+    source["Generated personal source and MCP binding"]
+    cache["Codex-owned immutable cache"]
+    task["New ChatGPT/Codex task"]
+    mcp["Checkout-bound stdio MCP"]
+    agent["Separately managed local agent"]
+
+    canonical --> package
+    package --> publisher
+    registry -. "validate only" .-> publisher
+    publisher --> source
+    publisher -->|"codex plugin add"| cache
+    cache --> task
+    task --> mcp
+    mcp -. "New Recruit or Tessera jobs" .-> agent
+```
+
+Personal-plugin publication owns only Codex integration. It neither installs
+nor restarts the per-user LaunchAgent. New Recruit and Tessera require their
+setup profiles, and checkout, build, or runtime drift is repaired separately
+with `rosterpilot agent ensure-current`.
+
 ## System architecture
 
 ```mermaid
@@ -830,13 +884,18 @@ Security invariants:
 | Keychain broker | Native secure configuration and restricted credential access | `native/NewRecruitKeychainBroker.swift` |
 | Hosted API | Credential-free REST, browser-engine operations, and remote handoff under server snapshot leases | `app/api/v1/[...path]/route.ts`, `app/hosted-data-bundles.ts` |
 | Browser UI | Device-local draft history with roster operations delegated to a same-origin, Fetch-Metadata-guarded, credential-free leased engine; headerless and cross-origin callers use the authenticated REST surface instead | `app/page.tsx`, `app/api/browser-engine/route.ts` |
-| Codex workflow guidance | Canonical skill plus a source-synchronized installable plugin package; setup manages only its marked standalone copy and never mutates plugin caches | `skills/rosterpilot/`, `plugins/rosterpilot/`, `scripts/manage-rosterpilot-skill.mjs`, `scripts/sync-rosterpilot-plugin.mjs` |
+| Canonical Codex workflow package | Keep the canonical skill and portable tracked plugin source-synchronized without machine-local paths | `skills/rosterpilot/`, `plugins/rosterpilot/`, `scripts/sync-rosterpilot-plugin.mjs` |
+| Managed standalone Codex skill | Install and inspect only the marker-protected per-user skill copy | `scripts/manage-rosterpilot-skill.mjs` |
+| Personal ChatGPT/Codex publication | Validate marketplace ownership, generate the machine source and MCP binding, request immutable-cache registration, probe startup, verify effective state, and roll back managed layers on failure | `scripts/manage-rosterpilot-personal-plugin.mjs` |
+| Local MCP configuration renderer | Generate one checkout-bound Node, loader, server, working-directory, and public data environment contract for standalone and plugin MCP paths | `scripts/setup.mjs` |
 
 ## Installation and deployment boundaries
 
 | Surface | Installation unit | Portability and durability rule |
 | --- | --- | --- |
 | Core engine, CLI, and stdio MCP | Complete Git checkout, locked Node dependencies, and compiled release data; signed bootstrap, trusted Ed25519 public keys, and a channel URL enable runtime updates | Supported on macOS, Linux, and Windows; without signed-update configuration it reports compiled fallback explicitly rather than claiming a verified signed bootstrap |
+| Standalone local MCP configuration | Ignored project-local `.codex/config.toml` or a copied client configuration | Absolute Node and checkout paths are generated from the current machine; do not combine the `rosterpilot` entry with the personal plugin in one checkout |
+| Personal ChatGPT/Codex plugin | Portable tracked package, generated per-user source, marker-protected standalone skill, and a Codex-created immutable cache version | Registry and cache are never edited directly; moving the checkout or Node requires `plugin:local:install` and a new task or app restart |
 | Hosted website, REST, and HTTP MCP | Validated Cloudflare-compatible build, signed bootstrap bundle, trusted public keys, signed-channel URL, and persistent bundle storage | Uses only credential-free core capabilities and never imports local automation modules into a hosted tool contract |
 | New Recruit and Tessera automation | Per-user macOS LaunchAgent, installed broker, and one complete checkout | Setup records the exact checkout and Node executable; status verifies checkout, protocol, build provenance, and runtime freshness |
 | Roster and report artifacts | Caller-selected directory | Writes stay inside the current directory by default and never overwrite without explicit approval |
@@ -867,6 +926,21 @@ runs lint, tests, a production build, rendered-output checks, and deterministic
 catalogue regeneration before changes are considered ready.
 
 ## Failure behavior
+
+The personal-plugin publisher also fails closed:
+
+- an invalid `personal` marketplace mapping stops before publication;
+- a project-local `mcp_servers.rosterpilot` shadow is reported and refused;
+- unmanaged or identity-mismatched source and skill directories are not
+  replaced;
+- missing Node, loader, or MCP paths and failed MCP startup or baseline tool
+  discovery block registration;
+- `plugin:local:check` reports stale canonical packaging, managed skill,
+  personal source, immutable cache, plugin record, or effective MCP transport
+  without changing state;
+- a failed publication restores the prior personal source and managed skill
+  and asks Codex to restore its previous registration; if Codex cannot finish
+  that rollback, the error retains and names a verified recovery copy.
 
 The companion fails closed:
 
