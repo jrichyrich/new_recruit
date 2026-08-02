@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import type {
   ProfilePolicyV1,
   TesseraFrozenScenarioContract,
+  TesseraPreparedRoster,
 } from "../../lib/rosterpilot";
 import {
   normalizeProfileIdentity,
@@ -239,6 +240,9 @@ export type TesseraBrowserInput = {
   playerName: string;
   opponentRoszPath: string;
   opponentName: string;
+  /** Explicit immutable inputs for non-website providers. */
+  playerSimulationInput?: TesseraPreparedRoster["simulationInput"];
+  opponentSimulationInput?: TesseraPreparedRoster["simulationInput"];
   licenseKey?: string;
   analysisMode?: TesseraAnalysisMode;
   phases?: readonly TesseraPhase[];

@@ -1271,6 +1271,15 @@ async function preparedCheckpointFromResult(
     enrichedRoszPath: absolute(
       report.player.enrichedRoszPath,
     ),
+    ...(report.player.simulationInput?.kind ===
+    "rosterpilot-local-engine-input"
+      ? {
+          simulationInput: {
+            ...report.player.simulationInput,
+            path: absolute(report.player.enrichedRoszPath),
+          },
+        }
+      : {}),
     cacheReused: true,
     connectorEvents: [],
   };
@@ -1298,6 +1307,7 @@ async function preparedCheckpointFromResult(
       ),
       sourceRoszSha256: opponent.sourceRoszSha256,
       enrichedRoszSha256: opponent.enrichedRoszSha256,
+      simulationInput: opponent.simulationInput,
       summary: opponent.summary,
       fingerprint: opponent.fingerprint,
       units: opponent.units,
@@ -1312,6 +1322,15 @@ async function preparedCheckpointFromResult(
           : document.request.kind === "build-and-analyze"
             ? document.request.input.opponentRoster.constraints
             : undefined,
+      ...(opponent.simulationInput?.kind ===
+      "rosterpilot-local-engine-input"
+        ? {
+            simulationInput: {
+              ...opponent.simulationInput,
+              path: absolute(opponent.enrichedRoszPath),
+            },
+          }
+        : {}),
     };
   }
   const checkpoint: TesseraRunPreparedCheckpoint = {
@@ -1386,7 +1405,12 @@ async function copyPreparedCheckpointForRestart(
         destinationJobDirectory,
         "artifacts",
         "prepared",
-        `${role}-${kind}-${expectedSha256}.rosz`,
+        `${role}-${kind}-${expectedSha256}.${
+          prepared.simulationInput?.kind ===
+          "rosterpilot-local-engine-input"
+            ? "json"
+            : "rosz"
+        }`,
       );
       await mkdir(path.dirname(destination), {
         recursive: true,
@@ -1426,6 +1450,16 @@ async function copyPreparedCheckpointForRestart(
       listUrl: null,
       sourceRoszPath,
       enrichedRoszPath,
+      ...(prepared.simulationInput?.kind ===
+      "rosterpilot-local-engine-input"
+        ? {
+            simulationInput: {
+              ...prepared.simulationInput,
+              path: enrichedRoszPath,
+              sha256: prepared.enrichedRoszSha256!,
+            },
+          }
+        : {}),
       cacheReused: true,
       connectorEvents: [],
     };

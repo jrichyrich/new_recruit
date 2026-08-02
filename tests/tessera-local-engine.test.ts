@@ -7,10 +7,21 @@ import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 
 import {
+  currentRosterSourceData,
+  type ProfilePolicyV1,
+} from "../lib/rosterpilot";
+import {
   compileEnrichedRoszForLocalEngine,
   LOCAL_TESSERA_ENGINE_IDENTITY,
   runLocalTesseraEngineMatchup,
 } from "../local/tessera/local-engine";
+import {
+  LOCAL_TESSERA_COMPILER_VERSION,
+  localInputSha256,
+  serializeLocalTesseraEngineInput,
+  type LocalTesseraEngineInput,
+} from "../local/tessera/local-engine-input";
+import { profilePolicyHash } from "../local/tessera/profile-policy";
 
 function enrichedRosz(input: {
   rosterName: string;
@@ -175,6 +186,200 @@ test("local runner emits deterministic browser-compatible full matrices", async 
       second.scenarios.map((scenario) => scenario.matrixSha256),
     );
     assert.equal(first.uiIdentity, null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("local runner falls back from null phase saves and honors numeric phase overrides", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-local-engine-invulnerable-"));
+  try {
+    const bundleId = currentRosterSourceData("adeptus-custodes").bundleId;
+    const profilePolicy = {
+      schemaVersion: 1,
+      policyKind: "tessera-profile-policy",
+      entries: [],
+    } satisfies ProfilePolicyV1;
+    const baseInput = {
+      schemaVersion: 1,
+      kind: "rosterpilot-local-engine-input",
+      compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      evaluationMode: "base-profile-evaluation",
+      bundleId,
+      rosterId: "invulnerable-save-fixture",
+      rosterFingerprint: "invulnerable-save-fixture-fingerprint",
+      rosterName: "Invulnerable save fixture",
+      factionId: "adeptus-custodes",
+      factionName: "Adeptus Custodes",
+      totalPoints: 100,
+      profilePolicySha256: profilePolicyHash(profilePolicy),
+      profileRequirements: [],
+      limitations: {
+        unmodeledSystems: ["fixture-only systems"],
+        omittedDatasheetAbilities: [],
+        omittedWargear: [],
+        omittedEnhancements: [],
+        unsupportedWeaponKeywords: [],
+        frozenChoices: [],
+      },
+    } satisfies Omit<LocalTesseraEngineInput, "units">;
+    const playerInput: LocalTesseraEngineInput = {
+      ...baseInput,
+      rosterId: "invulnerable-save-attacker",
+      rosterName: "Invulnerable save attacker",
+      units: [
+        {
+          instanceId: "111111111111111111111111",
+          selectionId: "attacker-1",
+          occurrence: 1,
+          label: "Attack fixture",
+          name: "Attack fixture",
+          models: 1,
+          T: 4,
+          SV: 3,
+          W: 2,
+          INV: null,
+          FNP: null,
+          points: 100,
+          keywords: ["INFANTRY"],
+          weapons: [
+            {
+              name: "Ranged fixture",
+              type: "ranged",
+              count: 1,
+              A: 120,
+              BS: 2,
+              S: 20,
+              AP: -6,
+              D: 1,
+              keywords: [],
+            },
+            {
+              name: "Melee fixture",
+              type: "melee",
+              count: 1,
+              A: 120,
+              WS: 2,
+              S: 20,
+              AP: -6,
+              D: 1,
+              keywords: [],
+            },
+          ],
+        },
+      ],
+    };
+    const opponentInput: LocalTesseraEngineInput = {
+      ...baseInput,
+      rosterId: "invulnerable-save-defender",
+      rosterName: "Invulnerable save defender",
+      units: [
+        {
+          instanceId: "222222222222222222222222",
+          selectionId: "defender-1",
+          occurrence: 1,
+          label: "Defence fixture",
+          name: "Defence fixture",
+          models: 200,
+          T: 1,
+          SV: 7,
+          W: 1,
+          INV: 4,
+          rangedINV: null,
+          meleeINV: 6,
+          FNP: null,
+          points: 100,
+          keywords: ["INFANTRY"],
+          weapons: [
+            {
+              name: "Defender ranged fixture",
+              type: "ranged",
+              count: 1,
+              A: 1,
+              BS: 4,
+              S: 1,
+              AP: 0,
+              D: 1,
+              keywords: [],
+            },
+            {
+              name: "Defender melee fixture",
+              type: "melee",
+              count: 1,
+              A: 1,
+              WS: 4,
+              S: 1,
+              AP: 0,
+              D: 1,
+              keywords: [],
+            },
+          ],
+        },
+      ],
+    };
+    const playerContent = serializeLocalTesseraEngineInput(playerInput);
+    const opponentContent = serializeLocalTesseraEngineInput(opponentInput);
+    const playerPath = path.join(directory, "player.json");
+    const opponentPath = path.join(directory, "opponent.json");
+    await Promise.all([
+      writeFile(playerPath, playerContent),
+      writeFile(opponentPath, opponentContent),
+    ]);
+
+    const matchupInput = {
+      profileDirectory: directory,
+      playerRoszPath: playerPath,
+      playerName: playerInput.rosterName,
+      opponentRoszPath: opponentPath,
+      opponentName: opponentInput.rosterName,
+      playerSimulationInput: {
+        kind: "rosterpilot-local-engine-input",
+        path: playerPath,
+        sha256: localInputSha256(playerContent),
+        bundleId,
+        compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      },
+      opponentSimulationInput: {
+        kind: "rosterpilot-local-engine-input",
+        path: opponentPath,
+        sha256: localInputSha256(opponentContent),
+        bundleId,
+        compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      },
+      phases: ["shooting", "fight"],
+      metrics: ["mean-damage"],
+      profilePolicy,
+    } satisfies Parameters<typeof runLocalTesseraEngineMatchup>[0];
+    const result = await runLocalTesseraEngineMatchup(matchupInput);
+    const playerDamage = Object.fromEntries(
+      result.scenarios
+        .filter(
+          (scenario) =>
+            scenario.direction === "player-to-opponent" &&
+            scenario.metric === "mean-damage",
+        )
+        .map((scenario) => [scenario.phase, scenario.cells[0].metricValue]),
+    );
+
+    assert.ok(
+      playerDamage.shooting > 35 && playerDamage.shooting < 48,
+      `Expected rangedINV: null to fall back to the unconditional 4+ save; observed ${playerDamage.shooting}.`,
+    );
+    assert.ok(
+      playerDamage.fight > 62 && playerDamage.fight < 77,
+      `Expected meleeINV: 6 to override the unconditional 4+ save; observed ${playerDamage.fight}.`,
+    );
+    assert.ok(playerDamage.fight > playerDamage.shooting + 20);
+    await assert.rejects(
+      runLocalTesseraEngineMatchup({
+        ...matchupInput,
+        profilePolicy: null,
+      }),
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as Error & { code?: string }).code ===
+          "TESSERA_LOCAL_PROFILE_POLICY_CHANGED",
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

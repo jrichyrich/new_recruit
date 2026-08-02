@@ -886,7 +886,7 @@ export type TesseraMatchupReport = {
     | "partial";
   preparation?: {
     status: "complete" | "failed";
-    source: "new-recruit";
+    source: "new-recruit" | "rosterpilot-data-bundle";
     uniqueRosters: number;
     remoteMutations: number;
     cacheReuses: number;
@@ -1603,7 +1603,7 @@ export type TesseraStressTestReport = {
   statusExplanation: string;
   preparation?: {
     status: "complete" | "partial" | "failed";
-    source: "new-recruit";
+    source: "new-recruit" | "rosterpilot-data-bundle";
     uniqueRosters: number;
     remoteMutations: number;
     cacheReuses: number;
@@ -1684,7 +1684,11 @@ export type TesseraStressTestReport = {
       | "player-source-rosz"
       | "player-enriched-rosz"
       | "opponent-source-rosz"
-      | "opponent-enriched-rosz";
+      | "opponent-enriched-rosz"
+      | "player-source-json"
+      | "player-local-engine-input"
+      | "opponent-source-json"
+      | "opponent-local-engine-input";
     written: string;
     sha256?: string | null;
   }>;
@@ -1703,7 +1707,7 @@ export type TesseraStressPreparationFailureReport = {
   connectorEvents: ConnectorEvent[];
   preparation: {
     status: "partial" | "failed";
-    source: "new-recruit";
+    source: "new-recruit" | "rosterpilot-data-bundle";
     failedSide: "player" | "opponent";
     failedTemplateId: string | null;
     uniqueRosters: number;
@@ -1765,7 +1769,11 @@ export type TesseraStressPreparationFailureReport = {
       | "player-source-rosz"
       | "player-enriched-rosz"
       | "opponent-source-rosz"
-      | "opponent-enriched-rosz";
+      | "opponent-enriched-rosz"
+      | "player-source-json"
+      | "player-local-engine-input"
+      | "opponent-source-json"
+      | "opponent-local-engine-input";
     written: string;
     sha256: string | null;
     verification: "verified" | "unverified";

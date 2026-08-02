@@ -18,8 +18,8 @@ capabilities:
 | Printable HTML, text, roster JSON, New Recruit-shaped JSON | Every validated roster | RosterPilot serializers |
 | `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
 | New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
-| Tessera handoff and simulated matchup matrix | Verified New Recruit-enriched rosters | Provider router over the retained isolated website adapter and an explicit evaluation-only pinned local engine; `experimental` is only a deprecated CLI alias for strict `executionMode: "simulate"` |
-| Known-faction stress testing | A validated player roster plus deterministic legal, exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, local New Recruit enrichment, and the selected Tessera provider |
+| Tessera handoff and simulated matchup matrix | Website: verified New Recruit-enriched rosters. Local engine: bundle-native, hash-bound JSON compiled from canonical rosters within the evaluation adapter's declared profile capability | Provider router over the retained isolated website adapter and an explicit evaluation-only pinned local engine; `experimental` is only a deprecated CLI alias for strict `executionMode: "simulate"` |
+| Known-faction stress testing | A validated player roster plus deterministic legal, New Recruit-exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, provider-specific preparation, and the selected Tessera provider |
 | Exact-aware roster construction | A validated canonical opponent roster plus player build constraints and optional owned-model quantities | Shared roster engine, exact opponent threat profile, deterministic repair, and exact Tessera adapter |
 | Durable Tessera jobs | Exact, stress, build-and-stress, and build-and-analyze requests on local CLI or stdio MCP | Persistent job document, local-agent-owned detached worker, retained result bundle, and stress manifest where applicable |
 | Unified roster workflow | Fail-closed intent and faction resolution, deterministic build/validation, calibrated coaching, artifact-safe handoff, and explicit delivery authority | Shared `lib/rosterpilot/` orchestration under one transport-owned data-bundle lease |
@@ -41,6 +41,7 @@ flowchart LR
     handoff["Prepare mapped ROSZ"]
     deliver["Explicit New Recruit delivery"]
     enrich["Verified profile-rich ROSZ"]
+    localCompile["Compile bundle-native local JSON"]
     compare["Explicit Tessera comparison"]
     counter["Explicit build against exact roster"]
     stress["Explicit known-faction stress test"]
@@ -52,21 +53,25 @@ flowchart LR
     validate -. "optional file handoff" .-> handoff
     handoff -. "optional upload request" .-> deliver
     deliver --> enrich
-    enrich -. "optional simulation request" .-> compare
+    enrich -. "website simulation request" .-> compare
+    validate -. "explicit local-engine request" .-> localCompile
+    localCompile --> compare
     compare --> report
     validate -. "optional exact counter-build request" .-> counter
     counter --> compare
     validate -. "optional stress-test request" .-> stress
     stress --> portfolio
-    portfolio -->|"verified enrichment and simulation"| report
+    portfolio -->|"provider-specific preparation and simulation"| report
 ```
 
-The dotted edges are explicit choices, not automatic transitions. Tessera has
-a technical dependency on New Recruit enrichment, but creating or exporting a
-roster does not trigger that dependency. Exact comparison and faction stress
-testing are also separate explicit choices. Counter-building uses the supplied
-canonical opponent rather than silently reducing it to a faction heuristic.
-Comparison suggestions never mutate a canonical roster.
+The dotted edges are explicit choices, not automatic transitions. The Tessera
+website provider depends on New Recruit enrichment. The local-engine provider
+instead compiles canonical rosters and generated proxies directly from the
+operation's immutable RosterPilot data bundle. Creating or exporting a roster
+does not trigger either path. Exact comparison and faction stress testing are
+also separate explicit choices. Counter-building uses the supplied canonical
+opponent rather than silently reducing it to a faction heuristic. Comparison
+suggestions never mutate a canonical roster.
 
 The unified workflow composes those dotted edges only when the same request
 names the action. A New Recruit capability question is not delivery authority.
@@ -174,14 +179,24 @@ changed scopes and never changes selections automatically.
 
 ### Tessera boundary
 
-Tessera is not a rules authority or roster validator. RosterPilot imports and
-verifies the canonical roster in New Recruit, downloads New Recruit's
-profile-rich `.rosz`, and treats that archive as the stable handoff contract.
-Simulation is selected only through the local CLI or stdio MCP provider router.
-The retained website provider uses the isolated, session-scoped Chrome worker;
-the candidate local provider compiles the same verified enriched archives into
-the pinned engine's public input contract. Neither provider changes roster
-legality or the operation's immutable data-bundle lease.
+Tessera is not a rules authority or roster validator. RosterPilot validates
+canonical rosters before provider preparation. Simulation is selected only
+through the local CLI or stdio MCP provider router. The providers have
+separate, explicit input contracts:
+
+- the website provider imports a mapped ROSZ into New Recruit, downloads and
+  verifies New Recruit's profile-rich `.rosz`, and uses that enriched archive
+  as its stable handoff;
+- the local provider compiles a canonical roster directly from unit, weapon,
+  composition, ability, and keyword data in the operation's immutable bundle
+  into `rosterpilot-local-engine-input` JSON. It does not upload to New
+  Recruit, open either website, use a browser profile, or retrieve a
+  credential.
+
+Neither provider changes roster legality or the operation's immutable
+data-bundle lease. An exact opponent supplied only as an enriched `.rosz` can
+still use the legacy archive compiler, but canonical player, opponent, and
+generated-proxy rosters use bundle-native JSON when `local-engine` is selected.
 
 The website adapter does not call private APIs or read browser storage. The
 orchestrator never handles premium keys: only its isolated Tessera worker may
@@ -189,12 +204,44 @@ retrieve the dedicated Keychain item. The key stays only in that worker's
 memory, and the worker enters it only after verifying the exact Tessera origin
 and locating its visible Licence key field. Before website browser or
 licence-key work, both the per-user agent and the isolated worker reopen the
-player and opponent archives. The local compiler independently revalidates its
-input before execution. Every archive must identify New Recruit as its
-generator, contain units and embedded profiles, and give every top-level unit
-at least one Unit profile and one Melee or Ranged weapon profile. This is a
-profile-readiness boundary, not a claim that embedded characteristic values
-equal another rules source.
+player and opponent archives. Every website archive must identify New Recruit
+as its generator, contain units and embedded profiles, and give every
+top-level unit at least one Unit profile and one Melee or Ranged weapon
+profile. This is a profile-readiness boundary, not a claim that embedded
+characteristic values equal another rules source.
+
+Local preparation is content-addressed and bound to the roster execution
+fingerprint, exact `bundleId`, compiler version, and optional profile-policy
+hash. A durable worker activates the job's archived bundle before preparation;
+the compiler rejects a roster whose source bundle is not that active snapshot.
+Preflight, execution, resume, and restart reparse the JSON and verify its
+schema, SHA-256, bundle identity, compiler version, and frozen roster identity.
+Missing profiles, unsupported characteristics, unresolved alternate profiles,
+or any identity mismatch fail closed. Refresh and rollback can affect future
+leases but cannot change an input already frozen for a durable run.
+
+The current local compiler is explicitly
+`base-profile-evaluation-v1`. It models unit and weapon profiles plus supported
+intrinsic weapon keywords. It does not apply army or detachment rules,
+datasheet abilities, enhancements, non-weapon wargear effects, stratagems, or
+attached-unit interactions, and it does not model range or distance-dependent
+effects such as Conversion. Its hashed input records those unmodeled systems,
+omitted abilities and wargear, unsupported weapon keywords, and every frozen
+alternate-profile, firing-set, melee-set, or mixed-defence decision.
+Preparation and simulation surface those records as warnings. The evidence
+remains evaluation-only and cannot silently become full-rules evidence,
+substantive coaching, or an optimizer decision.
+
+Persisted prepared-roster schemas retain the legacy field names
+`sourceRoszPath`, `enrichedRoszPath`, and their SHA-256 fields so older reports
+and manifests remain readable. For
+`simulationInput.kind: "rosterpilot-local-engine-input"`, those paths refer to
+the canonical source JSON and compiled local-input JSON, not ZIP archives; the
+discriminator, content hashes, and `.json` filenames are authoritative. Stress
+artifact inventories label them `player-source-json`,
+`player-local-engine-input`, `opponent-source-json`, and
+`opponent-local-engine-input`; new consumers must not infer the artifact format
+from the legacy property name.
 
 #### Simulation-provider selection and promotion
 
@@ -203,9 +250,10 @@ The request freezes `simulationBackend` as `auto`, `website`, or
 with its exact identity.
 
 - `website` selects only the existing browser adapter.
-- `local-engine` selects only the local adapter and fails closed if either
-  archive is outside its declared capability manifest, including ambiguous
-  phase weapon choices and selected combat rules the adapter cannot prove.
+- `local-engine` selects only the local adapter. Canonical inputs take the
+  bundle-native JSON route, and preparation reports zero remote mutations and
+  zero New Recruit cache reuses. Compilation or verification failures do not
+  fall back to New Recruit or the website.
 - `auto` selects the local adapter only when that exact identity is marked
   promoted, available, and preflight-complete. Otherwise it selects the
   website and records why. If a promoted local execution starts and then
@@ -302,18 +350,22 @@ the roster uses at least 98% of its points and has no red overall mission
 readiness result. The escape hatch is explicit. It assigns a stable descriptive
 name and never applies post-simulation changes.
 
-Stress preflight validates the player, locally verifies `.rosz` export for all
-available proxies, reserves report and manifest paths, and scans known
-multi-profile equipment before starting an external action. Unresolved choices
-produce a policy scaffold and `TESSERA_PROFILE_POLICY_REQUIRED`; no list is
-delivered. A `ProfilePolicyV1` entry binds faction, unit, weapon group, phase,
-selected profile, and active count. The enriched archives are checked against
-the complete inventory and the policy's canonical SHA-256 is frozen into the
-execution fingerprint, manifest, report provenance, and paired revision. An
-enriched-only decision is persisted before simulation; a completed replacement
-policy may be adopted only while the manifest has zero Tessera attempts, so
-resume can reuse the verified New Recruit artifacts without weakening paired
-provenance.
+Stress preflight validates the player, locally verifies `.rosz` exportability
+for all available proxies, reserves report and manifest paths, and scans known
+multi-profile equipment before starting an external action. The exportability
+gate remains part of the frozen portfolio contract even when the local provider
+will simulate bundle-native JSON; it performs no upload. Unresolved choices
+produce a policy scaffold and `TESSERA_PROFILE_POLICY_REQUIRED`. A
+`ProfilePolicyV1` entry binds faction, unit, weapon group, phase, selected
+profile, and active count, and its canonical SHA-256 is frozen into the
+execution fingerprint, manifest, report provenance, and paired revision.
+
+Website preparation checks enriched archives against the complete inventory
+and persists an enrichment-only decision before simulation. Local preparation
+checks the same frozen requirements against bundle-native profiles and embeds
+them in each compiled JSON input. A completed replacement policy may be adopted
+only while the manifest has zero Tessera attempts, so resume can reuse the
+verified provider-specific artifacts without weakening paired provenance.
 
 The default `diverse-9` staged strategy screens every available proxy with
 half-wipe probability for both phases and directions. It waits until every
@@ -346,7 +398,8 @@ attempts with one- and three-second backoff and five lifetime attempts through
 explicit resume; terminal errors require an explicit forced retry within that
 same ceiling.
 
-Before any New Recruit delivery, the manifest persists an in-progress marker.
+Before any website-provider New Recruit delivery, the manifest persists an
+in-progress marker.
 The verified receipt and enriched-file hash replace it after delivery. If the
 process stops in that narrow interval, resume reports an unknown external
 outcome and fails closed instead of risking a duplicate list. Resume also
@@ -383,9 +436,9 @@ available, and every remote outcome is inventoried.
 history. Once its five-attempt budget is exhausted, `restartManifestPath` (CLI
 `--restart-from`) requires a different output directory and creates a new
 manifest, run ID, and empty simulation stages. A restart carries forward the
-frozen portfolio, policy, and only those prepared New Recruit artifacts whose
-identities and hashes still verify; the source manifest is never rewritten.
-Resume and restart are mutually exclusive.
+frozen portfolio, policy, and only those provider-specific prepared artifacts
+whose discriminator, identities, and hashes still verify; the source manifest
+is never rewritten. Resume and restart are mutually exclusive.
 
 For client calls that cannot remain open, the local durable-job layer writes a
 `tessera-run.json` document before asking the current local agent to launch a
@@ -401,9 +454,11 @@ it is adopted; subsequent recovery uses only the shared durable job. Recovery
 does not widen the frozen request. In particular, `catalogueDriftMode` is part
 of the request hash; resume and restart inherit it and cannot enable or change
 the diagnostic choice. Exact jobs
-freeze and reverify prepared player and
-opponent archives for zero-redelivery resume; `restart-from` copies those
-archives into the new run but starts simulation evidence from a clean stage.
+freeze and reverify prepared player and opponent artifacts for zero-redelivery
+resume. Those are source/enriched ROSZ pairs for the website provider and
+source/local-input JSON pairs for canonical local-engine inputs;
+`restart-from` copies the verified pair into the new run but starts simulation
+evidence from a clean stage.
 Exact simulation remains one analytical stage rather than claiming the stress
 workflow's per-opponent screening/deep-dive checkpoints. The job manifest
 freezes request, `bundleId`, scoped semantic identities, policy, runtime,
@@ -466,11 +521,11 @@ win probability. Mission readiness remains separate.
 
 After explicit approval, `compare_stress_test_revision` requires the same
 player faction, points limit, `bundleId`, and relevant semantic roster hashes.
-It reuses the exact
-baseline enriched proxy files, portfolio, analysis strategy, simulator
-configuration, and representative selections; it never regenerates or
-reselects the opposing suite. Before revised-player delivery it verifies every
-proxy's execution fingerprint and SHA-256 content hash. After the rerun it
+It reuses the exact baseline prepared proxy files, portfolio, analysis
+strategy, simulator configuration, and representative selections; it never
+regenerates or reselects the opposing suite. Before revised-player preparation
+it verifies every proxy's artifact kind, execution fingerprint, and SHA-256
+content hash. After the rerun it
 actively reapplies and then requires identical recorded settings and iteration
 counts for each exact phase/metric/direction scenario, not merely matching
 stage-level totals. Margin changes smaller than one percentage point are
@@ -480,9 +535,10 @@ wipe, kill, and damage results remain supporting evidence. The conclusion is
 suppressed if the mission-readiness guardrail detects a regression.
 
 If the selected provider is unavailable or an individual simulation fails,
-verified enriched artifacts remain usable. A new exact report is `failed` when
-no trusted matrices exist and `inconclusive` when captured evidence cannot
-support analytical confidence; stress reports use the same distinction. Missing
+verified provider inputs remain usable: enriched ROSZ for the website or
+bundle-native JSON for the local engine. A new exact report is `failed` when no
+trusted matrices exist and `inconclusive` when captured evidence cannot support
+analytical confidence; stress reports use the same distinction. Missing
 scenarios and warnings stay visible. Reports describe modeled damage efficiency
 and unit threats, never a whole-game win probability. Hosted MCP, REST,
 OpenAPI, and the public website do not register exact-matchup or stress-test
@@ -626,9 +682,11 @@ flowchart LR
 ```
 
 Personal-plugin publication owns only Codex integration. It neither installs
-nor restarts the per-user LaunchAgent. New Recruit and Tessera require their
-setup profiles, and checkout, build, or runtime drift is repaired separately
-with `rosterpilot agent ensure-current`.
+nor restarts the per-user LaunchAgent. Browser-backed New Recruit and Tessera
+website work require their setup profiles, and durable jobs still require the
+current local agent. The pinned local engine itself uses no browser or
+credential. Checkout, build, or runtime drift is repaired separately with
+`rosterpilot agent ensure-current`.
 
 ## System architecture
 
@@ -659,12 +717,13 @@ flowchart LR
         http["Authenticated HTTP transports"]
     end
 
-    subgraph local["Local macOS boundary"]
+    subgraph local["Local execution boundary; browser workers require macOS"]
         companion["New Recruit companion orchestrator"]
         agent["Per-user RosterPilot LaunchAgent"]
         worker["Isolated New Recruit worker"]
         tesseraCompanion["Tessera orchestrator"]
         tesseraRouter["Tessera provider router"]
+        localCompiler["Bundle-native local-input compiler"]
         localEngine["Pinned local engine candidate"]
         tesseraWorker["Session-scoped isolated Tessera worker"]
         broker["Native Swift Keychain broker"]
@@ -703,13 +762,16 @@ flowchart LR
     cli -. "explicit comparison or stress request" .-> tesseraCompanion
     localMcp -. "local-only MCP tool" .-> tesseraCompanion
     stressCore --> tesseraCompanion
-    tesseraCompanion --> companion
+    tesseraCompanion -. "website preparation" .-> companion
+    tesseraCompanion -. "local JSON preparation" .-> localCompiler
+    data --> localCompiler
     companion --> validator
     companion --> exporter
     companion -->|"roster bytes over 0600 socket or 0700 file queue"| agent
     tesseraCompanion -->|"frozen provider request"| tesseraRouter
     tesseraRouter -->|"website request"| agent
     tesseraRouter -->|"explicit candidate evaluation or promoted auto"| localEngine
+    localCompiler -->|"hash-bound JSON"| localEngine
     agent -->|"New Recruit job"| worker
     agent -->|"Tessera job"| tesseraWorker
     worker --> broker
@@ -922,7 +984,8 @@ Security invariants:
 | Browser adapter | Authentication, import, verification, Pretty export | `local/new-recruit/browser.ts` |
 | Tessera orchestrator | Exact matchups, matched-points policy, scenario consolidation, findings, candidates, and exact-list revision deltas | `local/tessera/companion.ts` |
 | Tessera provider router | Freeze explicit/automatic provider selection, enforce promotion and preflight gates, and make any automatic website fallback atomic | `local/tessera/simulation-provider.ts` |
-| Local Tessera evaluation adapter | Compile verified enriched ROSZ profiles into the pinned public engine contract and emit deterministic scenario evidence | `local/tessera/local-engine.ts`, `local/tessera/tessera-engine-provenance.json` |
+| Local Tessera input compiler | Compile canonical rosters from the active immutable bundle into schema-, hash-, roster-, bundle-, compiler-, and policy-bound evaluation JSON without a remote mutation | `local/tessera/local-engine-input.ts`, `local/tessera/local-engine-preparation.ts` |
+| Local Tessera evaluation adapter | Verify bundle-native JSON, retain the legacy enriched-ROSZ reader for compatible persisted inputs, invoke the pinned public engine contract, and emit deterministic scenario evidence plus limitation warnings | `local/tessera/local-engine.ts`, `local/tessera/tessera-engine-provenance.json` |
 | Tessera provider parity | Compare identity-bound local and website evidence using completeness, metric tolerance, and winner-classification gates | `local/tessera/provider-parity.ts` |
 | Exact-aware build loop | Validate an exact opponent, build and repair from its threat profile, enforce readiness, and invoke exact analysis | `local/tessera/exact-full-loop.ts`, `lib/rosterpilot/build-and-analyze.ts` |
 | Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
@@ -947,7 +1010,8 @@ Security invariants:
 | Standalone local MCP configuration | Ignored project-local `.codex/config.toml` or a copied client configuration | Absolute Node and checkout paths are generated from the current machine; do not combine the `rosterpilot` entry with the personal plugin in one checkout |
 | Personal ChatGPT/Codex plugin | Portable tracked package, generated per-user source, marker-protected standalone skill, and a Codex-created immutable cache version | Registry and cache are never edited directly; moving the checkout or Node requires `plugin:local:install` and a new task or app restart |
 | Hosted website, REST, and HTTP MCP | Validated Cloudflare-compatible build, signed bootstrap bundle, trusted public keys, signed-channel URL, and persistent bundle storage | Uses only credential-free core capabilities and never imports local automation modules into a hosted tool contract |
-| New Recruit and Tessera automation | Per-user macOS LaunchAgent, installed broker, and one complete checkout | Setup records the exact checkout and Node executable; status verifies checkout, protocol, build provenance, and runtime freshness |
+| New Recruit and Tessera website automation | Per-user macOS LaunchAgent, installed broker, and one complete checkout | Setup records the exact checkout and Node executable; status verifies checkout, protocol, build provenance, and runtime freshness |
+| Local Tessera evaluation | Complete Git checkout, locked Node dependencies, and the exact archived runtime data bundle | Uses the local CLI or stdio MCP, performs no browser, Keychain, New Recruit, or Tessera website operation, and remains evaluation-only until promotion gates pass |
 | Roster and report artifacts | Caller-selected directory | Writes stay inside the current directory by default and never overwrite without explicit approval |
 
 The LaunchAgent intentionally runs reviewed worker code from the checkout that
@@ -1011,6 +1075,17 @@ The companion fails closed:
   profiles still verify, and that evidence remains provisional;
 - a profileless or partially profiled player or opponent archive stops at both
   the agent and worker boundary before Tessera browser or licence-key activity;
+- local preparation stops before simulation when the canonical roster is
+  invalid, its frozen `bundleId` is not active, a selected unit or weapon
+  profile is missing, an unsupported characteristic cannot be represented, or
+  a required profile-policy choice is unresolved;
+- local preflight, execution, resume, and restart reject a changed JSON hash,
+  schema, bundle, compiler, or roster fingerprint. An explicit `local-engine`
+  request never repairs that failure by uploading to New Recruit or falling
+  back to the website;
+- base-profile omissions and frozen attack/profile choices remain explicit in
+  the local input and report warnings rather than being applied, guessed, or
+  promoted to full-rules evidence;
 - exact Tessera opponents outside the 5% points tolerance stop unless the
   caller explicitly allows an unmatched directional analysis;
 - stress testing completes local validation, mapping preflight, and output-path

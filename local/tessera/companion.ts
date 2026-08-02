@@ -125,10 +125,17 @@ import {
 } from "./saved-list-reuse";
 import {
   createLocalTesseraEngineProvider,
+  localTesseraEngineIsAutoSelectable,
   LOCAL_TESSERA_ENGINE_IDENTITY,
   LOCAL_TESSERA_ENGINE_STATUS,
   runLocalTesseraEngineMatchup,
 } from "./local-engine";
+import {
+  prepareRosterForLocalTesseraEngine,
+} from "./local-engine-preparation";
+import {
+  verifyLocalTesseraEngineInput,
+} from "./local-engine-input";
 import {
   createWebsiteTesseraProvider,
   routeTesseraSimulation,
@@ -428,9 +435,14 @@ async function runTesseraViaAgent(
   });
 }
 
+type TesseraRosterPreparationOptions = NewRecruitDeliveryOptions & {
+  simulationBackend?: TesseraSimulationBackend;
+  profilePolicy?: ProfilePolicyV1 | null;
+};
+
 export async function prepareRosterForTessera(
   roster: RosterDraftV1,
-  options: NewRecruitDeliveryOptions = {},
+  options: TesseraRosterPreparationOptions = {},
   dependencies: TesseraDependencies = {},
 ): Promise<ResultEnvelope<TesseraPreparedRoster>> {
   const validation = validateRoster(roster);
@@ -441,6 +453,13 @@ export async function prepareRosterForTessera(
       violations: validation.violations,
       warnings: validation.warnings,
     };
+  }
+  if (options.simulationBackend === "local-engine") {
+    return prepareRosterForLocalTesseraEngine(
+      roster,
+      options.profilePolicy ?? null,
+      options,
+    );
   }
   const restartIssue = dependencies.runtimeIssue
     ? dependencies.runtimeIssue()
@@ -1422,12 +1441,56 @@ function mergedProfileRequirements(
 async function inspectPreparedProfileRequirements(
   prepared: Pick<
     TesseraPreparedRoster,
-    "enrichedRoszPath" | "summary" | "rosterName"
+    | "enrichedRoszPath"
+    | "simulationInput"
+    | "summary"
+    | "rosterName"
   >,
   faction: string,
 ): Promise<ResultEnvelope<TesseraProfileRequirement[]>> {
   try {
     const content = await readFile(prepared.enrichedRoszPath);
+    if (
+      prepared.simulationInput?.kind ===
+      "rosterpilot-local-engine-input"
+    ) {
+      const localInput = verifyLocalTesseraEngineInput({
+        content,
+        expectedSha256: prepared.simulationInput.sha256,
+        expectedBundleId: prepared.simulationInput.bundleId,
+      });
+      if (
+        localInput.compilerVersion !==
+          prepared.simulationInput.compilerVersion ||
+        localInput.totalPoints !== prepared.summary.totalPoints ||
+        !factionNamesCompatible(
+          localInput.factionName,
+          prepared.summary.factionName,
+        ) ||
+        localInput.units.length !== prepared.summary.units.length ||
+        localInput.factionId !== faction
+      ) {
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code: "TESSERA_PREPARED_ARTIFACT_DRIFT",
+              message:
+                `The local input for ${prepared.rosterName} no longer matches its frozen summary or faction.`,
+              severity: "error",
+            },
+          ],
+          warnings: [],
+        };
+      }
+      return {
+        ok: true,
+        data: structuredClone(localInput.profileRequirements),
+        violations: [],
+        warnings: [],
+      };
+    }
     const actualSummary = inspectEnrichedRosz(content);
     if (
       actualSummary.totalPoints !== prepared.summary.totalPoints ||
@@ -1711,32 +1774,43 @@ async function materializePreparedRosterArtifacts(
   const sourceRoszSha256 = sha256(sourceContent);
   const enrichedRoszSha256 = sha256(enrichedContent);
   const artifactDirectory = path.join(outputDirectory, "artifacts");
+  const localInput =
+    prepared.simulationInput?.kind ===
+    "rosterpilot-local-engine-input";
+  const sourceFilename = localInput
+    ? `source-${sourceRoszSha256}.json`
+    : `source-${sourceRoszSha256}.rosz`;
+  const enrichedFilename = localInput
+    ? `local-input-${enrichedRoszSha256}.json`
+    : `enriched-${enrichedRoszSha256}.rosz`;
   const [sourceRoszPath, enrichedRoszPath] = await Promise.all([
     writeExportArtifact(
       {
-        format: "rosz",
-        filename: `source-${sourceRoszSha256}.rosz`,
-        mimeType: "application/zip",
+        format: localInput ? "roster-json" : "rosz",
+        filename: sourceFilename,
+        mimeType: localInput ? "application/json" : "application/zip",
         encoding: "binary",
         content: sourceContent,
       },
       path.join(
         artifactDirectory,
-        `source-${sourceRoszSha256}.rosz`,
+        sourceFilename,
       ),
       { ...options, overwrite: true },
     ),
     writeExportArtifact(
       {
-        format: "rosz",
-        filename: `enriched-${enrichedRoszSha256}.rosz`,
-        mimeType: "application/zip",
+        format: localInput ? "roster-json" : "rosz",
+        filename: enrichedFilename,
+        mimeType: localInput
+          ? "application/vnd.rosterpilot.tessera-local-input+json"
+          : "application/zip",
         encoding: "binary",
         content: enrichedContent,
       },
       path.join(
         artifactDirectory,
-        `enriched-${enrichedRoszSha256}.rosz`,
+        enrichedFilename,
       ),
       { ...options, overwrite: true },
     ),
@@ -1747,6 +1821,16 @@ async function materializePreparedRosterArtifacts(
     enrichedRoszPath,
     sourceRoszSha256,
     enrichedRoszSha256,
+    ...(prepared.simulationInput?.kind ===
+    "rosterpilot-local-engine-input"
+      ? {
+          simulationInput: {
+            ...prepared.simulationInput,
+            path: enrichedRoszPath,
+            sha256: enrichedRoszSha256,
+          },
+        }
+      : {}),
   };
 }
 
@@ -1794,6 +1878,56 @@ async function verifiedPreparedRosterReuse(
       return fail(
         "A durable exact-run checkpoint archive changed after it was recorded.",
       );
+    }
+    if (
+      prepared.simulationInput?.kind ===
+      "rosterpilot-local-engine-input"
+    ) {
+      const localInput = verifyLocalTesseraEngineInput({
+        content: enriched,
+        expectedSha256: prepared.simulationInput.sha256,
+        expectedBundleId: prepared.simulationInput.bundleId,
+        expectedRosterFingerprint: expectedFingerprint,
+      });
+      if (
+        localInput.compilerVersion !==
+          prepared.simulationInput.compilerVersion ||
+        localInput.totalPoints !== prepared.summary.totalPoints ||
+        !factionNamesCompatible(
+          localInput.factionName,
+          prepared.summary.factionName,
+        ) ||
+        localInput.units.length !== prepared.summary.units.length ||
+        (
+          roster !== null &&
+          (
+            localInput.totalPoints !== roster.totalPoints ||
+            localInput.factionId !== roster.factionId
+          )
+        )
+      ) {
+        return fail(
+          "The durable local-engine checkpoint no longer matches its frozen roster, bundle, compiler, or summary identity.",
+        );
+      }
+      return {
+        ok: true,
+        data: {
+          ...prepared,
+          listUrl: null,
+          cacheReused: true,
+          connectorEvents: [],
+        },
+        violations: [],
+        warnings: [
+          {
+            code: "TESSERA_PREPARED_ARTIFACT_REUSED",
+            message:
+              "Reused a hash-verified run-local data-bundle input; no New Recruit or website activity was performed.",
+            severity: "warn",
+          },
+        ],
+      };
     }
     const actualSummary = validateTesseraReadyRosz(enriched).summary;
     const ignoredGameplayMismatches =
@@ -3246,10 +3380,22 @@ function failedPreparationReport(input: {
     status: "failed",
     preparation: {
       status: "failed",
-      source: "new-recruit",
+      source:
+        input.player.simulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+          ? "rosterpilot-data-bundle"
+          : "new-recruit",
       uniqueRosters: 1 + opponents.length,
-      remoteMutations,
-      cacheReuses,
+      remoteMutations:
+        input.player.simulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+          ? 0
+          : remoteMutations,
+      cacheReuses:
+        input.player.simulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+          ? 0
+          : cacheReuses,
       connectorEvents,
     },
     failures: input.violations.map((violation) => ({
@@ -3326,8 +3472,7 @@ export async function analyzeRosterMatchup(
       ? "local-engine"
       : requestedSimulationBackend === "website"
         ? "website"
-        : LOCAL_TESSERA_ENGINE_IDENTITY.promotion === "promoted" &&
-            LOCAL_TESSERA_ENGINE_IDENTITY.licenseState === "approved"
+        : localTesseraEngineIsAutoSelectable()
           ? "local-engine"
           : "website";
   let profilePolicy: ProfilePolicyV1 | null;
@@ -3730,6 +3875,7 @@ export async function analyzeRosterMatchup(
         playerRoster,
         {
           ...options,
+          profilePolicy,
           mutationRunId,
           outputDirectory: path.join(outputDirectory, "player"),
         },
@@ -3773,6 +3919,7 @@ export async function analyzeRosterMatchup(
       path.join(outputDirectory, "player"),
       options,
     );
+    preparedPlayer.units = canonicalUnits(playerRoster, "player");
   } catch (error) {
     const violation: RosterIssue = {
       code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
@@ -3815,6 +3962,7 @@ export async function analyzeRosterMatchup(
           opponent.roster,
           {
             ...options,
+            profilePolicy,
             mutationRunId,
             outputDirectory: path.join(outputDirectory, "opponent"),
           },
@@ -3845,6 +3993,7 @@ export async function analyzeRosterMatchup(
                 failedOpponent.sourceRoszSha256,
               enrichedRoszSha256:
                 failedOpponent.enrichedRoszSha256,
+              simulationInput: failedOpponent.simulationInput,
               summary: failedOpponent.summary,
               fingerprint: rosterExecutionFingerprint(opponent.roster),
               units: canonicalUnits(opponent.roster, "opponent"),
@@ -3914,6 +4063,7 @@ export async function analyzeRosterMatchup(
         materializedOpponent.sourceRoszSha256,
       enrichedRoszSha256:
         materializedOpponent.enrichedRoszSha256,
+      simulationInput: materializedOpponent.simulationInput,
       summary: materializedOpponent.summary,
       fingerprint: rosterExecutionFingerprint(opponent.roster),
       units: canonicalUnits(opponent.roster, "opponent"),
@@ -4145,6 +4295,7 @@ export async function analyzeRosterMatchup(
         uploadedArtifact.sourceRoszSha256,
       enrichedRoszSha256:
         uploadedArtifact.enrichedRoszSha256,
+      simulationInput: uploadedArtifact.simulationInput,
       summary: prepared.data.summary,
       fingerprint: uploadedArtifact.fingerprint,
       units: uploadedArtifact.units,
@@ -4160,6 +4311,7 @@ export async function analyzeRosterMatchup(
         item.roster,
         {
           ...options,
+          profilePolicy,
           mutationRunId,
           outputDirectory: path.join(
             outputDirectory,
@@ -4177,6 +4329,7 @@ export async function analyzeRosterMatchup(
                 archetype: item.posture,
                 rosterName: prepared.data.rosterName,
                 enrichedRoszPath: prepared.data.enrichedRoszPath,
+                simulationInput: prepared.data.simulationInput,
                 summary: prepared.data.summary,
                 fingerprint:
                   item.simulationFingerprint ??
@@ -4249,9 +4402,13 @@ export async function analyzeRosterMatchup(
         kind: "faction-archetype",
         archetype: item.posture,
         rosterName: materializedOpponent.rosterName,
+        sourceRoszPath: materializedOpponent.sourceRoszPath,
         enrichedRoszPath: materializedOpponent.enrichedRoszPath,
+        sourceRoszSha256:
+          materializedOpponent.sourceRoszSha256,
         enrichedRoszSha256:
           materializedOpponent.enrichedRoszSha256,
+        simulationInput: materializedOpponent.simulationInput,
         summary: materializedOpponent.summary,
         fingerprint:
           item.simulationFingerprint ??
@@ -4459,14 +4616,20 @@ export async function analyzeRosterMatchup(
     };
   }
 
-  if (preparedPlayer.enrichedRoszSha256) {
+  if (
+    plannedSimulationBackend !== "local-engine" &&
+    preparedPlayer.enrichedRoszSha256
+  ) {
     preparedPlayer.simulationInput = {
       kind: "new-recruit-enriched-rosz",
       sha256: preparedPlayer.enrichedRoszSha256,
     };
   }
   for (const prepared of opponents) {
-    if (prepared.enrichedRoszSha256) {
+    if (
+      plannedSimulationBackend !== "local-engine" &&
+      prepared.enrichedRoszSha256
+    ) {
       prepared.simulationInput = {
         kind: "new-recruit-enriched-rosz",
         sha256: prepared.enrichedRoszSha256,
@@ -4502,6 +4665,7 @@ export async function analyzeRosterMatchup(
       );
       try {
         const savedListReuse =
+          plannedSimulationBackend !== "local-engine" &&
           preparedPlayer.enrichedRoszSha256 &&
           preparedPlayer.fingerprint &&
           prepared.enrichedRoszSha256 &&
@@ -4540,6 +4704,8 @@ export async function analyzeRosterMatchup(
           playerName: preparedPlayer.rosterName,
           opponentRoszPath: prepared.enrichedRoszPath,
           opponentName: prepared.rosterName,
+          playerSimulationInput: preparedPlayer.simulationInput,
+          opponentSimulationInput: prepared.simulationInput,
           analysisMode: configuration.analysisMode,
           phases: configuration.phases,
           metrics: configuration.metrics,
@@ -4548,6 +4714,11 @@ export async function analyzeRosterMatchup(
           savedListReuse,
           sessionId: options.sessionId,
         };
+        const websiteInputCompatible =
+          preparedPlayer.simulationInput?.kind ===
+            "new-recruit-enriched-rosz" &&
+          prepared.simulationInput?.kind ===
+            "new-recruit-enriched-rosz";
         const routed = await routeTesseraSimulation({
           requestedBackend: requestedSimulationBackend,
           local: {
@@ -4556,12 +4727,17 @@ export async function analyzeRosterMatchup(
             ),
             input: simulationInput,
           },
-          website: {
-            provider: createWebsiteTesseraProvider(
-              dependencies.runBrowser ?? runTesseraViaAgent,
-            ),
-            input: simulationInput,
-          },
+          // The website accepts only verified New Recruit-enriched ROSZ.
+          // A future promoted-local auto run must fail closed after a local
+          // runtime error instead of treating bundle-native JSON as ROSZ.
+          website: websiteInputCompatible
+            ? {
+                provider: createWebsiteTesseraProvider(
+                  dependencies.runBrowser ?? runTesseraViaAgent,
+                ),
+                input: simulationInput,
+              }
+            : undefined,
         });
         const result = routed.data as TesseraBrowserResult;
         if (
@@ -4952,10 +5128,19 @@ export async function analyzeRosterMatchup(
           : "failed",
     preparation: {
       status: "complete",
-      source: "new-recruit",
+      source:
+        selectedSimulationBackend === "local-engine"
+          ? "rosterpilot-data-bundle"
+          : "new-recruit",
       uniqueRosters: 1 + opponents.length,
-      remoteMutations,
-      cacheReuses,
+      remoteMutations:
+        selectedSimulationBackend === "local-engine"
+          ? 0
+          : remoteMutations,
+      cacheReuses:
+        selectedSimulationBackend === "local-engine"
+          ? 0
+          : cacheReuses,
       connectorEvents: preparationConnectorEvents,
     },
     failures,
@@ -5066,6 +5251,17 @@ export async function analyzeRosterMatchup(
         enrichedRoszPath: portablePath(
           report.player.enrichedRoszPath,
         ),
+        ...(report.player.simulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+          ? {
+              simulationInput: {
+                ...report.player.simulationInput,
+                path: portablePath(
+                  report.player.simulationInput.path,
+                ),
+              },
+            }
+          : {}),
       },
       opponents: report.opponents.map((prepared) => ({
         ...prepared,
@@ -5079,6 +5275,17 @@ export async function analyzeRosterMatchup(
         enrichedRoszPath: portablePath(
           prepared.enrichedRoszPath,
         ),
+        ...(prepared.simulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+          ? {
+              simulationInput: {
+                ...prepared.simulationInput,
+                path: portablePath(
+                  prepared.simulationInput.path,
+                ),
+              },
+            }
+          : {}),
       })),
       artifacts: portableArtifacts,
     };

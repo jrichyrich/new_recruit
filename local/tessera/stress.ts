@@ -111,6 +111,12 @@ import {
   profilePolicyScaffold,
   validateProfilePolicy,
 } from "./profile-policy";
+import {
+  verifyLocalTesseraEngineInput,
+} from "./local-engine-input";
+import {
+  localTesseraEngineIsAutoSelectable,
+} from "./local-engine";
 
 const SCREENING_METRICS: TesseraMetric[] = [
   "half-wipe-probability",
@@ -175,11 +181,14 @@ function requestedSimulationBackend(
   return options.simulationBackend ?? "auto";
 }
 
-/** Auto remains on the promoted website route while the local engine is a candidate. */
 function selectedSimulationBackend(
   requested: TesseraSimulationBackend,
 ): TesseraSimulationProvider {
-  return requested === "local-engine" ? "local-engine" : "website";
+  if (requested === "local-engine") return "local-engine";
+  if (requested === "website") return "website";
+  return localTesseraEngineIsAutoSelectable()
+    ? "local-engine"
+    : "website";
 }
 
 function simulationProviderAllowsAnalyticalClaims(
@@ -797,7 +806,10 @@ export const TesseraStressPreparationFailureReportSchema = z
     connectorEvents: z.array(ConnectorEventSchema),
     preparation: z.object({
       status: z.enum(["partial", "failed"]),
-      source: z.literal("new-recruit"),
+      source: z.enum([
+        "new-recruit",
+        "rosterpilot-data-bundle",
+      ]),
       failedSide: z.enum(["player", "opponent"]),
       failedTemplateId: z.string().min(1).nullable(),
       uniqueRosters: z.number().int().nonnegative(),
@@ -880,6 +892,10 @@ export const TesseraStressPreparationFailureReportSchema = z
           "player-enriched-rosz",
           "opponent-source-rosz",
           "opponent-enriched-rosz",
+          "player-source-json",
+          "player-local-engine-input",
+          "opponent-source-json",
+          "opponent-local-engine-input",
         ]),
         written: z.string().min(1),
         sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
@@ -1343,6 +1359,10 @@ const StressBaselineSchema = z.object({
       "player-enriched-rosz",
       "opponent-source-rosz",
       "opponent-enriched-rosz",
+      "player-source-json",
+      "player-local-engine-input",
+      "opponent-source-json",
+      "opponent-local-engine-input",
     ]),
     written: z.string().min(1),
     sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
@@ -1650,6 +1670,7 @@ function portableManifestValue(
   const isPath =
     key.endsWith("Path") ||
     key === "reportPath" ||
+    (parentKey === "simulationInput" && key === "path") ||
     (parentKey === "finalArtifacts" &&
       (key === "json" || key === "html"));
   if (!isPath || !path.isAbsolute(value)) return value;
@@ -1691,6 +1712,7 @@ function resolveManifestValue(
     key === "outputDirectory" ||
     key.endsWith("Path") ||
     key === "reportPath" ||
+    (parentKey === "simulationInput" && key === "path") ||
     (parentKey === "finalArtifacts" &&
       (key === "json" || key === "html"));
   return isPath && !path.isAbsolute(value)
@@ -1815,6 +1837,16 @@ async function materializePreparedRoster(
     ...prepared,
     sourceRoszPath: source.filename,
     enrichedRoszPath: enriched.filename,
+    ...(prepared.simulationInput?.kind ===
+    "rosterpilot-local-engine-input"
+      ? {
+          simulationInput: {
+            ...prepared.simulationInput,
+            path: enriched.filename,
+            sha256: enriched.sha256,
+          },
+        }
+      : {}),
   };
 }
 
@@ -3640,13 +3672,20 @@ function combineMatchupReports(
         preparedReceipts.length === 1 + values.length
           ? "complete"
           : "failed",
-      source: "new-recruit",
+      source:
+        selectedBackend === "local-engine"
+          ? "rosterpilot-data-bundle"
+          : "new-recruit",
       uniqueRosters: preparedReceipts.length,
-      remoteMutations: Math.max(
-        0,
-        preparedReceipts.length - cacheReuses,
-      ),
-      cacheReuses,
+      remoteMutations:
+        selectedBackend === "local-engine"
+          ? 0
+          : Math.max(
+              0,
+              preparedReceipts.length - cacheReuses,
+            ),
+      cacheReuses:
+        selectedBackend === "local-engine" ? 0 : cacheReuses,
       connectorEvents: preparedReceipts.flatMap(
         (receipt) => receipt.connectorEvents ?? [],
       ),
@@ -3942,6 +3981,7 @@ async function ensurePreparedOpponents(
       continue;
     }
     if (
+      input.manifest.selectedSimulationBackend !== "local-engine" &&
       input.manifest.opponentPreparationStartedAt[item.templateId]
     ) {
       return {
@@ -3962,42 +4002,46 @@ async function ensurePreparedOpponents(
         },
       };
     }
-    const opponentPreparationStartedAt =
-      new Date().toISOString();
-    input.manifest.opponentPreparationStartedAt[item.templateId] =
-      opponentPreparationStartedAt;
-    try {
-      await writeManifest(
-        input.manifest,
-        input.manifestPath,
-        input.options,
-        true,
-      );
-    } catch (error) {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          issue(
-            "WRITE_FAILED",
-            error instanceof Error
-              ? error.message
-              : "The opponent delivery marker could not be persisted.",
-          ),
-        ],
-        warnings: [],
-        failureContext: {
-          side: "opponent",
-          templateId: item.templateId,
-          rosterName: item.roster.name,
-          partialPrepared: null,
-        },
-      };
+    const opponentPreparationStartedAt = new Date().toISOString();
+    if (input.manifest.selectedSimulationBackend !== "local-engine") {
+      input.manifest.opponentPreparationStartedAt[item.templateId] =
+        opponentPreparationStartedAt;
+      try {
+        await writeManifest(
+          input.manifest,
+          input.manifestPath,
+          input.options,
+          true,
+        );
+      } catch (error) {
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            issue(
+              "WRITE_FAILED",
+              error instanceof Error
+                ? error.message
+                : "The opponent delivery marker could not be persisted.",
+            ),
+          ],
+          warnings: [],
+          failureContext: {
+            side: "opponent",
+            templateId: item.templateId,
+            rosterName: item.roster.name,
+            partialPrepared: null,
+          },
+        };
+      }
     }
     const prepared = await prepareRosterForTessera(
       item.roster,
       {
         ...input.options,
+        simulationBackend:
+          input.manifest.selectedSimulationBackend,
+        profilePolicy: input.manifest.profilePolicy,
         mutationRunId: input.manifest.runId,
         outputDirectory: path.join(
           input.outputDirectory,
@@ -4046,9 +4090,11 @@ async function ensurePreparedOpponents(
       delete input.manifest.preparedOpponents[
         item.templateId
       ];
-      input.manifest.opponentPreparationStartedAt[
-        item.templateId
-      ] = opponentPreparationStartedAt;
+      if (input.manifest.selectedSimulationBackend !== "local-engine") {
+        input.manifest.opponentPreparationStartedAt[
+          item.templateId
+        ] = opponentPreparationStartedAt;
+      }
       return {
         ok: false,
         data: null,
@@ -4472,6 +4518,27 @@ async function runStage(
     const opponent: TesseraOpponentInput = opponentPath
       ? { kind: "rosz", path: opponentPath }
       : { kind: "roster", roster: item.roster };
+    const preparedReuse = (() => {
+      if (
+        input.manifest.selectedSimulationBackend !== "local-engine"
+      ) {
+        return undefined;
+      }
+      const player = input.manifest.preparedPlayer;
+      const preparedOpponent =
+        input.manifest.preparedOpponents[item.templateId]?.prepared;
+      if (!player || !preparedOpponent) {
+        throw artifactMaterializationError(
+          "TESSERA_STRESS_BUNDLE_ARTIFACT_MISSING",
+          `The frozen local-engine prepared receipt for ${item.templateId} is missing before ${stage} execution.`,
+        );
+      }
+      return {
+        player,
+        opponent: preparedOpponent,
+        sourceAttempt: 1,
+      };
+    })();
     let result: Awaited<ReturnType<typeof analyzeRosterMatchup>> | null = null;
     let lastCode: string | null = null;
     let attemptWithinTurn = 0;
@@ -4528,6 +4595,7 @@ async function runStage(
             ),
           ),
           opponentRosterContext: item.roster,
+          ...(preparedReuse ? { preparedReuse } : {}),
           frozenScenarioContract:
             stageContractFor(
               input.manifest,
@@ -5328,29 +5396,54 @@ async function preparedProfileInventory(
   manifest: TesseraStressManifest,
   opponentRoszPaths?: Map<string, string>,
 ): Promise<TesseraProfileRequirement[]> {
-  const inventories = await Promise.all([
-    readFile(preparedPlayer.enrichedRoszPath).then((content) =>
-      inspectEnrichedProfileRequirements(
+  const inspectPrepared = async (
+    prepared: TesseraPreparedRoster,
+    factionId: string,
+    overridePath?: string,
+  ): Promise<TesseraProfileRequirement[]> => {
+    const filename = overridePath ?? prepared.enrichedRoszPath;
+    const content = await readFile(filename);
+    if (
+      !overridePath &&
+      prepared.simulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+    ) {
+      return verifyLocalTesseraEngineInput({
         content,
-        playerRoster.factionId,
-      ),
-    ),
+        expectedSha256: prepared.simulationInput.sha256,
+        expectedBundleId: prepared.simulationInput.bundleId,
+        expectedRosterFingerprint: prepared.fingerprint,
+      }).profileRequirements;
+    }
+    return inspectEnrichedProfileRequirements(content, factionId);
+  };
+  const inventories = await Promise.all([
+    inspectPrepared(preparedPlayer, playerRoster.factionId),
     ...readyItems.map((item) => {
+      const receipt =
+        manifest.preparedOpponents[item.templateId]?.prepared;
       const enrichedRoszPath =
         opponentRoszPaths?.get(item.templateId) ??
-        manifest.preparedOpponents[item.templateId]?.prepared
-          .enrichedRoszPath;
+        receipt?.enrichedRoszPath;
       if (!enrichedRoszPath) {
         throw new Error(
           `${item.templateId} has no verified prepared opponent receipt.`,
         );
       }
-      return readFile(enrichedRoszPath).then((content) =>
-        inspectEnrichedProfileRequirements(
-          content,
-          item.roster.factionId,
-        ),
-      );
+      return receipt
+        ? inspectPrepared(
+            receipt,
+            item.roster.factionId,
+            opponentRoszPaths?.has(item.templateId)
+              ? enrichedRoszPath
+              : undefined,
+          )
+        : readFile(enrichedRoszPath).then((content) =>
+            inspectEnrichedProfileRequirements(
+              content,
+              item.roster.factionId,
+            ),
+          );
     }),
   ]);
   return mergeProfileInventory(inventories.flat());
@@ -5422,9 +5515,14 @@ async function preparationFailureArtifacts(
     artifacts.push(
       {
         format:
-          side === "player"
-            ? "player-source-rosz"
-            : "opponent-source-rosz",
+          prepared.simulationInput?.kind ===
+          "rosterpilot-local-engine-input"
+            ? side === "player"
+              ? "player-source-json"
+              : "opponent-source-json"
+            : side === "player"
+              ? "player-source-rosz"
+              : "opponent-source-rosz",
         written: prepared.sourceRoszPath,
         sha256: await optionalFileSha256(
           prepared.sourceRoszPath,
@@ -5435,9 +5533,14 @@ async function preparationFailureArtifacts(
       },
       {
         format:
-          side === "player"
-            ? "player-enriched-rosz"
-            : "opponent-enriched-rosz",
+          prepared.simulationInput?.kind ===
+          "rosterpilot-local-engine-input"
+            ? side === "player"
+              ? "player-local-engine-input"
+              : "opponent-local-engine-input"
+            : side === "player"
+              ? "player-enriched-rosz"
+              : "opponent-enriched-rosz",
         written: prepared.enrichedRoszPath,
         sha256:
           enrichedSha256 ??
@@ -5527,13 +5630,17 @@ async function preparationFailureReport(
       event.origin === "new-remote" &&
       event.outcome === "verified",
   ).length;
+  const localPreparation =
+    input.manifest.selectedSimulationBackend === "local-engine";
   const failureIssues =
     violations.length > 0
       ? violations
       : [
           issue(
             "TESSERA_STRESS_PREPARATION_FAILED",
-            "New Recruit preparation failed without a structured connector error.",
+            localPreparation
+              ? "Local data-bundle compilation failed without a structured compiler error."
+              : "New Recruit preparation failed without a structured connector error.",
           ),
         ];
   const recovery = stressRecoverySummary(
@@ -5543,9 +5650,11 @@ async function preparationFailureReport(
   );
   recovery.nextActions = unique([
     ...recovery.nextActions,
-    context.partialPrepared
-      ? "Inspect the non-reusable partial New Recruit receipt and resolve its provenance failure. Do not import it into Tessera or copy it into manifest success fields."
-      : "Inspect the failed New Recruit preparation and the recovery manifest before explicitly resuming; RosterPilot will not retry an uncertain external outcome automatically.",
+    localPreparation
+      ? "Inspect the local compiler failure and frozen bundle identity, then resume after resolving it; no external list was created."
+      : context.partialPrepared
+        ? "Inspect the non-reusable partial New Recruit receipt and resolve its provenance failure. Do not import it into Tessera or copy it into manifest success fields."
+        : "Inspect the failed New Recruit preparation and the recovery manifest before explicitly resuming; RosterPilot will not retry an uncertain external outcome automatically.",
   ]);
   const report: TesseraStressPreparationFailureReport = {
     schemaVersion: 3,
@@ -5555,9 +5664,13 @@ async function preparationFailureReport(
     source: "prepare-only",
     status: "failed",
     statusExplanation:
-      context.side === "player"
-        ? "Player New Recruit preparation failed before a verified reusable player receipt existed. Tessera was not started."
-        : `Opponent New Recruit preparation failed for ${context.templateId ?? "the current proxy"}; previously verified receipts were retained and Tessera was not started.`,
+      localPreparation
+        ? context.side === "player"
+          ? "Player data-bundle compilation failed before a verified local input existed. Tessera was not started."
+          : `Opponent data-bundle compilation failed for ${context.templateId ?? "the current proxy"}; verified local inputs were retained and Tessera was not started.`
+        : context.side === "player"
+          ? "Player New Recruit preparation failed before a verified reusable player receipt existed. Tessera was not started."
+          : `Opponent New Recruit preparation failed for ${context.templateId ?? "the current proxy"}; previously verified receipts were retained and Tessera was not started.`,
     runtime: getRuntimeProvenance(),
     tesseraUiIdentity: null,
     connectorEvents,
@@ -5568,16 +5681,19 @@ async function preparationFailureReport(
         context.partialPrepared
           ? "partial"
           : "failed",
-      source: "new-recruit",
+      source: localPreparation
+        ? "rosterpilot-data-bundle"
+        : "new-recruit",
       failedSide: context.side,
       failedTemplateId: context.templateId,
       uniqueRosters:
         (verifiedPlayer ? 1 : 0) + verifiedOpponents.length,
-      remoteMutations:
-        recordedRemoteMutations > 0
+      remoteMutations: localPreparation
+        ? 0
+        : recordedRemoteMutations > 0
           ? recordedRemoteMutations
           : Math.max(0, observedReceipts.length - cacheReuses),
-      cacheReuses,
+      cacheReuses: localPreparation ? 0 : cacheReuses,
       connectorEvents,
     },
     simulation: {
@@ -5745,7 +5861,10 @@ async function executeStressTest(
       };
     }
   } else {
-    if (input.manifest.playerPreparationStartedAt) {
+    if (
+      input.manifest.selectedSimulationBackend !== "local-engine" &&
+      input.manifest.playerPreparationStartedAt
+    ) {
       const outcomeIssue = issue(
         "TESSERA_STRESS_DELIVERY_OUTCOME_UNKNOWN",
         "A prior New Recruit delivery for the player roster started but no verified receipt was persisted. Resume will not risk creating a duplicate list; inspect the external account and start a new run when safe.",
@@ -5768,44 +5887,49 @@ async function executeStressTest(
         warnings: [],
       };
     }
-    input.manifest.playerPreparationStartedAt =
-      new Date().toISOString();
-    try {
-      await writeManifest(
-        input.manifest,
-        input.manifestPath,
-        input.options,
-        true,
-      );
-    } catch (error) {
-      const markerIssue = issue(
-        "WRITE_FAILED",
-        error instanceof Error
-          ? error.message
-          : "The player delivery marker could not be persisted.",
-      );
-      const diagnostic = await preparationFailureReport(
-        input,
-        {
-          side: "player",
-          templateId: null,
-          rosterName: input.playerRoster.name,
-          partialPrepared: null,
-        },
-        [markerIssue],
-        [],
-      );
-      return {
-        ok: false,
-        data: diagnostic,
-        violations: [markerIssue],
-        warnings: [],
-      };
+    if (input.manifest.selectedSimulationBackend !== "local-engine") {
+      input.manifest.playerPreparationStartedAt =
+        new Date().toISOString();
+      try {
+        await writeManifest(
+          input.manifest,
+          input.manifestPath,
+          input.options,
+          true,
+        );
+      } catch (error) {
+        const markerIssue = issue(
+          "WRITE_FAILED",
+          error instanceof Error
+            ? error.message
+            : "The player delivery marker could not be persisted.",
+        );
+        const diagnostic = await preparationFailureReport(
+          input,
+          {
+            side: "player",
+            templateId: null,
+            rosterName: input.playerRoster.name,
+            partialPrepared: null,
+          },
+          [markerIssue],
+          [],
+        );
+        return {
+          ok: false,
+          data: diagnostic,
+          violations: [markerIssue],
+          warnings: [],
+        };
+      }
     }
     const prepared = await prepareRosterForTessera(
       input.playerRoster,
       {
         ...input.options,
+        simulationBackend:
+          input.manifest.selectedSimulationBackend,
+        profilePolicy: input.manifest.profilePolicy,
         mutationRunId: input.manifest.runId,
         outputDirectory: path.join(
           input.outputDirectory,
@@ -5856,7 +5980,9 @@ async function executeStressTest(
       input.manifest.preparedPlayer = null;
       input.manifest.preparedPlayerSha256 = null;
       input.manifest.playerPreparationStartedAt =
-        preparationStartedAt ?? new Date().toISOString();
+        input.manifest.selectedSimulationBackend === "local-engine"
+          ? null
+          : preparationStartedAt ?? new Date().toISOString();
       const persistenceIssue = issue(
         "WRITE_FAILED",
         error instanceof Error
@@ -6378,7 +6504,9 @@ async function executeStressTest(
   const warnings = unique([
     ...input.manifest.warnings,
     ...screening.warnings,
+    ...(screeningReport?.warnings ?? []),
     ...deepWarnings,
+    ...(deepDiveReport?.warnings ?? []),
     ...robustness.warnings,
     ...integrity.issues.map(
       (entry) => `[${entry.code}] ${entry.message}`,
@@ -6500,13 +6628,22 @@ async function executeStressTest(
           : preparedReceipts.length > 0
             ? "partial"
             : "failed",
-      source: "new-recruit",
+      source:
+        input.manifest.selectedSimulationBackend === "local-engine"
+          ? "rosterpilot-data-bundle"
+          : "new-recruit",
       uniqueRosters: preparedReceipts.length,
-      remoteMutations: Math.max(
-        0,
-        preparedReceipts.length - cacheReuses,
-      ),
-      cacheReuses,
+      remoteMutations:
+        input.manifest.selectedSimulationBackend === "local-engine"
+          ? 0
+          : Math.max(
+              0,
+              preparedReceipts.length - cacheReuses,
+            ),
+      cacheReuses:
+        input.manifest.selectedSimulationBackend === "local-engine"
+          ? 0
+          : cacheReuses,
       connectorEvents: preparedReceipts.flatMap(
         (receipt) => receipt.connectorEvents ?? [],
       ),
@@ -6668,17 +6805,27 @@ async function executeStressTest(
         preparedReceipts.flatMap((receipt, index) => [
           fileSha256(receipt.sourceRoszPath).then((digest) => ({
             format:
-              index === 0
-                ? ("player-source-rosz" as const)
-                : ("opponent-source-rosz" as const),
+              receipt.simulationInput?.kind ===
+              "rosterpilot-local-engine-input"
+                ? index === 0
+                  ? ("player-source-json" as const)
+                  : ("opponent-source-json" as const)
+                : index === 0
+                  ? ("player-source-rosz" as const)
+                  : ("opponent-source-rosz" as const),
             written: receipt.sourceRoszPath,
             sha256: digest,
           })),
           fileSha256(receipt.enrichedRoszPath).then((digest) => ({
             format:
-              index === 0
-                ? ("player-enriched-rosz" as const)
-                : ("opponent-enriched-rosz" as const),
+              receipt.simulationInput?.kind ===
+              "rosterpilot-local-engine-input"
+                ? index === 0
+                  ? ("player-local-engine-input" as const)
+                  : ("opponent-local-engine-input" as const)
+                : index === 0
+                  ? ("player-enriched-rosz" as const)
+                  : ("opponent-enriched-rosz" as const),
             written: receipt.enrichedRoszPath,
             sha256: digest,
           })),

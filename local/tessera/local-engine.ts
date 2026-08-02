@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { strFromU8, unzipSync } from "fflate";
 
 import {
+  currentRosterSourceData,
   validateTesseraReadyRosz,
   type ProfilePolicyV1,
   type TesseraSimulationProviderIdentity,
@@ -20,34 +21,21 @@ import type {
 import type {
   TesseraSimulationProviderAdapter,
 } from "./simulation-provider";
+import {
+  LOCAL_TESSERA_COMPILER_VERSION,
+  verifyLocalTesseraEngineInput,
+  type LocalEngineUnit as EngineUnit,
+  type LocalEngineValue as EngineValue,
+  type LocalEngineWeapon as EngineWeapon,
+  type LocalTesseraEngineInput,
+  type LocalTesseraEngineUnit,
+} from "./local-engine-input";
+import {
+  profilePolicyHash,
+  profilePolicyIdentityMatches,
+} from "./profile-policy";
 
-type EngineValue = number | string;
-
-type EngineWeapon = {
-  name: string;
-  type: "ranged" | "melee";
-  count: number;
-  A: EngineValue;
-  BS?: number;
-  WS?: number;
-  S: number;
-  AP: number;
-  D: EngineValue;
-  keywords: string[];
-};
-
-type EngineUnit = {
-  name: string;
-  models: number;
-  T: number;
-  SV: number;
-  W: number;
-  INV: number | null;
-  FNP: number | null;
-  points?: number;
-  keywords: string[];
-  weapons: EngineWeapon[];
-};
+export { LOCAL_TESSERA_COMPILER_VERSION } from "./local-engine-input";
 
 type EngineDistributionBucket = {
   value: number;
@@ -101,23 +89,19 @@ type XmlSelection = {
   children: XmlSelection[];
 };
 
-export type LocalTesseraEngineUnit = EngineUnit & {
-  instanceId: string;
-  selectionId: string | null;
-  occurrence: number;
-  label: string;
-};
-
 export type LocalTesseraEngineRoster = {
   schemaVersion: 1;
-  compilerVersion: typeof LOCAL_TESSERA_COMPILER_VERSION;
+  compilerVersion: string;
   sourceSha256: string;
   rosterName: string;
   factionName: string;
   units: LocalTesseraEngineUnit[];
+  bundleId?: string;
+  evaluationMode?: "base-profile-evaluation";
+  limitations?: LocalTesseraEngineInput["limitations"];
 };
 
-export const LOCAL_TESSERA_COMPILER_VERSION =
+const LEGACY_ENRICHED_ROSZ_COMPILER_VERSION =
   "enriched-rosz-v1" as const;
 export const LOCAL_TESSERA_ADAPTER_VERSION =
   "tessera-engine-browser-contract-v1" as const;
@@ -132,9 +116,15 @@ const CAPABILITY_MANIFEST = {
     "mean-kills",
     "mean-damage",
   ],
-  unitCharacteristics: ["T", "SV", "W", "Invulnerable Save"],
+  unitCharacteristics: [
+    "T",
+    "SV",
+    "W",
+    "Invulnerable Save",
+    "phase-specific Invulnerable Save",
+    "mixed defensive profiles",
+  ],
   weaponCharacteristics: [
-    "Range",
     "A",
     "BS",
     "WS",
@@ -145,9 +135,11 @@ const CAPABILITY_MANIFEST = {
   ],
   unsupported: [
     "attached-units",
-    "mixed-defensive-profiles",
     "combat-relevant-datasheet-abilities",
     "army-and-detachment-rules",
+    "enhancements",
+    "non-weapon-wargear-effects",
+    "range-and-distance-dependent-effects",
     "stratagems",
   ],
 } as const;
@@ -188,6 +180,16 @@ export const LOCAL_TESSERA_ENGINE_STATUS = {
     "The pinned AGPL engine is available for explicit evaluation, but written-license and parity promotion gates are not satisfied.",
 };
 
+export function localTesseraEngineIsAutoSelectable(): boolean {
+  return (
+    LOCAL_TESSERA_ENGINE_STATUS.available &&
+    LOCAL_TESSERA_ENGINE_STATUS.simulationReady &&
+    LOCAL_TESSERA_ENGINE_STATUS.endToEndReady &&
+    LOCAL_TESSERA_ENGINE_IDENTITY.promotion === "promoted" &&
+    LOCAL_TESSERA_ENGINE_IDENTITY.licenseState === "approved"
+  );
+}
+
 const DEFAULT_PHASES: TesseraPhase[] = ["shooting", "fight"];
 const DEFAULT_METRICS: TesseraMetric[] = [
   "wipe-probability",
@@ -204,10 +206,8 @@ const SUPPORTED_KEYWORDS = new Set([
   "ASSAULT",
   "BLAST",
   "CLEAVE",
-  "CONVERSION",
   "DEVASTATING WOUNDS",
   "EXTRA ATTACKS",
-  "HAZARDOUS",
   "HEAVY",
   "IGNORES COVER",
   "INDIRECT FIRE",
@@ -802,7 +802,7 @@ function compileUnit(
     .slice(0, 24);
   return {
     instanceId,
-    selectionId: selection.id,
+    selectionId: selection.id ?? instanceId,
     occurrence,
     label: selection.name,
     name: selection.name,
@@ -853,12 +853,136 @@ export function compileEnrichedRoszForLocalEngine(
   });
   return {
     schemaVersion: 1,
-    compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+    compilerVersion: LEGACY_ENRICHED_ROSZ_COMPILER_VERSION,
     sourceSha256: crypto.createHash("sha256").update(content).digest("hex"),
     rosterName,
     factionName,
     units,
   };
+}
+
+function rosterFromLocalInput(
+  content: Uint8Array,
+  expected: Extract<
+    NonNullable<TesseraBrowserInput["playerSimulationInput"]>,
+    { kind: "rosterpilot-local-engine-input" }
+  >,
+  profilePolicy: ProfilePolicyV1 | null | undefined,
+): LocalTesseraEngineRoster {
+  const parsed = verifyLocalTesseraEngineInput({
+    content,
+    expectedSha256: expected.sha256,
+    expectedBundleId: expected.bundleId,
+  });
+  if (parsed.compilerVersion !== expected.compilerVersion) {
+    throw localEngineError(
+      "TESSERA_LOCAL_COMPILER_VERSION_CHANGED",
+      `The frozen local input was compiled by ${parsed.compilerVersion}, not ${expected.compilerVersion}.`,
+    );
+  }
+  const scopedProfilePolicy = profilePolicy
+    ? {
+        ...profilePolicy,
+        entries: profilePolicy.entries.filter((entry) =>
+          parsed.profileRequirements.some((requirement) =>
+            profilePolicyIdentityMatches(entry, requirement),
+          ),
+        ),
+      }
+    : null;
+  const expectedProfilePolicySha256 = scopedProfilePolicy
+    ? profilePolicyHash(scopedProfilePolicy)
+    : null;
+  if (parsed.profilePolicySha256 !== expectedProfilePolicySha256) {
+    throw localEngineError(
+      "TESSERA_LOCAL_PROFILE_POLICY_CHANGED",
+      "The local input was not compiled with the roster-scoped profile policy frozen for this run.",
+    );
+  }
+  const activeBundleId = currentRosterSourceData(
+    parsed.factionId,
+  ).bundleId;
+  if (activeBundleId !== parsed.bundleId) {
+    throw localEngineError(
+      "TESSERA_LOCAL_BUNDLE_MISMATCH",
+      `The local input is pinned to bundle ${parsed.bundleId}, but bundle ${activeBundleId} is active.`,
+    );
+  }
+  return {
+    schemaVersion: 1,
+    compilerVersion: parsed.compilerVersion,
+    sourceSha256: expected.sha256,
+    rosterName: parsed.rosterName,
+    factionName: parsed.factionName,
+    units: parsed.units,
+    bundleId: parsed.bundleId,
+    evaluationMode: parsed.evaluationMode,
+    limitations: parsed.limitations,
+  };
+}
+
+async function loadRosterForLocalEngine(
+  filename: string,
+  simulationInput: TesseraBrowserInput["playerSimulationInput"],
+  profilePolicy?: ProfilePolicyV1 | null,
+): Promise<LocalTesseraEngineRoster> {
+  const content = await readFile(filename);
+  return simulationInput?.kind === "rosterpilot-local-engine-input"
+    ? rosterFromLocalInput(content, simulationInput, profilePolicy)
+    : compileEnrichedRoszForLocalEngine(content, profilePolicy);
+}
+
+function phaseDefender(
+  unit: LocalTesseraEngineUnit,
+  phase: TesseraPhase,
+): LocalTesseraEngineUnit {
+  const scopedInvulnerable =
+    phase === "shooting" ? unit.rangedINV : unit.meleeINV;
+  const profiles = unit.profiles?.map((profile) => {
+    const scoped =
+      phase === "shooting"
+        ? profile.rangedINV
+        : profile.meleeINV;
+    return { ...profile, INV: scoped ?? profile.INV };
+  });
+  return {
+    ...unit,
+    INV: scopedInvulnerable ?? unit.INV,
+    ...(profiles ? { profiles } : {}),
+  };
+}
+
+function localInputWarnings(
+  side: "player" | "opponent",
+  roster: LocalTesseraEngineRoster,
+): string[] {
+  if (!roster.limitations) return [];
+  const abilities = roster.limitations.omittedDatasheetAbilities.reduce(
+    (count, item) => count + item.abilityNames.length,
+    0,
+  );
+  const wargear = roster.limitations.omittedWargear.length;
+  const enhancements = roster.limitations.omittedEnhancements.length;
+  const keywords = roster.limitations.unsupportedWeaponKeywords.length;
+  const choices = roster.limitations.frozenChoices.length;
+  return [
+    `The ${side} roster was compiled from frozen bundle ${roster.bundleId ?? "unknown"} in base-profile-evaluation mode. Unmodeled systems: ${roster.limitations.unmodeledSystems.join(", ")}.`,
+    ...(abilities > 0
+      ? [`The ${side} local input records ${abilities} omitted datasheet ability reference${abilities === 1 ? "" : "s"}.`]
+      : []),
+    ...(wargear > 0
+      ? [`The ${side} local input records ${wargear} selected non-weapon wargear effect${wargear === 1 ? "" : "s"} that the engine did not apply.`]
+      : []),
+    ...(enhancements > 0
+      ? [`The ${side} local input records ${enhancements} selected enhancement${enhancements === 1 ? "" : "s"} that the engine did not apply.`]
+      : []),
+    ...(keywords > 0
+      ? [`The ${side} local input records ${keywords} intrinsic weapon keyword${keywords === 1 ? "" : "s"} outside the pinned adapter capability; they were not applied.`]
+      : []),
+    ...(choices > 0
+      ? [`The ${side} local input freezes ${choices} explicit profile, attack-set, or mixed-defence choice${choices === 1 ? "" : "s"}; inspect the hashed input for details.`]
+      : []),
+  ];
 }
 
 function probabilityAtLeast(
@@ -1028,19 +1152,25 @@ function scenarioCell(
 export async function runLocalTesseraEngineMatchup(
   input: TesseraBrowserInput,
 ): Promise<TesseraBrowserResult> {
-  const [engine, playerBytes, opponentBytes] = await Promise.all([
+  const [engine, player, opponent] = await Promise.all([
     import("tessera-engine") as Promise<TesseraEngineModule>,
-    readFile(input.playerRoszPath),
-    readFile(input.opponentRoszPath),
+    loadRosterForLocalEngine(
+      input.playerSimulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+        ? input.playerSimulationInput.path
+        : input.playerRoszPath,
+      input.playerSimulationInput,
+      input.profilePolicy,
+    ),
+    loadRosterForLocalEngine(
+      input.opponentSimulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+        ? input.opponentSimulationInput.path
+        : input.opponentRoszPath,
+      input.opponentSimulationInput,
+      input.profilePolicy,
+    ),
   ]);
-  const player = compileEnrichedRoszForLocalEngine(
-    playerBytes,
-    input.profilePolicy,
-  );
-  const opponent = compileEnrichedRoszForLocalEngine(
-    opponentBytes,
-    input.profilePolicy,
-  );
   const phases = (input.phases ? [...input.phases] : DEFAULT_PHASES) as TesseraPhase[];
   const metrics = (input.metrics ? [...input.metrics] : DEFAULT_METRICS) as TesseraMetric[];
   const sourceIdentity = `${player.sourceSha256}|${opponent.sourceSha256}`;
@@ -1093,7 +1223,7 @@ export async function runLocalTesseraEngineMatchup(
               const seed = seedFor(sourceIdentity, cacheKey);
               result = engine.runSimulation(
                 attacker,
-                target,
+                phaseDefender(target, phase),
                 engineOptions(phase, settings, iterations, seed),
               );
               simulationCache.set(cacheKey, result);
@@ -1187,6 +1317,11 @@ export async function runLocalTesseraEngineMatchup(
       provider: "local-engine",
       engineCommit: LOCAL_TESSERA_ENGINE_IDENTITY.commit,
       compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      inputMode:
+        player.evaluationMode === "base-profile-evaluation" &&
+        opponent.evaluationMode === "base-profile-evaluation"
+          ? "base-profile-evaluation"
+          : "legacy-enriched-rosz",
       iterations: String(LOCAL_TESSERA_ENGINE_ITERATIONS),
     },
     cells: [...legacyCells.values()],
@@ -1196,6 +1331,8 @@ export async function runLocalTesseraEngineMatchup(
     integrityIssues: [],
     warnings: [
       "The local tessera-engine route is evaluation-only and models only its declared capability manifest; it is not eligible for automatic coaching or production promotion.",
+      ...localInputWarnings("player", player),
+      ...localInputWarnings("opponent", opponent),
     ],
   };
 }
@@ -1231,12 +1368,24 @@ export function createLocalTesseraEngineProvider(
     },
     async preflight(input) {
       try {
-        const [player, opponent] = await Promise.all([
-          readFile(input.playerRoszPath),
-          readFile(input.opponentRoszPath),
+        await Promise.all([
+          loadRosterForLocalEngine(
+            input.playerSimulationInput?.kind ===
+              "rosterpilot-local-engine-input"
+              ? input.playerSimulationInput.path
+              : input.playerRoszPath,
+            input.playerSimulationInput,
+            input.profilePolicy,
+          ),
+          loadRosterForLocalEngine(
+            input.opponentSimulationInput?.kind ===
+              "rosterpilot-local-engine-input"
+              ? input.opponentSimulationInput.path
+              : input.opponentRoszPath,
+            input.opponentSimulationInput,
+            input.profilePolicy,
+          ),
         ]);
-        compileEnrichedRoszForLocalEngine(player, input.profilePolicy);
-        compileEnrichedRoszForLocalEngine(opponent, input.profilePolicy);
         return {
           ok: true,
           reasonCodes: [],
