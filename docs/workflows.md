@@ -157,8 +157,8 @@ verified. Network failure never changes data mid-operation.
 
 ## Unified conversation and CLI workflow
 
-`run_roster_workflow` is the MCP entry point for the common path. The CLI
-equivalent is `rosterpilot workflow`. One invocation resolves the player and
+`run_roster_workflow` remains the one-shot compatibility entry point. Durable
+local work uses `start_roster_workflow` or `rosterpilot workflow start`. One invocation resolves the player and
 opponent factions, leases one immutable data snapshot, builds, validates,
 explains, adds calibrated competitive coaching, and prepares any artifact the
 explicitly requested next step needs.
@@ -169,6 +169,22 @@ npm run rosterpilot -- workflow \
   --coaching concise \
   --out custodes-vs-aeldari.json
 ```
+
+Long-running or recoverable work should use the retained journey surface:
+
+```bash
+npm run rosterpilot -- workflow start --prompt "Build a 1,000 point Custodes army and test it locally against Aeldari"
+npm run rosterpilot -- workflow status --journey <journey-id>
+npm run rosterpilot -- workflow continue --journey <journey-id> --policy safe-auto
+npm run rosterpilot -- workflow choose --journey <journey-id> --action workflow.park
+npm run rosterpilot -- workflow doctor --journey <journey-id>
+```
+
+`continue --policy safe-auto` performs only typed automatic actions bound to
+the current journey revision. It never changes providers or selections and
+never creates or retries a New Recruit list. A legal roster with a blocked
+optional action is `action-required`; completed roster and fallback artifacts
+remain successful results.
 
 Faction resolution is fail-closed. Canonical names, IDs, and reviewed aliases
 resolve automatically. A voice-like or fuzzy name such as `Death Gourd` or
@@ -213,7 +229,9 @@ the open catalogue and labels that fact. Legends remain excluded by default
 when permission or verified classification is unavailable; they are advisory
 and are not a prerequisite for the main workflow.
 
-An explicit optimize request defaults to approval-gated guided mode:
+Plain “analyze,” “Tessera,” “math-hammer,” “paired test,” and “stress test”
+requests use the non-mutating `analyze` intent. Only an explicit improve,
+revise, change, or optimize request enters approval-gated optimization:
 
 ```bash
 npm run rosterpilot -- workflow \
@@ -239,9 +257,11 @@ decisions even when the run itself completes.
 With an exact opponent, the target is that frozen roster. With only a known
 faction, it uses the existing frozen faction stress portfolio. When no opponent
 is supplied, 1,000- and 2,000-point workflows deterministically build six
-legal, New Recruit-exportable robustness lenses: horde, elite infantry,
-armour/monsters, fast scoring MSU, ranged pressure, and melee pressure. The
-portfolio hash binds the six simulation payloads. Other points limits require
+legal robustness lenses: horde, elite infantry, armour/monsters, fast scoring
+MSU, ranged pressure, and melee pressure. The local provider consumes their
+canonical bundle-native inputs; the website provider separately requires New
+Recruit-exportable preparation. The portfolio hash binds the six simulation
+payloads. Other points limits require
 a named faction or exact opponent.
 
 Guided optimization is two-stage: the user first approves at most three

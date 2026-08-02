@@ -619,7 +619,15 @@ async function configureNewRecruit(
     "New Recruit status",
     runRosterPilot(["new-recruit", "status"], dependencies),
   );
-  if (!status.data?.available) {
+  if (
+    status.data?.platform !== "darwin" ||
+    !status.data?.agentAvailable ||
+    !status.data?.browserAvailable ||
+    !status.data?.brokerAvailable ||
+    !status.data?.protocolCompatible ||
+    !status.data?.installationCurrent ||
+    status.data?.runtimeCompatible === false
+  ) {
     throw new SetupError(
       "The New Recruit companion is unavailable after prerequisite checks.",
     );

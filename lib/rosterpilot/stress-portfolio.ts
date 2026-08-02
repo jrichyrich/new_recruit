@@ -1408,6 +1408,59 @@ export function buildExportableRosterCandidate(
   return repairedBest;
 }
 
+/**
+ * Builds a legal, well-utilized canonical roster without consulting New
+ * Recruit mappings. This is the provider-neutral input path used by the local
+ * Tessera engine.
+ */
+export function buildCanonicalRosterCandidate(
+  input: Parameters<typeof buildRoster>[0],
+): RosterDraftV1 | null {
+  const explicitFactionId = input.playerFaction ?? input.faction;
+  if (!explicitFactionId) return null;
+  const detachments = input.detachmentId
+    ? [input.detachmentId]
+    : listDetachments(explicitFactionId).map(
+        (detachment) => detachment.id,
+      );
+  let best: RosterDraftV1 | null = null;
+  for (const detachmentId of detachments) {
+    const built = buildRoster({ ...input, detachmentId });
+    if (!built.ok || !built.data || !validateRoster(built.data).ok) {
+      continue;
+    }
+    const candidate = built.data;
+    if (
+      candidate.totalPoints / Math.max(1, candidate.pointsLimit) >=
+      0.98
+    ) {
+      return candidate;
+    }
+    if (
+      !best ||
+      candidate.totalPoints > best.totalPoints ||
+      (
+        candidate.totalPoints === best.totalPoints &&
+        rosterSimulationFingerprint(candidate) <
+          rosterSimulationFingerprint(best)
+      )
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function buildPortfolioRoster(
+  input: Parameters<typeof buildRoster>[0],
+  knownBlocked: Set<string>,
+  artifactMode: "canonical" | "new-recruit",
+): RosterDraftV1 | null {
+  return artifactMode === "canonical"
+    ? buildCanonicalRosterCandidate(input)
+    : buildExportableRoster(input, knownBlocked);
+}
+
 interface StressCandidate {
   roster: RosterDraftV1;
   traits: TesseraStressPortfolioTraits;
@@ -1704,6 +1757,7 @@ function candidateRosterPool(
   allowLegends: boolean,
   pointsTolerancePercent: number,
   knownBlocked: Set<string>,
+  artifactMode: "canonical" | "new-recruit",
   expanded = false,
 ): StressCandidate[] {
   const factionUnits = searchUnits({
@@ -1723,7 +1777,7 @@ function candidateRosterPool(
       left.id.localeCompare(right.id) || left.name.localeCompare(right.name),
   );
   if (detachments.length === 0) return [];
-  const unnamedAnchor = buildExportableRoster(
+  const unnamedAnchor = buildPortfolioRoster(
     {
       faction: factionId,
       pointsLimit,
@@ -1733,11 +1787,12 @@ function candidateRosterPool(
       allowLegends,
     },
     new Set(knownBlocked),
+    artifactMode,
   );
   const requiresNamedCharacterAnchor = unnamedAnchor === null;
   const portfolioAnchor =
     unnamedAnchor ??
-    buildExportableRoster(
+    buildPortfolioRoster(
       {
         faction: factionId,
         pointsLimit,
@@ -1747,6 +1802,7 @@ function candidateRosterPool(
         allowLegends,
       },
       new Set(knownBlocked),
+      artifactMode,
     );
 
   type Recipe = {
@@ -1790,9 +1846,14 @@ function candidateRosterPool(
     }
   }
 
-  const mappedUnitIds = new Set(
-    Object.keys(getNewRecruitFactionCatalogue(factionId)?.units ?? {}),
-  );
+  const mappedUnitIds =
+    artifactMode === "canonical"
+      ? new Set(factionUnits.map((unit) => unit.id))
+      : new Set(
+          Object.keys(
+            getNewRecruitFactionCatalogue(factionId)?.units ?? {},
+          ),
+        );
   const forcedUnitIds = [
     ...new Set([
       ...factionUnits
@@ -2032,16 +2093,18 @@ function candidateRosterPool(
       excludedUnitIds: recipe.excludedUnitIds,
     };
     const roster =
-      buildExportableRoster(
+      buildPortfolioRoster(
         {
           ...rosterInput,
           detachmentId: detachment.id,
         },
         knownBlocked,
+        artifactMode,
       ) ??
-      buildExportableRoster(
+      buildPortfolioRoster(
         rosterInput,
         knownBlocked,
+        artifactMode,
       );
     if (!roster) continue;
     const validation = validateRoster(roster);
@@ -2089,12 +2152,13 @@ function namedCharacterSpecialistCandidate(
   pointsTolerancePercent: number,
   knownBlocked: Set<string>,
   namedAnchorIds: readonly string[],
+  artifactMode: "canonical" | "new-recruit",
 ): StressCandidate | null {
   const buildCandidate = (
     anchorId: string,
     requiredWarlordUnitId?: string,
   ): StressCandidate | null => {
-    const roster = buildExportableRoster(
+    const roster = buildPortfolioRoster(
       {
         faction: factionId,
         pointsLimit,
@@ -2106,6 +2170,7 @@ function namedCharacterSpecialistCandidate(
         requiredWarlordUnitId,
       },
       new Set(knownBlocked),
+      artifactMode,
     );
     if (!roster || !rosterHasNamedCharacter(roster)) return null;
     const pointDifference =
@@ -2124,7 +2189,7 @@ function namedCharacterSpecialistCandidate(
     if (direct) return direct;
 
     if (escortWarlordUnitId === undefined) {
-      const escortRoster = buildExportableRoster(
+      const escortRoster = buildPortfolioRoster(
         {
           faction: factionId,
           pointsLimit,
@@ -2134,6 +2199,7 @@ function namedCharacterSpecialistCandidate(
           allowLegends,
         },
         new Set(knownBlocked),
+        artifactMode,
       );
       escortWarlordUnitId =
         escortRoster?.units.find((unit) => unit.isWarlord)
@@ -2758,6 +2824,7 @@ function unavailableItem(
 export function generateFactionStressPortfolio(
   input: GenerateFactionStressPortfolioInput,
 ): ResultEnvelope<TesseraStressPortfolio> {
+  const artifactMode = input.artifactMode ?? "new-recruit";
   const pointsLimit = Math.max(100, Math.min(input.pointsLimit, 5000));
   const suite = input.suite ?? "diverse-9";
   const pointsTolerancePercent = Math.max(
@@ -2783,7 +2850,7 @@ export function generateFactionStressPortfolio(
   const factionName = seed.data.factionName;
   const portfolioHash = portfolioCapabilityHash(factionId);
   const capability = getNewRecruitCapability(factionId);
-  if (!capability.available) {
+  if (artifactMode === "new-recruit" && !capability.available) {
     return {
       ok: false,
       data: null,
@@ -2838,6 +2905,7 @@ export function generateFactionStressPortfolio(
         input.allowLegends ?? false,
         pointsTolerancePercent,
         knownBlocked,
+        artifactMode,
       ),
     );
   }
@@ -2851,6 +2919,7 @@ export function generateFactionStressPortfolio(
           pointsTolerancePercent,
           knownBlocked,
           namedAnchorIds,
+          artifactMode,
         )
       : null;
   const includeNamedSpecialist = () => {
@@ -2904,6 +2973,7 @@ export function generateFactionStressPortfolio(
           input.allowLegends ?? false,
           pointsTolerancePercent,
           knownBlocked,
+          artifactMode,
           true,
         ),
       );
@@ -3097,7 +3167,14 @@ export async function previewFactionStressPortfolio(
     const others = ready.filter(
       (candidate) => candidate.templateId !== item.templateId,
     );
-    const exported = await exportRoster(item.roster, "rosz");
+    const exported =
+      (input.artifactMode ?? "new-recruit") === "canonical"
+        ? {
+            ok: true,
+            data: { format: "roster-json" as const },
+            violations: [],
+          }
+        : await exportRoster(item.roster, "rosz");
     previewItems.push({
       templateId: item.templateId,
       structuralFingerprint: rosterStructuralFingerprint(item.roster),
@@ -3118,7 +3195,7 @@ export async function previewFactionStressPortfolio(
         exported.ok && exported.data
           ? null
           : exported.violations[0]?.message ??
-            "New Recruit export failed.",
+            "Provider input preparation failed.",
     });
   }
   const exportableTemplateIds = new Set(

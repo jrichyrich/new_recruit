@@ -984,6 +984,9 @@ export function parseRosterPrompt(
       if (
         !/\b(?:anti|against|versus|vs|counter(?:s|ed|ing)?|answers?(?:\s+to)?|answering)\s*$/.test(
           prefix,
+        ) &&
+        !/\b(?:opponent|enemy|they|their|them|against|versus|vs)\b[^.!?;,]*$/.test(
+          normalized.slice(Math.max(0, index - 96), index),
         )
       ) {
         return true;

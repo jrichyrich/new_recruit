@@ -1075,19 +1075,28 @@ export async function deliverRosterToNewRecruit(
         content: enrichedContent,
       });
     }
+    const optionalArtifactWarnings: Array<{
+      code: string;
+      message: string;
+      severity: "warn";
+    }> = [];
     if (includePretty) {
       if (!agent.prettyHtmlBase64) {
-        throw new Error(
-          "The local agent did not return the requested Pretty HTML.",
-        );
+        optionalArtifactWarnings.push({
+          code: "NEW_RECRUIT_PRETTY_HTML_UNAVAILABLE",
+          message:
+            "New Recruit created and verified the list, but the optional Pretty HTML was not returned. The verified roster artifacts were preserved.",
+          severity: "warn",
+        });
+      } else {
+        artifacts.push({
+          format: "html",
+          filename: htmlFilename(rosz.filename),
+          mimeType: "text/html; charset=utf-8",
+          encoding: "binary",
+          content: Buffer.from(agent.prettyHtmlBase64, "base64"),
+        });
       }
-      artifacts.push({
-        format: "html",
-        filename: htmlFilename(rosz.filename),
-        mimeType: "text/html; charset=utf-8",
-        encoding: "binary",
-        content: Buffer.from(agent.prettyHtmlBase64, "base64"),
-      });
     }
     const written = await writeExportArtifacts(
       artifacts,
@@ -1134,6 +1143,7 @@ export async function deliverRosterToNewRecruit(
         warnings: [
           ...validation.warnings,
           ...catalogueProvenanceWarnings,
+          ...optionalArtifactWarnings,
         ],
       });
     }
@@ -1190,6 +1200,7 @@ export async function deliverRosterToNewRecruit(
       warnings: [
         ...validation.warnings,
         ...catalogueProvenanceWarnings,
+        ...optionalArtifactWarnings,
       ],
     };
   } catch (error) {

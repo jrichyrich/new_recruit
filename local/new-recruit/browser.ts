@@ -38,6 +38,7 @@ type BrowserDependencies = {
 type ImportRosterResult = {
   imported: boolean;
   listUrl: string | null;
+  remoteOutcomeUnknown?: boolean;
 };
 
 const listUrlPattern = /\/app\/Lists\//i;
@@ -414,7 +415,11 @@ async function importRoster(
     }
     await page.waitForTimeout(250);
   }
-  return { imported: false, listUrl: null };
+  return {
+    imported: false,
+    listUrl: null,
+    remoteOutcomeUnknown: true,
+  };
 }
 
 async function verifyRoster(
@@ -616,8 +621,12 @@ export async function runNewRecruitBrowserDelivery(
     listUrl = importResult.listUrl;
     if (!imported) {
       throw new NewRecruitAutomationError(
-        "IMPORT_FAILED",
-        "New Recruit did not create a newly imported list.",
+        importResult.remoteOutcomeUnknown
+          ? "IMPORT_OUTCOME_UNCERTAIN"
+          : "IMPORT_FAILED",
+        importResult.remoteOutcomeUnknown
+          ? "The import was submitted, but New Recruit did not expose enough evidence to determine whether a list was created. Do not retry automatically."
+          : "New Recruit did not create a newly imported list.",
       );
     }
     if (!listUrl) {
@@ -674,6 +683,9 @@ export async function runNewRecruitBrowserDelivery(
           ? error.code
           : "COMPANION_FAILED",
       message: error instanceof Error ? error.message : "Delivery failed.",
+      remoteOutcomeUnknown:
+        error instanceof NewRecruitAutomationError &&
+        error.code === "IMPORT_OUTCOME_UNCERTAIN",
       uiIdentity,
       imported,
       sessionReused,

@@ -396,6 +396,13 @@ record their exact `bundleId` and reacquire that archived snapshot on resume;
 they never mix simulation evidence across bundles. Moving a job to current
 data requires a new run or an explicit compatible roster rebase.
 
+Durable roster journeys follow the same rule per transition. A journey retains
+the bundle referenced by each immutable roster revision and reacquires that
+exact snapshot only while executing an action. A provenance-only compatible
+rebase creates a new revision; a semantic change records `review-required` and
+preserves the prior revision. Activating a newer signed bundle never rewrites
+an existing journey, Tessera job, or mutation receipt.
+
 The local store retains the active bundle, the previous three bundles, every
 bundle with a registered roster or durable-job reference, and unreferenced
 bundles for at least 30 days. Integrity failures block garbage collection

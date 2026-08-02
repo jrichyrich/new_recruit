@@ -51,6 +51,13 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
    identifiable `event-pack` or `organizer-ruling` evidence; otherwise exclude
    Legends even if the user requested `allow`. Never override a sourced event
    denial.
+   Treat plain analysis, Tessera, math-hammer, paired-test, and stress-test
+   language as `analyze`. Enter `optimize` only when the user explicitly asks
+   to improve, revise, change, or optimize the roster. Keep opponent style
+   assumptions separate from player preferences.
+   For work that may need recovery across turns, use the local durable journey
+   tools: `start_roster_workflow`, `get_roster_workflow_status`,
+   `continue_roster_workflow`, and `choose_roster_workflow_action`.
 6. Use `modify_roster` for changes. Never edit stored totals, ordinals, or legality fields by hand.
 7. Call `validate_roster` after every build or modification.
 8. Call `explain_roster` only after validation so the explanation includes current cautions.
@@ -238,6 +245,16 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   Capability is evaluated per roster; do not infer it from the faction name.
 - Treat `NEW_RECRUIT_MAPPING_UNAVAILABLE` as a capability boundary, not a
   roster-legality failure. Offer printable HTML or roster JSON.
+- A blocked optional delivery or simulation is `action-required`; it does not
+  invalidate a legal retained roster. Prefer `continue_roster_workflow` with
+  `safe-auto` for typed read-only/local recovery, or provide the exact action
+  requiring approval.
+- Explicit local-engine exact, known-faction, and general-threat analysis uses
+  canonical bundle-native rosters and must not invoke New Recruit. Website
+  preparation evaluates ROSZ compatibility only after provider selection.
+- Inspect an uncertain New Recruit outcome with
+  `inspect_new_recruit_mutation`. Never retry `pending`, `uncertain`,
+  `created`, or `reused` outcomes.
 - Treat `NEW_RECRUIT_LEGENDS_CONFIGURATION_UNAVAILABLE` as a scoped ROS/ROSZ
   failure: the selected roster is still valid, but New Recruit's exact Legends
   visibility branch is not mapped for that frozen catalogue. Offer text,

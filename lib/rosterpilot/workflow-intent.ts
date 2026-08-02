@@ -6,6 +6,7 @@ export const RosterWorkflowIntentSchema = z.enum([
   "build",
   "prepare-new-recruit",
   "deliver-new-recruit",
+  "analyze",
   "optimize",
 ]);
 
@@ -61,6 +62,7 @@ export type ResolvedRosterWorkflowIntent = {
   detectedFromPrompt: {
     newRecruitMentioned: boolean;
     deliveryRequested: boolean;
+    analysisRequested: boolean;
     optimizationRequested: boolean;
     recommendOnlyRequested: boolean;
     question: boolean;
@@ -99,7 +101,12 @@ function promptSignals(prompt: string) {
   const deliveryRequested =
     !question && newRecruitMentioned && deliveryVerb;
   const optimizationRequested =
-    /\b(?:optimi[sz]e|optimization|math[ -]?hammer|tessera|paired test|stress test)\b/.test(
+    /\b(?:optimi[sz]e|optimization|improve|revise|change candidates?)\b/.test(
+      normalized,
+    );
+  const analysisRequested =
+    optimizationRequested ||
+    /\b(?:analy[sz]e|analysis|math[ -]?hammer|tessera|paired test|stress test|simulate|simulation)\b/.test(
       normalized,
     );
   const recommendOnlyRequested =
@@ -123,6 +130,7 @@ function promptSignals(prompt: string) {
     question,
     newRecruitMentioned,
     deliveryRequested,
+    analysisRequested,
     optimizationRequested,
     recommendOnlyRequested,
     prepareRequested,
@@ -135,6 +143,7 @@ function inferredIntent(
   signals: ReturnType<typeof promptSignals>,
 ): RosterWorkflowIntent {
   if (signals.optimizationRequested) return "optimize";
+  if (signals.analysisRequested) return "analyze";
   if (signals.deliveryRequested) return "deliver-new-recruit";
   if (signals.prepareRequested) return "prepare-new-recruit";
   return "build";
@@ -144,6 +153,7 @@ function requiredArtifact(
   intent: RosterWorkflowIntent,
 ): RosterArtifactRequirement {
   if (intent === "optimize") return "tessera-profile-rich";
+  if (intent === "analyze") return "none";
   if (
     intent === "prepare-new-recruit" ||
     intent === "deliver-new-recruit"
@@ -158,6 +168,9 @@ function compatibleArtifact(
   artifact: RosterArtifactRequirement,
 ): boolean {
   if (intent === "build") return artifact === "none";
+  if (intent === "analyze") {
+    return artifact === "none" || artifact === "tessera-profile-rich";
+  }
   if (intent === "optimize") {
     return artifact === "tessera-profile-rich";
   }
@@ -297,6 +310,7 @@ export function resolveRosterWorkflowIntent(
       detectedFromPrompt: {
         newRecruitMentioned: signals.newRecruitMentioned,
         deliveryRequested: signals.deliveryRequested,
+        analysisRequested: signals.analysisRequested,
         optimizationRequested: signals.optimizationRequested,
         recommendOnlyRequested: signals.recommendOnlyRequested,
         question: signals.question,

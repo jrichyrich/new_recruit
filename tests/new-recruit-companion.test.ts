@@ -527,6 +527,69 @@ test("direct New Recruit delivery accepts only a matching verified catalogue ide
   }
 });
 
+test("missing optional Pretty HTML preserves a verified New Recruit delivery", async () => {
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.data);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-pretty-partial-"),
+  );
+  try {
+    const enriched = await enrichedArchiveForRoster(built.data!);
+    const result = await deliverRosterToNewRecruit(
+      built.data!,
+      {
+        outputDirectory: directory,
+        allowOutsideRoot: true,
+        downloadEnrichedRosz: true,
+        downloadPrettyHtml: true,
+        mutationReceiptMode: "external",
+      },
+      {
+        platform: "darwin",
+        browserAvailable: true,
+        agentDeliver: async () => ({
+          worker: {
+            ok: true,
+            uiIdentity: "e".repeat(64),
+            imported: true,
+            sessionReused: false,
+            listUrl:
+              "https://www.newrecruit.eu/app/Lists/pretty-partial-fixture",
+            verification: {
+              name: true,
+              faction: true,
+              points: true,
+              units: [],
+              mismatches: [],
+            },
+          },
+          enrichedRoszBase64: Buffer.from(enriched).toString("base64"),
+        }),
+      },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.data?.imported, true);
+    assert.equal(
+      result.data?.artifacts.some(
+        (artifact) => artifact.format === "new-recruit-pretty-html",
+      ),
+      false,
+    );
+    assert.ok(
+      result.warnings.some(
+        (warning) =>
+          warning.code === "NEW_RECRUIT_PRETTY_HTML_UNAVAILABLE",
+      ),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("direct New Recruit delivery rejects a verified enriched roster from a drifted live catalogue", async () => {
   const built = buildRoster({
     faction: "adeptus-custodes",

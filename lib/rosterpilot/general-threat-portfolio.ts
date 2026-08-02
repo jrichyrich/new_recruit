@@ -5,6 +5,7 @@ import {
   searchUnits,
 } from "./engine";
 import {
+  buildCanonicalRosterCandidate,
   buildExportableRosterCandidate,
   inspectStressPortfolioTraits,
   rosterExecutionFingerprint,
@@ -323,6 +324,7 @@ export function generalThreatPortfolioHash(
  */
 export function buildGeneralThreatPortfolio(input: {
   pointsLimit: number;
+  artifactMode?: "canonical" | "new-recruit";
 }): ResultEnvelope<GeneralThreatPortfolio> {
   if (input.pointsLimit !== 1000 && input.pointsLimit !== 2000) {
     return {
@@ -369,7 +371,11 @@ export function buildGeneralThreatPortfolio(input: {
       )
       .slice(0, 8);
     const candidates = candidateFactions.flatMap((faction) => {
-      const roster = buildExportableRosterCandidate({
+      const rosterBuilder =
+        input.artifactMode === "canonical"
+          ? buildCanonicalRosterCandidate
+          : buildExportableRosterCandidate;
+      const roster = rosterBuilder({
         playerFaction: faction.id,
         pointsLimit,
         name: `${definition.label} ${pointsLimit}`,
@@ -415,7 +421,7 @@ export function buildGeneralThreatPortfolio(input: {
         violations: [
           issue(
             "GENERAL_PORTFOLIO_ARCHETYPE_UNAVAILABLE",
-            `No legal, 98%-utilized, New Recruit-exportable representative could be built for ${definition.label}.`,
+            `No legal, 98%-utilized representative compatible with the selected provider could be built for ${definition.label}.`,
           ),
         ],
         warnings: [],

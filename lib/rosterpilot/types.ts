@@ -26,6 +26,23 @@ export const PreferenceTagSchema = z.enum([
 
 export type PreferenceTag = z.infer<typeof PreferenceTagSchema>;
 
+export const OpponentStyleTagSchema = z.enum([
+  "aggressive",
+  "defensive",
+  "mobile",
+  "ranged",
+  "melee",
+  "objective",
+  "elite",
+  "horde",
+]);
+
+export type OpponentAssumptions = {
+  styleTags: Array<z.infer<typeof OpponentStyleTagSchema>>;
+  knownUnitIds?: string[];
+  source: "user-stated";
+};
+
 export type ResultEnvelope<T> = {
   ok: boolean;
   data: T | null;
@@ -355,6 +372,8 @@ export type BuildRosterInput = {
         kind: "known-roster";
         roster: RosterDraftV1;
       };
+  /** User-stated opponent behavior; never interpreted as player preferences. */
+  opponentAssumptions?: OpponentAssumptions;
   mixedThreatIntent?: boolean;
   /**
    * Internal retry contract used by portfolio generation. These exclusions
@@ -1369,6 +1388,8 @@ export type GenerateFactionStressPortfolioInput = {
   suite?: TesseraStressSuite;
   pointsTolerancePercent?: number;
   allowLegends?: boolean;
+  /** Canonical inputs are sufficient for the local engine; Web still requires New Recruit artifacts. */
+  artifactMode?: "canonical" | "new-recruit";
 };
 
 export type TesseraStressPortfolioTraits = {

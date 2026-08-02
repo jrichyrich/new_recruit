@@ -51,7 +51,10 @@ import {
   type TesseraAnalysisOptions,
   type TesseraOpponentInput,
 } from "./companion";
-import { ProfilePolicySchema } from "./profile-policy";
+import {
+  ProfilePolicySchema,
+  validateProfilePolicy,
+} from "./profile-policy";
 import {
   compareRosterStressRevision,
   runRosterStressTest,
@@ -4127,6 +4130,10 @@ async function bindFrozenStressPortfolio(
     suite: request.options?.suite,
     pointsTolerancePercent: 5,
     allowLegends: false,
+    artifactMode:
+      request.options?.simulationBackend === "local-engine"
+        ? "canonical"
+        : "new-recruit",
   });
   if (!preview.ok || !preview.data) {
     throw jobError(
@@ -4903,7 +4910,8 @@ export async function resumeTesseraRun(
     }
     if (
       document.status === "complete" ||
-      document.status === "degraded"
+      document.status === "degraded" ||
+      document.status === "inconclusive"
     ) {
       return publicJob(document);
     }
@@ -5038,7 +5046,28 @@ export async function resolveTesseraRunProfiles(
         "Profile choices cannot change while a Tessera worker is active.",
       );
     }
+    if (document.status !== "needs-input" || !document.profileResolution) {
+      throw jobError(
+        "TESSERA_PROFILE_RESOLUTION_NOT_REQUIRED",
+        "Profile choices can be resolved only for a retained needs-input job with exact structured requirements.",
+      );
+    }
     const parsed = ProfilePolicySchema.parse(policy);
+    const policyValidation = validateProfilePolicy(
+      document.profileResolution.requirements.map((requirement) => ({
+        ...requirement,
+        selectionId: null,
+        selectedProfile: null,
+      })),
+      parsed,
+    );
+    if (!policyValidation.valid) {
+      throw jobError(
+        "TESSERA_PROFILE_POLICY_INVALID",
+        policyValidation.errors[0] ??
+          "The profile policy does not resolve every retained requirement exactly.",
+      );
+    }
     const artifact = await writeFrozenInput(
       document.jobDirectory,
       "profile-policy",
@@ -5310,21 +5339,15 @@ function resultIsRetryable(result: TesseraRunResult): boolean {
       .flat()
       .some(
         (failure) =>
-          failure.retryable === true ||
-          (
-            typeof failure.code === "string" &&
-            retryableRunCodes.has(failure.code)
-          ),
+          typeof failure.code === "string" &&
+          retryableRunCodes.has(failure.code),
       )
   ) {
     return true;
   }
   return result.violations.some(
     (violation) =>
-      retryableRunCodes.has(violation.code) ||
-      /TIMEOUT|TRANSIENT|SESSION_CLOSED|NAVIGATION_FAILED/.test(
-        violation.code,
-      ),
+      retryableRunCodes.has(violation.code),
   );
 }
 
@@ -5857,6 +5880,8 @@ export async function executeTesseraRunJob(
         nextAction:
           status === "needs-input"
             ? "Resolve the retained structured profile scaffold, then resume this run."
+            : status === "inconclusive"
+              ? "The statistical result is complete but does not separate the compared choices. Keep the baseline or approve a new, explicitly different candidate; do not resume this completed evidence."
             : status === "failed"
               ? shouldScheduleAutomaticRetry
                 ? `Automatic retry ${latest.attempt + 1} of ${automaticAttemptLimit} is being scheduled from the frozen run manifest.`

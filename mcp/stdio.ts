@@ -13,6 +13,7 @@ import {
 } from "../local/new-recruit/companion";
 import {
   restoreNewRecruitMutationArtifactFromTesseraRun,
+  inspectNewRecruitMutationReceipt,
 } from "../local/new-recruit/cache";
 import {
   analyzeRosterMatchup,
@@ -66,18 +67,31 @@ import {
   initializeLocalDataBundleProvider,
 } from "../local/data-bundles/configure";
 import { createRosterPilotMcpServer } from "./server";
+import {
+  chooseRosterJourneyAction,
+  continueRosterJourneySafely,
+  getRosterJourney,
+  startRosterJourney,
+} from "../local/workflow/journey";
 
 await initializeLocalDataBundleProvider();
 const server = createRosterPilotMcpServer({
   dataBundleProvider:
     getConfiguredDataBundleProvider() ?? undefined,
   runtimeProvenance: getRuntimeProvenance,
+  workflowJourneys: {
+    start: startRosterJourney,
+    status: getRosterJourney,
+    continue: continueRosterJourneySafely,
+    choose: chooseRosterJourneyAction,
+  },
   artifactWriter: (artifact, outputPath, overwrite) =>
     writeExportArtifact(artifact, outputPath, { overwrite }),
   handoffWriter: (artifacts, outputDirectory, overwrite) =>
     writeExportArtifacts(artifacts, outputDirectory, { overwrite }),
   newRecruitCompanion: {
     status: getNewRecruitConnectionStatus,
+    inspectMutation: inspectNewRecruitMutationReceipt,
     deliver: (roster, options) =>
       deliverRosterToNewRecruit(roster, options),
   },

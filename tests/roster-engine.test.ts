@@ -1172,10 +1172,14 @@ test("prepares a validated New Recruit handoff with editable and printable artif
   );
   assert.deepEqual(
     handoff.data.artifacts.map((artifact) => artifact.format),
-    ["rosz", "html"],
+    ["rosz", "roster-json", "text", "html"],
   );
   assert.equal(handoff.data.artifacts[0].encoding, "binary");
-  assert.equal(handoff.data.artifacts[1].encoding, "utf8");
+  assert.ok(
+    handoff.data.artifacts
+      .slice(1)
+      .every((artifact) => artifact.encoding === "utf8"),
+  );
 
   const invalid = {
     ...built.data,
@@ -1352,7 +1356,7 @@ test("preflights every New Recruit handoff file before batch writing", async () 
       "exports",
       { rootDir: directory },
     );
-    assert.equal(written.length, 2);
+    assert.equal(written.length, 4);
     assert.ok(written.every((filename) => path.dirname(filename).endsWith("exports")));
 
     await assert.rejects(

@@ -1148,6 +1148,22 @@ cross-origin browser mutations, or use a cloud roster database. Agent clients
 with browser control may import the generated `.rosz` only when the user
 explicitly asks for that assisted workflow.
 
+### Durable roster journeys
+
+Local CLI and stdio MCP workflows can retain a hash-sealed journey instead of
+ending at the first blocked optional action. Use `workflow start`, `status`,
+`continue --policy safe-auto`, `choose`, and `doctor`, or the corresponding
+`start_roster_workflow`, `get_roster_workflow_status`,
+`continue_roster_workflow`, and `choose_roster_workflow_action` MCP tools.
+
+Analysis is distinct from optimization. Local-engine analysis compiles the
+player and opponent portfolios directly from canonical bundle data and has no
+New Recruit dependency. Website analysis performs its profile-rich New
+Recruit preparation only after that provider is selected. If ROSZ preparation
+is blocked, canonical JSON, text, and printable HTML remain available. A
+blocked optional upload or simulation is reported as `action-required`, while
+the dedicated mutation tools continue to fail closed.
+
 Verify the reviewed local-engine dependency and the provider contracts with:
 
 ```bash

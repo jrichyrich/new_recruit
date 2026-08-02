@@ -19,10 +19,11 @@ capabilities:
 | `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
 | New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
 | Tessera handoff and simulated matchup matrix | Website: verified New Recruit-enriched rosters. Local engine: bundle-native, hash-bound JSON compiled from canonical rosters within the evaluation adapter's declared profile capability | Provider router over the retained isolated website adapter and an explicit evaluation-only pinned local engine; `experimental` is only a deprecated CLI alias for strict `executionMode: "simulate"` |
-| Known-faction stress testing | A validated player roster plus deterministic legal, New Recruit-exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, provider-specific preparation, and the selected Tessera provider |
+| Known-faction stress testing | A validated player roster plus deterministic legal faction proxies within points tolerance; New Recruit exportability is evaluated only for the website provider | Shared provider-neutral portfolio and mission-readiness core followed by provider-specific preparation |
 | Exact-aware roster construction | A validated canonical opponent roster plus player build constraints and optional owned-model quantities | Shared roster engine, exact opponent threat profile, deterministic repair, and exact Tessera adapter |
 | Durable Tessera jobs | Exact, stress, build-and-stress, and build-and-analyze requests on local CLI or stdio MCP | Persistent job document, local-agent-owned detached worker, retained result bundle, and stress manifest where applicable |
 | Unified roster workflow | Fail-closed intent and faction resolution, deterministic build/validation, calibrated coaching, artifact-safe handoff, and explicit delivery authority | Shared `lib/rosterpilot/` orchestration under one transport-owned data-bundle lease |
+| Durable roster journey | Immutable roster revisions, typed branch recovery, retained child-job references, and revision-bound approvals | Hash-sealed local journey journal; existing Tessera, optimizer, bundle, and New Recruit stores remain authoritative |
 | Approval-gated optimization | Frozen exact/faction baseline or six-archetype exact-report set, at most three candidate revisions, paired evidence, Pareto ranking, and exact winner or baseline-retention approval | Single-baseline and general-six optimizer coordinators plus existing durable Tessera exact/stress and paired-revision jobs |
 
 ### Workflow composition
@@ -75,9 +76,27 @@ suggestions never mutate a canonical roster.
 
 The unified workflow composes those dotted edges only when the same request
 names the action. A New Recruit capability question is not delivery authority.
-An optimize request authorizes preparation and analysis, but candidate and
+An analyze request authorizes only the requested simulation. An optimize
+request additionally enters the approval-gated improvement lifecycle, but candidate and
 winner approvals are separate durable transitions; it never converts a
 suggestion into a roster mutation by itself.
+
+### Durable journey and recovery boundary
+
+The local CLI and stdio MCP may persist a `RosterJourneyV1`. The journey is a
+coordinator, not a replacement for specialized stores: it retains immutable
+roster revisions and references Tessera jobs, optimizer records, data-bundle
+leases, and New Recruit mutation receipts. Every update is compare-and-swap
+bound to the expected state revision and the document is sealed with a SHA-256
+content hash.
+
+Recovery is selected from a closed action registry. Read-only status checks,
+compatible provenance-only rebases, hash-verified artifact reuse, universal
+fallback exports, and bounded same-job transient retries may be automatic.
+Provider changes create sibling jobs. Semantic data changes, roster changes,
+profile choices, external mutations, and optimizer decisions require scoped
+approval. A pending, uncertain, created, or reused New Recruit mutation is
+never retried.
 
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation

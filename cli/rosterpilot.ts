@@ -37,6 +37,8 @@ import {
   type RosterOptimizerMode,
   type RosterWorkflowResult,
   type RosterWorkflowIntent,
+  type PrepareRosterWorkflowInput,
+  type OpponentAssumptions,
   type TesseraStressAnalysisStrategy,
   type TesseraSimulationBackend,
   type TesseraStressPortfolioPreview,
@@ -57,6 +59,7 @@ import {
   forgetNewRecruitCredentials,
   getNewRecruitConnectionStatus,
 } from "../local/new-recruit/companion";
+import { inspectNewRecruitMutationReceipt } from "../local/new-recruit/cache";
 import {
   ensureCurrentLocalAgent,
   getLocalAgentLifecycleStatus,
@@ -87,6 +90,12 @@ import {
   startTesseraRun,
   type TesseraRunRequest,
 } from "../local/tessera/jobs";
+import {
+  chooseRosterJourneyAction,
+  continueRosterJourneySafely,
+  getRosterJourney,
+  startRosterJourney,
+} from "../local/workflow/journey";
 import { ProfilePolicySchema } from "../local/tessera/profile-policy";
 import {
   approveAndMaterializeTesseraOptimizerCandidates,
@@ -541,6 +550,7 @@ function compactRosterWorkflowData(
           disclaimer: coaching.disclaimer,
         }
       : null,
+    analysis: workflow.analysis,
     newRecruit: {
       capability: workflow.newRecruit.capability,
       handoff: workflow.newRecruit.handoff
@@ -615,8 +625,10 @@ async function startWorkflowTesseraBaselines(
   workflow: RosterWorkflowResult,
   args: Args,
 ): Promise<WorkflowTesseraBaselineJobSummary[]> {
-  if (!workflow.roster || !workflow.optimization) return [];
-  const target = workflow.optimization.target;
+  if (!workflow.roster) return [];
+  const target =
+    workflow.optimization?.target ?? workflow.analysis?.target;
+  if (!target) return [];
   const requests: Array<{
     targetId: string;
     targetLabel: string;
@@ -907,13 +919,13 @@ async function main(): Promise<void> {
           {
             id: "tessera",
             label: "Compare known armies in Tessera",
-            available: tessera.data?.available ?? false,
+            available: tessera.data?.simulationAvailable ?? false,
             setupProfile: "tessera",
             requires: [
               "validated player roster",
               "one exact opponent roster or .rosz",
-              "New Recruit-enriched profiles",
-              "macOS local automation and a Tessera licence key",
+              "provider selection: local canonical input or Web profile-rich ROSZ",
+              "macOS local automation and a Tessera licence key for Tessera Web",
             ],
             produces: [
               "directional scenario matrices",
@@ -1078,6 +1090,22 @@ async function main(): Promise<void> {
       });
       print(result);
       if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "inspect-mutation") {
+      const inputFile = value(args, "file");
+      if (!inputFile) {
+        throw new Error(
+          "The new-recruit inspect-mutation command requires --file.",
+        );
+      }
+      const roster = await readRosterDraft(path.resolve(inputFile));
+      print({
+        ok: true,
+        data: await inspectNewRecruitMutationReceipt(roster),
+        violations: [],
+        warnings: [],
+      });
       return;
     }
     throw new Error(`Unknown new-recruit command "${action}".`);
@@ -2787,7 +2815,81 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "workflow") {
-    const prompt = value(args, "prompt") ?? positionals.join(" ");
+    const workflowAction = [
+      "start",
+      "status",
+      "continue",
+      "choose",
+      "doctor",
+    ].includes(positionals[0] ?? "")
+      ? positionals[0]
+      : null;
+    if (
+      workflowAction === "status" ||
+      workflowAction === "doctor" ||
+      workflowAction === "continue" ||
+      workflowAction === "choose"
+    ) {
+      const journeyId = value(args, "journey") ?? positionals[1];
+      if (!journeyId) {
+        throw new Error(`${workflowAction} requires --journey <id>.`);
+      }
+      const current = await getRosterJourney(journeyId);
+      if (workflowAction === "status") {
+        print(current);
+        return;
+      }
+      if (workflowAction === "doctor") {
+        print({
+          ok: true,
+          data: {
+            journeyId: current.journeyId,
+            stateRevision: current.stateRevision,
+            integrity: "verified",
+            status: current.status,
+            rosterStillLegal: current.recovery.rosterStillLegal,
+            recommendedActionId:
+              current.recovery.recommendedActionId,
+            actions: current.recovery.actions,
+          },
+          violations: [],
+          warnings: [],
+        });
+        return;
+      }
+      const expectedRevision = Number(
+        value(args, "expected-revision") ?? current.stateRevision,
+      );
+      if (workflowAction === "continue") {
+        if ((value(args, "policy") ?? "safe-auto") !== "safe-auto") {
+          throw new Error("workflow continue supports only --policy safe-auto.");
+        }
+        print(
+          await continueRosterJourneySafely(
+            journeyId,
+            expectedRevision,
+          ),
+        );
+        return;
+      }
+      const actionId = value(args, "action");
+      if (!actionId) {
+        throw new Error("workflow choose requires --action <action-id>.");
+      }
+      print(
+        await chooseRosterJourneyAction(
+          journeyId,
+          expectedRevision,
+          actionId as Parameters<
+            typeof chooseRosterJourneyAction
+          >[2],
+        ),
+      );
+      return;
+    }
+    const prompt =
+      value(args, "prompt") ??
+      positionals.slice(workflowAction === "start" ? 1 : 0).join(" ");
     const requestedIntent = value(args, "intent");
     if (
       requestedIntent &&
@@ -2795,11 +2897,12 @@ async function main(): Promise<void> {
         "build",
         "prepare-new-recruit",
         "deliver-new-recruit",
+        "analyze",
         "optimize",
       ].includes(requestedIntent)
     ) {
       throw new Error(
-        "--intent requires build, prepare-new-recruit, deliver-new-recruit, or optimize.",
+        "--intent requires build, prepare-new-recruit, deliver-new-recruit, analyze, or optimize.",
       );
     }
     const requestedArtifact = value(args, "artifact");
@@ -2842,11 +2945,31 @@ async function main(): Promise<void> {
     const collectionUnitIds = list(args, "collection");
     const requiredUnitIds = list(args, "required-unit");
     const excludedUnitIds = list(args, "exclude-unit");
+    const opponentStyleTags = list(args, "opponent-style");
+    const allowedOpponentStyles = new Set([
+      "aggressive",
+      "defensive",
+      "mobile",
+      "ranged",
+      "melee",
+      "objective",
+      "elite",
+      "horde",
+    ]);
+    if (
+      opponentStyleTags.some(
+        (style) => !allowedOpponentStyles.has(style),
+      )
+    ) {
+      throw new Error(
+        "--opponent-style contains an unsupported style tag.",
+      );
+    }
     const opponentRosterPath = value(args, "opponent-roster");
     const opponentRoster = opponentRosterPath
       ? await readRosterDraft(path.resolve(opponentRosterPath))
       : undefined;
-    const result = await prepareRosterWorkflow({
+    const workflowRequest: PrepareRosterWorkflowInput = {
       prompt: prompt || undefined,
       intent:
         requestedIntent as RosterWorkflowIntent | undefined,
@@ -2864,7 +2987,13 @@ async function main(): Promise<void> {
         value(args, "player-faction") ?? value(args, "faction"),
       opponentFaction: value(args, "opponent-faction"),
       opponentContext: opponentRoster
-        ? { kind: "known-roster", roster: opponentRoster }
+        ? { kind: "known-roster" as const, roster: opponentRoster }
+        : undefined,
+      opponentAssumptions: opponentStyleTags.length
+        ? ({
+            styleTags: opponentStyleTags,
+            source: "user-stated",
+          } as OpponentAssumptions)
         : undefined,
       pointsLimit: value(args, "points")
         ? Number(value(args, "points"))
@@ -2893,7 +3022,13 @@ async function main(): Promise<void> {
       requiredWarlordUnitId: value(args, "required-warlord"),
       detachmentId: value(args, "detachment"),
       forceDispositionId: value(args, "disposition"),
-    });
+      simulationBackend: requestedSimulationBackend(args),
+    };
+    if (workflowAction === "start") {
+      print(await startRosterJourney(workflowRequest));
+      return;
+    }
+    const result = await prepareRosterWorkflow(workflowRequest);
     const writtenRoster =
       result.data?.roster && value(args, "out")
         ? await writeRosterDraft(
@@ -2947,7 +3082,7 @@ async function main(): Promise<void> {
     const tesseraBaselineJobs =
       result.ok &&
       result.data &&
-      workflowIntent === "optimize"
+      (workflowIntent === "optimize" || workflowIntent === "analyze")
         ? await startWorkflowTesseraBaselines(result.data, args)
         : [];
     if (

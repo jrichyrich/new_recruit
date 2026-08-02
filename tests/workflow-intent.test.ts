@@ -54,7 +54,7 @@ test("workflow intent defaults optimization to guided approval", () => {
   const guided = resolveRosterWorkflowIntent({
     prompt: "Build 2,000 points of Death Guard and Tessera optimize it.",
   });
-  const recommendations = resolveRosterWorkflowIntent({
+  const analysis = resolveRosterWorkflowIntent({
     prompt:
       "Math-hammer this Space Marines roster, recommendations only and do not apply changes.",
   });
@@ -65,7 +65,28 @@ test("workflow intent defaults optimization to guided approval", () => {
     guided.data?.artifactRequirement,
     "tessera-profile-rich",
   );
-  assert.equal(recommendations.data?.optimizerMode, "recommend-only");
+  assert.equal(analysis.data?.intent, "analyze");
+  assert.equal(analysis.data?.optimizerMode, null);
+  assert.equal(analysis.data?.artifactRequirement, "none");
+});
+
+test("workflow intent requires an explicit change verb for optimization", () => {
+  for (const prompt of [
+    "Test this roster in Tessera.",
+    "Math-hammer this roster.",
+    "Run a stress test against Aeldari.",
+    "Run a paired test for these armies.",
+  ]) {
+    const result = resolveRosterWorkflowIntent({ prompt });
+    assert.equal(result.data?.intent, "analyze", prompt);
+    assert.equal(result.data?.optimizerMode, null, prompt);
+  }
+  const optimize = resolveRosterWorkflowIntent({
+    prompt:
+      "Analyze and improve this roster, recommendations only and do not apply changes.",
+  });
+  assert.equal(optimize.data?.intent, "optimize");
+  assert.equal(optimize.data?.optimizerMode, "recommend-only");
 });
 
 test("optimization defers requested delivery until winner approval", () => {

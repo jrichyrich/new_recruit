@@ -157,6 +157,7 @@ async function spoolRequest<T>(
   await writeFile(temporaryPath, payload, { flag: "wx", mode: 0o600 });
   await rename(temporaryPath, requestPath);
   const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
+  let responseObserved = false;
   try {
     while (Date.now() < deadline) {
       try {
@@ -167,6 +168,7 @@ async function spoolRequest<T>(
             "The RosterPilot local-agent response exceeds the maximum size.",
           );
         }
+        responseObserved = true;
         return responseData<T>(
           request,
           JSON.parse(responseBytes.toString("utf8")) as LocalAgentResponse,
@@ -187,11 +189,13 @@ async function spoolRequest<T>(
       "The RosterPilot local agent did not respond in time.",
     );
   } finally {
-    await Promise.all([
-      rm(temporaryPath, { force: true }),
-      rm(requestPath, { force: true }),
-      rm(responsePath, { force: true }),
-    ]);
+    await rm(temporaryPath, { force: true });
+    if (responseObserved) {
+      await Promise.all([
+        rm(requestPath, { force: true }),
+        rm(responsePath, { force: true }),
+      ]);
+    }
   }
 }
 

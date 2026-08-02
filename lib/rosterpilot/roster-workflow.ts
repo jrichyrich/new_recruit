@@ -31,9 +31,11 @@ import {
 import type {
   BuildRosterInput,
   NewRecruitHandoff,
+  OpponentAssumptions,
   ResultEnvelope,
   RosterDraftV1,
   RosterIssue,
+  TesseraSimulationBackend,
   TesseraStressPortfolioPreview,
 } from "./types";
 import {
@@ -47,6 +49,7 @@ export type PrepareRosterWorkflowInput = BuildRosterInput &
   ResolveRosterWorkflowIntentInput & {
     /** Explicit opponent selector for prompt surfaces. */
     opponentFaction?: string;
+    simulationBackend?: TesseraSimulationBackend;
     missionContext?: CompetitiveCoachingOptions["missionContext"];
     terrainContext?: CompetitiveCoachingOptions["terrainContext"];
   };
@@ -60,7 +63,7 @@ type RosterWorkflowExplanation = NonNullable<
   ReturnType<typeof explainRoster>["data"]
 >;
 
-export type RosterWorkflowOptimizationTarget =
+export type RosterWorkflowAnalysisTarget =
   | {
       kind: "exact-opponent";
       factionId: string;
@@ -81,6 +84,7 @@ export type RosterWorkflowResult = {
   workflowKind: "roster-workflow";
   status:
     | "complete"
+    | "action-required"
     | "needs-input"
     | "failed"
     | "ready-for-tessera-baseline";
@@ -90,6 +94,12 @@ export type RosterWorkflowResult = {
   validation: RosterWorkflowValidation | null;
   explanation: RosterWorkflowExplanation | null;
   coaching: CompetitiveCoachingReport | null;
+  opponentAssumptions: OpponentAssumptions | null;
+  analysis: {
+    status: "baseline-pending";
+    provider: TesseraSimulationBackend;
+    target: RosterWorkflowAnalysisTarget;
+  } | null;
   newRecruit: {
     capability: NewRecruitCapability | null;
     handoff: NewRecruitHandoff | null;
@@ -105,11 +115,11 @@ export type RosterWorkflowResult = {
     mode: "guided" | "recommend-only";
     status: "baseline-pending";
     preparation: {
-      sourceRosz: "prepared";
+      sourceRosz: "pending-provider-preparation";
       profileRichRosz: "pending-new-recruit-enrichment";
       pairedBaseline: "pending-tessera";
     };
-    target: RosterWorkflowOptimizationTarget;
+    target: RosterWorkflowAnalysisTarget;
     pairedTestRequired: boolean;
     deliveryAfterWinnerApproval:
       | "none"
@@ -152,6 +162,8 @@ function emptyResult(
     validation: null,
     explanation: null,
     coaching: null,
+    opponentAssumptions: null,
+    analysis: null,
     newRecruit: {
       capability: null,
       handoff: null,
@@ -329,6 +341,7 @@ function buildInputForWorkflow(
     detachmentId: input.detachmentId,
     forceDispositionId: input.forceDispositionId,
     opponentContext,
+    opponentAssumptions: input.opponentAssumptions,
     mixedThreatIntent: input.mixedThreatIntent,
     internalSelectionExclusions:
       input.internalSelectionExclusions,
@@ -340,7 +353,7 @@ function buildForArtifact(
   input: BuildRosterInput,
 ): ResultEnvelope<RosterDraftV1> {
   const canonical = buildRoster(input);
-  if (requirement === "none") {
+  if (requirement !== "new-recruit-rosz") {
     return canonical;
   }
   if (!canonical.ok || !canonical.data) {
@@ -387,10 +400,15 @@ function buildForArtifact(
   };
 }
 
-async function optimizationTarget(
+async function analysisTarget(
   roster: RosterDraftV1,
   opponentContext: BuildRosterInput["opponentContext"],
-): Promise<ResultEnvelope<RosterWorkflowOptimizationTarget>> {
+  simulationBackend: TesseraSimulationBackend,
+): Promise<ResultEnvelope<RosterWorkflowAnalysisTarget>> {
+  const artifactMode =
+    simulationBackend === "local-engine"
+      ? "canonical"
+      : "new-recruit";
   if (opponentContext?.kind === "known-roster") {
     return {
       ok: true,
@@ -410,6 +428,7 @@ async function optimizationTarget(
       suite: "diverse-9",
       pointsTolerancePercent: 5,
       allowLegends: roster.constraints.allowLegends,
+      artifactMode,
     });
     if (!preview.ok || !preview.data) {
       return {
@@ -432,6 +451,7 @@ async function optimizationTarget(
   }
   const portfolio = buildGeneralThreatPortfolio({
     pointsLimit: roster.pointsLimit,
+    artifactMode,
   });
   if (!portfolio.ok || !portfolio.data) {
     return {
@@ -524,6 +544,10 @@ export async function prepareRosterWorkflow(
     const fallbackRoster = built.data;
     const fallbackValidation = validateRoster(fallbackRoster);
     const fallbackExplanation = explainRoster(fallbackRoster);
+    const fallbackHandoff = await prepareNewRecruitHandoff(
+      fallbackRoster,
+      true,
+    );
     const fallbackCoaching =
       intent.coachingMode === "none"
         ? null
@@ -533,9 +557,11 @@ export async function prepareRosterWorkflow(
             terrainContext: input.terrainContext,
           });
     return {
-      ok: false,
+      ok: fallbackValidation.ok,
       data: emptyResult({
-        status: "failed",
+        status: fallbackValidation.ok
+          ? "action-required"
+          : "failed",
         intent,
         faction,
         roster: fallbackRoster,
@@ -550,16 +576,23 @@ export async function prepareRosterWorkflow(
           capability: getNewRecruitCapability(
             fallbackRoster.factionId,
           ),
-          handoff: null,
+          handoff: fallbackHandoff.data,
           delivery: {
             authorized: false,
             status: "not-requested",
           },
         },
       }),
-      violations: built.violations,
+      violations: fallbackValidation.ok
+        ? []
+        : built.violations,
       warnings: uniqueIssues([
         ...built.warnings,
+        ...built.violations.map((violation) => ({
+          ...violation,
+          severity: "warn" as const,
+        })),
+        ...fallbackHandoff.warnings,
         ...fallbackValidation.warnings,
         ...fallbackExplanation.warnings,
         ...(fallbackCoaching?.warnings ?? []),
@@ -628,11 +661,12 @@ export async function prepareRosterWorkflow(
     };
   }
   const capability = getNewRecruitCapability(roster.factionId);
-  const needsHandoff = intent.artifactRequirement !== "none";
+  const needsHandoff =
+    intent.artifactRequirement === "new-recruit-rosz";
   const handoff = needsHandoff
     ? await prepareNewRecruitHandoff(roster, true)
     : null;
-  if (handoff && (!handoff.ok || !handoff.data)) {
+  if (handoff && !handoff.data) {
     return {
       ok: false,
       data: emptyResult({
@@ -658,10 +692,11 @@ export async function prepareRosterWorkflow(
     };
   }
   const target =
-    intent.intent === "optimize"
-      ? await optimizationTarget(
+    intent.intent === "optimize" || intent.intent === "analyze"
+      ? await analysisTarget(
           roster,
           opponent.data ?? undefined,
+          input.simulationBackend ?? "auto",
         )
       : null;
   if (target && (!target.ok || !target.data)) {
@@ -689,12 +724,13 @@ export async function prepareRosterWorkflow(
     };
   }
   const optimization =
-    target?.data && intent.optimizerMode
+    target?.data && intent.intent === "optimize" && intent.optimizerMode
       ? {
           mode: intent.optimizerMode,
           status: "baseline-pending" as const,
           preparation: {
-            sourceRosz: "prepared" as const,
+            sourceRosz:
+              "pending-provider-preparation" as const,
             profileRichRosz:
               "pending-new-recruit-enrichment" as const,
             pairedBaseline: "pending-tessera" as const,
@@ -729,15 +765,27 @@ export async function prepareRosterWorkflow(
   return {
     ok: true,
     data: emptyResult({
-      status: optimization
-        ? "ready-for-tessera-baseline"
-        : "complete",
+      status:
+        handoff && !handoff.ok
+          ? "action-required"
+          : optimization || intent.intent === "analyze"
+            ? "ready-for-tessera-baseline"
+            : "complete",
       intent,
       faction,
       roster,
       validation: validationSummary,
       explanation: explained.data,
       coaching: coaching?.data ?? null,
+      opponentAssumptions: input.opponentAssumptions ?? null,
+      analysis:
+        target?.data && intent.intent === "analyze"
+          ? {
+              status: "baseline-pending" as const,
+              provider: input.simulationBackend ?? "auto",
+              target: target.data,
+            }
+          : null,
       newRecruit: {
         capability,
         handoff: handoff?.data ?? null,

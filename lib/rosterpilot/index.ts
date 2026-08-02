@@ -29,3 +29,4 @@ export * from "./competitive-heuristics";
 export * from "./competitive-coaching";
 export * from "./general-threat-portfolio";
 export * from "./roster-workflow";
+export * from "./workflow-recovery";

@@ -1087,6 +1087,64 @@ export async function readNewRecruitMutationReceipt(
   return receipt;
 }
 
+/** Read-only, redacted projection suitable for CLI/MCP recovery guidance. */
+export async function inspectNewRecruitMutationReceipt(
+  roster: RosterDraftV1,
+): Promise<{
+  receiptFound: boolean;
+  cacheKey: string;
+  rosterId: string;
+  updatedAt: string | null;
+  attemptCount: number;
+  latestAttempt: {
+    attemptId: string;
+    runId: string;
+    outcome: NewRecruitMutationOutcome;
+    startedAt: string;
+    finalizedAt: string | null;
+    hasConnectorEvidence: boolean;
+    hasInventoryEvidence: boolean;
+    hasRecoveryArtifact: boolean;
+  } | null;
+  safeToRetry: boolean;
+  requiredAction:
+    | "none"
+    | "retry-proven-not-created"
+    | "reconcile-from-observed-evidence"
+    | "reuse-created-artifact";
+}> {
+  const receipt = await readNewRecruitMutationReceipt(roster);
+  const latest = receipt?.attempts.at(-1) ?? null;
+  return {
+    receiptFound: receipt !== null,
+    cacheKey: receipt?.cacheKey ?? newRecruitCacheKey(roster),
+    rosterId: roster.id,
+    updatedAt: receipt?.updatedAt ?? null,
+    attemptCount: receipt?.attempts.length ?? 0,
+    latestAttempt: latest
+      ? {
+          attemptId: latest.attemptId,
+          runId: latest.runId,
+          outcome: latest.outcome,
+          startedAt: latest.startedAt,
+          finalizedAt: latest.finalizedAt,
+          hasConnectorEvidence: latest.connectorEvent !== null,
+          hasInventoryEvidence: latest.inventoryEventId !== null,
+          hasRecoveryArtifact: latest.recoveryArtifact != null,
+        }
+      : null,
+    safeToRetry: latest?.outcome === "not-created",
+    requiredAction:
+      !latest
+        ? "none"
+        : latest.outcome === "not-created"
+          ? "retry-proven-not-created"
+          : latest.outcome === "pending" || latest.outcome === "uncertain"
+            ? "reconcile-from-observed-evidence"
+            : "reuse-created-artifact",
+  };
+}
+
 export async function readNewRecruitRoszMutationReceipt(
   subject: NewRecruitRoszMutationSubject,
 ): Promise<NewRecruitRoszMutationReceipt | null> {

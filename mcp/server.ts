@@ -62,10 +62,12 @@ import {
   LegendsPlayContextSchema,
   LegendsPolicySchema,
   ModifyRosterOperationSchema,
+  OpponentStyleTagSchema,
   RosterArtifactRequirementSchema,
   RosterCoachingModeSchema,
   RosterDraftSchema,
   RosterOptimizerModeSchema,
+  RecoveryActionIds,
   RosterWorkflowIntentSchema,
   type ExportArtifact,
   type ExportFormat,
@@ -85,6 +87,8 @@ import {
   type ResultEnvelope,
   type RosterDraftV1,
   type RosterWorkflowResult,
+  type PrepareRosterWorkflowInput,
+  type RecoveryActionId,
   type RuntimeProvenance,
   type TesseraConnectionStatus,
   type TesseraFrozenScenarioContract,
@@ -117,8 +121,22 @@ type ServerOptions = {
   runtimeProvenance?: () => RuntimeProvenance;
   artifactWriter?: ArtifactWriter;
   handoffWriter?: HandoffWriter;
+  workflowJourneys?: {
+    start: (request: PrepareRosterWorkflowInput) => Promise<unknown>;
+    status: (journeyId: string) => Promise<unknown>;
+    continue: (
+      journeyId: string,
+      expectedRevision: number,
+    ) => Promise<unknown>;
+    choose: (
+      journeyId: string,
+      expectedRevision: number,
+      actionId: RecoveryActionId,
+    ) => Promise<unknown>;
+  };
   newRecruitCompanion?: {
     status: () => Promise<ResultEnvelope<NewRecruitConnectionStatus>>;
+    inspectMutation?: (roster: RosterDraftV1) => Promise<unknown>;
     deliver: (
       roster: RosterDraftV1,
       options: {
@@ -1139,6 +1157,196 @@ export function createRosterPilotMcpServer(
       ),
   );
 
+  if (options.workflowJourneys) {
+    const journeyError = (error: unknown) =>
+      resultContent({
+        ok: false,
+        data: null,
+        violations: [
+          {
+            code:
+              error && typeof error === "object" && "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "ROSTER_JOURNEY_OPERATION_FAILED",
+            message:
+              error instanceof Error ? error.message : String(error),
+            severity: "error" as const,
+          },
+        ],
+        warnings: [],
+      });
+
+    server.registerTool(
+      "start_roster_workflow",
+      {
+        title: "Start a durable roster workflow",
+        description:
+          "Build and retain a roster journey with immutable roster identity, structured recovery, and resumable next actions.",
+        inputSchema: {
+          prompt: z.string().optional(),
+          intent: RosterWorkflowIntentSchema.optional(),
+          playerFaction: z.string().optional(),
+          opponentFaction: z.string().optional(),
+          opponentRoster: RosterDraftSchema.optional(),
+          opponentAssumptions: z
+            .object({
+              styleTags: z.array(OpponentStyleTagSchema),
+              knownUnitIds: z.array(z.string().min(1)).optional(),
+              source: z.literal("user-stated").default("user-stated"),
+            })
+            .strict()
+            .optional(),
+          pointsLimit: z.number().int().min(100).max(5000).optional(),
+          name: z.string().optional(),
+          preferences: z.array(z.enum([
+            "mobility",
+            "durability",
+            "objective",
+            "shooting",
+            "melee",
+            "elite",
+            "horde",
+          ])).optional(),
+          allowNamedCharacters: z.boolean().optional(),
+          legendsPolicy: LegendsPolicySchema.optional(),
+          playContext: LegendsPlayContextSchema.optional(),
+          detachmentId: z.string().optional(),
+          simulationBackend: z
+            .enum(["auto", "local-engine", "website"])
+            .optional(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ opponentRoster, ...request }) => {
+        try {
+          const journey = await options.workflowJourneys!.start({
+            ...request,
+            preferences: request.preferences as PreferenceTag[] | undefined,
+            opponentContext: opponentRoster
+              ? {
+                  kind: "known-roster",
+                  roster: opponentRoster as RosterDraftV1,
+                }
+              : undefined,
+          });
+          return resultContent({
+            ok: true,
+            data: journey,
+            violations: [],
+            warnings: [],
+          });
+        } catch (error) {
+          return journeyError(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      "get_roster_workflow_status",
+      {
+        title: "Get durable roster workflow status",
+        description:
+          "Read and integrity-check a retained roster journey without performing recovery actions.",
+        inputSchema: { journeyId: z.string().uuid() },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ journeyId }) => {
+        try {
+          return resultContent({
+            ok: true,
+            data: await options.workflowJourneys!.status(journeyId),
+            violations: [],
+            warnings: [],
+          });
+        } catch (error) {
+          return journeyError(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      "continue_roster_workflow",
+      {
+        title: "Continue a roster workflow safely",
+        description:
+          "Perform only hash-bound automatic recovery actions, such as universal fallback exports, without external mutations or provider changes.",
+        inputSchema: {
+          journeyId: z.string().uuid(),
+          expectedRevision: z.number().int().positive(),
+          policy: z.literal("safe-auto").default("safe-auto"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ journeyId, expectedRevision }) => {
+        try {
+          return resultContent({
+            ok: true,
+            data: await options.workflowJourneys!.continue(
+              journeyId,
+              expectedRevision,
+            ),
+            violations: [],
+            warnings: [],
+          });
+        } catch (error) {
+          return journeyError(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      "choose_roster_workflow_action",
+      {
+        title: "Choose a roster workflow action",
+        description:
+          "Choose a typed recovery action. Side-effecting actions remain delegated to their specialized approval-aware tools.",
+        inputSchema: {
+          journeyId: z.string().uuid(),
+          expectedRevision: z.number().int().positive(),
+          actionId: z.enum(RecoveryActionIds),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ journeyId, expectedRevision, actionId }) => {
+        try {
+          return resultContent({
+            ok: true,
+            data: await options.workflowJourneys!.choose(
+              journeyId,
+              expectedRevision,
+              actionId,
+            ),
+            violations: [],
+            warnings: [],
+          });
+        } catch (error) {
+          return journeyError(error);
+        }
+      },
+    );
+  }
+
   server.registerTool(
     "run_roster_workflow",
     {
@@ -1156,6 +1364,14 @@ export function createRosterPilotMcpServer(
         faction: z.string().optional(),
         opponentFaction: z.string().optional(),
         opponentRoster: RosterDraftSchema.optional(),
+        opponentAssumptions: z
+          .object({
+            styleTags: z.array(OpponentStyleTagSchema),
+            knownUnitIds: z.array(z.string().min(1)).optional(),
+            source: z.literal("user-stated").default("user-stated"),
+          })
+          .strict()
+          .optional(),
         pointsLimit: z.number().int().min(100).max(5000).optional(),
         name: z.string().optional(),
         preferences: z
@@ -1232,6 +1448,7 @@ export function createRosterPilotMcpServer(
     }) => {
       const prepared = await prepareRosterWorkflow({
         ...input,
+        simulationBackend,
         opponentContext: opponentRoster
           ? {
               kind: "known-roster",
@@ -1256,12 +1473,7 @@ export function createRosterPilotMcpServer(
           }
         | {
             status: "in-progress";
-            targetKind: RosterWorkflowResult["optimization"] extends
-              { target: infer Target }
-              ? Target extends { kind: infer Kind }
-                ? Kind
-                : string
-              : string;
+            targetKind: string;
             jobs: Array<
               (TesseraRunJob & {
                 targetId: string;
@@ -1277,11 +1489,10 @@ export function createRosterPilotMcpServer(
               }
             >;
           } = { status: "not-requested" };
-      if (
-        prepared.ok &&
-        prepared.data.optimization &&
-        prepared.data.roster
-      ) {
+      const analysisTarget =
+        prepared.data.optimization?.target ??
+        prepared.data.analysis?.target;
+      if (prepared.ok && analysisTarget && prepared.data.roster) {
         if (!options.tesseraRunJobs) {
           const reason =
             "This transport cannot start durable Tessera runs. Use the local MCP/CLI transport; the source ROSZ is prepared, but no profile-rich archive or paired baseline exists yet.";
@@ -1290,9 +1501,10 @@ export function createRosterPilotMcpServer(
             reason,
           };
           return resultContent({
-            ok: false,
+            ok: true,
             data: {
               ...workflow,
+              status: "action-required",
               execution: {
                 newRecruitDelivery: {
                   status: "not-run",
@@ -1302,17 +1514,18 @@ export function createRosterPilotMcpServer(
                 tesseraBaseline: tesseraBaselineExecution,
               },
             },
-            violations: [
+            violations: [],
+            warnings: [
+              ...prepared.warnings,
               {
                 code: "TESSERA_DURABLE_RUNNER_UNAVAILABLE",
                 message: reason,
-                severity: "error" as const,
+                severity: "warn" as const,
               },
             ],
-            warnings: prepared.warnings,
           });
         }
-        const target = prepared.data.optimization.target;
+        const target = analysisTarget;
         const commonExactOptions = {
           outputDirectory: tesseraOutputDirectory,
           overwrite: false,
@@ -1401,9 +1614,10 @@ export function createRosterPilotMcpServer(
           }
         } catch (error) {
           return resultContent({
-            ok: false,
+            ok: true,
             data: {
               ...workflow,
+              status: "action-required",
               execution: {
                 newRecruitDelivery: {
                   status: "not-run",
@@ -1425,17 +1639,18 @@ export function createRosterPilotMcpServer(
                 },
               },
             },
-            violations: [
+            violations: [],
+            warnings: [
+              ...prepared.warnings,
               {
                 code: "TESSERA_BASELINE_START_FAILED",
                 message:
                   error instanceof Error
                     ? error.message
                     : "A durable Tessera baseline run could not be started.",
-                severity: "error" as const,
+                severity: "warn" as const,
               },
             ],
-            warnings: prepared.warnings,
           });
         }
         tesseraBaselineExecution = {
@@ -1481,9 +1696,10 @@ export function createRosterPilotMcpServer(
       }
       if (!options.newRecruitCompanion) {
         return resultContent({
-          ok: false,
+          ok: true,
           data: {
             ...workflow,
+            status: "action-required",
             execution: {
               newRecruitDelivery: {
                 status: "unavailable",
@@ -1492,15 +1708,16 @@ export function createRosterPilotMcpServer(
               },
             },
           },
-          violations: [
+          violations: [],
+          warnings: [
+            ...prepared.warnings,
             {
               code: "NEW_RECRUIT_COMPANION_UNAVAILABLE",
               message:
                 "Direct delivery is unavailable on this transport; the validated .rosz handoff remains available for manual import.",
-              severity: "error",
+              severity: "warn" as const,
             },
           ],
-          warnings: prepared.warnings,
         });
       }
       const connection =
@@ -1510,9 +1727,10 @@ export function createRosterPilotMcpServer(
         !connection.data?.available
       ) {
         return resultContent({
-          ok: false,
+          ok: true,
           data: {
             ...workflow,
+            status: "action-required",
             execution: {
               newRecruitDelivery: {
                 status: "unavailable",
@@ -1524,20 +1742,23 @@ export function createRosterPilotMcpServer(
               },
             },
           },
-          violations:
-            connection.violations.length > 0
-              ? connection.violations
+          violations: [],
+          warnings: [
+            ...prepared.warnings,
+            ...connection.warnings,
+            ...(connection.violations.length > 0
+              ? connection.violations.map((violation) => ({
+                  ...violation,
+                  severity: "warn" as const,
+                }))
               : [
                   {
                     code: "NEW_RECRUIT_CONNECTION_UNAVAILABLE",
                     message:
                       "Direct delivery was requested, but the New Recruit companion is not ready. The .rosz handoff remains available.",
-                    severity: "error" as const,
+                    severity: "warn" as const,
                   },
-                ],
-          warnings: [
-            ...prepared.warnings,
-            ...connection.warnings,
+                ]),
           ],
         });
       }
@@ -1552,10 +1773,10 @@ export function createRosterPilotMcpServer(
           },
         );
       return resultContent({
-        ok: delivered.ok,
+        ok: true,
         data: {
           ...workflow,
-          status: delivered.ok ? "complete" : "failed",
+          status: delivered.ok ? "complete" : "action-required",
           newRecruit: {
             ...workflow.newRecruit,
             delivery: {
@@ -1571,11 +1792,15 @@ export function createRosterPilotMcpServer(
             },
           },
         },
-        violations: delivered.violations,
+        violations: [],
         warnings: [
           ...prepared.warnings,
           ...connection.warnings,
           ...delivered.warnings,
+          ...delivered.violations.map((violation) => ({
+            ...violation,
+            severity: "warn" as const,
+          })),
         ],
       });
     },
@@ -2895,6 +3120,33 @@ export function createRosterPilotMcpServer(
       },
       async () => resultContent(await options.newRecruitCompanion!.status()),
     );
+
+    if (options.newRecruitCompanion.inspectMutation) {
+      server.registerTool(
+        "inspect_new_recruit_mutation",
+        {
+          title: "Inspect a New Recruit mutation receipt",
+          description:
+            "Read a redacted, integrity-checked receipt to determine whether delivery is reusable, safely retryable, or must remain parked for evidence-backed reconciliation.",
+          inputSchema: { roster: RosterDraftSchema },
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async ({ roster }) =>
+          resultContent({
+            ok: true,
+            data: await options.newRecruitCompanion!.inspectMutation!(
+              roster as RosterDraftV1,
+            ),
+            violations: [],
+            warnings: [],
+          }),
+      );
+    }
 
     server.registerTool(
       "deliver_roster_to_new_recruit",

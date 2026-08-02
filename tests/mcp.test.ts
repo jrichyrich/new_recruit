@@ -297,7 +297,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
     );
     assert.deepEqual(
       handoffEnvelope.data.artifacts.map((artifact) => artifact.format),
-      ["rosz", "html"],
+      ["rosz", "roster-json", "text", "html"],
     );
     assert.equal(handoffEnvelope.data.artifacts[0].encoding, "base64");
 

@@ -163,7 +163,7 @@ test("hosted MCP returns a manual handoff when direct delivery is unavailable", 
           "Build a 1,000 point Aeldari army and upload it to New Recruit.",
       },
     });
-    assert.equal(response.isError, true);
+    assert.equal(response.isError, false);
     const envelope = response.structuredContent as {
       data: {
         newRecruit: {
@@ -176,6 +176,7 @@ test("hosted MCP returns a manual handoff when direct delivery is unavailable", 
         };
       };
       violations: Array<{ code: string }>;
+      warnings: Array<{ code: string }>;
     };
     assert.equal(
       envelope.data.execution.newRecruitDelivery.status,
@@ -189,9 +190,13 @@ test("hosted MCP returns a manual handoff when direct delivery is unavailable", 
       ),
     );
     assert.equal(
-      envelope.violations[0]?.code,
+      envelope.warnings.find(
+        (warning) =>
+          warning.code === "NEW_RECRUIT_COMPANION_UNAVAILABLE",
+      )?.code,
       "NEW_RECRUIT_COMPANION_UNAVAILABLE",
     );
+    assert.deepEqual(envelope.violations, []);
   } finally {
     await client.close();
     await server.close();

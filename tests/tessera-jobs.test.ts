@@ -248,20 +248,15 @@ test("durable Tessera jobs reserve isolated bundles and retain guided recovery s
   assert.equal(cancelled.status, "cancelled");
   assert.match(cancelled.nextAction ?? "", /never deletes/i);
 
-  const resolved = await resolveTesseraRunProfiles(
-    job.requestPath,
-    {
+  await assert.rejects(
+    resolveTesseraRunProfiles(job.requestPath, {
       schemaVersion: 1,
       policyKind: "tessera-profile-policy",
       entries: [],
-    },
-  );
-  assert.ok(resolved.profilePolicyPath);
-  assert.equal(
-    JSON.parse(
-      await readFile(resolved.profilePolicyPath!, "utf8"),
-    ).policyKind,
-    "tessera-profile-policy",
+    }),
+    (error: unknown) =>
+      (error as { code?: string }).code ===
+      "TESSERA_PROFILE_RESOLUTION_NOT_REQUIRED",
   );
 
   const resumed = await resumeTesseraRun(job.requestPath, {
@@ -269,7 +264,7 @@ test("durable Tessera jobs reserve isolated bundles and retain guided recovery s
   });
   assert.equal(resumed.status, "queued");
   assert.equal(resumed.attempt, 2);
-  assert.equal(resumed.profilePolicyPath, resolved.profilePolicyPath);
+  assert.equal(resumed.profilePolicyPath, null);
   const resumedDocument = await readJobDocument(job.requestPath);
   assert.equal(resumedDocument.request.kind, "stress");
   if (resumedDocument.request.kind !== "stress") {
@@ -297,10 +292,7 @@ test("durable Tessera jobs reserve isolated bundles and retain guided recovery s
           request.options?.resumeManifestPath,
           undefined,
         );
-        assert.equal(
-          request.options?.profilePolicyPath,
-          resolved.profilePolicyPath,
-        );
+        assert.equal(request.options?.profilePolicyPath, undefined);
       },
     },
   );

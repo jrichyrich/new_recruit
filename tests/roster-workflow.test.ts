@@ -31,6 +31,85 @@ test("roster workflow distinguishes player and opponent factions", async () => {
   );
 });
 
+test("opponent play-style assumptions do not become player preferences", async () => {
+  const result = await prepareRosterWorkflow({
+    prompt:
+      "Build a 1,000 point Custodes army against Aeldari; they play mobile and ranged.",
+    opponentAssumptions: {
+      styleTags: ["mobile", "ranged"],
+      source: "user-stated",
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data?.opponentAssumptions?.styleTags, [
+    "mobile",
+    "ranged",
+  ]);
+  assert.equal(result.data?.roster?.preferences.includes("mobility"), false);
+  assert.equal(result.data?.roster?.preferences.includes("shooting"), false);
+});
+
+test("local exact analysis uses canonical rosters without a New Recruit handoff", async () => {
+  const opponent = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+  }).data;
+  assert.ok(opponent);
+  const result = await prepareRosterWorkflow({
+    intent: "analyze",
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    simulationBackend: "local-engine",
+    opponentContext: { kind: "known-roster", roster: opponent },
+    coachingMode: "none",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data?.analysis?.provider, "local-engine");
+  assert.equal(result.data?.analysis?.target.kind, "exact-opponent");
+  assert.equal(result.data?.newRecruit.handoff, null);
+});
+
+test("local known-faction analysis freezes a canonical portfolio", {
+  timeout: 120_000,
+}, async () => {
+  const result = await prepareRosterWorkflow({
+    intent: "analyze",
+    playerFaction: "adeptus-custodes",
+    opponentFaction: "agents-of-the-imperium",
+    pointsLimit: 1000,
+    simulationBackend: "local-engine",
+    coachingMode: "none",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data?.analysis?.target.kind, "known-faction");
+  assert.equal(result.data?.newRecruit.handoff, null);
+});
+
+test("local general-threat analysis freezes six canonical opponents", {
+  timeout: 120_000,
+}, async () => {
+  const result = await prepareRosterWorkflow({
+    intent: "analyze",
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    simulationBackend: "local-engine",
+    coachingMode: "none",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(
+    result.data?.analysis?.target.kind,
+    "general-six-archetype",
+  );
+  if (result.data?.analysis?.target.kind === "general-six-archetype") {
+    assert.equal(result.data.analysis.target.portfolio.items.length, 6);
+  }
+  assert.equal(result.data?.newRecruit.handoff, null);
+});
+
 test("roster workflow prepares an export-safe New Recruit handoff", async () => {
   const result = await prepareRosterWorkflow({
     prompt:
@@ -79,14 +158,27 @@ test("artifact failure retains the legal canonical roster fallback", async () =>
     coachingMode: "none",
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(
-    result.violations[0]?.code,
-    "EXPORTABLE_ROSTER_UNAVAILABLE",
+  assert.equal(result.ok, true);
+  assert.equal(result.data?.status, "action-required");
+  assert.ok(
+    result.warnings.some(
+      (warning) => warning.code === "EXPORTABLE_ROSTER_UNAVAILABLE",
+    ),
   );
   assert.equal(result.data?.validation?.ok, true);
   assert.equal(result.data?.roster?.totalPoints, 1000);
-  assert.equal(result.data?.newRecruit.handoff, null);
+  assert.ok(result.data?.newRecruit.handoff);
+  assert.equal(
+    result.data?.newRecruit.handoff?.artifacts.some(
+      (artifact) => artifact.format === "rosz",
+    ),
+    false,
+  );
+  assert.ok(
+    result.data?.newRecruit.handoff?.artifacts.some(
+      (artifact) => artifact.format === "html",
+    ),
+  );
   assert.ok(
     result.warnings.some(
       (warning) =>
@@ -159,7 +251,7 @@ test("roster workflow creates six archetype optimizer input", {
     "ready-for-tessera-baseline",
   );
   assert.deepEqual(result.data?.optimization?.preparation, {
-    sourceRosz: "prepared",
+    sourceRosz: "pending-provider-preparation",
     profileRichRosz: "pending-new-recruit-enrichment",
     pairedBaseline: "pending-tessera",
   });

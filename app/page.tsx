@@ -531,7 +531,10 @@ export default function Home() {
     };
     const rosz = handoff.artifacts.find((artifact) => artifact.format === "rosz");
     if (!rosz) {
-      setAgentNote("New Recruit handoff failed to produce a .rosz artifact.");
+      setNewRecruitHandoff(handoff);
+      setAgentNote(
+        "New Recruit import is blocked for this data snapshot. Your legal roster was preserved; printable HTML, text, and canonical JSON remain available.",
+      );
       return;
     }
     downloadArtifact(rosz);

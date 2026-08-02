@@ -141,8 +141,14 @@ function setupHarness(options: {
             ok: true,
             data: {
               available: options.newRecruitAvailable ?? true,
+              platform: "darwin",
               agentAvailable:
                 options.newRecruitAgentAvailable ?? true,
+              browserAvailable: true,
+              brokerAvailable: true,
+              protocolCompatible: true,
+              installationCurrent: true,
+              runtimeCompatible: true,
               credentialsConfigured: options.credentialsConfigured ?? false,
             },
           }),
@@ -959,6 +965,13 @@ test("New Recruit setup asks before opening the secure credential dialog", async
               ok: true,
               data: {
                 available: true,
+                platform: "darwin",
+                agentAvailable: true,
+                browserAvailable: true,
+                brokerAvailable: true,
+                protocolCompatible: true,
+                installationCurrent: true,
+                runtimeCompatible: true,
                 credentialsConfigured: statusCalls > 1,
               },
             }),
