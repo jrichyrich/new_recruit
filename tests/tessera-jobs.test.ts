@@ -2405,6 +2405,199 @@ test("worker lifecycle retains enriched profile requirements as needs-input", as
   );
 });
 
+test("durable retries retain and enforce the selected local provider identity", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-job-provider-pin-"),
+  );
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.ok && built.data);
+  let job = await startTesseraRun(
+    {
+      kind: "stress",
+      playerRoster: built.data,
+      factionId: "aeldari",
+      options: {
+        executionMode: "simulate",
+        simulationBackend: "auto",
+      },
+    },
+    {
+      outputDirectory: path.join(root, "runs"),
+      rootDir: root,
+      launch: false,
+    },
+  );
+  const localIdentity = {
+    schemaVersion: 1 as const,
+    provider: "local-engine" as const,
+    engine: "tessera-engine" as const,
+    repository: "Tessera-cmd/tessera-engine" as const,
+    commit: "a".repeat(40),
+    tree: "b".repeat(40),
+    sourceSha256: "c".repeat(64),
+    adapterVersion: "fixture-adapter-v1",
+    compilerVersion: "fixture-compiler-v1",
+    inputSchemaVersion: 1 as const,
+    capabilityManifestSha256: "d".repeat(64),
+    promotion: "candidate" as const,
+    licenseState: "evaluation-only" as const,
+  };
+  const localFailure = {
+    ok: false,
+    data: {
+      reportKind: "tessera-stress-test",
+      source: "tessera-local-engine-failed",
+      status: "failed",
+      simulation: {
+        requested: true,
+        status: "failed",
+        selectedBackend: "local-engine",
+        providerIdentity: localIdentity,
+      },
+    },
+    violations: [
+      {
+        code: "TESSERA_BROWSER_TIMEOUT",
+        message: "Synthetic retryable provider fixture.",
+        severity: "error",
+      },
+    ],
+    warnings: [],
+  } as unknown as TesseraRunResult;
+  await executeMockedAttempt(job.requestPath, localFailure);
+  job = (await getTesseraRunStatus(job.requestPath)).job;
+  assert.equal(job.status, "failed");
+  assert.equal(
+    job.simulationProviderPin?.selectedBackend,
+    "local-engine",
+  );
+  assert.deepEqual(
+    job.simulationProviderPin?.providerIdentity,
+    localIdentity,
+  );
+  assert.equal(
+    job.attemptHistory[0]?.simulationBackend,
+    "local-engine",
+  );
+
+  job = await resumeTesseraRun(job.requestPath, { launch: false });
+  assert.equal(
+    job.attemptHistory[1]?.simulationBackend,
+    "local-engine",
+  );
+  const websiteIdentity = {
+    schemaVersion: 1 as const,
+    provider: "website" as const,
+    engine: "tessera-ui" as const,
+    uiIdentity: "fixture-ui-v2",
+    adapterVersion: "website-browser-v1",
+  };
+  const websiteFailure = {
+    ...localFailure,
+    data: {
+      reportKind: "tessera-stress-test",
+      source: "tessera-ui-failed",
+      status: "failed",
+      simulation: {
+        requested: true,
+        status: "failed",
+        selectedBackend: "website",
+        providerIdentity: websiteIdentity,
+      },
+    },
+  } as unknown as TesseraRunResult;
+  await executeMockedAttempt(job.requestPath, websiteFailure, {
+    inspectRequest: (request) => {
+      assert.equal(request.options?.simulationBackend, "local-engine");
+    },
+  });
+  job = (await getTesseraRunStatus(job.requestPath)).job;
+  assert.equal(job.status, "failed");
+  assert.equal(
+    job.error?.code,
+    "TESSERA_SIMULATION_PROVIDER_CHANGED",
+  );
+  assert.equal(
+    job.attemptHistory[1]?.simulationBackend,
+    "local-engine",
+  );
+  assert.deepEqual(
+    job.simulationProviderPin?.providerIdentity,
+    localIdentity,
+  );
+});
+
+test("legacy website reports pin compatible retries to the website backend", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-job-legacy-ui-pin-"),
+  );
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.ok && built.data);
+  let job = await startTesseraRun(
+    {
+      kind: "stress",
+      playerRoster: built.data,
+      factionId: "aeldari",
+      options: {
+        executionMode: "simulate",
+        simulationBackend: "auto",
+      },
+    },
+    {
+      outputDirectory: path.join(root, "runs"),
+      rootDir: root,
+      launch: false,
+    },
+  );
+  const legacyWebsiteFailure = {
+    ok: false,
+    data: {
+      reportKind: "tessera-stress-test",
+      source: "tessera-ui-failed",
+      status: "failed",
+      tesseraUiIdentity: "legacy-ui-fixture",
+    },
+    violations: [
+      {
+        code: "TESSERA_BROWSER_TIMEOUT",
+        message: "Synthetic legacy website retry.",
+        severity: "error",
+      },
+    ],
+    warnings: [],
+  } as unknown as TesseraRunResult;
+  await executeMockedAttempt(job.requestPath, legacyWebsiteFailure);
+  job = (await getTesseraRunStatus(job.requestPath)).job;
+  assert.equal(
+    job.simulationProviderPin?.selectedBackend,
+    "website",
+  );
+  assert.equal(
+    job.simulationProviderPin?.providerIdentity,
+    null,
+  );
+  assert.equal(
+    job.attemptHistory[0]?.tesseraUiIdentity,
+    "legacy-ui-fixture",
+  );
+
+  job = await resumeTesseraRun(job.requestPath, { launch: false });
+  await executeMockedAttempt(job.requestPath, legacyWebsiteFailure, {
+    inspectRequest: (request) => {
+      assert.equal(request.options?.simulationBackend, "website");
+    },
+  });
+  job = (await getTesseraRunStatus(job.requestPath)).job;
+  assert.equal(job.error?.code, "TESSERA_BROWSER_TIMEOUT");
+  assert.equal(job.attemptHistory[1]?.simulationBackend, "website");
+});
+
 test("cancel verifies the worker path, job path, and launch token before signaling", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "rosterpilot-tessera-job-cancel-"),

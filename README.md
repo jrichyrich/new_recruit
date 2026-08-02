@@ -425,9 +425,48 @@ npm run rosterpilot -- tessera prepare \
 npm run rosterpilot -- tessera analyze \
   --file roster.json \
   --opponent-roster enemy.json \
+  --simulation-backend auto \
   --execution-mode simulate \
   --out-dir exports/tessera
 ```
+
+Simulation requests accept `--simulation-backend auto|local-engine|website`;
+the same `simulationBackend` field is available through local MCP and durable
+jobs.
+
+| Selection | Current behavior |
+| --- | --- |
+| `auto` (default) | Uses the website while the pinned local engine remains an unpromoted candidate. A future promoted local identity may be selected only after its preflight passes. |
+| `website` | Forces the existing `playtessera.gg` browser route and its premium-key boundary. |
+| `local-engine` | Explicitly runs the pinned engine for evaluation when both enriched rosters fit its declared capability manifest. It never silently falls back to the website. |
+
+After New Recruit enrichment, the explicit local route does not open the
+Tessera website or retrieve its premium key. It fails closed for unsupported
+characteristics and keywords, unresolved alternate profiles, mixed defensive
+profiles, ambiguous PISTOL or melee weapon choices, and combat-relevant
+abilities or selected rules outside its declared capability.
+Every result records the requested and selected backend plus its provider
+identity. Local scenarios also bind deterministic seed, execution, and
+projection hashes.
+
+`auto` is deliberately conservative. A local provider that is missing,
+unavailable, unpromoted, or fails preflight is not run; the request selects the
+website and records the selection reason. If a future promoted local provider
+fails during execution, RosterPilot discards all local evidence, reruns the
+complete request through the website, and records one fallback receipt. An
+explicit `local-engine` or `website` request never crosses providers. This is
+separate from `--fallback baseline-damage-v1`, which adds a supplemental
+deterministic analysis rather than changing the simulation provider.
+
+The local dependency is currently `evaluation-only`: it is pinned to upstream
+commit `16ab4365bbd97ef592b061c5a9babe5e44f00e80`, and its commit, tree,
+archive digests, package metadata, and licence state are tracked in
+[`local/tessera/tessera-engine-provenance.json`](local/tessera/tessera-engine-provenance.json).
+Automatic selection and local-engine-derived coaching remain disabled until a
+written licence grant is recorded and complete local-versus-website parity
+evidence passes the frozen parity policy. Explicit local runs can retain
+evaluation matrices, but substantive findings and roster-change candidates
+are suppressed while that provider identity is still a candidate.
 
 Use `--opponent-file enemy.rosz` for an exported list or
 `--opponent-roster enemy.json` for another canonical RosterPilot draft.
@@ -448,7 +487,8 @@ The default `full` analysis runs 16 raw Tessera scenarios per opponent: Shooting
 and Fight, four metrics (wipe probability, half-wipe probability, mean kills,
 and mean damage), and both attack directions. RosterPilot consolidates those
 matrices by phase and direction, calculates mean damage per 100 attacker
-points, and preserves the visible iteration count and simulator settings.
+points, and preserves the selected provider identity, iteration count, and
+simulator settings.
 For a faster smoke test, quick mode runs Shooting wipe probability in both
 directions:
 
@@ -462,7 +502,7 @@ npm run rosterpilot -- tessera analyze \
 ```
 
 `--phases` and `--metrics` can select an explicit subset.
-`--execution-mode simulate` opts into local Tessera UI automation;
+`--execution-mode simulate` opts into the selected simulation provider;
 `--execution-mode prepare-only` returns verified handoff files with
 `status: prepared`. The old `--experimental` flag remains a deprecated
 compatibility alias for simulation.
@@ -598,7 +638,7 @@ Job status is one of `queued`, `running`, `needs-input`, `complete`,
 `degraded`, `inconclusive`, `failed`, or `cancelled`. `run-status --full-json`
 includes the retained result when one exists. A `needs-input` job accepts a
 validated structured profile policy through `resolve-profiles`; resume then
-uses that frozen policy. A supplied stress-manifest v1/v2/v3 is copied,
+uses that frozen policy. A supplied legacy stress manifest (v1-v4) is copied,
 verified, and migrated into the durable bundle before recovery. Exact and
 stress paired revisions are durable jobs as well. The outer coordinator owns
 the first three automatic attempts; each stress stage advances at most once
@@ -804,9 +844,10 @@ Bare `--resume` reads `<out-dir>/stress-manifest.json`; pass
 `--resume path/to/stress-manifest.json` to select it explicitly. Resume accepts
 only the same player fingerprint, opponent faction, `bundleId`, semantic
 roster identity, suite, analysis
-strategy, simulation setting, profile-policy hash, and exact frozen portfolio
-SHA-256. Schema-v1 and schema-v2 manifests are migrated in memory and rewritten
-as v3 when resumed. Every stage records attempt count, first/last attempt time,
+strategy, requested and selected simulation backend, simulation setting,
+profile-policy hash, and exact frozen portfolio SHA-256. Schema-v1 through
+schema-v4 manifests are migrated in memory and rewritten as v5 when resumed.
+Every stage records attempt count, first/last attempt time,
 structured error code, retryability, and next action. Transient failures receive three automatic
 attempts with bounded backoff and up to five lifetime attempts through explicit
 resume; terminal failures require `--force-retry`. Completed child reports are
@@ -912,12 +953,13 @@ npm run rosterpilot -- tessera compare-revision \
 Revision comparison requires a schema-v3 baseline with captured scenarios and
 a valid revised roster from the same faction. It always starts a durable
 simulate-mode job and fails before delivery unless the baseline is complete
-and local browser analysis was explicitly enabled. It freezes and verifies the
+and simulation was explicitly enabled. It freezes and verifies the
 opponent artifacts, source identities, points contract, profile policy,
-scenarios, iterations, settings, and Tessera UI identity, then classifies each
-comparable cell as improved, worsened, unchanged, or ambiguous. The
-roster-level conclusion is `improved` only when at least one applicable trusted
-aggregate improves and none materially worsen; otherwise it is `worsened`,
+scenarios, iterations, settings, selected backend, and provider identity, then
+classifies each comparable cell as improved, worsened, unchanged, or
+ambiguous. The roster-level conclusion is `improved` only when at least one
+applicable trusted aggregate improves and none materially worsen; otherwise it
+is `worsened`,
 `mixed`, or `unchanged`. Materiality is five percentage points for wipe
 probabilities, the greater of 0.5 model or 10% for mean kills, and the greater
 of one wound or 10% for mean damage. Ambiguous aggregate coverage cannot vote
@@ -963,7 +1005,8 @@ Tessera artifact into the support-owned, content-addressed recovery store; it
 cannot upload, create a list, or simulate. Hosted MCP,
 REST, OpenAPI, and the website omit all of
 them; there is no public stress-test UI. Each stress run
-uses one isolated, session-scoped Tessera worker across proxy requests. That
+that selects `website` uses one isolated, session-scoped Tessera worker across
+proxy requests. That
 worker owns one live browser context and retains the premium key only in its
 memory. Explicit session close or seven days of inactivity removes its
 user-only browser profile. Local-agent shutdown closes the worker and browser
@@ -977,8 +1020,9 @@ login-Keychain item; only the isolated Tessera worker can retrieve it, and only
 to fill Tessera's Licence key field on the exact `https://playtessera.gg`
 origin. Use `tessera forget` to remove it.
 
-If Tessera is disabled, unavailable, or its UI changes after the enriched
-rosters are prepared, RosterPilot preserves those verified handoff artifacts.
+If the selected provider is unavailable or fails after the enriched rosters
+are prepared, including a website UI change, RosterPilot preserves those
+verified handoff artifacts.
 A requested simulation with no trusted matrices is `failed`; captured evidence
 that cannot support analytical confidence is `inconclusive`. Missing cells are
 never invented.
@@ -996,6 +1040,28 @@ not inspect New Recruit credentials, call New Recruit's private APIs, automate
 cross-origin browser mutations, or use a cloud roster database. Agent clients
 with browser control may import the generated `.rosz` only when the user
 explicitly asks for that assisted workflow.
+
+Verify the reviewed local-engine dependency and the provider contracts with:
+
+```bash
+npm run tessera:engine:check
+node --import tsx --test \
+  tests/tessera-engine-provenance.test.ts \
+  tests/tessera-local-engine-companion.test.ts \
+  tests/tessera-local-engine.test.ts \
+  tests/tessera-simulation-provider.test.ts \
+  tests/tessera-provider-parity.test.ts \
+  tests/tessera-stress-local-provider.test.ts
+```
+
+`npm run verify` also includes the provenance check after the normal lint and
+test suite. To verify separately downloaded source bytes, add
+`-- --archive /absolute/path/tessera-engine.tar.gz` to
+`npm run tessera:engine:check`. These deterministic tests do not contact the
+website. The parity tests validate completeness, normalized-input and scenario
+contract identity, metric-specific Monte Carlo tolerances, and winner
+classification behavior; they do not themselves constitute live promotion
+evidence.
 
 Fixture-based Chrome tests are opt-in because they launch an actual isolated
 browser process:

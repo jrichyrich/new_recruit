@@ -404,6 +404,7 @@ function reportSettings(report: TesseraMatchupReport): DisplayPair[] {
 }
 
 function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
+  const providerIdentity = report.simulation.providerIdentity;
   const pairs: DisplayPair[] = [
     { label: "Run ID", value: safeText(report.runId) },
     { label: "Generated", value: safeText(report.generatedAt) },
@@ -421,7 +422,44 @@ function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
       label: "Player export",
       value: safeText(report.player.summary.generatedBy, "Unknown"),
     },
+    {
+      label: "Requested simulation backend",
+      value: safeText(report.simulation.requestedBackend, "website"),
+    },
+    {
+      label: "Selected simulation backend",
+      value: safeText(report.simulation.selectedBackend, "website"),
+    },
   ];
+  if (providerIdentity?.provider === "website") {
+    pairs.push(
+      { label: "Provider engine", value: providerIdentity.engine },
+      {
+        label: "Tessera UI identity",
+        value: safeText(providerIdentity.uiIdentity, "Unavailable"),
+      },
+      {
+        label: "Provider adapter",
+        value: safeText(providerIdentity.adapterVersion),
+      },
+    );
+  } else if (providerIdentity?.provider === "local-engine") {
+    pairs.push(
+      { label: "Provider engine", value: providerIdentity.engine },
+      { label: "Engine commit", value: providerIdentity.commit },
+      { label: "Engine source SHA-256", value: providerIdentity.sourceSha256 },
+      { label: "Compiler", value: providerIdentity.compilerVersion },
+      { label: "Provider adapter", value: providerIdentity.adapterVersion },
+      { label: "Promotion state", value: providerIdentity.promotion },
+      { label: "Usage state", value: providerIdentity.licenseState },
+    );
+  }
+  if (report.simulation.fallback) {
+    pairs.push({
+      label: "Provider fallback",
+      value: `${report.simulation.fallback.from} → ${report.simulation.fallback.to} (${report.simulation.fallback.code}; local evidence discarded)`,
+    });
+  }
   if (report.player.fingerprint) {
     pairs.push({
       label: "Player roster fingerprint",

@@ -10,6 +10,7 @@ import type {
   TesseraStressPortfolioPreview,
   TesseraStressRunReport,
   TesseraStressSuite,
+  TesseraSimulationBackend,
 } from "./types";
 
 export type BuildAndStressRosterInput = {
@@ -28,6 +29,7 @@ export type BuildAndStressRosterInput = {
   analysisStrategy?: TesseraStressAnalysisStrategy;
   profilePolicyPath?: string;
   outputDirectory?: string;
+  simulationBackend?: TesseraSimulationBackend;
   resumeManifestPath?: string;
   restartManifestPath?: string;
   allowReadinessWarnings?: boolean;

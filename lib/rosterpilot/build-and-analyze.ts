@@ -8,6 +8,7 @@ import type {
   ResultEnvelope,
   RosterDraftV1,
   TesseraMatchupReport,
+  TesseraSimulationBackend,
 } from "./types";
 
 export type BuildAndAnalyzeRosterInput = {
@@ -26,6 +27,7 @@ export type BuildAndAnalyzeRosterInput = {
   allowReadinessWarnings?: boolean;
   profilePolicyPath?: string;
   outputDirectory?: string;
+  simulationBackend?: TesseraSimulationBackend;
   executionMode?: "prepare-only" | "simulate";
   experimental?: boolean;
 };

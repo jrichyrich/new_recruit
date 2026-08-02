@@ -57,6 +57,9 @@ import {
   type TesseraStressStageProvenance,
   type TesseraStressSuite,
   type TesseraStressTestReport,
+  type TesseraSimulationBackend,
+  type TesseraSimulationProvider,
+  type TesseraSimulationProviderIdentity,
 } from "../../lib/rosterpilot";
 import {
   pathExists,
@@ -131,6 +134,8 @@ export type TesseraStressOpponentInput = {
 
 export type TesseraStressOptions = WriteOptions & {
   outputDirectory?: string;
+  /** Provider request frozen for the complete stress run. */
+  simulationBackend?: TesseraSimulationBackend;
   suite?: TesseraStressSuite;
   analysisStrategy?: TesseraStressAnalysisStrategy;
   executionMode?: "prepare-only" | "simulate";
@@ -162,6 +167,31 @@ function stressSimulationRequested(
   return options.executionMode
     ? options.executionMode === "simulate"
     : options.experimental === true;
+}
+
+function requestedSimulationBackend(
+  options: TesseraStressOptions,
+): TesseraSimulationBackend {
+  return options.simulationBackend ?? "auto";
+}
+
+/** Auto remains on the promoted website route while the local engine is a candidate. */
+function selectedSimulationBackend(
+  requested: TesseraSimulationBackend,
+): TesseraSimulationProvider {
+  return requested === "local-engine" ? "local-engine" : "website";
+}
+
+function simulationProviderAllowsAnalyticalClaims(
+  selected: TesseraSimulationProvider | undefined,
+  identity: TesseraSimulationProviderIdentity | undefined,
+): boolean {
+  if (selected !== "local-engine") return true;
+  return Boolean(
+    identity?.provider === "local-engine" &&
+      identity.promotion === "promoted" &&
+      identity.licenseState === "approved",
+  );
 }
 
 export type TesseraStressDependencies = TesseraDependencies & {
@@ -211,7 +241,7 @@ type ManifestStageContracts = {
 };
 
 type TesseraStressManifest = {
-  schemaVersion: 4;
+  schemaVersion: 5;
   reportKind: "tessera-stress-manifest";
   runId: string;
   createdAt: string;
@@ -224,6 +254,8 @@ type TesseraStressManifest = {
   portfolio: TesseraStressPortfolio;
   outputDirectory: string;
   simulationRequested: boolean;
+  simulationBackend: TesseraSimulationBackend;
+  selectedSimulationBackend: TesseraSimulationProvider;
   profilePolicy: ProfilePolicyV1 | null;
   profilePolicyHash: string | null;
   enrichedProfileRequirements: TesseraProfileRequirement[] | null;
@@ -309,7 +341,10 @@ const ConnectorEventSchema = z.object({
   eventId: z.string().min(1),
   recordedAt: z.string().min(1),
   provider: z.enum(["new-recruit", "tessera"]),
-  action: z.enum(["prepare", "simulate"]),
+  simulationBackend: z
+    .enum(["local-engine", "website"])
+    .optional(),
+  action: z.enum(["prepare", "probe", "simulate"]),
   origin: z.enum([
     "new-remote",
     "persistent-cache",
@@ -320,6 +355,57 @@ const ConnectorEventSchema = z.object({
   remoteId: z.string().nullable(),
   contentSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
 });
+
+const SimulationProviderIdentitySchema = z.discriminatedUnion(
+  "provider",
+  [
+    z.object({
+      schemaVersion: z.literal(1),
+      provider: z.literal("website"),
+      engine: z.literal("tessera-ui"),
+      uiIdentity: z.string().nullable(),
+      adapterVersion: z.string().min(1),
+    }),
+    z.object({
+      schemaVersion: z.literal(1),
+      provider: z.literal("local-engine"),
+      engine: z.literal("tessera-engine"),
+      repository: z.literal("Tessera-cmd/tessera-engine"),
+      commit: z.string().regex(/^[0-9a-f]{40}$/),
+      tree: z.string().regex(/^[0-9a-f]{40}$/),
+      sourceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+      adapterVersion: z.string().min(1),
+      compilerVersion: z.string().min(1),
+      inputSchemaVersion: z.literal(1),
+      capabilityManifestSha256:
+        z.string().regex(/^[0-9a-f]{64}$/),
+      promotion: z.enum(["candidate", "promoted"]),
+      licenseState: z.enum(["evaluation-only", "approved"]),
+    }),
+  ],
+);
+
+const SimulationFallbackSchema = z.object({
+  from: z.literal("local-engine"),
+  to: z.literal("website"),
+  code: z.string().min(1),
+  message: z.string().min(1),
+  discardedLocalEvidence: z.literal(true),
+});
+
+const SimulationInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("new-recruit-enriched-rosz"),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+  z.object({
+    kind: z.literal("rosterpilot-local-engine-input"),
+    path: z.string().min(1),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    bundleId: z.string().min(1),
+    compilerVersion: z.string().min(1),
+  }),
+]);
 
 const ObservedNewRecruitCatalogueSchema = z.object({
   source: z.literal("new-recruit-enriched-rosz"),
@@ -380,6 +466,7 @@ const PreparedRosterSchema = z.object({
   sourceRoszSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   enrichedRoszSha256:
     z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  simulationInput: SimulationInputSchema.optional(),
   summary: z.object({
     rosterName: z.string().min(1),
     factionName: z.string().min(1),
@@ -627,6 +714,7 @@ const StressManifestSchema = z.object({
     z.literal(2),
     z.literal(3),
     z.literal(4),
+    z.literal(5),
   ]),
   reportKind: z.literal("tessera-stress-manifest"),
   runId: z.string().min(1),
@@ -641,6 +729,12 @@ const StressManifestSchema = z.object({
   portfolio: PortfolioSchema,
   outputDirectory: z.string().min(1),
   simulationRequested: z.boolean(),
+  simulationBackend: z
+    .enum(["auto", "local-engine", "website"])
+    .optional(),
+  selectedSimulationBackend: z
+    .enum(["local-engine", "website"])
+    .optional(),
   profilePolicy: ProfilePolicySchema.nullable().optional(),
   profilePolicyHash: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   enrichedProfileRequirements:
@@ -820,6 +914,11 @@ const ScenarioResultSchema = z.object({
     ]),
     iterations: z.number().int().positive().nullable(),
     settings: z.record(z.string()),
+    seed: z.number().int().nonnegative().optional(),
+    executionSha256:
+      z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    projectionSha256:
+      z.string().regex(/^[0-9a-f]{64}$/).optional(),
     matrixSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     integrity: z.object({
       status: z.enum(["trusted", "aliased"]),
@@ -847,13 +946,19 @@ const ScenarioResultSchema = z.object({
 });
 
 const MatchupReportSchema = z.object({
-  schemaVersion: z.union([z.literal(2), z.literal(3)]),
+  schemaVersion: z.union([
+    z.literal(2),
+    z.literal(3),
+    z.literal(4),
+  ]),
   runId: z.string().min(1),
   generatedAt: z.string().min(1),
   source: z.enum([
     "prepare-only",
     "tessera-ui",
     "tessera-ui-failed",
+    "tessera-local-engine",
+    "tessera-local-engine-failed",
     "handoff-only",
   ]),
   status: z.enum([
@@ -882,10 +987,15 @@ const MatchupReportSchema = z.object({
   }),
   player: PreparedRosterSchema,
   opponents: z.array(z.object({
+    kind: z
+      .enum(["roster", "rosz", "faction-archetype"])
+      .optional(),
     rosterName: z.string().min(1),
+    sourceRoszPath: z.string().min(1).optional(),
     enrichedRoszPath: z.string().min(1),
     enrichedRoszSha256:
       z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    simulationInput: SimulationInputSchema.optional(),
     summary: PreparedRosterSchema.shape.summary,
   }).passthrough()).min(1),
   simulation: z.object({
@@ -897,7 +1007,15 @@ const MatchupReportSchema = z.object({
     status: z
       .enum(["not-requested", "complete", "partial", "failed"])
       .optional(),
-    engine: z.literal("tessera-ui").optional(),
+    requestedBackend: z
+      .enum(["auto", "local-engine", "website"])
+      .optional(),
+    selectedBackend: z
+      .enum(["local-engine", "website"])
+      .optional(),
+    providerIdentity: SimulationProviderIdentitySchema.optional(),
+    fallback: SimulationFallbackSchema.nullable().optional(),
+    engine: z.enum(["tessera-ui", "tessera-engine"]).optional(),
     settings: z.record(z.string()),
     matrices: z.array(z.object({
       opponentName: z.string().min(1),
@@ -1082,6 +1200,7 @@ const StressBaselineSchema = z.object({
     z.literal(1),
     z.literal(2),
     z.literal(3),
+    z.literal(4),
   ]),
   reportKind: z.literal("tessera-stress-test"),
   runId: z.string().min(1),
@@ -1090,6 +1209,8 @@ const StressBaselineSchema = z.object({
     "prepare-only",
     "tessera-ui",
     "tessera-ui-failed",
+    "tessera-local-engine",
+    "tessera-local-engine-failed",
     "handoff-only",
   ]),
   status: z.enum([
@@ -1101,6 +1222,25 @@ const StressBaselineSchema = z.object({
     "partial",
   ]),
   statusExplanation: z.string().default(""),
+  simulation: z.object({
+    requested: z.boolean(),
+    status: z.enum([
+      "not-requested",
+      "complete",
+      "partial",
+      "failed",
+    ]),
+    requestedBackend: z
+      .enum(["auto", "local-engine", "website"])
+      .optional(),
+    selectedBackend: z
+      .enum(["local-engine", "website"])
+      .optional(),
+    providerIdentity: SimulationProviderIdentitySchema.optional(),
+    fallback: SimulationFallbackSchema.nullable().optional(),
+    engine: z.enum(["none", "tessera-ui", "tessera-engine"]),
+    trustedMatrices: z.number().int().nonnegative(),
+  }).optional(),
   integrity: z.object({
     status: z.enum(["verified", "inconclusive", "not-evaluated"]),
     issues: z.array(z.object({
@@ -2167,6 +2307,7 @@ function newManifest(
   configuration: TesseraStressConfiguration,
   outputDirectory: string,
   simulationRequested: boolean,
+  simulationBackend: TesseraSimulationBackend,
   profilePolicy: ProfilePolicyV1 | null,
   warnings: string[] = [],
   runId = crypto.randomUUID(),
@@ -2174,7 +2315,7 @@ function newManifest(
 ): TesseraStressManifest {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     reportKind: "tessera-stress-manifest",
     runId,
     createdAt: now,
@@ -2187,6 +2328,9 @@ function newManifest(
     portfolio,
     outputDirectory: path.resolve(outputDirectory),
     simulationRequested,
+    simulationBackend,
+    selectedSimulationBackend:
+      selectedSimulationBackend(simulationBackend),
     profilePolicy,
     profilePolicyHash:
       profilePolicy === null ? null : profilePolicyHash(profilePolicy),
@@ -2354,6 +2498,30 @@ async function readManifest(
     );
   }
   const data = parsed.data;
+  if (
+    data.schemaVersion === 5 &&
+    (
+      data.simulationBackend === undefined ||
+      data.selectedSimulationBackend === undefined
+    )
+  ) {
+    throw new Error(
+      "The v5 resume manifest must freeze both simulationBackend and selectedSimulationBackend.",
+    );
+  }
+  const migratedSimulationBackend =
+    data.simulationBackend ?? "website";
+  const migratedSelectedSimulationBackend =
+    data.selectedSimulationBackend ??
+    selectedSimulationBackend(migratedSimulationBackend);
+  if (
+    migratedSelectedSimulationBackend !==
+    selectedSimulationBackend(migratedSimulationBackend)
+  ) {
+    throw new Error(
+      "The resume manifest's selected simulation provider does not match its frozen backend request.",
+    );
+  }
   const normalizedPortfolio = normalizePortfolioCoverage(
     data.portfolio as unknown as TesseraStressPortfolio,
   );
@@ -2428,7 +2596,10 @@ async function readManifest(
     );
   const manifest = {
     ...data,
-    schemaVersion: 4,
+    schemaVersion: 5,
+    simulationBackend: migratedSimulationBackend,
+    selectedSimulationBackend:
+      migratedSelectedSimulationBackend,
     configuration: {
       ...data.configuration,
       profilePolicyHash:
@@ -2469,8 +2640,8 @@ async function readManifest(
 }
 
 /**
- * Verify a v1/v2/v3/v4 stress manifest and rewrite it in the current portable
- * v4 format. Durable jobs use this only after copying the complete run bundle
+ * Verify a v1/v2/v3/v4/v5 stress manifest and rewrite it in the current portable
+ * v5 format. Durable jobs use this only after copying the complete run bundle
  * into their own isolated directory.
  */
 export async function verifyAndMigrateTesseraStressManifest(
@@ -2806,6 +2977,7 @@ type StoredStageExpectation = {
   metrics: TesseraMetric[];
   mode: "quick" | "full";
   simulationRequested: boolean;
+  simulationBackend: TesseraSimulationProvider;
   includeChangeCandidates: boolean;
   opponentEnrichedRoszPath?: string;
 };
@@ -2869,6 +3041,22 @@ function completeScenarioValidationError(
     ) {
       return `scenario ${key} does not match the requested phase, direction, metrics, opponent, or completion state`;
     }
+    const metricRuns = scenario.metricRuns ?? [];
+    if (
+      expected.simulationBackend === "local-engine" &&
+      (
+        metricRuns.length !== scenario.metrics.length ||
+        metricRuns.some(
+          (metricRun) =>
+            metricRun.seed === undefined ||
+            metricRun.executionSha256 === undefined ||
+            metricRun.projectionSha256 === undefined ||
+            metricRun.matrixSha256 === undefined,
+        )
+      )
+    ) {
+      return `scenario ${key} does not retain complete deterministic local-engine execution provenance`;
+    }
     actualKeys.add(key);
     const attackers =
       scenario.direction === "player-to-opponent"
@@ -2921,10 +3109,20 @@ function combinedStageValidationError(
   includeChangeCandidates: boolean,
 ): string | null {
   const configuration = report.configuration;
+  const simulationBackend =
+    report.simulation.selectedBackend ?? "website";
+  const expectedSource =
+    simulationBackend === "local-engine"
+      ? "tessera-local-engine"
+      : "tessera-ui";
   if (
-    report.source !== "tessera-ui" ||
+    report.source !== expectedSource ||
     report.status !== "complete" ||
     !report.simulation.requested ||
+    (
+      report.simulation.providerIdentity !== undefined &&
+      report.simulation.providerIdentity.provider !== simulationBackend
+    ) ||
     !configuration ||
     configuration.analysisMode !== mode ||
     !sameStringSet(configuration.phases, ["shooting", "fight"]) ||
@@ -2987,6 +3185,8 @@ function combinedStageValidationError(
         metrics,
         mode,
         simulationRequested: true,
+        simulationBackend:
+          report.simulation.selectedBackend ?? "website",
         includeChangeCandidates,
       },
     );
@@ -3204,8 +3404,17 @@ async function readMatchupReport(
     expected.simulationRequested && report.status !== "complete"
       ? "simulation status"
       : null,
-    report.status === "complete" && report.source !== "tessera-ui"
+    report.status === "complete" &&
+    report.source !==
+      (expected.simulationBackend === "local-engine"
+        ? "tessera-local-engine"
+        : "tessera-ui")
       ? "simulation source"
+      : null,
+    expected.simulationRequested &&
+    (report.simulation.selectedBackend ?? "website") !==
+      expected.simulationBackend
+      ? "simulation provider"
       : null,
   ].filter((value): value is string => value !== null);
   if (mismatches.length > 0) {
@@ -3264,6 +3473,56 @@ function combineMatchupReports(
   const matrices = values.flatMap(
     (report) => report.simulation.matrices,
   );
+  const requestedBackends = new Set(
+    values.map(
+      (report) => report.simulation.requestedBackend ?? "website",
+    ),
+  );
+  const selectedBackends = new Set(
+    values.map(
+      (report) => report.simulation.selectedBackend ?? "website",
+    ),
+  );
+  const providerIdentities = new Map<
+    string,
+    TesseraSimulationProviderIdentity
+  >();
+  for (const report of values) {
+    const identity =
+      report.simulation.providerIdentity ??
+      (report.tesseraUiIdentity
+        ? {
+            schemaVersion: 1 as const,
+            provider: "website" as const,
+            engine: "tessera-ui" as const,
+            uiIdentity: report.tesseraUiIdentity,
+            adapterVersion: "website-browser-v1",
+          }
+        : null);
+    if (identity) providerIdentities.set(canonicalJson(identity), identity);
+  }
+  const requestedBackend =
+    [...requestedBackends][0] as TesseraSimulationBackend | undefined;
+  const selectedBackend =
+    [...selectedBackends][0] as TesseraSimulationProvider | undefined;
+  const providerIdentity = [...providerIdentities.values()][0];
+  const providerConsistent =
+    requestedBackends.size <= 1 &&
+    selectedBackends.size <= 1 &&
+    providerIdentities.size <= 1 &&
+    (
+      providerIdentity === undefined ||
+      providerIdentity.provider === selectedBackend
+    ) &&
+    (
+      selectedBackend !== "local-engine" ||
+      providerIdentity?.provider === "local-engine"
+    );
+  const analyticalClaimsAllowed =
+    simulationProviderAllowsAnalyticalClaims(
+      selectedBackend,
+      providerIdentity,
+    );
   const legacyProjections = values.flatMap((report) =>
     report.simulation.legacyProjection
       ? [report.simulation.legacyProjection]
@@ -3335,8 +3594,19 @@ function combineMatchupReports(
         ),
     ).values(),
   ];
+  if (!providerConsistent) {
+    failures.push({
+      stage: "simulation",
+      code: "TESSERA_SIMULATION_PROVIDER_DRIFT",
+      message:
+        "The stored stage reports do not share one frozen simulation provider identity.",
+      opponentName: null,
+      retryable: false,
+    });
+  }
   const complete =
     values.length === expectedCount &&
+    providerConsistent &&
     values.every((report) =>
       simulationRequested
         ? report.status === "complete"
@@ -3349,8 +3619,12 @@ function combineMatchupReports(
     generatedAt: new Date().toISOString(),
     source: simulationRequested
       ? matrices.length > 0
-        ? "tessera-ui"
-        : "tessera-ui-failed"
+        ? selectedBackend === "local-engine"
+          ? "tessera-local-engine"
+          : "tessera-ui"
+        : selectedBackend === "local-engine"
+          ? "tessera-local-engine-failed"
+          : "tessera-ui-failed"
       : "prepare-only",
     status: complete
       ? simulationRequested
@@ -3427,7 +3701,14 @@ function combineMatchupReports(
           : matrices.length > 0
             ? "partial"
             : "failed",
-      engine: "tessera-ui",
+      requestedBackend,
+      selectedBackend,
+      providerIdentity,
+      fallback: null,
+      engine:
+        selectedBackend === "local-engine"
+          ? "tessera-engine"
+          : "tessera-ui",
       settings: Object.assign(
         {},
         ...values.map((report) => report.simulation.settings),
@@ -3436,32 +3717,49 @@ function combineMatchupReports(
       matrices,
       scenarios,
     },
-    strengths: unique(values.flatMap((report) => report.strengths)),
-    weaknesses: unique(values.flatMap((report) => report.weaknesses)),
-    suggestions: unique(values.flatMap((report) => report.suggestions)),
-    findings: [
-      ...new Map(
-        values
-          .flatMap((report) => report.findings ?? [])
-          .map((finding) => [finding.findingId, finding] as const),
-      ).values(),
-    ],
-    changeCandidates: [
-      ...new Map(
-        values
-          .flatMap((report) => report.changeCandidates ?? [])
-          .map(
-            (candidate) =>
-              [candidate.candidateId, candidate] as const,
-          ),
-      ).values(),
-    ],
+    strengths: analyticalClaimsAllowed
+      ? unique(values.flatMap((report) => report.strengths))
+      : [],
+    weaknesses: analyticalClaimsAllowed
+      ? unique(values.flatMap((report) => report.weaknesses))
+      : [],
+    suggestions: analyticalClaimsAllowed
+      ? unique(values.flatMap((report) => report.suggestions))
+      : [],
+    findings: analyticalClaimsAllowed
+      ? [
+          ...new Map(
+            values
+              .flatMap((report) => report.findings ?? [])
+              .map(
+                (finding) => [finding.findingId, finding] as const,
+              ),
+          ).values(),
+        ]
+      : [],
+    changeCandidates: analyticalClaimsAllowed
+      ? [
+          ...new Map(
+            values
+              .flatMap((report) => report.changeCandidates ?? [])
+              .map(
+                (candidate) =>
+                  [candidate.candidateId, candidate] as const,
+              ),
+          ).values(),
+        ]
+      : [],
     limitations: unique(
       values.flatMap((report) => report.limitations),
     ),
     warnings: unique([
       ...warnings,
       ...values.flatMap((report) => report.warnings),
+      ...(analyticalClaimsAllowed
+        ? []
+        : [
+            "Local tessera-engine evidence was retained for evaluation, but analytical and coaching claims were suppressed until the provider is both approved and promoted.",
+          ]),
     ]),
     artifacts: [],
   };
@@ -4088,6 +4386,8 @@ async function runStage(
           mode,
           simulationRequested:
             input.manifest.simulationRequested,
+          simulationBackend:
+            input.manifest.selectedSimulationBackend,
           includeChangeCandidates: stage === "screening",
           opponentEnrichedRoszPath:
             input.manifest.preparedOpponents[item.templateId]
@@ -4208,6 +4508,8 @@ async function runStage(
           executionMode: input.manifest.simulationRequested
             ? "simulate"
             : "prepare-only",
+          simulationBackend:
+            input.manifest.selectedSimulationBackend,
           experimental: input.options.experimental,
           analysisMode: mode,
           phases: ["shooting", "fight"],
@@ -5382,6 +5684,7 @@ async function executeStressTest(
   const delivery = createDeliveryCache(input.dependencies);
   if (
     input.manifest.simulationRequested &&
+    input.manifest.selectedSimulationBackend === "website" &&
     !input.dependencies.runBrowser
   ) {
     const readiness = await getTesseraConnectionStatus();
@@ -5791,6 +6094,7 @@ async function executeStressTest(
   }
   if (
     input.manifest.simulationRequested &&
+    input.manifest.selectedSimulationBackend === "website" &&
     !input.dependencies.runBrowser
   ) {
     const readiness = await getTesseraConnectionStatus();
@@ -6011,6 +6315,24 @@ async function executeStressTest(
           TesseraStressTestReport["integrity"]["issues"][number],
     ),
   };
+  const stageProviderIdentities = [
+    screeningReport?.simulation.providerIdentity,
+    deepDiveReport?.simulation.providerIdentity,
+  ].filter(
+    (identity): identity is TesseraSimulationProviderIdentity =>
+      identity !== undefined,
+  );
+  const providerIdentity = stageProviderIdentities[0];
+  const providerIdentityDrift = stageProviderIdentities.some(
+    (identity) =>
+      providerIdentity !== undefined &&
+      canonicalJson(identity) !== canonicalJson(providerIdentity),
+  );
+  const simulationProviderClaimsAllowed =
+    simulationProviderAllowsAnalyticalClaims(
+      input.manifest.selectedSimulationBackend,
+      providerIdentity,
+    );
 
   const mission = analyzeMissionReadiness(input.playerRoster);
   if (!mission.ok || !mission.data) {
@@ -6032,14 +6354,18 @@ async function executeStressTest(
   );
   const analyticalClaimsAllowed =
     input.manifest.simulationRequested &&
+    simulationProviderClaimsAllowed &&
+    !providerIdentityDrift &&
     allScreeningStagesComplete &&
     integrity.status === "verified" &&
     robustness.confidence !== "insufficient";
   const findings = analyticalClaimsAllowed
     ? candidateFindings
-    : candidateFindings.filter(
-        (finding) => finding.kind === "insufficient-confidence",
-      );
+    : simulationProviderClaimsAllowed
+      ? candidateFindings.filter(
+          (finding) => finding.kind === "insufficient-confidence",
+        )
+      : [];
   const changeCandidates = analyticalClaimsAllowed
     ? await aggregateChangeCandidates(
         input.playerRoster,
@@ -6061,6 +6387,11 @@ async function executeStressTest(
       ? []
       : [
           "Substantive findings and roster-change candidates were suppressed because the complete screening evidence did not pass every confidence and integrity gate.",
+        ]),
+    ...(simulationProviderClaimsAllowed
+      ? []
+      : [
+          "Local tessera-engine evidence was retained for evaluation, but analytical and coaching claims were suppressed until the provider is both approved and promoted.",
         ]),
     ...input.portfolio.items.flatMap((item) =>
       item.warnings.map((warning) => warning.message),
@@ -6100,6 +6431,16 @@ async function executeStressTest(
     screeningReport,
     deepDiveReport,
   ]);
+  if (providerIdentityDrift) {
+    failures.push({
+      stage: "report",
+      code: "TESSERA_SIMULATION_PROVIDER_DRIFT",
+      message:
+        "Screening and deep-dive evidence do not share one simulation-provider identity.",
+      opponentName: null,
+      retryable: false,
+    });
+  }
   if (
     input.manifest.simulationRequested &&
     status === "failed" &&
@@ -6121,13 +6462,15 @@ async function executeStressTest(
     generatedAt: new Date().toISOString(),
     runtime: getRuntimeProvenance(),
     tesseraUiIdentity:
-      [
-        screeningReport?.tesseraUiIdentity,
-        deepDiveReport?.tesseraUiIdentity,
-      ]
-        .filter((identity): identity is string => Boolean(identity))
-        .sort()
-        .join("|") || null,
+      input.manifest.selectedSimulationBackend === "website"
+        ? [
+            screeningReport?.tesseraUiIdentity,
+            deepDiveReport?.tesseraUiIdentity,
+          ]
+            .filter((identity): identity is string => Boolean(identity))
+            .sort()
+            .join("|") || null
+        : null,
     connectorEvents: [
       ...(screeningReport?.connectorEvents ?? []),
       ...(deepDiveReport?.connectorEvents ?? []),
@@ -6135,8 +6478,12 @@ async function executeStressTest(
     source: !input.manifest.simulationRequested
       ? "prepare-only"
       : trustedMatrices > 0
-        ? "tessera-ui"
-        : "tessera-ui-failed",
+        ? input.manifest.selectedSimulationBackend === "local-engine"
+          ? "tessera-local-engine"
+          : "tessera-ui"
+        : input.manifest.selectedSimulationBackend === "local-engine"
+          ? "tessera-local-engine-failed"
+          : "tessera-ui-failed",
     status,
     statusExplanation: stressStatusExplanation(
       status,
@@ -6173,8 +6520,14 @@ async function executeStressTest(
           : status === "inconclusive"
             ? "partial"
             : "failed",
+      requestedBackend: input.manifest.simulationBackend,
+      selectedBackend: input.manifest.selectedSimulationBackend,
+      providerIdentity,
+      fallback: null,
       engine: input.manifest.simulationRequested
-        ? "tessera-ui"
+        ? input.manifest.selectedSimulationBackend === "local-engine"
+          ? "tessera-engine"
+          : "tessera-ui"
         : "none",
       trustedMatrices,
     },
@@ -6526,6 +6879,7 @@ export async function runRosterStressTest(
       : null,
   );
   let simulationRequested = stressSimulationRequested(options);
+  let simulationBackend = requestedSimulationBackend(options);
   const prospectiveRunId = crypto.randomUUID();
   const requestedOutput =
     options.outputDirectory ??
@@ -6605,6 +6959,13 @@ export async function runRosterStressTest(
         ...options,
         catalogueDriftMode:
           manifest.configuration.catalogueDriftMode,
+      };
+    }
+    if (options.simulationBackend === undefined) {
+      simulationBackend = manifest.simulationBackend;
+      options = {
+        ...options,
+        simulationBackend,
       };
     }
     resumed = !restarting;
@@ -6712,6 +7073,9 @@ export async function runRosterStressTest(
       manifest.opponentFactionId !== opponent.factionId ||
       manifest.simulationRequested !==
         simulationRequested ||
+      manifest.simulationBackend !== simulationBackend ||
+      manifest.selectedSimulationBackend !==
+        selectedSimulationBackend(simulationBackend) ||
       (
         !configurationMatches(manifest.configuration, configuration) &&
         !legacyConfigurationMatches &&
@@ -6720,7 +7084,7 @@ export async function runRosterStressTest(
     ) {
       return failure(
         "TESSERA_STRESS_RESUME_MISMATCH",
-        "The resume manifest does not match this player roster, opponent faction, suite, analysis strategy, or catalogue-drift policy.",
+        "The resume manifest does not match this player roster, opponent faction, suite, analysis strategy, simulation provider, or catalogue-drift policy.",
         validation.warnings,
       );
     }
@@ -7023,6 +7387,7 @@ export async function runRosterStressTest(
         sourceManifest.configuration,
         outputDirectory,
         sourceManifest.simulationRequested,
+        sourceManifest.simulationBackend,
         sourceManifest.profilePolicy,
         unique([
           ...sourceManifest.warnings,
@@ -7240,6 +7605,7 @@ export async function runRosterStressTest(
       configuration,
       outputDirectory,
       simulationRequested,
+      simulationBackend,
       requestedProfilePolicy,
       initialWarnings,
       prospectiveRunId,
@@ -7874,8 +8240,20 @@ export async function compareRosterStressRevision(
       deepDiveProxyRuns,
       deepDiveItems,
     );
+  const baselineSelectedBackend =
+    baseline.simulation?.selectedBackend ?? "website";
+  const baselineExpectedSource =
+    baselineSelectedBackend === "local-engine"
+      ? "tessera-local-engine"
+      : "tessera-ui";
+  const baselineProviderClaimsAllowed =
+    simulationProviderAllowsAnalyticalClaims(
+      baselineSelectedBackend,
+      baseline.simulation?.providerIdentity,
+    );
   if (
-    baseline.source !== "tessera-ui" ||
+    baseline.source !== baselineExpectedSource ||
+    !baselineProviderClaimsAllowed ||
     !["complete", "degraded"].includes(baseline.status) ||
     usableSamples < requiredSamples ||
     representedPostures.size !== 3 ||
@@ -8073,6 +8451,7 @@ export async function compareRosterStressRevision(
     configuration,
     outputDirectory,
     true,
+    baselineManifest.simulationBackend,
     baselineManifest.profilePolicy,
     [],
     revisionRunId,
@@ -8189,8 +8568,18 @@ export async function compareRosterStressRevision(
     manifest,
     baseline.portfolio,
   ).filter((entry) => !entry.retryable);
+  const revisedSelectedBackend =
+    revised.simulation?.selectedBackend ?? "website";
+  const revisedExpectedSource =
+    revisedSelectedBackend === "local-engine"
+      ? "tessera-local-engine"
+      : "tessera-ui";
   if (
-    revised.source !== "tessera-ui" ||
+    revised.source !== revisedExpectedSource ||
+    !simulationProviderAllowsAnalyticalClaims(
+      revisedSelectedBackend,
+      revised.simulation?.providerIdentity,
+    ) ||
     !["complete", "degraded"].includes(revised.status) ||
     revised.screeningReport?.status !== "complete" ||
     revised.deepDiveReport?.status !== "complete" ||

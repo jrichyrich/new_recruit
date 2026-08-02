@@ -250,6 +250,8 @@ export async function buildAndStressRosterAgainstFaction(
     {
       ...options,
       outputDirectory,
+      simulationBackend:
+        input.simulationBackend ?? options.simulationBackend,
       suite,
       analysisStrategy: input.analysisStrategy,
       profilePolicyPath: input.profilePolicyPath,

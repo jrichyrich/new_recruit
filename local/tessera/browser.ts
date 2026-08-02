@@ -120,6 +120,8 @@ export type TesseraScenarioCell = TesseraMatrixCell & {
   attackerOccurrence: number;
   targetOccurrence: number;
   metricValue: number;
+  seed?: number;
+  executionSha256?: string;
 };
 
 export type TesseraScenario = {
@@ -129,6 +131,9 @@ export type TesseraScenario = {
   metric: TesseraMetric;
   settings: Record<string, string>;
   iterations: number | null;
+  seed?: number;
+  executionSha256?: string;
+  projectionSha256?: string;
   cells: TesseraScenarioCell[];
   matrixSha256?: string;
   integrity?: {

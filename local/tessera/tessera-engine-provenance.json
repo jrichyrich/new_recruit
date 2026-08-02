@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "rosterpilot-tessera-engine-candidate",
+  "status": "evaluation-only",
+  "promotionGate": "written-license-grant-required",
+  "upstream": {
+    "repository": "https://github.com/Tessera-cmd/tessera-engine",
+    "commit": "16ab4365bbd97ef592b061c5a9babe5e44f00e80",
+    "tree": "8842756e6b805018f7c186b34521e3931e79e4d8",
+    "codeloadUrl": "https://codeload.github.com/Tessera-cmd/tessera-engine/tar.gz/16ab4365bbd97ef592b061c5a9babe5e44f00e80",
+    "archiveSha256": "a1288b50b5d100ea07428e15b6df6cf3c95d6ee379c8c0f5fc7039ca53438da9",
+    "archiveIntegrity": "sha512-okYYCvioiSMmNCCaZCTpA9ziuXIg++JusVvxm7bm23y76vMy0BYaJqdA4A/pFZL1y+6wBas5kMIrJqAvDTDYrA=="
+  },
+  "package": {
+    "name": "tessera-engine",
+    "version": "1.0.0",
+    "type": "module",
+    "entrypoint": "src/index.js",
+    "license": "AGPL-3.0-only",
+    "repository": "git+https://github.com/Tessera-cmd/tessera-engine.git",
+    "homepage": "https://playtessera.gg"
+  },
+  "integration": {
+    "dependencySection": "devDependencies",
+    "allowedUsage": "explicit-local-evaluation-and-contract-tests-only",
+    "explicitLocalRuntimeEnabled": true,
+    "productionRuntimeEnabled": false
+  }
+}

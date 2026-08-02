@@ -18,8 +18,8 @@ capabilities:
 | Printable HTML, text, roster JSON, New Recruit-shaped JSON | Every validated roster | RosterPilot serializers |
 | `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
 | New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
-| Tessera handoff and simulated matchup matrix | Verified New Recruit-enriched rosters | Local isolated browser adapter; `experimental` is only a deprecated CLI alias for strict `executionMode: "simulate"` |
-| Known-faction stress testing | A validated player roster plus deterministic legal, exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, local New Recruit enrichment, and local Tessera adapter |
+| Tessera handoff and simulated matchup matrix | Verified New Recruit-enriched rosters | Provider router over the retained isolated website adapter and an explicit evaluation-only pinned local engine; `experimental` is only a deprecated CLI alias for strict `executionMode: "simulate"` |
+| Known-faction stress testing | A validated player roster plus deterministic legal, exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, local New Recruit enrichment, and the selected Tessera provider |
 | Exact-aware roster construction | A validated canonical opponent roster plus player build constraints and optional owned-model quantities | Shared roster engine, exact opponent threat profile, deterministic repair, and exact Tessera adapter |
 | Durable Tessera jobs | Exact, stress, build-and-stress, and build-and-analyze requests on local CLI or stdio MCP | Persistent job document, local-agent-owned detached worker, retained result bundle, and stress manifest where applicable |
 | Unified roster workflow | Fail-closed intent and faction resolution, deterministic build/validation, calibrated coaching, artifact-safe handoff, and explicit delivery authority | Shared `lib/rosterpilot/` orchestration under one transport-owned data-bundle lease |
@@ -177,18 +177,57 @@ changed scopes and never changes selections automatically.
 Tessera is not a rules authority or roster validator. RosterPilot imports and
 verifies the canonical roster in New Recruit, downloads New Recruit's
 profile-rich `.rosz`, and treats that archive as the stable handoff contract.
-The optional Tessera adapter runs only through local stdio MCP or CLI in a
-temporary Chrome profile. It does not call private APIs or read browser
-storage. The orchestrator never handles premium keys: only the isolated,
-session-scoped Tessera worker may retrieve the dedicated Keychain item. The key
-stays only in that worker's memory, and the worker enters it only after
-verifying the exact Tessera origin and locating its visible Licence key field.
-Before any Tessera browser or licence-key work, both the per-user agent and the
-isolated Tessera worker reopen the player and opponent archives. Each archive
-must identify New Recruit as its generator, contain units and embedded
-profiles, and give every top-level unit at least one Unit profile and one
-Melee or Ranged weapon profile. This is a profile-readiness boundary, not a
-claim that embedded characteristic values equal another rules source.
+Simulation is selected only through the local CLI or stdio MCP provider router.
+The retained website provider uses the isolated, session-scoped Chrome worker;
+the candidate local provider compiles the same verified enriched archives into
+the pinned engine's public input contract. Neither provider changes roster
+legality or the operation's immutable data-bundle lease.
+
+The website adapter does not call private APIs or read browser storage. The
+orchestrator never handles premium keys: only its isolated Tessera worker may
+retrieve the dedicated Keychain item. The key stays only in that worker's
+memory, and the worker enters it only after verifying the exact Tessera origin
+and locating its visible Licence key field. Before website browser or
+licence-key work, both the per-user agent and the isolated worker reopen the
+player and opponent archives. The local compiler independently revalidates its
+input before execution. Every archive must identify New Recruit as its
+generator, contain units and embedded profiles, and give every top-level unit
+at least one Unit profile and one Melee or Ranged weapon profile. This is a
+profile-readiness boundary, not a claim that embedded characteristic values
+equal another rules source.
+
+#### Simulation-provider selection and promotion
+
+The request freezes `simulationBackend` as `auto`, `website`, or
+`local-engine`, and reports record both the requested and selected provider
+with its exact identity.
+
+- `website` selects only the existing browser adapter.
+- `local-engine` selects only the local adapter and fails closed if either
+  archive is outside its declared capability manifest, including ambiguous
+  phase weapon choices and selected combat rules the adapter cannot prove.
+- `auto` selects the local adapter only when that exact identity is marked
+  promoted, available, and preflight-complete. Otherwise it selects the
+  website and records why. If a promoted local execution starts and then
+  fails, the router discards all local evidence before one complete website
+  rerun and records an atomic fallback receipt.
+
+The reviewed dependency is a development-only GitHub codeload archive pinned
+by commit, tree, SHA-256, lockfile integrity, package entry point, and licence
+metadata. `scripts/verify-tessera-engine-provenance.mjs` checks those fields and
+a fixed-seed public-API smoke result. The tracked provider identity remains
+`candidate` and `evaluation-only`; no runtime path can infer promotion merely
+from package availability.
+
+Promotion requires an explicit written-licence decision and complete parity
+evidence for identical normalized inputs, profile policy, data bundle, and
+scenario contract. The parity comparator checks every cell with
+metric-specific Monte Carlo tolerances, requires at least 98% within tolerance
+for each metric, rejects any cell beyond twice its tolerance, and compares
+winner classifications outside uncertainty boundaries. Unit tests exercise
+this policy but are not live promotion evidence. Until promotion, `auto`
+continues to use the website and local-engine evidence is ineligible for
+substantive coaching, roster-change candidates, or optimizer decisions.
 
 Opponent scope selects one of three non-overlapping routes:
 
@@ -216,21 +255,22 @@ the warning. Candidate revisions remain authorization-gated suggestions.
 
 An exact-list full analysis captures 16 raw scenarios per opponent: two phases,
 four metrics, and both directions. Quick mode captures Shooting wipe
-probability in both directions. The adapter confirms each visible phase and
-metric selection, records the iteration count and settings, maps repeated unit
-names to stable roster instances, and consolidates metric matrices into
-phase/direction scenarios. Each raw table is fingerprinted from its headers,
-dimensions, and values for provenance. A control transition is accepted only
-after the requested exclusive state is visible, the table node is replaced or
-its matrix subtree mutates, and the resulting table is stable for three reads.
-The numeric fingerprint may remain equal across controls or distinct proxy
-payloads; equality alone is not evidence of stale UI. A control transition
-without a matrix refresh is stale and remains available only as diagnostic
-evidence. Duplicate simulation payloads are rejected separately before any
-browser work.
+probability in both directions. Both providers record settings and iteration
+counts, map repeated unit names to stable roster instances, and consolidate
+metric matrices into phase/direction scenarios. Local results additionally
+bind deterministic seed, execution, and projection hashes. The website adapter
+confirms each visible phase and metric selection, and fingerprints each raw
+table from its headers, dimensions, and values for provenance. A website
+control transition is accepted only after the requested exclusive state is
+visible, the table node is replaced or its matrix subtree mutates, and the
+resulting table is stable for three reads. The numeric fingerprint may remain
+equal across controls or distinct proxy payloads; equality alone is not
+evidence of stale UI. A control transition without a matrix refresh is stale
+and remains available only as diagnostic evidence. Duplicate simulation
+payloads are rejected separately before provider execution.
 
 A known-faction stress test freezes a deterministic proxy portfolio before any
-browser work. `core-3` is posture-first: it requires distinct
+provider execution. `core-3` is posture-first: it requires distinct
 balanced-control, ranged-pressure, and assault-pressure proxies. Their
 composition labels describe the generated rosters and help maximize feasible
 diversity, but repeated labels do not reduce core coverage. `diverse-9` crosses
@@ -282,23 +322,25 @@ and freezing the stress, central, and contrast representatives for the other
 three metrics. Deep dives therefore never race a changing screening set. A
 complete `diverse-9` staged run captures 72 raw scenarios. `core-3` defaults to
 `full-all`: every ready proxy is necessarily a representative, so one full
-browser pass per proxy preserves the same required 48-scenario evidence while
-avoiding a redundant second browser setup pass. An explicitly requested staged
-core run remains supported for recovery testing. `full-all` applies all four
-metrics to every proxy, producing 144 raw scenarios for a complete diverse
+provider pass per proxy preserves the same required 48-scenario evidence while
+avoiding a redundant second provider setup pass. An explicitly requested
+staged core run remains supported for recovery testing. `full-all` applies all
+four metrics to every proxy, producing 144 raw scenarios for a complete diverse
 suite.
 Tessera simulation requires `executionMode: "simulate"`; prepare-only returns
 verified handoffs with `status: prepared` and no inferred cells. The legacy
 `experimental` option is a deprecated compatibility alias.
 
-Stress report schema v3 and manifest schema v3 record the player fingerprint,
+Stress report schema v3 and manifest schema v5 record the player fingerprint,
 `bundleId`, scoped semantic roster identities, profile-policy hash, opponent
-faction, the complete frozen portfolio and its canonical SHA-256, configuration,
+faction, the complete frozen portfolio and its canonical SHA-256, requested
+and selected simulation backend, configuration,
 prepared-artifact hashes, representative selection, and every stage's status,
 attempt count and history, timestamps, structured error, retryability, next
 action, report path, and content hash. Resume revalidates identity, requested
-cells, exact profile policy, and hashes. V1 and V2 manifests are migrated in
-memory and rewritten as v3 on resume. V1 paired baselines without exact profile
+cells, provider selection, exact profile policy, and hashes. V1 through V4
+manifests are migrated in memory and rewritten as v5 on resume. V1 paired
+baselines without exact profile
 provenance are rejected. Transient entries receive at most three automatic
 attempts with one- and three-second backoff and five lifetime attempts through
 explicit resume; terminal errors require an explicit forced retry within that
@@ -387,7 +429,7 @@ closed unless `allowPointMismatch` is explicit; an overridden report is
 classified as unmatched and cannot produce roster-change candidates.
 Out-of-tolerance generated faction proxies are omitted.
 
-Schema-v3 exact reports retain visible Tessera settings, import warnings, structured
+Schema-v3 exact reports retain provider-recorded settings, import warnings, structured
 findings with cell-level evidence, and up to three validated single-operation
 change candidates for matched comparisons. Candidate qualification requires a
 legal and New Recruit-exportable result, at least 98% points utilization, no
@@ -401,7 +443,7 @@ attacking unit's cells are ambiguous.
 After explicit approval, `compare_roster_revision` validates a same-faction
 revision, freezes and verifies the baseline opponent artifacts, source
 identities, points contract, profile policy, scenarios, iterations, settings,
-and Tessera UI identity, and records improved, worsened, unchanged, or
+selected backend, and provider identity, and records improved, worsened, unchanged, or
 ambiguous cell deltas. Its roster-level conclusion uses trusted aggregates and
 is `improved` only when at least one applicable aggregate materially improves
 and none worsen; otherwise it is `worsened`, `mixed`, or `unchanged`.
@@ -437,10 +479,10 @@ paired conclusion uses the screening half-wipe robustness deltas; deep-dive
 wipe, kill, and damage results remain supporting evidence. The conclusion is
 suppressed if the mission-readiness guardrail detects a regression.
 
-If UI automation is disabled or an individual Tessera run fails, verified
-enriched artifacts remain usable. A new exact report is `failed` when no
-trusted matrices exist and `inconclusive` when captured evidence cannot support
-analytical confidence; stress reports use the same distinction. Missing
+If the selected provider is unavailable or an individual simulation fails,
+verified enriched artifacts remain usable. A new exact report is `failed` when
+no trusted matrices exist and `inconclusive` when captured evidence cannot
+support analytical confidence; stress reports use the same distinction. Missing
 scenarios and warnings stay visible. Reports describe modeled damage efficiency
 and unit threats, never a whole-game win probability. Hosted MCP, REST,
 OpenAPI, and the public website do not register exact-matchup or stress-test
@@ -460,8 +502,8 @@ the trusted-cache loader and is accepted downstream only when the current
 identity matches or the frozen request explicitly allows the narrow
 forward-revision diagnostic.
 Remote list URLs are retained in a local run inventory and are never deleted
-automatically. A stress run also
-reuses one isolated, session-scoped Tessera worker across its proxy requests.
+automatically. A website-backed stress run also reuses one isolated,
+session-scoped Tessera worker across its proxy requests.
 That worker owns one live browser context and keeps the premium key only in
 memory. Explicit session close or seven days of inactivity removes its
 user-only browser profile. Local-agent shutdown closes the worker and context
@@ -622,6 +664,8 @@ flowchart LR
         agent["Per-user RosterPilot LaunchAgent"]
         worker["Isolated New Recruit worker"]
         tesseraCompanion["Tessera orchestrator"]
+        tesseraRouter["Tessera provider router"]
+        localEngine["Pinned local engine candidate"]
         tesseraWorker["Session-scoped isolated Tessera worker"]
         broker["Native Swift Keychain broker"]
         keychain[("macOS login Keychain")]
@@ -663,7 +707,9 @@ flowchart LR
     companion --> validator
     companion --> exporter
     companion -->|"roster bytes over 0600 socket or 0700 file queue"| agent
-    tesseraCompanion -->|"enriched roster bytes and scenario settings"| agent
+    tesseraCompanion -->|"frozen provider request"| tesseraRouter
+    tesseraRouter -->|"website request"| agent
+    tesseraRouter -->|"explicit candidate evaluation or promoted auto"| localEngine
     agent -->|"New Recruit job"| worker
     agent -->|"Tessera job"| tesseraWorker
     worker --> broker
@@ -675,6 +721,7 @@ flowchart LR
     tesseraWorker --> tessera
     agent -->|"sanitized artifact bytes"| companion
     agent -->|"sanitized scenario matrices"| tesseraCompanion
+    localEngine -->|"identity-bound scenario matrices"| tesseraCompanion
     companion --> files
     tesseraCompanion --> reports
 
@@ -874,12 +921,15 @@ Security invariants:
 | Companion orchestrator | Validation, collisions, local-agent requests, and artifact publication | `local/new-recruit/companion.ts` |
 | Browser adapter | Authentication, import, verification, Pretty export | `local/new-recruit/browser.ts` |
 | Tessera orchestrator | Exact matchups, matched-points policy, scenario consolidation, findings, candidates, and exact-list revision deltas | `local/tessera/companion.ts` |
+| Tessera provider router | Freeze explicit/automatic provider selection, enforce promotion and preflight gates, and make any automatic website fallback atomic | `local/tessera/simulation-provider.ts` |
+| Local Tessera evaluation adapter | Compile verified enriched ROSZ profiles into the pinned public engine contract and emit deterministic scenario evidence | `local/tessera/local-engine.ts`, `local/tessera/tessera-engine-provenance.json` |
+| Tessera provider parity | Compare identity-bound local and website evidence using completeness, metric tolerance, and winner-classification gates | `local/tessera/provider-parity.ts` |
 | Exact-aware build loop | Validate an exact opponent, build and repair from its threat profile, enforce readiness, and invoke exact analysis | `local/tessera/exact-full-loop.ts`, `lib/rosterpilot/build-and-analyze.ts` |
 | Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
 | Durable Tessera jobs | Persist requests and results; ask the local agent to start workers; inspect, resume, resolve profiles, and cancel background runs | `local/tessera/jobs.ts`, `local/agent/server.ts` |
 | Tessera optimizer coordinator | Freeze a verified baseline and active bundle identity; atomically persist candidate, comparison, Pareto, retention/winner approval, and finalization receipts; reject stale revisions and identity drift | `local/tessera/optimizer.ts`, `local/tessera/optimizer-store.ts` |
 | General-six Tessera optimizer | Freeze one deterministic portfolio and six completed exact baselines; materialize each candidate once; bind six paired revisions by candidate, archetype, and request hash; enforce aggregate no-regression Pareto and separate approvals | `local/tessera/general-optimizer.ts`, `local/tessera/general-optimizer-store.ts` |
-| Tessera UI and reports | Visible simulator control/extraction plus exact-matchup and faction-stress HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts`, `local/tessera/stress-report.ts` |
+| Tessera website UI and reports | Visible website simulator control/extraction plus provider-aware exact-matchup and faction-stress HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts`, `local/tessera/stress-report.ts` |
 | Isolated workers | Hold credentials in memory and return sanitized results; New Recruit is job-scoped and Tessera is session-scoped | `local/new-recruit/worker.ts`, `local/tessera/worker.ts` |
 | Keychain broker | Native secure configuration and restricted credential access | `native/NewRecruitKeychainBroker.swift` |
 | Hosted API | Credential-free REST, browser-engine operations, and remote handoff under server snapshot leases | `app/api/v1/[...path]/route.ts`, `app/hosted-data-bundles.ts` |

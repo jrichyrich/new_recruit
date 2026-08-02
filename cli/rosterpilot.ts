@@ -38,6 +38,7 @@ import {
   type RosterWorkflowResult,
   type RosterWorkflowIntent,
   type TesseraStressAnalysisStrategy,
+  type TesseraSimulationBackend,
   type TesseraStressPortfolioPreview,
   type TesseraStressSuite,
 } from "../lib/rosterpilot/index";
@@ -309,6 +310,23 @@ function shouldStartDurableTesseraRun(
   );
 }
 
+function requestedSimulationBackend(
+  args: Args,
+): TesseraSimulationBackend | undefined {
+  const requested = value(args, "simulation-backend");
+  if (requested === undefined) return undefined;
+  if (
+    requested !== "auto" &&
+    requested !== "local-engine" &&
+    requested !== "website"
+  ) {
+    throw new Error(
+      "--simulation-backend requires auto, local-engine, or website.",
+    );
+  }
+  return requested;
+}
+
 function printStartedTesseraRun(
   job: Awaited<ReturnType<typeof startTesseraRun>>,
 ): void {
@@ -500,6 +518,7 @@ async function startWorkflowTesseraBaselines(
         playerRoster: workflow.roster,
         opponent: { kind: "roster", roster: target.roster },
         options: {
+          simulationBackend: requestedSimulationBackend(args),
           executionMode: "simulate",
           experimental: false,
           analysisMode: "full",
@@ -518,6 +537,7 @@ async function startWorkflowTesseraBaselines(
         options: {
           suite: "diverse-9",
           analysisStrategy: "staged",
+          simulationBackend: requestedSimulationBackend(args),
           executionMode: "simulate",
           experimental: false,
           portfolioPreview: target.portfolioPreview,
@@ -534,6 +554,7 @@ async function startWorkflowTesseraBaselines(
           playerRoster: workflow.roster,
           opponent: { kind: "roster", roster: item.roster },
           options: {
+            simulationBackend: requestedSimulationBackend(args),
             executionMode: "simulate",
             experimental: false,
             analysisMode: "full",
@@ -635,7 +656,7 @@ Usage:
   rosterpilot conflicts [--faction adeptus-custodes] [--blocking true]
   rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective] [--include-legends]
   rosterpilot compare <faction> <faction>
-  rosterpilot workflow --prompt "Build a 1,000 point Custodes army and upload it to New Recruit" [--intent build|prepare-new-recruit|deliver-new-recruit|optimize] [--coaching none|concise|full] [--optimizer-mode guided|recommend-only] [--opponent-faction aeldari | --opponent-roster enemy.json] [--out roster.json] [--portfolio-out general-threat-portfolio.json] [--out-dir exports/new-recruit] [--tessera-out-dir exports/tessera]
+  rosterpilot workflow --prompt "Build a 1,000 point Custodes army and upload it to New Recruit" [--intent build|prepare-new-recruit|deliver-new-recruit|optimize] [--coaching none|concise|full] [--optimizer-mode guided|recommend-only] [--simulation-backend auto|local-engine|website] [--opponent-faction aeldari | --opponent-roster enemy.json] [--out roster.json] [--portfolio-out general-threat-portfolio.json] [--out-dir exports/new-recruit] [--tessera-out-dir exports/tessera]
   rosterpilot build --prompt "Build a fast 1,000 point Aeldari army" [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--out roster.json]
   rosterpilot modify --file roster.json --operation '{"type":"remove","selectionId":"..."}' [--out next.json]
   rosterpilot validate --file roster.json
@@ -655,12 +676,12 @@ Usage:
   rosterpilot tessera configure
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera] [--verified-catalogue-drift-diagnostic]
-  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
-  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
+  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
+  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
-  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
+  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--collection collection.json] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--simulation-backend auto|local-engine|website] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
   rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
   rosterpilot tessera run-resume --job exports/tessera/runs/run-.../tessera-run.json [--restart-from] [--out-dir exports/tessera]
   rosterpilot tessera resolve-profiles --job ... --profile-policy profiles.json
@@ -1517,6 +1538,7 @@ async function main(): Promise<void> {
                 path: path.resolve(opponentRoszFile!),
               },
           options: {
+            simulationBackend: requestedSimulationBackend(args),
             executionMode: executionMode as
               | "prepare-only"
               | "simulate"
@@ -1558,6 +1580,7 @@ async function main(): Promise<void> {
           options: {
             suite,
             analysisStrategy,
+            simulationBackend: requestedSimulationBackend(args),
             executionMode: executionMode as
               | "prepare-only"
               | "simulate"
@@ -1604,6 +1627,7 @@ async function main(): Promise<void> {
               value(args, "required-warlord"),
             suite,
             analysisStrategy,
+            simulationBackend: requestedSimulationBackend(args),
             executionMode: executionMode as
               | "prepare-only"
               | "simulate"
@@ -1662,6 +1686,7 @@ async function main(): Promise<void> {
             excludedUnitIds: list(args, "exclude-unit"),
             requiredWarlordUnitId:
               value(args, "required-warlord"),
+            simulationBackend: requestedSimulationBackend(args),
             executionMode: executionMode as
               | "prepare-only"
               | "simulate"
@@ -1831,11 +1856,13 @@ async function main(): Promise<void> {
                 "allow-readiness-warnings",
               ),
               forceRetry: flag(args, "force-retry"),
+              simulationBackend: requestedSimulationBackend(args),
               executionMode: "simulate",
               experimental: false,
             },
             options: {
               outputDirectory,
+              simulationBackend: requestedSimulationBackend(args),
               executionMode: "simulate",
               experimental: false,
               catalogueDriftMode:
@@ -1895,6 +1922,7 @@ async function main(): Promise<void> {
             "allow-readiness-warnings",
           ),
           forceRetry: flag(args, "force-retry"),
+          simulationBackend: requestedSimulationBackend(args),
           executionMode: executionMode as
             | "prepare-only"
             | "simulate"
@@ -1903,6 +1931,7 @@ async function main(): Promise<void> {
         },
         {
           overwrite: flag(args, "overwrite"),
+          simulationBackend: requestedSimulationBackend(args),
           allowOutsideRoot: flag(args, "allow-outside-root"),
           catalogueDriftMode:
             requestedCatalogueDriftMode(
@@ -1985,6 +2014,7 @@ async function main(): Promise<void> {
         ),
         profilePolicyPath: value(args, "profile-policy"),
         outputDirectory,
+        simulationBackend: requestedSimulationBackend(args),
         executionMode: executionMode as
           | "prepare-only"
           | "simulate"
@@ -2007,6 +2037,7 @@ async function main(): Promise<void> {
             },
             options: {
               outputDirectory,
+              simulationBackend: requestedSimulationBackend(args),
               executionMode: "simulate",
               experimental: false,
               catalogueDriftMode: flag(
@@ -2029,6 +2060,7 @@ async function main(): Promise<void> {
         buildInput,
         {
           outputDirectory,
+          simulationBackend: requestedSimulationBackend(args),
           overwrite: flag(args, "overwrite"),
           allowOutsideRoot: flag(args, "allow-outside-root"),
           catalogueDriftMode: flag(
@@ -2230,6 +2262,7 @@ async function main(): Promise<void> {
                 : undefined,
               profilePolicyPath: value(args, "profile-policy"),
               forceRetry: flag(args, "force-retry"),
+              simulationBackend: requestedSimulationBackend(args),
               outputDirectory,
               executionMode: "simulate",
               experimental: false,
@@ -2269,6 +2302,7 @@ async function main(): Promise<void> {
             : undefined,
           profilePolicyPath: value(args, "profile-policy"),
           forceRetry: flag(args, "force-retry"),
+          simulationBackend: requestedSimulationBackend(args),
           outputDirectory,
           overwrite: flag(args, "overwrite"),
           allowOutsideRoot: flag(args, "allow-outside-root"),
@@ -2411,6 +2445,7 @@ async function main(): Promise<void> {
         outputDirectory,
         overwrite: flag(args, "overwrite"),
         allowOutsideRoot: flag(args, "allow-outside-root"),
+        simulationBackend: requestedSimulationBackend(args),
         executionMode: executionMode as
           | "prepare-only"
           | "simulate"

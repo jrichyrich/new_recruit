@@ -182,6 +182,8 @@ export async function buildAndAnalyzeRosterMatchup(
       ...options,
       outputDirectory:
         input.outputDirectory ?? options.outputDirectory,
+      simulationBackend:
+        input.simulationBackend ?? options.simulationBackend,
       profilePolicyPath:
         input.profilePolicyPath ?? options.profilePolicyPath,
       executionMode,

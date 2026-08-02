@@ -226,6 +226,12 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     ).properties;
     assert.deepEqual(properties.analysisMode.enum, ["quick", "full"]);
     assert.equal(properties.analysisMode.default, "full");
+    assert.deepEqual(properties.simulationBackend.enum, [
+      "auto",
+      "local-engine",
+      "website",
+    ]);
+    assert.equal(properties.simulationBackend.default, undefined);
     assert.deepEqual(properties.phases.items?.enum, ["shooting", "fight"]);
     assert.deepEqual(properties.metrics.items?.enum, [
       "wipe-probability",
@@ -259,6 +265,12 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     assert.equal(stressProperties.analysisStrategy.default, undefined);
     assert.equal(stressProperties.outputDirectory.default, undefined);
     assert.equal(stressProperties.responseDetail.default, "compact");
+    assert.deepEqual(stressProperties.simulationBackend.enum, [
+      "auto",
+      "local-engine",
+      "website",
+    ]);
+    assert.equal(stressProperties.simulationBackend.default, undefined);
     assert.equal(
       stressProperties.verifiedCatalogueDriftDiagnostic.default,
       false,
@@ -274,6 +286,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     assert.deepEqual(analyses[0], {
       outputDirectory: "exports/tessera",
       overwrite: false,
+      simulationBackend: undefined,
       executionMode: undefined,
       fallbackMode: "none",
       profilePolicyPath: undefined,
@@ -293,6 +306,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         opponent: { kind: "rosz", path: "/fixture/opponent.rosz" },
         outputDirectory: "exports/quick",
         overwrite: true,
+        simulationBackend: "local-engine",
         experimental: true,
         analysisMode: "quick",
         phases: ["fight"],
@@ -305,6 +319,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
     assert.deepEqual(analyses[1], {
       outputDirectory: "exports/quick",
       overwrite: true,
+      simulationBackend: "local-engine",
       executionMode: undefined,
       fallbackMode: "none",
       profilePolicyPath: undefined,
@@ -363,6 +378,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         restartManifestPath: undefined,
         profilePolicyPath: undefined,
         forceRetry: false,
+        simulationBackend: undefined,
         executionMode: undefined,
         outputDirectory: undefined,
         overwrite: false,
@@ -382,6 +398,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         restartManifestPath: undefined,
         profilePolicyPath: undefined,
         forceRetry: false,
+        simulationBackend: "website",
         executionMode: undefined,
         outputDirectory: "exports/stress",
         overwrite: true,
@@ -407,6 +424,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         restartManifestPath: undefined,
         profilePolicyPath: undefined,
         forceRetry: false,
+        simulationBackend: "website",
         executionMode: undefined,
         outputDirectory: "exports/stress",
         overwrite: true,

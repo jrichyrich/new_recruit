@@ -26,6 +26,8 @@ import type {
   TesseraMatchupReport,
   TesseraPreparedRoster,
   TesseraRevisionComparisonReport,
+  TesseraSimulationProvider,
+  TesseraSimulationProviderIdentity,
   TesseraStressRunReport,
   TesseraStressRevisionReport,
 } from "../../lib/rosterpilot";
@@ -136,7 +138,19 @@ type TesseraRunAttemptProvenance = {
   artifactSha256s: string[];
   connectorReceiptSha256: string | null;
   tesseraUiIdentity: string | null;
+  /** Concrete provider actually selected for this attempt. */
+  simulationBackend?: TesseraSimulationProvider | null;
+  /** Immutable provider identity returned with this attempt's report. */
+  simulationProviderIdentity?: TesseraSimulationProviderIdentity | null;
   errorCode: string | null;
+};
+
+type TesseraRunSimulationProviderPin = {
+  selectedBackend: TesseraSimulationProvider;
+  providerIdentity: TesseraSimulationProviderIdentity | null;
+  providerIdentitySha256: string | null;
+  tesseraUiIdentity: string | null;
+  sourceAttempt: number;
 };
 
 type TesseraRunRetryBudget = {
@@ -258,6 +272,11 @@ export type TesseraRunJob = {
   restartFrom: TesseraRunRestartReceipt | null;
   retryBudget: TesseraRunRetryBudget;
   attemptHistory: TesseraRunAttemptProvenance[];
+  /**
+   * First concrete provider selected in this simulation stage. Retries are
+   * forced through this provider and must reproduce its exact identity.
+   */
+  simulationProviderPin?: TesseraRunSimulationProviderPin | null;
   profileResolution: TesseraProfileResolutionState | null;
   error: {
     code: string;
@@ -589,6 +608,8 @@ function attemptProvenance(input: {
     artifactSha256s: [],
     connectorReceiptSha256: null,
     tesseraUiIdentity: null,
+    simulationBackend: null,
+    simulationProviderIdentity: null,
     errorCode: null,
   };
 }
@@ -777,9 +798,215 @@ function connectorEventsFromReport(
   return [];
 }
 
+type TesseraReportSimulationProvenance = {
+  simulationBackend: TesseraSimulationProvider | null;
+  simulationProviderIdentity: TesseraSimulationProviderIdentity | null;
+  tesseraUiIdentity: string | null;
+};
+
+function parsedSimulationProviderIdentity(
+  value: unknown,
+): TesseraSimulationProviderIdentity | null {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object") {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_INVALID",
+      "The Tessera result contains a malformed simulation-provider identity.",
+    );
+  }
+  const identity = value as Record<string, unknown>;
+  const commonValid =
+    identity.schemaVersion === 1 &&
+    typeof identity.adapterVersion === "string" &&
+    identity.adapterVersion.length > 0;
+  if (
+    commonValid &&
+    identity.provider === "website" &&
+    identity.engine === "tessera-ui" &&
+    (
+      identity.uiIdentity === null ||
+      typeof identity.uiIdentity === "string"
+    )
+  ) {
+    return value as TesseraSimulationProviderIdentity;
+  }
+  if (
+    commonValid &&
+    identity.provider === "local-engine" &&
+    identity.engine === "tessera-engine" &&
+    identity.repository === "Tessera-cmd/tessera-engine" &&
+    typeof identity.commit === "string" &&
+    /^[0-9a-f]{40,64}$/.test(identity.commit) &&
+    typeof identity.tree === "string" &&
+    /^[0-9a-f]{40,64}$/.test(identity.tree) &&
+    typeof identity.sourceSha256 === "string" &&
+    sha256Pattern.test(identity.sourceSha256) &&
+    typeof identity.compilerVersion === "string" &&
+    identity.compilerVersion.length > 0 &&
+    identity.inputSchemaVersion === 1 &&
+    typeof identity.capabilityManifestSha256 === "string" &&
+    sha256Pattern.test(identity.capabilityManifestSha256) &&
+    (
+      identity.promotion === "candidate" ||
+      identity.promotion === "promoted"
+    ) &&
+    (
+      identity.licenseState === "evaluation-only" ||
+      identity.licenseState === "approved"
+    )
+  ) {
+    return value as TesseraSimulationProviderIdentity;
+  }
+  throw jobError(
+    "TESSERA_PROVIDER_PROVENANCE_INVALID",
+    "The Tessera result contains a malformed simulation-provider identity.",
+  );
+}
+
+function reportSimulationProvenance(
+  report: Record<string, unknown>,
+): TesseraReportSimulationProvenance {
+  const simulation =
+    report.simulation && typeof report.simulation === "object"
+      ? report.simulation as Record<string, unknown>
+      : null;
+  const selected = simulation?.selectedBackend;
+  if (
+    selected !== undefined &&
+    selected !== "local-engine" &&
+    selected !== "website"
+  ) {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_INVALID",
+      "The Tessera result contains an invalid selected simulation backend.",
+    );
+  }
+  const providerIdentity = parsedSimulationProviderIdentity(
+    simulation?.providerIdentity,
+  );
+  if (
+    selected !== undefined &&
+    providerIdentity &&
+    providerIdentity.provider !== selected
+  ) {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+      "The selected simulation backend does not match the retained provider identity.",
+    );
+  }
+  const source =
+    typeof report.source === "string" ? report.source : null;
+  const legacyBackend: TesseraSimulationProvider | null =
+    source === "tessera-local-engine" ||
+    source === "tessera-local-engine-failed"
+      ? "local-engine"
+      : source === "tessera-ui" ||
+          source === "tessera-ui-failed"
+        ? "website"
+        : null;
+  const simulationBackend =
+    (selected as TesseraSimulationProvider | undefined) ??
+    providerIdentity?.provider ??
+    legacyBackend;
+  if (
+    simulationBackend &&
+    legacyBackend &&
+    simulationBackend !== legacyBackend
+  ) {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+      "The Tessera report source does not match its selected simulation backend.",
+    );
+  }
+  const legacyUiIdentity =
+    typeof report.tesseraUiIdentity === "string"
+      ? report.tesseraUiIdentity
+      : null;
+  const providerUiIdentity =
+    providerIdentity?.provider === "website"
+      ? providerIdentity.uiIdentity
+      : null;
+  if (
+    legacyUiIdentity &&
+    providerUiIdentity &&
+    legacyUiIdentity !== providerUiIdentity
+  ) {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+      "The legacy Tessera UI identity does not match the website-provider identity.",
+    );
+  }
+  return {
+    simulationBackend,
+    simulationProviderIdentity: providerIdentity,
+    tesseraUiIdentity:
+      providerUiIdentity ?? legacyUiIdentity,
+  };
+}
+
+function commonReportSimulationProvenance(
+  reports: Record<string, unknown>[],
+): TesseraReportSimulationProvenance {
+  const provenances = reports.map(reportSimulationProvenance);
+  const withBackend = provenances.filter(
+    (
+      provenance,
+    ): provenance is TesseraReportSimulationProvenance & {
+      simulationBackend: TesseraSimulationProvider;
+    } => provenance.simulationBackend !== null,
+  );
+  const backends = new Set(
+    withBackend.map((provenance) => provenance.simulationBackend),
+  );
+  if (backends.size > 1) {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+      "One durable result contains evidence from more than one simulation backend.",
+    );
+  }
+  const identities = withBackend
+    .map((provenance) => provenance.simulationProviderIdentity)
+    .filter(
+      (
+        identity,
+      ): identity is TesseraSimulationProviderIdentity => identity !== null,
+    );
+  const identityHashes = new Set(
+    identities.map((identity) => canonicalSha256(identity)),
+  );
+  if (identityHashes.size > 1) {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+      "One durable result contains more than one simulation-provider identity.",
+    );
+  }
+  const uiIdentities = withBackend
+    .map((provenance) => provenance.tesseraUiIdentity)
+    .filter((identity): identity is string => identity !== null);
+  if (new Set(uiIdentities).size > 1) {
+    throw jobError(
+      "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+      "One durable result contains more than one Tessera UI identity.",
+    );
+  }
+  return {
+    simulationBackend: withBackend[0]?.simulationBackend ?? null,
+    simulationProviderIdentity:
+      identities.length === withBackend.length
+        ? identities[0] ?? null
+        : null,
+    tesseraUiIdentity:
+      uiIdentities.length === withBackend.length
+        ? uiIdentities[0] ?? null
+        : null,
+  };
+}
+
 function reportProvenance(result: TesseraRunResult): {
   connectorReceiptSha256: string | null;
   tesseraUiIdentity: string | null;
+  simulationBackend: TesseraSimulationProvider | null;
+  simulationProviderIdentity: TesseraSimulationProviderIdentity | null;
 } {
   const data =
     result.data && typeof result.data === "object"
@@ -810,41 +1037,135 @@ function reportProvenance(result: TesseraRunResult): {
             typeof report === "object",
         )
       : [];
-  if (revisedReports.length > 0) {
-    const connectorEvents = revisedReports.flatMap(
+  const stressRevisionReports = data
+    ? [data.baseline, data.revised].filter(
+        (
+          report,
+        ): report is Record<string, unknown> =>
+          report !== null && typeof report === "object",
+      )
+    : [];
+  if (stressRevisionReports.length > 0) {
+    const connectorEvents = stressRevisionReports.flatMap(
       connectorEventsFromReport,
     );
-    const uiIdentities = revisedReports.map((report) =>
-      typeof report.tesseraUiIdentity === "string"
-        ? report.tesseraUiIdentity
-        : null,
-    );
-    const commonUiIdentity =
-      uiIdentities.every(
-        (identity): identity is string => identity !== null,
-      ) &&
-      new Set(uiIdentities).size === 1
-        ? uiIdentities[0] ?? null
-        : null;
     return {
       connectorReceiptSha256:
         connectorEvents.length > 0
           ? canonicalSha256(connectorEvents)
           : null,
-      tesseraUiIdentity: commonUiIdentity,
+      ...commonReportSimulationProvenance(
+        stressRevisionReports,
+      ),
+    };
+  }
+  if (revisedReports.length > 0) {
+    const connectorEvents = revisedReports.flatMap(
+      connectorEventsFromReport,
+    );
+    const simulationProvenance =
+      commonReportSimulationProvenance(revisedReports);
+    return {
+      connectorReceiptSha256:
+        connectorEvents.length > 0
+          ? canonicalSha256(connectorEvents)
+          : null,
+      ...simulationProvenance,
     };
   }
   const connectorEvents = nested
     ? connectorEventsFromReport(nested)
     : [];
+  const simulationProvenance = nested
+    ? reportSimulationProvenance(nested)
+    : {
+        simulationBackend: null,
+        simulationProviderIdentity: null,
+        tesseraUiIdentity: null,
+      };
   return {
     connectorReceiptSha256: connectorEvents.length > 0
       ? canonicalSha256(connectorEvents)
       : null,
-    tesseraUiIdentity:
-      nested && typeof nested.tesseraUiIdentity === "string"
-        ? nested.tesseraUiIdentity
-        : null,
+    ...simulationProvenance,
+  };
+}
+
+function simulationProviderPinFromProvenance(
+  provenance: ReturnType<typeof reportProvenance>,
+  sourceAttempt: number,
+): TesseraRunSimulationProviderPin | null {
+  if (!provenance.simulationBackend) return null;
+  return {
+    selectedBackend: provenance.simulationBackend,
+    providerIdentity: provenance.simulationProviderIdentity,
+    providerIdentitySha256: provenance.simulationProviderIdentity
+      ? canonicalSha256(provenance.simulationProviderIdentity)
+      : null,
+    tesseraUiIdentity: provenance.tesseraUiIdentity,
+    sourceAttempt,
+  };
+}
+
+function assertSimulationProviderPinMatchesResult(
+  pin: TesseraRunSimulationProviderPin | null | undefined,
+  provenance: ReturnType<typeof reportProvenance>,
+): void {
+  if (!pin || !provenance.simulationBackend) return;
+  if (pin.selectedBackend !== provenance.simulationBackend) {
+    throw jobError(
+      "TESSERA_SIMULATION_PROVIDER_CHANGED",
+      `The durable simulation stage is pinned to ${pin.selectedBackend}, but this attempt returned ${provenance.simulationBackend}. Use restart-from to begin a new simulation stage.`,
+    );
+  }
+  if (
+    pin.providerIdentity &&
+    (
+      !provenance.simulationProviderIdentity ||
+      canonicalSha256(pin.providerIdentity) !==
+        canonicalSha256(provenance.simulationProviderIdentity)
+    )
+  ) {
+    throw jobError(
+      "TESSERA_SIMULATION_PROVIDER_CHANGED",
+      "The immutable Tessera provider identity changed within a durable simulation stage. Use restart-from before accepting evidence from the new provider identity.",
+    );
+  }
+  if (
+    pin.tesseraUiIdentity &&
+    (
+      !provenance.tesseraUiIdentity ||
+      pin.tesseraUiIdentity !== provenance.tesseraUiIdentity
+    )
+  ) {
+    throw jobError(
+      "TESSERA_SIMULATION_PROVIDER_CHANGED",
+      "The Tessera website identity changed within a durable simulation stage. Use restart-from before accepting evidence from the new website identity.",
+    );
+  }
+}
+
+function inferredSimulationProviderPin(
+  history: TesseraRunAttemptProvenance[],
+): TesseraRunSimulationProviderPin | null {
+  const source = [...history]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.simulationBackend !== null &&
+        entry.simulationBackend !== undefined,
+    );
+  if (!source?.simulationBackend) return null;
+  const providerIdentity =
+    source.simulationProviderIdentity ?? null;
+  return {
+    selectedBackend: source.simulationBackend,
+    providerIdentity,
+    providerIdentitySha256: providerIdentity
+      ? canonicalSha256(providerIdentity)
+      : null,
+    tesseraUiIdentity: source.tesseraUiIdentity,
+    sourceAttempt: source.attempt,
   };
 }
 
@@ -1572,6 +1893,31 @@ async function validateJobDocumentPaths(
   const currentAttempt = document.attemptHistory.find(
     (entry) => entry.attempt === document.attempt,
   );
+  for (const entry of document.attemptHistory) {
+    if (
+      entry.simulationBackend !== null &&
+      entry.simulationBackend !== undefined &&
+      entry.simulationBackend !== "local-engine" &&
+      entry.simulationBackend !== "website"
+    ) {
+      throw jobError(
+        "TESSERA_JOB_ATTEMPT_HISTORY_CHANGED",
+        "A Tessera attempt contains an invalid selected simulation backend.",
+      );
+    }
+    const providerIdentity = parsedSimulationProviderIdentity(
+      entry.simulationProviderIdentity,
+    );
+    if (
+      providerIdentity &&
+      entry.simulationBackend !== providerIdentity.provider
+    ) {
+      throw jobError(
+        "TESSERA_JOB_ATTEMPT_HISTORY_CHANGED",
+        "A Tessera attempt's selected backend does not match its provider identity.",
+      );
+    }
+  }
   if (
     !currentAttempt ||
     document.attemptHistory.some(
@@ -1615,6 +1961,43 @@ async function validateJobDocumentPaths(
       "TESSERA_JOB_ATTEMPT_HISTORY_CHANGED",
       "The Tessera attempt provenance is incomplete or inconsistent.",
     );
+  }
+  if (document.simulationProviderPin) {
+    const pin = document.simulationProviderPin;
+    const providerIdentity = parsedSimulationProviderIdentity(
+      pin.providerIdentity,
+    );
+    const sourceAttempt = document.attemptHistory.find(
+      (entry) => entry.attempt === pin.sourceAttempt,
+    );
+    if (
+      (pin.selectedBackend !== "local-engine" &&
+        pin.selectedBackend !== "website") ||
+      !Number.isInteger(pin.sourceAttempt) ||
+      pin.sourceAttempt < 1 ||
+      pin.sourceAttempt > document.attempt ||
+      !sourceAttempt ||
+      sourceAttempt.simulationBackend !== pin.selectedBackend ||
+      (
+        providerIdentity !== null &&
+        providerIdentity.provider !== pin.selectedBackend
+      ) ||
+      (
+        providerIdentity === null
+          ? pin.providerIdentitySha256 !== null
+          : pin.providerIdentitySha256 !==
+            canonicalSha256(providerIdentity)
+      ) ||
+      canonicalSha256(
+        sourceAttempt.simulationProviderIdentity ?? null,
+      ) !== canonicalSha256(providerIdentity) ||
+      sourceAttempt.tesseraUiIdentity !== pin.tesseraUiIdentity
+    ) {
+      throw jobError(
+        "TESSERA_JOB_PROVIDER_PIN_CHANGED",
+        "The durable Tessera simulation-provider pin no longer matches its source attempt.",
+      );
+    }
   }
   if (
     document.restartFrom &&
@@ -1896,6 +2279,17 @@ async function readJobDocument(
       errorCode: parsed.error?.code ?? null,
     },
   ];
+  for (const entry of parsed.attemptHistory) {
+    const providerIdentity = parsedSimulationProviderIdentity(
+      entry.simulationProviderIdentity,
+    );
+    entry.simulationProviderIdentity = providerIdentity;
+    entry.simulationBackend ??=
+      providerIdentity?.provider ??
+      (entry.tesseraUiIdentity ? "website" : null);
+  }
+  parsed.simulationProviderPin ??=
+    inferredSimulationProviderPin(parsed.attemptHistory);
   if (
     parsed.profileResolution &&
     !Array.isArray(parsed.profileResolution.requirements)
@@ -3575,6 +3969,7 @@ export async function startTesseraRun(
           runtime: runtimeProvenance,
         }),
       ],
+      simulationProviderPin: null,
       profileResolution: null,
       error: null,
       nextAction:
@@ -4279,17 +4674,25 @@ export async function resumeTesseraRun(
       retryBudget: retryBudgetFor(nextAttempt, "queued"),
       attemptHistory: [
         ...document.attemptHistory,
-        attemptProvenance({
-          attempt: nextAttempt,
-          simulationStage: document.simulationStage,
-          trigger: "resume",
-          status: "queued",
-          at: now,
-          requestSha256,
-          dataPinSha256,
-          profilePolicySha256,
-          runtime: runtimeProvenance,
-        }),
+        {
+          ...attemptProvenance({
+            attempt: nextAttempt,
+            simulationStage: document.simulationStage,
+            trigger: "resume",
+            status: "queued",
+            at: now,
+            requestSha256,
+            dataPinSha256,
+            profilePolicySha256,
+            runtime: runtimeProvenance,
+          }),
+          simulationBackend:
+            document.simulationProviderPin?.selectedBackend ?? null,
+          simulationProviderIdentity:
+            document.simulationProviderPin?.providerIdentity ?? null,
+          tesseraUiIdentity:
+            document.simulationProviderPin?.tesseraUiIdentity ?? null,
+        },
       ],
       error: null,
       nextAction:
@@ -4778,13 +5181,18 @@ function requestForDurableExecution(
   request: TesseraRunRequest,
   runId: string,
   attempt: number,
+  simulationProviderPin?: TesseraRunSimulationProviderPin | null,
 ): TesseraRunRequest {
+  const simulationBackend =
+    simulationProviderPin?.selectedBackend;
   if (request.kind === "exact") {
     return {
       ...request,
       options: {
         ...request.options,
         sessionId: runId,
+        simulationBackend:
+          simulationBackend ?? request.options?.simulationBackend,
       },
     };
   }
@@ -4795,25 +5203,41 @@ function requestForDurableExecution(
         ...request.options,
         retryOwner: "durable-job",
         durableAttemptNumber: attempt,
+        simulationBackend:
+          simulationBackend ?? request.options?.simulationBackend,
       },
     };
   }
   if (request.kind === "build-and-stress") {
     return {
       ...request,
+      input: {
+        ...request.input,
+        simulationBackend:
+          simulationBackend ?? request.input.simulationBackend,
+      },
       options: {
         ...request.options,
         retryOwner: "durable-job",
         durableAttemptNumber: attempt,
+        simulationBackend:
+          simulationBackend ?? request.options?.simulationBackend,
       },
     };
   }
   if (request.kind === "build-and-analyze") {
     return {
       ...request,
+      input: {
+        ...request.input,
+        simulationBackend:
+          simulationBackend ?? request.input.simulationBackend,
+      },
       options: {
         ...request.options,
         sessionId: runId,
+        simulationBackend:
+          simulationBackend ?? request.options?.simulationBackend,
       },
     };
   }
@@ -4825,6 +5249,8 @@ function requestForDurableExecution(
         executionMode: "simulate",
         experimental: false,
         sessionId: runId,
+        simulationBackend:
+          simulationBackend ?? request.options?.simulationBackend,
       },
     };
   }
@@ -4837,6 +5263,8 @@ function requestForDurableExecution(
         experimental: false,
         retryOwner: "durable-job",
         durableAttemptNumber: attempt,
+        simulationBackend:
+          simulationBackend ?? request.options?.simulationBackend,
       },
     };
   }
@@ -4998,6 +5426,7 @@ export async function executeTesseraRunJob(
         document.request,
         document.runId,
         document.attempt,
+        document.simulationProviderPin,
       );
     const result = await (
       overrides.executeRequest ?? executeRequest
@@ -5012,6 +5441,17 @@ export async function executeTesseraRunJob(
         latest.workerTokenSha256 !== workerTokenSha256 ||
         latest.attempt !== document.attempt
       ) return;
+      const retainedProvenance = reportProvenance(result);
+      assertSimulationProviderPinMatchesResult(
+        latest.simulationProviderPin,
+        retainedProvenance,
+      );
+      const simulationProviderPin =
+        latest.simulationProviderPin ??
+        simulationProviderPinFromProvenance(
+          retainedProvenance,
+          latest.attempt,
+        );
       await writeJsonAtomic(latest.resultPath, result);
       const status = finalStatus(result);
       const now = new Date().toISOString();
@@ -5033,7 +5473,6 @@ export async function executeTesseraRunJob(
         (receipt) =>
           receipt.kind === "workflow-manifest",
       );
-      const retainedProvenance = reportProvenance(result);
       const preparedCheckpoint =
         await preparedCheckpointFromResult(latest, result);
       const retryable = resultIsRetryable(result);
@@ -5051,6 +5490,7 @@ export async function executeTesseraRunJob(
         artifactReceipts,
         preparedCheckpoint,
         profileResolution,
+        simulationProviderPin,
         retryBudget: retryBudgetFor(latest.attempt, status),
         attemptHistory: updateCurrentAttempt(
           latest.attemptHistory,
@@ -5067,7 +5507,17 @@ export async function executeTesseraRunJob(
             connectorReceiptSha256:
               retainedProvenance.connectorReceiptSha256,
             tesseraUiIdentity:
-              retainedProvenance.tesseraUiIdentity,
+              retainedProvenance.tesseraUiIdentity ??
+              simulationProviderPin?.tesseraUiIdentity ??
+              null,
+            simulationBackend:
+              retainedProvenance.simulationBackend ??
+              simulationProviderPin?.selectedBackend ??
+              null,
+            simulationProviderIdentity:
+              retainedProvenance.simulationProviderIdentity ??
+              simulationProviderPin?.providerIdentity ??
+              null,
             errorCode:
               status === "failed"
                 ? first?.code ?? null

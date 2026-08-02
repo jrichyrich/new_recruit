@@ -81,6 +81,7 @@ import {
   type TesseraPhase,
   type TesseraPreparedRoster,
   type TesseraRevisionComparisonReport,
+  type TesseraSimulationBackend,
   type TesseraStressAnalysisStrategy,
   type TesseraStressPortfolioPreview,
   type TesseraStressRunReport,
@@ -134,6 +135,7 @@ type ServerOptions = {
       options: {
         outputDirectory: string;
         overwrite: boolean;
+        simulationBackend?: TesseraSimulationBackend;
         executionMode?: "prepare-only" | "simulate";
         fallbackMode?: "none" | "baseline-damage-v1";
         profilePolicyPath?: string;
@@ -164,6 +166,7 @@ type ServerOptions = {
       options: {
         outputDirectory?: string;
         overwrite: boolean;
+        simulationBackend?: TesseraSimulationBackend;
         catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<BuildAndAnalyzeRosterResult>>;
@@ -174,6 +177,7 @@ type ServerOptions = {
         factionId: string;
       },
       options: {
+        simulationBackend?: TesseraSimulationBackend;
         suite?: TesseraStressSuite;
         analysisStrategy?: TesseraStressAnalysisStrategy;
         resumeManifestPath?: string;
@@ -199,6 +203,7 @@ type ServerOptions = {
       options: {
         outputDirectory?: string;
         overwrite: boolean;
+        simulationBackend?: TesseraSimulationBackend;
         catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<BuildAndStressRosterResult>>;
@@ -1184,6 +1189,9 @@ export function createRosterPilotMcpServer(
           .string()
           .min(1)
           .default("exports/tessera"),
+        simulationBackend: z
+          .enum(["auto", "local-engine", "website"])
+          .optional(),
         overwrite: z.boolean().default(false),
         responseDetail: z
           .enum(["compact", "full"])
@@ -1200,6 +1208,7 @@ export function createRosterPilotMcpServer(
       downloadPrettyHtml,
       outputDirectory,
       tesseraOutputDirectory,
+      simulationBackend,
       overwrite,
       responseDetail,
       opponentRoster,
@@ -1293,6 +1302,7 @@ export function createRosterPilotMcpServer(
           overwrite: false,
           executionMode: "simulate" as const,
           fallbackMode: "none" as const,
+          simulationBackend,
           experimental: false,
           analysisMode: "full" as const,
           allowPointMismatch: false,
@@ -1336,6 +1346,7 @@ export function createRosterPilotMcpServer(
                         suite: "diverse-9",
                         analysisStrategy: "staged",
                         executionMode: "simulate",
+                        simulationBackend,
                         experimental: false,
                         catalogueDriftMode: "reject",
                         portfolioPreview: target.portfolioPreview,
@@ -2914,7 +2925,7 @@ export function createRosterPilotMcpServer(
       {
         title: "Get local Tessera connection status",
         description:
-          "Check whether the experimental local Tessera browser adapter is available. Never reads premium keys, browser storage, or credentials.",
+          "Check the retained website adapter and pinned local-engine evaluation provider. Never returns premium keys, browser storage, or credentials.",
         inputSchema: {},
         annotations: {
           readOnlyHint: true,
@@ -2968,6 +2979,11 @@ export function createRosterPilotMcpServer(
     );
 
     const tesseraPhaseSchema = z.enum(["shooting", "fight"]);
+    const tesseraSimulationBackendSchema = z.enum([
+      "auto",
+      "local-engine",
+      "website",
+    ]);
     const tesseraMetricSchema = z.enum([
       "wipe-probability",
       "half-wipe-probability",
@@ -2979,7 +2995,7 @@ export function createRosterPilotMcpServer(
       {
         title: "Prepare or analyze a roster matchup",
         description:
-          "Prepare New Recruit-enriched player and opponent rosters and optionally run Tessera's experimental Army vs Army UI. Results are directional combat math, not game win probability.",
+          "Prepare New Recruit-enriched player and opponent rosters and optionally run the selected Tessera website or local-engine provider. Results are directional combat math, not game win probability; candidate local evidence cannot drive coaching.",
         inputSchema: {
           playerRoster: RosterDraftSchema,
           opponent: z
@@ -2997,6 +3013,8 @@ export function createRosterPilotMcpServer(
             .optional(),
           outputDirectory: z.string().default("exports/tessera"),
           overwrite: z.boolean().default(false),
+          simulationBackend:
+            tesseraSimulationBackendSchema.optional(),
           executionMode: z
             .enum(["prepare-only", "simulate"])
             .optional(),
@@ -3026,6 +3044,7 @@ export function createRosterPilotMcpServer(
         opponent,
         outputDirectory,
         overwrite,
+        simulationBackend,
         executionMode,
         fallbackMode,
         profilePolicyPath,
@@ -3074,6 +3093,7 @@ export function createRosterPilotMcpServer(
               options: {
                 outputDirectory,
                 overwrite,
+                simulationBackend,
                 executionMode: "simulate",
                 fallbackMode,
                 profilePolicyPath,
@@ -3101,6 +3121,7 @@ export function createRosterPilotMcpServer(
             {
               outputDirectory,
               overwrite,
+              simulationBackend,
               executionMode,
               fallbackMode,
               profilePolicyPath,
@@ -3145,6 +3166,8 @@ export function createRosterPilotMcpServer(
             allowReadinessWarnings: z.boolean().default(false),
             profilePolicyPath: z.string().min(1).optional(),
             outputDirectory: z.string().min(1).optional(),
+            simulationBackend:
+              tesseraSimulationBackendSchema.optional(),
             executionMode: z
               .enum(["prepare-only", "simulate"])
               .optional(),
@@ -3179,6 +3202,7 @@ export function createRosterPilotMcpServer(
           allowReadinessWarnings,
           profilePolicyPath,
           outputDirectory,
+          simulationBackend,
           executionMode,
           responseDetail,
           overwrite,
@@ -3211,12 +3235,14 @@ export function createRosterPilotMcpServer(
                   allowReadinessWarnings,
                   profilePolicyPath,
                   outputDirectory,
+                  simulationBackend,
                   executionMode: "simulate",
                   experimental: false,
                 },
                 options: {
                   outputDirectory,
                   overwrite,
+                  simulationBackend,
                   executionMode: "simulate",
                   experimental: false,
                   catalogueDriftMode:
@@ -3246,12 +3272,14 @@ export function createRosterPilotMcpServer(
                 allowReadinessWarnings,
                 profilePolicyPath,
                 outputDirectory,
+                simulationBackend,
                 executionMode,
                 experimental,
               },
               {
                 outputDirectory,
                 overwrite,
+                simulationBackend,
                 catalogueDriftMode:
                   requestedCatalogueDriftMode(
                     verifiedCatalogueDriftDiagnostic,
@@ -3415,6 +3443,8 @@ export function createRosterPilotMcpServer(
               .default("compact"),
             allowReadinessWarnings: z.boolean().default(false),
             forceRetry: z.boolean().default(false),
+            simulationBackend:
+              tesseraSimulationBackendSchema.optional(),
             executionMode: z
               .enum(["prepare-only", "simulate"])
               .optional(),
@@ -3451,6 +3481,7 @@ export function createRosterPilotMcpServer(
           responseDetail,
           allowReadinessWarnings,
           forceRetry,
+          simulationBackend,
           executionMode,
           overwrite,
           experimental,
@@ -3489,12 +3520,14 @@ export function createRosterPilotMcpServer(
                   outputDirectory,
                   allowReadinessWarnings,
                   forceRetry,
+                  simulationBackend,
                   executionMode: "simulate",
                   experimental: false,
                 },
                 options: {
                   outputDirectory,
                   overwrite,
+                  simulationBackend,
                   executionMode: "simulate",
                   experimental: false,
                   catalogueDriftMode:
@@ -3532,12 +3565,14 @@ export function createRosterPilotMcpServer(
                 outputDirectory,
                 allowReadinessWarnings,
                 forceRetry,
+                simulationBackend,
                 executionMode,
                 experimental,
               },
               {
                 outputDirectory,
                 overwrite,
+                simulationBackend,
                 catalogueDriftMode:
                   requestedCatalogueDriftMode(
                     verifiedCatalogueDriftDiagnostic,
@@ -3579,6 +3614,8 @@ export function createRosterPilotMcpServer(
             restartManifestPath: z.string().min(1).optional(),
             profilePolicyPath: z.string().min(1).optional(),
             forceRetry: z.boolean().default(false),
+            simulationBackend:
+              tesseraSimulationBackendSchema.optional(),
             executionMode: z
               .enum(["prepare-only", "simulate"])
               .optional(),
@@ -3608,6 +3645,7 @@ export function createRosterPilotMcpServer(
           restartManifestPath,
           profilePolicyPath,
           forceRetry,
+          simulationBackend,
           executionMode,
           outputDirectory,
           responseDetail,
@@ -3639,6 +3677,7 @@ export function createRosterPilotMcpServer(
                   restartManifestPath,
                   profilePolicyPath,
                   forceRetry,
+                  simulationBackend,
                   executionMode: "simulate",
                   outputDirectory,
                   overwrite,
@@ -3668,6 +3707,7 @@ export function createRosterPilotMcpServer(
                 restartManifestPath,
                 profilePolicyPath,
                 forceRetry,
+                simulationBackend,
                 executionMode,
                 outputDirectory,
                 overwrite,
@@ -3787,6 +3827,11 @@ export function createRosterPilotMcpServer(
   }
 
   if (options.tesseraRunJobs) {
+    const jobSimulationBackendSchema = z.enum([
+      "auto",
+      "local-engine",
+      "website",
+    ]);
     const jobProfilePolicySchema = z.object({
       schemaVersion: z.literal(1),
       policyKind: z.literal("tessera-profile-policy"),
@@ -3824,6 +3869,8 @@ export function createRosterPilotMcpServer(
           ])
           .optional(),
         executionMode: jobExecutionModeSchema,
+        simulationBackend:
+          jobSimulationBackendSchema.optional(),
         profilePolicyPath: z.string().min(1).optional(),
         analysisMode: z.enum(["quick", "full"]).default("full"),
         allowPointMismatch: z.boolean().default(false),
@@ -3841,6 +3888,8 @@ export function createRosterPilotMcpServer(
           .optional(),
         portfolioPreview: z.unknown().optional(),
         executionMode: jobExecutionModeSchema,
+        simulationBackend:
+          jobSimulationBackendSchema.optional(),
         profilePolicyPath: z.string().min(1).optional(),
         resumeManifestPath: z.string().min(1).optional(),
         restartManifestPath: z.string().min(1).optional(),
@@ -3865,6 +3914,8 @@ export function createRosterPilotMcpServer(
           .enum(["staged", "full-all"])
           .optional(),
         executionMode: jobExecutionModeSchema,
+        simulationBackend:
+          jobSimulationBackendSchema.optional(),
         profilePolicyPath: z.string().min(1).optional(),
         allowReadinessWarnings: z.boolean().default(false),
         resumeManifestPath: z.string().min(1).optional(),
@@ -3887,6 +3938,8 @@ export function createRosterPilotMcpServer(
         excludedUnitIds: z.array(z.string().min(1)).optional(),
         requiredWarlordUnitId: z.string().min(1).optional(),
         executionMode: jobExecutionModeSchema,
+        simulationBackend:
+          jobSimulationBackendSchema.optional(),
         profilePolicyPath: z.string().min(1).optional(),
         allowReadinessWarnings: z.boolean().default(false),
         verifiedCatalogueDriftDiagnostic: z
@@ -3948,6 +4001,7 @@ export function createRosterPilotMcpServer(
                 : request.opponent,
             options: {
               executionMode: request.executionMode,
+              simulationBackend: request.simulationBackend,
               profilePolicyPath: request.profilePolicyPath,
               analysisMode: request.analysisMode,
               allowPointMismatch: request.allowPointMismatch,
@@ -3977,6 +4031,7 @@ export function createRosterPilotMcpServer(
                   | TesseraStressPortfolioPreview
                   | undefined,
               executionMode: request.executionMode,
+              simulationBackend: request.simulationBackend,
               profilePolicyPath: request.profilePolicyPath,
               resumeManifestPath: request.resumeManifestPath,
               restartManifestPath:
@@ -4008,6 +4063,7 @@ export function createRosterPilotMcpServer(
                 request.requiredWarlordUnitId,
               suite: request.suite,
               analysisStrategy: request.analysisStrategy,
+              simulationBackend: request.simulationBackend,
               executionMode: request.executionMode,
               profilePolicyPath: request.profilePolicyPath,
               allowReadinessWarnings:
@@ -4017,6 +4073,7 @@ export function createRosterPilotMcpServer(
                 request.restartManifestPath,
             },
             options: {
+              simulationBackend: request.simulationBackend,
               catalogueDriftMode:
                 requestedCatalogueDriftMode(
                   request.verifiedCatalogueDriftDiagnostic,
@@ -4045,11 +4102,13 @@ export function createRosterPilotMcpServer(
               requiredWarlordUnitId:
                 request.requiredWarlordUnitId,
               executionMode: request.executionMode,
+              simulationBackend: request.simulationBackend,
               profilePolicyPath: request.profilePolicyPath,
               allowReadinessWarnings:
                 request.allowReadinessWarnings,
             },
             options: {
+              simulationBackend: request.simulationBackend,
               catalogueDriftMode:
                 request.verifiedCatalogueDriftDiagnostic
                   ? "diagnostic"

@@ -48,6 +48,10 @@ import {
   type TesseraRevisionDelta,
   type TesseraScenarioCell,
   type TesseraScenarioResult,
+  type TesseraSimulationBackend,
+  type TesseraSimulationFallbackReceipt,
+  type TesseraSimulationProvider,
+  type TesseraSimulationProviderIdentity,
   type TesseraStressPortfolioItem,
   type TesseraUnitInstance,
 } from "../../lib/rosterpilot";
@@ -119,6 +123,16 @@ import {
 import {
   createTesseraSavedListReuse,
 } from "./saved-list-reuse";
+import {
+  createLocalTesseraEngineProvider,
+  LOCAL_TESSERA_ENGINE_IDENTITY,
+  LOCAL_TESSERA_ENGINE_STATUS,
+  runLocalTesseraEngineMatchup,
+} from "./local-engine";
+import {
+  createWebsiteTesseraProvider,
+  routeTesseraSimulation,
+} from "./simulation-provider";
 
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -168,6 +182,8 @@ export type TesseraOpponentInput =
 
 export type TesseraAnalysisOptions = WriteOptions & {
   outputDirectory?: string;
+  /** Requested provider. The selected provider is frozen for paired work. */
+  simulationBackend?: TesseraSimulationBackend;
   executionMode?: "prepare-only" | "simulate";
   fallbackMode?: "none" | "baseline-damage-v1";
   profilePolicyPath?: string;
@@ -220,6 +236,7 @@ export type TesseraDependencies = {
   deliver?: typeof deliverRosterToNewRecruit;
   enrich?: typeof enrichRoszThroughNewRecruit;
   runBrowser?: typeof runTesseraBrowserMatchup;
+  runLocalEngine?: typeof runLocalTesseraEngineMatchup;
   runtimeIssue?: typeof runtimeRestartIssue;
   /**
    * Marks an injected delivery adapter as the production persistent-cache
@@ -246,7 +263,10 @@ async function exists(filename: string): Promise<boolean> {
 export async function getTesseraConnectionStatus(): Promise<
   ResultEnvelope<TesseraConnectionStatus>
 > {
-  const browserAvailable = await exists(chromePath);
+  const [browserAvailable, localEngineAvailable] = await Promise.all([
+    exists(chromePath),
+    exists(path.join(projectRoot, "node_modules/tessera-engine/src/index.js")),
+  ]);
   let agentStatus: Awaited<ReturnType<typeof getLocalAgentStatus>> | null = null;
   let agentError: LocalAgentError | null = null;
   try {
@@ -285,6 +305,33 @@ export async function getTesseraConnectionStatus(): Promise<
     ok: true,
     data: {
       available,
+      simulationAvailable:
+        available || localEngineAvailable,
+      defaultBackend: "website",
+      backends: {
+        localEngine: {
+          ...structuredClone(LOCAL_TESSERA_ENGINE_STATUS),
+          available: localEngineAvailable,
+          simulationReady: localEngineAvailable,
+          endToEndReady: localEngineAvailable,
+          reason: localEngineAvailable
+            ? LOCAL_TESSERA_ENGINE_STATUS.reason
+            : "The pinned tessera-engine package is not installed or its entry point is unavailable.",
+        },
+        website: {
+          available,
+          identity: {
+            schemaVersion: 1,
+            provider: "website",
+            engine: "tessera-ui",
+            uiIdentity: null,
+            adapterVersion: "website-browser-v1",
+          },
+          reason: available
+            ? null
+            : "The browser/local-agent/credential readiness gate is not satisfied.",
+        },
+      },
       platform: process.platform,
       browserAvailable,
       brokerAvailable,
@@ -330,12 +377,19 @@ export async function getTesseraConnectionStatus(): Promise<
           },
         ]
       : available
-        ? []
+        ? [
+            {
+              code: "TESSERA_LOCAL_ENGINE_EVALUATION_ONLY",
+              message:
+                "The pinned local engine is available only by explicit selection; auto remains on the website until licensing and parity promotion gates pass.",
+              severity: "warn",
+            },
+          ]
         : [
           {
             code: "TESSERA_COMPANION_UNAVAILABLE",
             message:
-              "Tessera automation requires macOS, Google Chrome, the local agent, and a configured premium key. Enriched .rosz handoff remains available.",
+              "The Tessera website route requires macOS, Google Chrome, the local agent, and a configured premium key. The explicit local-engine evaluation route remains available for capability-covered rosters.",
             severity: "warn",
           },
         ],
@@ -2408,6 +2462,9 @@ function consolidateBrowserScenarios(
         metric: TesseraMetric;
         iterations: number | null;
         settings: Record<string, string>;
+        seed?: number;
+        executionSha256?: string;
+        projectionSha256?: string;
         matrixSha256?: string;
         integrity?: {
           status: "trusted" | "aliased";
@@ -2443,6 +2500,9 @@ function consolidateBrowserScenarios(
       metric,
       iterations: raw.iterations ?? null,
       settings: { ...(raw.settings ?? {}) },
+      seed: raw.seed,
+      executionSha256: raw.executionSha256,
+      projectionSha256: raw.projectionSha256,
       matrixSha256: raw.matrixSha256,
       integrity: raw.integrity,
     });
@@ -3260,6 +3320,16 @@ export async function analyzeRosterMatchup(
   const configuration = analysisConfiguration(options);
   const executionMode = effectiveExecutionMode(options);
   const simulationRequested = executionMode === "simulate";
+  const requestedSimulationBackend = options.simulationBackend ?? "auto";
+  const plannedSimulationBackend: TesseraSimulationProvider =
+    requestedSimulationBackend === "local-engine"
+      ? "local-engine"
+      : requestedSimulationBackend === "website"
+        ? "website"
+        : LOCAL_TESSERA_ENGINE_IDENTITY.promotion === "promoted" &&
+            LOCAL_TESSERA_ENGINE_IDENTITY.licenseState === "approved"
+          ? "local-engine"
+          : "website";
   let profilePolicy: ProfilePolicyV1 | null;
   try {
     profilePolicy = await requestedAnalysisProfilePolicy(options);
@@ -3503,7 +3573,11 @@ export async function analyzeRosterMatchup(
       warnings: [],
     };
   }
-  if (simulationRequested && !dependencies.runBrowser) {
+  if (
+    simulationRequested &&
+    plannedSimulationBackend === "website" &&
+    !dependencies.runBrowser
+  ) {
     const readiness = await getTesseraConnectionStatus();
     if (!readiness.ok || !readiness.data?.available) {
       return {
@@ -4385,6 +4459,20 @@ export async function analyzeRosterMatchup(
     };
   }
 
+  if (preparedPlayer.enrichedRoszSha256) {
+    preparedPlayer.simulationInput = {
+      kind: "new-recruit-enriched-rosz",
+      sha256: preparedPlayer.enrichedRoszSha256,
+    };
+  }
+  for (const prepared of opponents) {
+    if (prepared.enrichedRoszSha256) {
+      prepared.simulationInput = {
+        kind: "new-recruit-enriched-rosz",
+        sha256: prepared.enrichedRoszSha256,
+      };
+    }
+  }
   const matrices: TesseraMatchupReport["simulation"]["matrices"] = [];
   const scenarios: TesseraScenarioResult[] = [];
   const settings: Record<string, string> = {};
@@ -4392,6 +4480,14 @@ export async function analyzeRosterMatchup(
   const simulationConnectorEvents: ConnectorEvent[] = [];
   const tesseraUiIdentities = new Set<string>();
   let tesseraUiIdentityComplete = true;
+  let selectedSimulationBackend: TesseraSimulationProvider =
+    plannedSimulationBackend;
+  let simulationProviderIdentity: TesseraSimulationProviderIdentity | null =
+    plannedSimulationBackend === "local-engine"
+      ? LOCAL_TESSERA_ENGINE_IDENTITY
+      : null;
+  let simulationFallback: TesseraSimulationFallbackReceipt | null = null;
+  let simulationProviderIdentityComplete = true;
   let legacyProjection:
     | NonNullable<
         TesseraMatchupReport["simulation"]["legacyProjection"]
@@ -4436,9 +4532,9 @@ export async function analyzeRosterMatchup(
                   [],
               })
             : null;
-        const result: TesseraBrowserResult = await (
-          dependencies.runBrowser ?? runTesseraViaAgent
-        )({
+        const simulationInput: Parameters<
+          typeof runTesseraBrowserMatchup
+        >[0] = {
           profileDirectory,
           playerRoszPath: preparedPlayer.enrichedRoszPath,
           playerName: preparedPlayer.rosterName,
@@ -4451,7 +4547,44 @@ export async function analyzeRosterMatchup(
           frozenScenarioContract: options.frozenScenarioContract,
           savedListReuse,
           sessionId: options.sessionId,
+        };
+        const routed = await routeTesseraSimulation({
+          requestedBackend: requestedSimulationBackend,
+          local: {
+            provider: createLocalTesseraEngineProvider(
+              dependencies.runLocalEngine ?? runLocalTesseraEngineMatchup,
+            ),
+            input: simulationInput,
+          },
+          website: {
+            provider: createWebsiteTesseraProvider(
+              dependencies.runBrowser ?? runTesseraViaAgent,
+            ),
+            input: simulationInput,
+          },
         });
+        const result = routed.data as TesseraBrowserResult;
+        if (
+          routed.selection.selectedBackend !==
+          selectedSimulationBackend
+        ) {
+          if (
+            requestedSimulationBackend === "auto" &&
+            routed.fallback !== null &&
+            matrices.length === 0
+          ) {
+            selectedSimulationBackend = routed.selection.selectedBackend;
+          } else {
+            throw Object.assign(
+              new Error(
+                "The simulation provider changed within one exact run.",
+              ),
+              { code: "TESSERA_SIMULATION_PROVIDER_DRIFT" },
+            );
+          }
+        }
+        simulationFallback ??= routed.fallback;
+        simulationProviderIdentity = routed.identity;
         Object.assign(settings, result.settings);
         if (result.legacyProjection) {
           legacyProjection =
@@ -4476,10 +4609,12 @@ export async function analyzeRosterMatchup(
                   scenarioIds: [],
                 };
         }
-        if (result.uiIdentity) {
-          tesseraUiIdentities.add(result.uiIdentity);
-        } else {
-          tesseraUiIdentityComplete = false;
+        if (selectedSimulationBackend === "website") {
+          if (result.uiIdentity) {
+            tesseraUiIdentities.add(result.uiIdentity);
+          } else {
+            tesseraUiIdentityComplete = false;
+          }
         }
         warnings.push(...result.warnings);
         const unresolvedAlternateProfiles = (result.importIssues ?? []).filter(
@@ -4529,8 +4664,12 @@ export async function analyzeRosterMatchup(
           eventId: crypto.randomUUID(),
           recordedAt: new Date().toISOString(),
           provider: "tessera",
+          simulationBackend: selectedSimulationBackend,
           action: "simulate",
-          origin: "new-remote",
+          origin:
+            selectedSimulationBackend === "local-engine"
+              ? "in-memory"
+              : "new-remote",
           outcome: "verified",
           remoteId: null,
           contentSha256: crypto
@@ -4543,6 +4682,7 @@ export async function analyzeRosterMatchup(
             .digest("hex"),
         });
       } catch (error) {
+        simulationProviderIdentityComplete = false;
         const errorCode =
           error &&
           typeof error === "object" &&
@@ -4573,8 +4713,12 @@ export async function analyzeRosterMatchup(
           eventId: crypto.randomUUID(),
           recordedAt: new Date().toISOString(),
           provider: "tessera",
+          simulationBackend: selectedSimulationBackend,
           action: "simulate",
-          origin: "new-remote",
+          origin:
+            selectedSimulationBackend === "local-engine"
+              ? "in-memory"
+              : "new-remote",
           outcome: "uncertain",
           remoteId: null,
           contentSha256: null,
@@ -4585,6 +4729,26 @@ export async function analyzeRosterMatchup(
     }
   }
 
+  const combinedTesseraUiIdentity =
+    tesseraUiIdentities.size === 0
+      ? null
+      : tesseraUiIdentities.size === 1
+        ? [...tesseraUiIdentities][0]
+        : crypto
+            .createHash("sha256")
+            .update([...tesseraUiIdentities].sort().join("|"))
+            .digest("hex");
+  if (selectedSimulationBackend === "website") {
+    simulationProviderIdentity = combinedTesseraUiIdentity
+      ? {
+          schemaVersion: 1,
+          provider: "website",
+          engine: "tessera-ui",
+          uiIdentity: combinedTesseraUiIdentity,
+          adapterVersion: "website-browser-v1",
+        }
+      : null;
+  }
   const allMatched = pointsComparisons.every((comparison) => comparison.matched);
   const expectedScenarioCount =
     opponents.length *
@@ -4593,20 +4757,34 @@ export async function analyzeRosterMatchup(
   const scenariosComplete =
     scenarios.length === expectedScenarioCount &&
     scenarios.every((scenario) => scenario.status === "complete");
-  const analyticalClaimsAllowed =
+  const simulationEvidenceComplete =
     simulationRequested &&
     matrices.length === opponents.length &&
     captureIntegrityClean &&
     profileResolutionClean &&
-    tesseraUiIdentityComplete &&
+    simulationProviderIdentityComplete &&
+    simulationProviderIdentity !== null &&
+    (selectedSimulationBackend !== "website" ||
+      tesseraUiIdentityComplete) &&
     scenariosComplete;
+  const providerEligibleForCoaching =
+    simulationProviderIdentity?.provider === "website" ||
+    (simulationProviderIdentity?.provider === "local-engine" &&
+      simulationProviderIdentity.promotion === "promoted" &&
+      simulationProviderIdentity.licenseState === "approved");
+  const analyticalClaimsAllowed =
+    simulationEvidenceComplete && providerEligibleForCoaching;
   const findings = analyticalClaimsAllowed
     ? structuredFindings(scenarios)
     : [];
   const legacy = legacyFindingText(findings);
-  if (simulationRequested && !analyticalClaimsAllowed) {
+  if (simulationRequested && !simulationEvidenceComplete) {
     warnings.push(
       "Substantive matchup findings and roster-change candidates were suppressed because the required capture evidence was incomplete or failed matrix-integrity checks.",
+    );
+  } else if (simulationEvidenceComplete && !providerEligibleForCoaching) {
+    warnings.push(
+      "The local-engine matrices are retained as complete evaluation evidence, but substantive matchup findings and roster-change candidates are suppressed until the pinned provider satisfies its written-license and parity promotion gates.",
     );
   }
   const proposedChanges =
@@ -4716,14 +4894,14 @@ export async function analyzeRosterMatchup(
     TesseraMatchupReport["simulation"]["status"]
   > = !simulationRequested
     ? "not-requested"
-    : analyticalClaimsAllowed
+    : simulationEvidenceComplete
       ? "complete"
       : matrices.length > 0
         ? "partial"
         : "failed";
   if (
     simulationRequested &&
-    !analyticalClaimsAllowed &&
+    !simulationEvidenceComplete &&
     failures.length === 0
   ) {
     const preservedBrowserCode = warnings
@@ -4759,11 +4937,15 @@ export async function analyzeRosterMatchup(
     source: !simulationRequested
       ? "prepare-only"
       : matrices.length
-        ? "tessera-ui"
-        : "tessera-ui-failed",
+        ? selectedSimulationBackend === "local-engine"
+          ? "tessera-local-engine"
+          : "tessera-ui"
+        : selectedSimulationBackend === "local-engine"
+          ? "tessera-local-engine-failed"
+          : "tessera-ui-failed",
     status: !simulationRequested
       ? "prepared"
-      : analyticalClaimsAllowed
+      : simulationEvidenceComplete
         ? "complete"
         : matrices.length > 0
           ? "inconclusive"
@@ -4784,15 +4966,7 @@ export async function analyzeRosterMatchup(
       enrichedProfileRequirements,
     ),
     runtime: getRuntimeProvenance(),
-    tesseraUiIdentity:
-      tesseraUiIdentities.size === 0
-        ? null
-        : tesseraUiIdentities.size === 1
-          ? [...tesseraUiIdentities][0]
-          : crypto
-              .createHash("sha256")
-              .update([...tesseraUiIdentities].sort().join("|"))
-              .digest("hex"),
+    tesseraUiIdentity: combinedTesseraUiIdentity,
     connectorEvents: [
       ...preparationConnectorEvents,
       ...simulationConnectorEvents,
@@ -4810,7 +4984,14 @@ export async function analyzeRosterMatchup(
         : "prepare-only",
       experimental: true,
       status: simulationStatus,
-      engine: "tessera-ui",
+      requestedBackend: requestedSimulationBackend,
+      selectedBackend: selectedSimulationBackend,
+      providerIdentity: simulationProviderIdentity ?? undefined,
+      fallback: simulationFallback,
+      engine:
+        selectedSimulationBackend === "local-engine"
+          ? "tessera-engine"
+          : "tessera-ui",
       settings,
       legacyProjection:
         legacyProjection ?? {
@@ -4985,7 +5166,7 @@ export async function analyzeRosterMatchup(
       warnings: player.warnings,
     };
   }
-  const successful = !simulationRequested || analyticalClaimsAllowed;
+  const successful = !simulationRequested || simulationEvidenceComplete;
   return {
     ok: successful,
     data: report,
@@ -5574,6 +5755,17 @@ export async function compareRosterRevision(
       warnings: [],
     };
   }
+  const baselineProviderIdentity: TesseraSimulationProviderIdentity | null =
+    baseline.simulation?.providerIdentity ??
+    (baseline.tesseraUiIdentity
+      ? {
+          schemaVersion: 1,
+          provider: "website",
+          engine: "tessera-ui",
+          uiIdentity: baseline.tesseraUiIdentity,
+          adapterVersion: "website-browser-v1",
+        }
+      : null);
   const baselineScenarios = baseline.simulation?.scenarios ?? [];
   if (
     baseline.schemaVersion !== 3 ||
@@ -5612,7 +5804,7 @@ export async function compareRosterRevision(
       baseline.profilePolicyHash !== undefined &&
       !Array.isArray(baseline.frozenProfileRequirements)
     ) ||
-    !baseline.tesseraUiIdentity
+    !baselineProviderIdentity
   ) {
     return {
       ok: false,
@@ -5621,7 +5813,26 @@ export async function compareRosterRevision(
         {
           code: "TESSERA_BASELINE_INCOMPATIBLE",
           message:
-            "Revision comparison requires a complete schema-v3 baseline with frozen source provenance, execution fingerprints, Tessera UI identity, and captured scenarios.",
+            "Revision comparison requires a complete schema-v3 baseline with frozen source provenance, execution fingerprints, simulation-provider identity, and captured scenarios.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
+  if (
+    baselineProviderIdentity.provider === "local-engine" &&
+    (baselineProviderIdentity.promotion !== "promoted" ||
+      baselineProviderIdentity.licenseState !== "approved")
+  ) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code: "TESSERA_LOCAL_ENGINE_EVALUATION_ONLY",
+          message:
+            "The pinned local Tessera engine may produce evaluation and parity evidence, but paired revision conclusions remain disabled until its written-license and parity promotion gates are satisfied.",
           severity: "error",
         },
       ],
@@ -5634,7 +5845,9 @@ export async function compareRosterRevision(
     baseline.configuration.directions.length;
   if (
     baseline.status !== "complete" ||
-    baseline.source !== "tessera-ui" ||
+    !["tessera-ui", "tessera-local-engine"].includes(
+      baseline.source,
+    ) ||
     baselineScenarios.length !== expectedBaselineScenarios ||
     baselineScenarios.some((scenario) => scenario.status !== "complete")
   ) {
@@ -6015,6 +6228,9 @@ export async function compareRosterRevision(
       },
       {
         ...options,
+        simulationBackend:
+          baseline.simulation.selectedBackend ??
+          baselineProviderIdentity.provider,
         executionMode: "simulate",
         experimental: undefined,
         profilePolicy: revisionProfilePolicy,
@@ -6070,7 +6286,18 @@ export async function compareRosterRevision(
     if (
       revised.data.profilePolicyHash !==
         (baseline.profilePolicyHash ?? null) ||
-      revised.data.tesseraUiIdentity !== baseline.tesseraUiIdentity ||
+      JSON.stringify(
+        revised.data.simulation.providerIdentity ??
+          (revised.data.tesseraUiIdentity
+            ? {
+                schemaVersion: 1,
+                provider: "website",
+                engine: "tessera-ui",
+                uiIdentity: revised.data.tesseraUiIdentity,
+                adapterVersion: "website-browser-v1",
+              }
+            : null),
+      ) !== JSON.stringify(baselineProviderIdentity) ||
       !revisedOpponent ||
       !summariesGameplayCompatible(
         revisedOpponent.summary,
@@ -6089,7 +6316,7 @@ export async function compareRosterRevision(
           {
             code: "TESSERA_REVISION_EVIDENCE_DRIFT",
             message:
-              `The rerun against ${opponent.rosterName} changed its frozen opponent identity, profile policy, or Tessera UI identity.`,
+              `The rerun against ${opponent.rosterName} changed its frozen opponent identity, profile policy, or simulation-provider identity.`,
             severity: "error",
           },
         ],

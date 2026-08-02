@@ -488,6 +488,8 @@ export type ConnectorEvent = {
   eventId: string;
   recordedAt: string;
   provider: "new-recruit" | "tessera";
+  /** Concrete Tessera provider; absent on legacy connector receipts. */
+  simulationBackend?: "local-engine" | "website";
   action: "prepare" | "probe" | "simulate";
   origin:
     | "new-remote"
@@ -611,6 +613,50 @@ export type TesseraArchetype =
 
 export type TesseraPhase = "shooting" | "fight";
 
+/** Requested simulation route. `auto` resolves once per durable run. */
+export type TesseraSimulationBackend =
+  | "auto"
+  | "local-engine"
+  | "website";
+
+/** Concrete provider retained by reports, jobs, and paired comparisons. */
+export type TesseraSimulationProvider = Exclude<
+  TesseraSimulationBackend,
+  "auto"
+>;
+
+export type TesseraSimulationProviderIdentity =
+  | {
+      schemaVersion: 1;
+      provider: "website";
+      engine: "tessera-ui";
+      uiIdentity: string | null;
+      adapterVersion: string;
+    }
+  | {
+      schemaVersion: 1;
+      provider: "local-engine";
+      engine: "tessera-engine";
+      repository: "Tessera-cmd/tessera-engine";
+      commit: string;
+      tree: string;
+      sourceSha256: string;
+      adapterVersion: string;
+      compilerVersion: string;
+      inputSchemaVersion: 1;
+      capabilityManifestSha256: string;
+      promotion: "candidate" | "promoted";
+      licenseState: "evaluation-only" | "approved";
+    };
+
+export type TesseraSimulationFallbackReceipt = {
+  from: "local-engine";
+  to: "website";
+  code: string;
+  message: string;
+  discardedLocalEvidence: true;
+};
+
 export type TesseraMetric =
   | "wipe-probability"
   | "half-wipe-probability"
@@ -669,6 +715,12 @@ export type TesseraScenarioResult = {
     metric: TesseraMetric;
     iterations: number | null;
     settings: Record<string, string>;
+    /** Present for deterministic local-engine executions. */
+    seed?: number;
+    /** Shared by projections derived from one local Monte Carlo execution. */
+    executionSha256?: string;
+    /** Distinguishes each normalized metric projection. */
+    projectionSha256?: string;
     matrixSha256?: string;
     integrity?: {
       status: "trusted" | "aliased";
@@ -742,7 +794,26 @@ export type TesseraPointsComparison = {
 };
 
 export type TesseraConnectionStatus = {
+  /** Legacy website availability. New callers should inspect `backends`. */
   available: boolean;
+  simulationAvailable?: boolean;
+  defaultBackend?: TesseraSimulationBackend;
+  backends?: {
+    localEngine: {
+      available: boolean;
+      simulationReady: boolean;
+      endToEndReady: boolean;
+      promotion: "candidate" | "promoted";
+      licenseState: "evaluation-only" | "approved";
+      identity: TesseraSimulationProviderIdentity | null;
+      reason: string | null;
+    };
+    website: {
+      available: boolean;
+      identity: TesseraSimulationProviderIdentity | null;
+      reason: string | null;
+    };
+  };
   platform: NodeJS.Platform;
   browserAvailable: boolean;
   brokerAvailable: boolean;
@@ -773,6 +844,18 @@ export type TesseraPreparedRoster = {
   enrichedRoszPath: string;
   sourceRoszSha256?: string;
   enrichedRoszSha256?: string;
+  simulationInput?:
+    | {
+        kind: "new-recruit-enriched-rosz";
+        sha256: string;
+      }
+    | {
+        kind: "rosterpilot-local-engine-input";
+        path: string;
+        sha256: string;
+        bundleId: string;
+        compilerVersion: string;
+      };
   summary: EnrichedRoszSummary;
   fingerprint?: string;
   units?: TesseraUnitInstance[];
@@ -784,13 +867,15 @@ export type TesseraPreparedRoster = {
 };
 
 export type TesseraMatchupReport = {
-  schemaVersion?: 2 | 3;
+  schemaVersion?: 2 | 3 | 4;
   runId: string;
   generatedAt: string;
   source:
     | "prepare-only"
     | "tessera-ui"
     | "tessera-ui-failed"
+    | "tessera-local-engine"
+    | "tessera-local-engine-failed"
     | "handoff-only";
   status:
     | "prepared"
@@ -837,6 +922,7 @@ export type TesseraMatchupReport = {
     enrichedRoszPath: string;
     sourceRoszSha256?: string;
     enrichedRoszSha256?: string;
+    simulationInput?: TesseraPreparedRoster["simulationInput"];
     summary: EnrichedRoszSummary;
     fingerprint?: string;
     units?: TesseraUnitInstance[];
@@ -850,7 +936,11 @@ export type TesseraMatchupReport = {
     /** @deprecated Use executionMode. */
     experimental: boolean;
     status?: "not-requested" | "complete" | "partial" | "failed";
-    engine?: "tessera-ui";
+    requestedBackend?: TesseraSimulationBackend;
+    selectedBackend?: TesseraSimulationProvider;
+    providerIdentity?: TesseraSimulationProviderIdentity;
+    fallback?: TesseraSimulationFallbackReceipt | null;
+    engine?: "tessera-ui" | "tessera-engine";
     settings: Record<string, string>;
     legacyProjection?: {
       status: "derived" | "unavailable";
@@ -1489,7 +1579,7 @@ export type TesseraProfileRequirement = {
 };
 
 export type TesseraStressTestReport = {
-  schemaVersion: 2 | 3;
+  schemaVersion: 2 | 3 | 4;
   reportKind: "tessera-stress-test";
   runId: string;
   generatedAt: string;
@@ -1500,6 +1590,8 @@ export type TesseraStressTestReport = {
     | "prepare-only"
     | "tessera-ui"
     | "tessera-ui-failed"
+    | "tessera-local-engine"
+    | "tessera-local-engine-failed"
     | "handoff-only";
   status:
     | "prepared"
@@ -1520,7 +1612,11 @@ export type TesseraStressTestReport = {
   simulation?: {
     requested: boolean;
     status: "not-requested" | "complete" | "partial" | "failed";
-    engine: "none" | "tessera-ui";
+    requestedBackend?: TesseraSimulationBackend;
+    selectedBackend?: TesseraSimulationProvider;
+    providerIdentity?: TesseraSimulationProviderIdentity;
+    fallback?: TesseraSimulationFallbackReceipt | null;
+    engine: "none" | "tessera-ui" | "tessera-engine";
     trustedMatrices: number;
   };
   failures?: Array<{
