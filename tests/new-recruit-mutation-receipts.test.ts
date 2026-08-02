@@ -35,6 +35,7 @@ import {
   recordNewRecruitReuseReceipt,
   restoreNewRecruitMutationArtifactFromTesseraRun,
   storeNewRecruitCache,
+  storeNewRecruitProvisionalArtifact,
 } from "../local/new-recruit/cache";
 import {
   deliverRosterToNewRecruit,
@@ -98,13 +99,16 @@ function delivery(input: {
   };
 }
 
-function enrichedRosz(source: Uint8Array): Uint8Array {
+function enrichedRosz(
+  source: Uint8Array,
+  options: { gameSystemRevision?: number } = {},
+): Uint8Array {
   const entries = unzipSync(source);
   const [filename, bytes] = Object.entries(entries)[0];
   const profiles =
     '<profiles><profile name="Fixture model" typeName="Unit"/><profile name="Fixture weapon" typeName="Ranged Weapons"/></profiles>';
   let selectionDepth = 0;
-  const xml = strFromU8(bytes)
+  let xml = strFromU8(bytes)
     .replace(
       'generatedBy="RosterPilot"',
       'generatedBy="https://newrecruit.eu"',
@@ -129,6 +133,12 @@ function enrichedRosz(source: Uint8Array): Uint8Array {
         return topLevelUnit ? `${token}${profiles}` : token;
       },
     );
+  if (options.gameSystemRevision !== undefined) {
+    xml = xml.replace(
+      /gameSystemRevision="\d+"/,
+      `gameSystemRevision="${options.gameSystemRevision}"`,
+    );
+  }
   return zipSync({ [filename]: strToU8(xml) });
 }
 
@@ -184,6 +194,116 @@ function receiptLockOwnerFilename(
     newRecruitCacheKey(candidate),
     "owner.json",
   );
+}
+
+async function seedLegacyStrictDriftMisclassification(input: {
+  roster: RosterDraftV1;
+  supportDirectory: string;
+  uncertainContentSha256?: string;
+}): Promise<{
+  sourceSha256: string;
+  enrichedSha256: string;
+  verifiedEvent: ConnectorEvent;
+}> {
+  const exported = await exportRoster(input.roster, "rosz");
+  assert.ok(exported.ok && exported.data);
+  assert.notEqual(typeof exported.data.content, "string");
+  const source = exported.data.content as Uint8Array;
+  const enriched = enrichedRosz(source, {
+    gameSystemRevision:
+      input.roster.sourceData.newRecruit.gameSystemRevision + 1,
+  });
+  const sourceSha256 = crypto
+    .createHash("sha256")
+    .update(source)
+    .digest("hex");
+  const enrichedSha256 = crypto
+    .createHash("sha256")
+    .update(enriched)
+    .digest("hex");
+  const artifactDirectory = path.join(
+    input.supportDirectory,
+    "legacy-strict-drift",
+  );
+  await mkdir(artifactDirectory, { recursive: true });
+  const sourcePath = path.join(artifactDirectory, "source.rosz");
+  const enrichedPath = path.join(
+    artifactDirectory,
+    "enriched.rosz",
+  );
+  await Promise.all([
+    writeFile(sourcePath, source),
+    writeFile(enrichedPath, enriched),
+  ]);
+  const verifiedEvent: ConnectorEvent = {
+    schemaVersion: 1,
+    eventId: "legacy-strict-drift-event",
+    recordedAt: new Date().toISOString(),
+    provider: "new-recruit",
+    action: "prepare",
+    origin: "new-remote",
+    outcome: "verified",
+    remoteId:
+      "https://www.newrecruit.eu/app/Lists/legacy-strict-drift",
+    contentSha256: enrichedSha256,
+  };
+  const transaction = await beginNewRecruitMutationReceipt({
+    roster: input.roster,
+    runId: "legacy-strict-drift-run",
+  });
+  const strictDelivery: ResultEnvelope<NewRecruitDelivery> = {
+    ok: false,
+    data: {
+      rosterId: input.roster.id,
+      rosterName: input.roster.name,
+      listUrl: verifiedEvent.remoteId,
+      imported: true,
+      sessionReused: false,
+      cacheReused: false,
+      connectorEvents: [verifiedEvent],
+      verification: null,
+      enrichedSummary: inspectEnrichedRosz(enriched),
+      artifacts: [
+        {
+          format: "rosterpilot-source-rosz",
+          filename: "source.rosz",
+          mimeType: "application/zip",
+          written: sourcePath,
+        },
+        {
+          format: "new-recruit-enriched-rosz",
+          filename: "enriched.rosz",
+          mimeType: "application/zip",
+          written: enrichedPath,
+        },
+      ],
+    },
+    violations: [
+      {
+        code: "NEW_RECRUIT_CATALOGUE_DRIFT",
+        message:
+          "The verified upload used the next game-system revision.",
+        severity: "error",
+      },
+    ],
+    warnings: [],
+  };
+  await storeNewRecruitProvisionalArtifact(
+    input.roster,
+    strictDelivery,
+  );
+  await transaction.finalize({
+    outcome: "uncertain",
+    connectorEvent: {
+      ...verifiedEvent,
+      outcome: "uncertain",
+      contentSha256:
+        input.uncertainContentSha256 ?? enrichedSha256,
+    },
+    message:
+      "A legacy Tessera wrapper downgraded the verified upload after strict catalogue drift.",
+  });
+  return { sourceSha256, enrichedSha256, verifiedEvent };
 }
 
 test("New Recruit writes a sealed pending receipt before browser activity", async () => {
@@ -993,6 +1113,183 @@ test("Tessera preparation seals mutation receipts before delivery and records ca
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
+    },
+  );
+});
+
+test("a sealed provisional artifact repairs the legacy strict-drift misclassification before diagnostic reuse", async () => {
+  await withSupportDirectory(
+    "new-recruit-legacy-strict-drift-repair",
+    async (supportDirectory) => {
+      const candidate = roster();
+      const seeded = await seedLegacyStrictDriftMisclassification({
+        roster: candidate,
+        supportDirectory,
+      });
+      assert.equal(
+        (await readNewRecruitMutationReceipt(candidate))
+          ?.attempts[0]?.outcome,
+        "uncertain",
+      );
+      let deliveryCalls = 0;
+      const dependencies = {
+        runtimeIssue: () => null,
+        persistentCacheDelivery: true,
+        deliver: async () => {
+          deliveryCalls += 1;
+          throw new Error(
+            "the sealed provisional artifact must prevent redelivery",
+          );
+        },
+      };
+      const strict = await prepareRosterForTessera(
+        candidate,
+        {
+          outputDirectory: path.join(
+            supportDirectory,
+            "strict-recheck",
+          ),
+          allowOutsideRoot: true,
+          mutationRunId: "legacy-strict-drift-recheck-run",
+        },
+        dependencies,
+      );
+      assert.equal(strict.ok, false);
+      assert.equal(
+        strict.violations[0]?.code,
+        "NEW_RECRUIT_CATALOGUE_DRIFT",
+      );
+      assert.equal(strict.data?.cacheReused, true);
+      assert.equal(deliveryCalls, 0);
+
+      const prepared = await prepareRosterForTessera(
+        candidate,
+        {
+          outputDirectory: path.join(
+            supportDirectory,
+            "diagnostic-reuse",
+          ),
+          allowOutsideRoot: true,
+          mutationRunId: "legacy-strict-drift-diagnostic-run",
+          catalogueDriftMode: "diagnostic",
+        },
+        dependencies,
+      );
+      assert.equal(
+        prepared.ok,
+        true,
+        prepared.violations.map((issue) => issue.message).join("\n"),
+      );
+      assert.equal(prepared.data?.cacheReused, true);
+      assert.equal(deliveryCalls, 0);
+      assert.ok(
+        prepared.warnings.some(
+          (warning) =>
+            warning.code ===
+            "NEW_RECRUIT_PROVISIONAL_CACHE_REUSED",
+        ),
+      );
+
+      const repaired = await readNewRecruitMutationReceipt(candidate);
+      assert.equal(repaired?.attempts.length, 3);
+      assert.equal(repaired?.attempts[0]?.outcome, "created");
+      assert.equal(
+        repaired?.attempts[0]?.connectorEvent?.outcome,
+        "verified",
+      );
+      assert.equal(
+        repaired?.attempts[0]?.connectorEvent?.eventId,
+        seeded.verifiedEvent.eventId,
+      );
+      assert.equal(
+        repaired?.attempts[0]?.expectedSourceRoszSha256,
+        seeded.sourceSha256,
+      );
+      assert.equal(
+        repaired?.attempts[0]?.recoveryArtifact
+          ?.enrichedRoszSha256,
+        seeded.enrichedSha256,
+      );
+      assert.equal(repaired?.attempts[1]?.outcome, "reused");
+      assert.equal(
+        repaired?.attempts[1]?.runId,
+        "legacy-strict-drift-recheck-run",
+      );
+      assert.equal(repaired?.attempts[2]?.outcome, "reused");
+      assert.equal(
+        repaired?.attempts[2]?.runId,
+        "legacy-strict-drift-diagnostic-run",
+      );
+      assert.deepEqual(
+        (await readNewRecruitRunInventory()).entries.map(
+          (entry) => ({
+            runId: entry.runId,
+            outcome: entry.outcome,
+          }),
+        ),
+        [
+          {
+            runId: "legacy-strict-drift-run",
+            outcome: "created",
+          },
+          {
+            runId: "legacy-strict-drift-recheck-run",
+            outcome: "reused",
+          },
+          {
+            runId: "legacy-strict-drift-diagnostic-run",
+            outcome: "reused",
+          },
+        ],
+      );
+    },
+  );
+});
+
+test("provisional recovery leaves nonmatching uncertain mutations blocked", async () => {
+  await withSupportDirectory(
+    "new-recruit-legacy-strict-drift-conflict",
+    async (supportDirectory) => {
+      const candidate = roster();
+      await seedLegacyStrictDriftMisclassification({
+        roster: candidate,
+        supportDirectory,
+        uncertainContentSha256: "f".repeat(64),
+      });
+      let deliveryCalls = 0;
+      const prepared = await prepareRosterForTessera(
+        candidate,
+        {
+          outputDirectory: path.join(
+            supportDirectory,
+            "blocked-diagnostic",
+          ),
+          allowOutsideRoot: true,
+          mutationRunId: "blocked-diagnostic-run",
+          catalogueDriftMode: "diagnostic",
+        },
+        {
+          runtimeIssue: () => null,
+          persistentCacheDelivery: true,
+          deliver: async () => {
+            deliveryCalls += 1;
+            throw new Error("a conflicted receipt must not redeliver");
+          },
+        },
+      );
+      assert.equal(prepared.ok, false);
+      assert.equal(
+        prepared.violations[0]?.code,
+        "NEW_RECRUIT_MUTATION_RECONCILIATION_REQUIRED",
+      );
+      assert.equal(deliveryCalls, 0);
+      const receipt = await readNewRecruitMutationReceipt(candidate);
+      assert.equal(receipt?.attempts.length, 1);
+      assert.equal(receipt?.attempts[0]?.outcome, "uncertain");
+      assert.equal(
+        (await readNewRecruitRunInventory()).entries.length,
+        0,
+      );
     },
   );
 });

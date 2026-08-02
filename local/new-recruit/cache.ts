@@ -2301,6 +2301,121 @@ export async function storeNewRecruitProvisionalArtifact(
   }
 }
 
+function legacyUncertainEventMatchesVerified(
+  uncertain: ConnectorEvent | null,
+  verified: ConnectorEvent,
+): boolean {
+  if (
+    !uncertain ||
+    uncertain.provider !== "new-recruit" ||
+    uncertain.action !== "prepare" ||
+    uncertain.origin !== "new-remote" ||
+    uncertain.outcome !== "uncertain" ||
+    verified.provider !== "new-recruit" ||
+    verified.action !== "prepare" ||
+    verified.origin !== "new-remote" ||
+    verified.outcome !== "verified" ||
+    typeof verified.remoteId !== "string" ||
+    verified.remoteId.length === 0 ||
+    !verified.contentSha256
+  ) {
+    return false;
+  }
+  return (
+    uncertain.eventId === verified.eventId &&
+    uncertain.recordedAt === verified.recordedAt &&
+    uncertain.remoteId === verified.remoteId &&
+    uncertain.contentSha256 === verified.contentSha256
+  );
+}
+
+/**
+ * Releases one legacy contradiction created by the pre-recovery Tessera
+ * wrapper. That wrapper changed a verified remote creation to `uncertain`
+ * when strict catalogue acceptance failed after the upload. A sealed
+ * provisional artifact preserves the original verified event and exact
+ * source/enriched bytes, so that evidence can repair the receipt locally.
+ * Every other uncertain outcome remains fail-closed.
+ */
+async function repairLegacyStrictDriftMutationReceipt(input: {
+  roster: RosterDraftV1;
+  provisional: ProvisionalCacheReceiptV1;
+  directory: string;
+}): Promise<void> {
+  const cacheKey = newRecruitCacheKey(input.roster);
+  if (input.provisional.cacheKey !== cacheKey) {
+    throw failClosed(
+      "NEW_RECRUIT_PROVISIONAL_RECEIPT_CONFLICT",
+      "The provisional artifact does not match the roster mutation receipt.",
+    );
+  }
+  const verifiedEvents = input.provisional.connectorEvents.filter(
+    (event) =>
+      event.origin === "new-remote" &&
+      event.outcome === "verified" &&
+      event.remoteId === input.provisional.listUrl &&
+      event.contentSha256 === input.provisional.enrichedRoszSha256,
+  );
+  if (verifiedEvents.length === 0) return;
+
+  const filename = mutationReceiptPath(cacheKey);
+  const release = await acquireDirectoryLease(
+    mutationReceiptLockPath(cacheKey),
+  );
+  try {
+    const receipt = await readMutationReceiptFile(filename);
+    if (!receipt) return;
+    assertReceiptProvenance(receipt, input.roster);
+    const matches = receipt.attempts.flatMap((attempt) =>
+      attempt.outcome === "uncertain" &&
+      (
+        attempt.expectedSourceRoszSha256 === null ||
+        attempt.expectedSourceRoszSha256 ===
+          input.provisional.sourceRoszSha256
+      )
+        ? verifiedEvents
+            .filter((event) =>
+              legacyUncertainEventMatchesVerified(
+                attempt.connectorEvent,
+                event,
+              ),
+            )
+            .map((event) => ({ attempt, event }))
+        : [],
+    );
+    if (matches.length === 0) return;
+    if (matches.length !== 1) {
+      throw failClosed(
+        "NEW_RECRUIT_LEGACY_RECEIPT_AMBIGUOUS",
+        "More than one uncertain mutation matches the verified provisional artifact; manual reconciliation is required.",
+      );
+    }
+    const [{ attempt, event }] = matches;
+    const recoveryArtifact = await persistMutationRecoveryArtifact({
+      cacheKey,
+      sourceRoszPath: path.join(input.directory, "source.rosz"),
+      enrichedRoszPath: path.join(input.directory, "enriched.rosz"),
+      expectedSourceRoszSha256:
+        input.provisional.sourceRoszSha256,
+      expectedEnrichedRoszSha256:
+        input.provisional.enrichedRoszSha256,
+    });
+    attempt.outcome = "created";
+    attempt.expectedSourceRoszSha256 =
+      input.provisional.sourceRoszSha256;
+    attempt.connectorEvent = event;
+    attempt.inventoryEventId = `new-recruit-${event.eventId}`;
+    attempt.message =
+      "Recovered a verified New Recruit creation that an earlier strict catalogue-drift handoff misclassified as uncertain.";
+    attempt.recoveryArtifact = recoveryArtifact;
+    const sealed = resealMutationReceipt(receipt);
+    await atomicWriteJson(filename, sealed);
+    await ensureFinalizedInventory(sealed);
+  } finally {
+    await release();
+  }
+}
+
 export async function loadNewRecruitProvisionalArtifact(
   roster: RosterDraftV1,
 ): Promise<ResultEnvelope<NewRecruitDelivery> | null> {
@@ -2382,9 +2497,17 @@ export async function loadNewRecruitProvisionalArtifact(
     right.receipt.createdAt.localeCompare(left.receipt.createdAt),
   );
   const selected = candidates[0];
-  return selected
-    ? provisionalDelivery(roster, selected.directory, selected.receipt)
-    : null;
+  if (!selected) return null;
+  await repairLegacyStrictDriftMutationReceipt({
+    roster,
+    provisional: selected.receipt,
+    directory: selected.directory,
+  });
+  return provisionalDelivery(
+    roster,
+    selected.directory,
+    selected.receipt,
+  );
 }
 
 /**

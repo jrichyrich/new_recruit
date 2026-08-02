@@ -31,7 +31,26 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
    operator request to restore an exact archived bundle; rollback also affects
    only future requests.
 4. Use `search_factions`, `compare_factions`, or `search_units` to answer research questions. Clearly distinguish browsable factions from build-supported factions.
-5. Call `build_roster` with the user’s prompt and explicit constraints. Include point limit, named-character preference, Legends preference, collection ids, detachment, or disposition when provided.
+5. Prefer `run_roster_workflow` for a natural-language request that composes
+   build, validation, coaching, an export-safe handoff, explicit New Recruit
+   delivery, or approval-gated optimization. It resolves the player and
+   opponent under one immutable bundle lease and never treats a capability
+   question as delivery authority. Use the lower-level tools when the user is
+   inspecting or operating on an existing roster or asks for only one step.
+   Faction resolution is fail-closed: canonical names, IDs, and reviewed
+   aliases may resolve, but fuzzy or voice-like suggestions require user
+   confirmation and must never fall back to Custodes or another faction.
+   Call `build_roster` with the user’s prompt and explicit constraints when a
+   standalone build is appropriate. Include
+   point limit, named-character preference, collection ids, detachment, or
+   disposition when provided. For Legends, prefer `legendsPolicy` plus a
+   structured `playContext`; keep `allowLegends` only for compatibility.
+   Questions such as “are Legends allowed?” do not opt a roster in. Casual,
+   narrative, and open-play context may allow verified, build-supported
+   Legends. A named event requires an explicit `allowed` ruling with
+   identifiable `event-pack` or `organizer-ruling` evidence; otherwise exclude
+   Legends even if the user requested `allow`. Never override a sourced event
+   denial.
 6. Use `modify_roster` for changes. Never edit stored totals, ordinals, or legality fields by hand.
 7. Call `validate_roster` after every build or modification.
 8. Call `explain_roster` only after validation so the explanation includes current cautions.
@@ -64,8 +83,11 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
     - Build against a known canonical roster: use
       `build_and_analyze_roster_matchup`, which scores against that roster
       rather than the faction catalogue.
-    A missing faction and missing exact roster is not enough scope; report
-    `OPPONENT_SCOPE_REQUIRED` instead of choosing a faction.
+    A standalone exact or known-faction Tessera request still requires that
+    opponent scope and reports `OPPONENT_SCOPE_REQUIRED` rather than guessing.
+    An explicit `run_roster_workflow` optimize request with no opponent may
+    instead use its frozen six-archetype general portfolio at 1,000 or 2,000
+    points; other limits require a named faction or exact roster.
     Set `verifiedCatalogueDriftDiagnostic: true` only when the user explicitly
     asks to test through a verified forward game-system-revision mismatch.
     Never infer this permission. Require the same game-system ID, exact
@@ -98,11 +120,36 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
     copies to obtain profile-rich `.rosz` files. Never describe a client or
     Codex timeout as a failed workflow; return the run ID and current durable
     status.
-16. Do not apply a Tessera change candidate automatically. After explicit
+16. Do not apply a Tessera change candidate automatically. Guided optimization
+    requires two approvals: first the candidate batch (at most three), then the
+    exact paired-test winner or the unchanged baseline. Recheck the frozen
+    baseline, bundle, portfolio, profile-policy, heuristic, and runtime hashes
+    at every transition; drift invalidates the approval. `recommend-only`
+    findings are unpaired and cannot authorize a revision. After explicit
     approval, modify and validate a new canonical roster, then call
     `compare_roster_revision` or `compare_stress_test_revision` against the
     exact frozen baseline only when the user asks for the before/after run.
-    Both comparison tools return durable job references; follow them with the
+    On the local MCP, use `start_tessera_optimizer`,
+    `approve_tessera_optimizer_candidates`, the returned paired revision
+    requests, `record_tessera_optimizer_comparison`, and then either
+    `approve_tessera_optimizer_winner` or
+    `retain_tessera_optimizer_baseline`. Finalization records delivery intent
+    but does not deliver. Call
+    `deliver_tessera_optimizer_winner_to_new_recruit` only after a finalized
+    `deliver-new-recruit` intent and a new explicit `confirmDelivery=true`.
+    For a general six-archetype run, use the separate
+    `start_tessera_general_optimizer` lifecycle after all six exact baselines
+    complete. It requires the frozen portfolio, canonical player roster, and
+    exactly one report per archetype. Approve at most three candidates with
+    `approve_tessera_general_optimizer_candidates`; run all six returned
+    request-SHA-bound revisions per candidate; record each with
+    `record_tessera_general_optimizer_comparison`; then separately approve the
+    aggregate no-regression Pareto winner or retain the baseline. Finalize and
+    call `deliver_tessera_general_optimizer_winner_to_new_recruit` only with
+    the same finalized intent and fresh `confirmDelivery=true` gate. Never
+    substitute six independent single-baseline optimizer conclusions for the
+    aggregate coordinator.
+    All paired comparison requests return durable job references; follow them with the
     same status, profile-resolution, resume, and restart flow above.
 
 ## Validation rules
@@ -129,6 +176,15 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   identities, selection paths, constraints, and export structure. Unresolved
   official/community conflicts fail closed at the affected scope; remind users
   to confirm event-specific rulings.
+- Treat Games Workshop faction packs as the Legends-classification authority.
+  The points manual and BSData labels do not prove membership. Check the
+  `get_data_status.legends` coverage and authority counts, and use
+  `search_units(includeLegends=true)` when the user wants the inventory.
+  Clearly label `legendBuildSupported=false` results as inventory-only; do not
+  build them or synthesize missing profiles. Surface
+  `LEGENDS_CLASSIFICATION_UNVERIFIED`, `LEGENDS_POLICY_UNKNOWN`,
+  `LEGENDS_BUILD_SUPPORT_UNAVAILABLE`, and `LEGENDS_INCLUDED` without hiding
+  them.
 - When collection quantities are omitted, label counter-build advice
   `open-catalog`. Use `collectionProfile.mode="owned"` with per-unit
   `maxUnits` and `maxModels` when quantities are known; do not imply that
@@ -141,6 +197,10 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   Capability is evaluated per roster; do not infer it from the faction name.
 - Treat `NEW_RECRUIT_MAPPING_UNAVAILABLE` as a capability boundary, not a
   roster-legality failure. Offer printable HTML or roster JSON.
+- Treat `NEW_RECRUIT_LEGENDS_CONFIGURATION_UNAVAILABLE` as a scoped ROS/ROSZ
+  failure: the selected roster is still valid, but New Recruit's exact Legends
+  visibility branch is not mapped for that frozen catalogue. Offer text,
+  printable HTML, or canonical JSON and do not guess the selection path.
 - Treat `NEW_RECRUIT_DATA_CONFLICT` as a fail-closed export result. Report the
   named conflicts and offer printable HTML or canonical roster JSON.
 - Omit `outputPath` when the user only wants content returned to the chat.
@@ -187,3 +247,6 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   it if the client disconnects.”
 - “Build a Custodes roster against this exact Aeldari roster, respecting my
   owned-model quantities, then start a durable Tessera run.”
+- “Build a 1,000-point Custodes army, coach me on its competitive roles, test
+  it against the six general threat archetypes, and show me candidate changes
+  for approval.”

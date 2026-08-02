@@ -11,6 +11,10 @@ on:
         description: Exact HTTPS or checkout-relative official source artifact covered by the overlay
         required: false
         type: string
+      official_legend_source_artifacts:
+        description: Optional JSON array of schema-v2 source-id=HTTPS-or-checkout-relative-path entries
+        required: false
+        type: string
       official_extraction_receipt:
         description: Signed reviewed-extractor receipt for the source and overlay
         required: false
@@ -75,6 +79,7 @@ jobs:
         env:
           OFFICIAL_EVIDENCE_INPUT: ${{ inputs.official_reconciliation_evidence }}
           OFFICIAL_SOURCE_INPUT: ${{ inputs.official_source_artifact }}
+          OFFICIAL_LEGEND_SOURCES_INPUT: ${{ inputs.official_legend_source_artifacts }}
           OFFICIAL_RECEIPT_INPUT: ${{ inputs.official_extraction_receipt }}
           OFFICIAL_UNAVAILABLE_REASON: ${{ inputs.official_authority_unavailable_reason }}
         run: |
@@ -90,12 +95,13 @@ jobs:
           fi
           official_evidence="$OFFICIAL_EVIDENCE_INPUT"
           official_source="$OFFICIAL_SOURCE_INPUT"
+          official_legend_sources="$OFFICIAL_LEGEND_SOURCES_INPUT"
           official_receipt="$OFFICIAL_RECEIPT_INPUT"
-          if test -n "$official_evidence" && test -n "$OFFICIAL_UNAVAILABLE_REASON"; then
+          if { test -n "$official_evidence" || test -n "$official_source" || test -n "$official_legend_sources" || test -n "$official_receipt"; } && test -n "$OFFICIAL_UNAVAILABLE_REASON"; then
             echo "Official evidence and an unavailable-authority reason are mutually exclusive." >&2
             exit 1
           fi
-          if test -n "$official_evidence" || test -n "$official_source" || test -n "$official_receipt"; then
+          if test -n "$official_evidence" || test -n "$official_source" || test -n "$official_legend_sources" || test -n "$official_receipt"; then
             test -n "$official_evidence" && test -n "$official_source" && test -n "$official_receipt"
             if [[ "$official_evidence" == https://* ]]; then
               evidence_file="$RUNNER_TEMP/rosterpilot-official-overlay.json"
@@ -115,15 +121,34 @@ jobs:
             else
               receipt_file="$GITHUB_WORKSPACE/$official_receipt"
             fi
-            npm run data:official-overlay -- check \
-              --file "$evidence_file" \
-              --source-artifact "$source_file" \
+            legend_entries_file="$RUNNER_TEMP/rosterpilot-official-legend-inputs.tsv"
+            node --import tsx scripts/parse-official-legend-artifacts.ts \
+              "$official_legend_sources" > "$legend_entries_file"
+            official_check_args=(
+              --file "$evidence_file"
+              --source-artifact "$source_file"
               --receipt "$receipt_file"
-            args+=(
+            )
+            official_build_args=(
               --official-reconciliation-evidence "$evidence_file"
               --official-source-artifact "$source_file"
               --official-extraction-receipt "$receipt_file"
             )
+            legend_index=0
+            while IFS=$'\t' read -r source_id artifact_input; do
+              if [[ "$artifact_input" == https://* ]]; then
+                artifact_file="$RUNNER_TEMP/rosterpilot-official-legend-$legend_index"
+                curl --fail --show-error --silent --location "$artifact_input" --output "$artifact_file"
+              else
+                artifact_file="$GITHUB_WORKSPACE/$artifact_input"
+              fi
+              test -f "$artifact_file"
+              official_check_args+=(--legend-source-artifact "$source_id=$artifact_file")
+              official_build_args+=(--official-legend-source-artifact "$source_id=$artifact_file")
+              legend_index=$((legend_index + 1))
+            done < "$legend_entries_file"
+            npm run data:official-overlay -- check "${official_check_args[@]}"
+            args+=("${official_build_args[@]}")
           elif test -n "$OFFICIAL_UNAVAILABLE_REASON"; then
             args+=(--official-authority-unavailable "$OFFICIAL_UNAVAILABLE_REASON")
           fi

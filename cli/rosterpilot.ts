@@ -14,8 +14,10 @@ import {
   getNewRecruitCapability,
   getDataStatus,
   getDataUpdateStatus,
+  GeneralThreatArchetypeIds,
   listDataConflicts,
   modifyRoster,
+  prepareRosterWorkflow,
   previewFactionStressPortfolio,
   rebaseRosterWithProvider,
   refreshDataNow,
@@ -25,8 +27,16 @@ import {
   validateRoster,
   withDataBundleSnapshotLease,
   type ExportFormat,
+  type GeneralThreatArchetype,
+  type LegendsPlayContext,
+  type LegendsPolicy,
   type ModifyRosterOperation,
   type PreferenceTag,
+  type RosterArtifactRequirement,
+  type RosterCoachingMode,
+  type RosterOptimizerMode,
+  type RosterWorkflowResult,
+  type RosterWorkflowIntent,
   type TesseraStressAnalysisStrategy,
   type TesseraStressPortfolioPreview,
   type TesseraStressSuite,
@@ -34,6 +44,7 @@ import {
 import {
   readRosterDraft,
   writeExportArtifact,
+  writeExportArtifacts,
   writeRosterDraft,
 } from "../lib/rosterpilot/io";
 import {
@@ -74,6 +85,24 @@ import {
 } from "../local/tessera/jobs";
 import { ProfilePolicySchema } from "../local/tessera/profile-policy";
 import {
+  approveAndMaterializeTesseraOptimizerCandidates,
+  approveStoredTesseraOptimizerWinner,
+  finalizeStoredTesseraOptimizer,
+  getTesseraOptimizerStatus,
+  recordStoredTesseraOptimizerComparison,
+  retainStoredTesseraOptimizerBaseline,
+  startTesseraOptimizer,
+} from "../local/tessera/optimizer-store";
+import {
+  approveAndMaterializeTesseraGeneralOptimizerCandidates,
+  approveStoredTesseraGeneralOptimizerWinner,
+  finalizeStoredTesseraGeneralOptimizer,
+  getTesseraGeneralOptimizerStatus,
+  recordStoredTesseraGeneralOptimizerComparison,
+  retainStoredTesseraGeneralOptimizerBaseline,
+  startTesseraGeneralOptimizer,
+} from "../local/tessera/general-optimizer-store";
+import {
   initializeLocalDataBundleProvider,
 } from "../local/data-bundles/configure";
 
@@ -109,6 +138,88 @@ function flag(args: Args, key: string): boolean {
   return args[key] === true || value(args, key) === "true";
 }
 
+function requiredInteger(
+  args: Args,
+  key: string,
+  label = `--${key}`,
+): number {
+  const raw = value(args, key);
+  const parsed = raw === undefined ? Number.NaN : Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} requires a non-negative integer.`);
+  }
+  return parsed;
+}
+
+function optimizerStatePath(args: Args): string {
+  const requested = value(args, "optimizer") ?? value(args, "state");
+  if (!requested) {
+    throw new Error(
+      "This optimizer command requires --optimizer <tessera-optimizer.json>.",
+    );
+  }
+  return path.resolve(requested);
+}
+
+function generalOptimizerStatePath(args: Args): string {
+  const requested = value(args, "optimizer") ?? value(args, "state");
+  if (!requested) {
+    throw new Error(
+      "This general optimizer command requires --optimizer <tessera-general-optimizer.json>.",
+    );
+  }
+  return path.resolve(requested);
+}
+
+function isGeneralThreatArchetype(
+  value: string,
+): value is GeneralThreatArchetype {
+  return (GeneralThreatArchetypeIds as readonly string[]).includes(value);
+}
+
+function generalArchetypeMappings(
+  args: Args,
+  key: "baseline" | "profile-policy",
+  required: boolean,
+): Map<GeneralThreatArchetype, string> {
+  const mappings = new Map<GeneralThreatArchetype, string>();
+  for (const entry of list(args, key)) {
+    const separator = entry.indexOf("=");
+    const archetypeId = separator > 0
+      ? entry.slice(0, separator).trim()
+      : "";
+    const filename = separator > 0
+      ? entry.slice(separator + 1).trim()
+      : "";
+    if (!isGeneralThreatArchetype(archetypeId) || !filename) {
+      throw new Error(
+        `--${key} requires archetype=path using one of: ${
+          GeneralThreatArchetypeIds.join(", ")
+        }.`,
+      );
+    }
+    if (mappings.has(archetypeId)) {
+      throw new Error(
+        `--${key} contains duplicate mapping for ${archetypeId}.`,
+      );
+    }
+    mappings.set(archetypeId, filename);
+  }
+  if (required) {
+    const missing = GeneralThreatArchetypeIds.filter(
+      (archetypeId) => !mappings.has(archetypeId),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `--${key} requires exactly one mapping for all six archetypes; missing: ${
+          missing.join(", ")
+        }.`,
+      );
+    }
+  }
+  return mappings;
+}
+
 function requestedCatalogueDriftMode(
   args: Args,
   inheritFrozenPolicy = false,
@@ -133,6 +244,49 @@ function list(args: Args, key: string): string[] {
   if (!found || found === true) return [];
   const values = Array.isArray(found) ? found : [found];
   return values.flatMap((entry) => entry.split(",")).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function requestedLegendsPolicy(
+  args: Args,
+): LegendsPolicy | undefined {
+  if (args["legends-policy"] === undefined) return undefined;
+  const requested = value(args, "legends-policy");
+  if (
+    requested !== "auto" &&
+    requested !== "allow" &&
+    requested !== "exclude"
+  ) {
+    throw new Error(
+      "--legends-policy requires auto, allow, or exclude.",
+    );
+  }
+  return requested;
+}
+
+type CliPlayContextKind = Exclude<
+  LegendsPlayContext["kind"],
+  "event"
+>;
+
+function requestedPlayContext(
+  args: Args,
+): LegendsPlayContext | undefined {
+  if (args["play-context"] === undefined) return undefined;
+  const requested = value(args, "play-context") as
+    | CliPlayContextKind
+    | undefined;
+  if (
+    requested !== "unspecified" &&
+    requested !== "open-play" &&
+    requested !== "casual" &&
+    requested !== "narrative" &&
+    requested !== "matched-play"
+  ) {
+    throw new Error(
+      "--play-context requires unspecified, open-play, casual, narrative, or matched-play.",
+    );
+  }
+  return { kind: requested };
 }
 
 function print(payload: unknown): void {
@@ -207,6 +361,236 @@ function compactPortfolioPreview(
   };
 }
 
+function compactRosterWorkflowData(
+  workflow: RosterWorkflowResult,
+): Record<string, unknown> {
+  const roster = workflow.roster;
+  const coaching = workflow.coaching;
+  const target = workflow.optimization?.target;
+  return {
+    schemaVersion: workflow.schemaVersion,
+    workflowKind: workflow.workflowKind,
+    status: workflow.status,
+    intent: workflow.intent,
+    faction: workflow.faction,
+    roster: roster
+      ? {
+          id: roster.id,
+          name: roster.name,
+          factionId: roster.factionId,
+          factionName: roster.factionName,
+          points: `${roster.totalPoints}/${roster.pointsLimit}`,
+          detachment: roster.detachmentName,
+          forceDisposition: roster.forceDispositionName,
+          units: roster.units.map((unit) => ({
+            selectionId: unit.selectionId,
+            name: unit.name,
+            modelCount: unit.modelCount,
+            points: unit.points,
+            warlord: unit.isWarlord,
+          })),
+          bundleId: roster.sourceData.bundleId,
+        }
+      : null,
+    validation: workflow.validation,
+    explanation: workflow.explanation
+      ? {
+          summary: workflow.explanation.summary,
+          choices: workflow.explanation.choices,
+          cautions: workflow.explanation.cautions,
+        }
+      : null,
+    coaching: coaching
+      ? {
+          mode: coaching.mode,
+          heuristicPack: coaching.heuristicPack,
+          summary: coaching.summary,
+          advice: coaching.advice,
+          units: coaching.mode === "full" ? coaching.units : undefined,
+          disclaimer: coaching.disclaimer,
+        }
+      : null,
+    newRecruit: {
+      capability: workflow.newRecruit.capability,
+      handoff: workflow.newRecruit.handoff
+        ? {
+            rosterName: workflow.newRecruit.handoff.rosterName,
+            totalPoints: workflow.newRecruit.handoff.totalPoints,
+            importUrl: workflow.newRecruit.handoff.importUrl,
+            artifacts:
+              workflow.newRecruit.handoff.artifacts.map(
+                ({ content, ...artifact }) => {
+                  void content;
+                  return artifact;
+                },
+              ),
+            instructions:
+              workflow.newRecruit.handoff.instructions,
+          }
+        : null,
+      delivery: workflow.newRecruit.delivery,
+    },
+    optimization: workflow.optimization
+      ? {
+          mode: workflow.optimization.mode,
+          status: workflow.optimization.status,
+          pairedTestRequired:
+            workflow.optimization.pairedTestRequired,
+          deliveryAfterWinnerApproval:
+            workflow.optimization.deliveryAfterWinnerApproval,
+          target:
+            target?.kind === "general-six-archetype"
+              ? {
+                  kind: target.kind,
+                  portfolioHash: target.portfolio.portfolioHash,
+                  pointsLimit: target.portfolio.pointsLimit,
+                  items: target.portfolio.items.map((item) => ({
+                    archetypeId: item.archetypeId,
+                    label: item.label,
+                    representativeFaction:
+                      item.representativeFactionName,
+                    simulationFingerprint:
+                      item.simulationFingerprint,
+                    evidence: item.selectionEvidence,
+                  })),
+                  limitations: target.portfolio.limitations,
+                }
+              : target?.kind === "exact-opponent"
+                ? {
+                    kind: target.kind,
+                    factionId: target.factionId,
+                    rosterId: target.roster.id,
+                  }
+                : target,
+        }
+      : null,
+  };
+}
+
+type WorkflowTesseraBaselineJobSummary = {
+  targetId: string;
+  targetLabel: string;
+  ok: boolean;
+  runId: string | null;
+  runKind: string;
+  status: string;
+  requestPath: string | null;
+  manifestPath: string | null;
+  jobDirectory: string | null;
+  error: { code: string; message: string } | null;
+};
+
+async function startWorkflowTesseraBaselines(
+  workflow: RosterWorkflowResult,
+  args: Args,
+): Promise<WorkflowTesseraBaselineJobSummary[]> {
+  if (!workflow.roster || !workflow.optimization) return [];
+  const target = workflow.optimization.target;
+  const requests: Array<{
+    targetId: string;
+    targetLabel: string;
+    request: TesseraRunRequest;
+  }> = [];
+  if (target.kind === "exact-opponent") {
+    requests.push({
+      targetId: target.roster.id,
+      targetLabel: target.roster.name,
+      request: {
+        kind: "exact",
+        playerRoster: workflow.roster,
+        opponent: { kind: "roster", roster: target.roster },
+        options: {
+          executionMode: "simulate",
+          experimental: false,
+          analysisMode: "full",
+          includeChangeCandidates: true,
+        },
+      },
+    });
+  } else if (target.kind === "known-faction") {
+    requests.push({
+      targetId: target.factionId,
+      targetLabel: target.portfolioPreview.portfolio.factionName,
+      request: {
+        kind: "stress",
+        playerRoster: workflow.roster,
+        factionId: target.factionId,
+        options: {
+          suite: "diverse-9",
+          analysisStrategy: "staged",
+          executionMode: "simulate",
+          experimental: false,
+          portfolioPreview: target.portfolioPreview,
+        },
+      },
+    });
+  } else {
+    for (const item of target.portfolio.items) {
+      requests.push({
+        targetId: item.archetypeId,
+        targetLabel: `${item.label} (${item.representativeFactionName})`,
+        request: {
+          kind: "exact",
+          playerRoster: workflow.roster,
+          opponent: { kind: "roster", roster: item.roster },
+          options: {
+            executionMode: "simulate",
+            experimental: false,
+            analysisMode: "full",
+            includeChangeCandidates: true,
+          },
+        },
+      });
+    }
+  }
+  const outputDirectory =
+    value(args, "tessera-out-dir") ?? "exports/tessera";
+  return Promise.all(
+    requests.map(async ({ targetId, targetLabel, request }) => {
+      try {
+        const job = await startTesseraRun(request, {
+          outputDirectory,
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+        });
+        return {
+          targetId,
+          targetLabel,
+          ok: true,
+          runId: job.runId,
+          runKind: job.runKind,
+          status: job.status,
+          requestPath: job.requestPath,
+          manifestPath: job.manifestPath,
+          jobDirectory: job.jobDirectory,
+          error: null,
+        };
+      } catch (error) {
+        const code =
+          error && typeof error === "object" && "code" in error &&
+          typeof error.code === "string"
+            ? error.code
+            : "TESSERA_BASELINE_START_FAILED";
+        return {
+          targetId,
+          targetLabel,
+          ok: false,
+          runId: null,
+          runKind: request.kind,
+          status: "failed-to-start",
+          requestPath: null,
+          manifestPath: null,
+          jobDirectory: null,
+          error: {
+            code,
+            message:
+              error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }),
+  );
+}
+
 async function readPortfolioPreview(
   filename: string,
 ): Promise<TesseraStressPortfolioPreview> {
@@ -249,9 +633,10 @@ Usage:
   rosterpilot data rollback --bundle <bundle-id>
   rosterpilot rebase --file roster.json [--out rebased.json]
   rosterpilot conflicts [--faction adeptus-custodes] [--blocking true]
-  rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective]
+  rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective] [--include-legends]
   rosterpilot compare <faction> <faction>
-  rosterpilot build --prompt "Build a fast 1,000 point Aeldari army" [--out roster.json]
+  rosterpilot workflow --prompt "Build a 1,000 point Custodes army and upload it to New Recruit" [--intent build|prepare-new-recruit|deliver-new-recruit|optimize] [--coaching none|concise|full] [--optimizer-mode guided|recommend-only] [--opponent-faction aeldari | --opponent-roster enemy.json] [--out roster.json] [--portfolio-out general-threat-portfolio.json] [--out-dir exports/new-recruit] [--tessera-out-dir exports/tessera]
+  rosterpilot build --prompt "Build a fast 1,000 point Aeldari army" [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--out roster.json]
   rosterpilot modify --file roster.json --operation '{"type":"remove","selectionId":"..."}' [--out next.json]
   rosterpilot validate --file roster.json
   rosterpilot explain --file roster.json
@@ -273,15 +658,29 @@ Usage:
   rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
   rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
-  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
+  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--collection collection.json] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
   rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
   rosterpilot tessera run-resume --job exports/tessera/runs/run-.../tessera-run.json [--restart-from] [--out-dir exports/tessera]
   rosterpilot tessera resolve-profiles --job ... --profile-policy profiles.json
   rosterpilot tessera run-cancel --job exports/tessera/runs/run-.../tessera-run.json
   rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera]
   rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera] [--overwrite]
+  rosterpilot tessera optimizer-start --baseline-report matchup.json --file roster.json [--mode guided|recommend-only] [--profile-policy profiles.json] [--out-dir exports/tessera/optimizers]
+  rosterpilot tessera optimizer-status --optimizer exports/tessera/optimizers/optimizer-.../tessera-optimizer.json
+  rosterpilot tessera optimizer-approve-candidates --optimizer ... --expected-revision 0 --candidate candidate-id [--candidate another-id] --approval-id approval-id --approved-by name
+  rosterpilot tessera optimizer-record-comparison --optimizer ... --expected-revision 2 --candidate candidate-id --report comparison.json
+  rosterpilot tessera optimizer-approve-winner --optimizer ... --expected-revision 3 --candidate candidate-id --approval-id approval-id --approved-by name
+  rosterpilot tessera optimizer-retain-baseline --optimizer ... --expected-revision 3 --approval-id approval-id --approved-by name
+  rosterpilot tessera optimizer-finalize --optimizer ... --expected-revision 4 [--delivery-intent none|prepare-handoff|deliver-new-recruit] [--intent-id intent-id --recorded-by name]
+  rosterpilot tessera general-optimizer-start --file roster.json --portfolio general-threat-portfolio.json --baseline horde=horde.json --baseline elite=elite.json --baseline ranged-pressure=ranged.json --baseline armour-monster=armour.json --baseline fast-scoring-msu=msu.json --baseline melee-pressure=melee.json [--profile-policy horde=horde-profiles.json] [--mode guided|recommend-only] [--out-dir exports/tessera/general-optimizers]
+  rosterpilot tessera general-optimizer-status --optimizer exports/tessera/general-optimizers/general-optimizer-.../tessera-general-optimizer.json
+  rosterpilot tessera general-optimizer-approve-candidates --optimizer ... --expected-revision 0 --candidate candidate-id [--candidate another-id] --approval-id approval-id --approved-by name
+  rosterpilot tessera general-optimizer-record-comparison --optimizer ... --expected-revision 2 --candidate candidate-id --archetype horde --request-sha256 <sha256> --report comparison.json
+  rosterpilot tessera general-optimizer-approve-winner --optimizer ... --expected-revision 8 --candidate candidate-id --approval-id approval-id --approved-by name
+  rosterpilot tessera general-optimizer-retain-baseline --optimizer ... --expected-revision 8 --approval-id approval-id --approved-by name
+  rosterpilot tessera general-optimizer-finalize --optimizer ... --expected-revision 9 [--delivery-intent none|prepare-handoff|deliver-new-recruit] [--intent-id intent-id --recorded-by name]
   rosterpilot mcp
 
 Writes are restricted to the current directory unless --allow-outside-root is supplied.
@@ -291,6 +690,11 @@ Use --restart-from with a different --out-dir after a five-attempt budget is
 exhausted; verified prepared artifacts are reused, but simulation stages start fresh.
 Stress tests default to the diverse-9 suite and staged analysis; results are
 directional robustness ranges, not game win probabilities.
+Optimizer candidate and winner approvals are separate durable gates. Finalize
+records delivery intent only; it does not upload a roster to New Recruit.
+General optimizer baselines are keyed by archetype, never array position. Supply
+exactly one repeatable --baseline archetype=path mapping for each of the six
+general-threat archetypes; profile policies use the same keyed form.
 --verified-catalogue-drift-diagnostic is not a general drift override. It
 accepts only a newer game-system revision with exact faction-catalogue identity
 and complete per-unit profiles. Set it when starting a durable run; resume
@@ -348,7 +752,7 @@ async function main(): Promise<void> {
               "plain text",
             ],
             nextCommand:
-              'rosterpilot build --prompt "Build a 1,000 point army" --out roster.json',
+              'rosterpilot build --prompt "Build a 1,000 point Custodes army" --out roster.json',
           },
           {
             id: "new-recruit",
@@ -404,6 +808,27 @@ async function main(): Promise<void> {
             ],
             nextCommand:
               "rosterpilot tessera stress-test --file roster.json --against-faction necrons --execution-mode simulate",
+          },
+          {
+            id: "tessera-optimizer",
+            label:
+              "Approval-gated paired Tessera roster optimization",
+            available: tessera.data?.available ?? false,
+            setupProfile: "tessera",
+            requires: [
+              "one complete exact/stress baseline or six keyed general exact baselines",
+              "the exact canonical baseline roster",
+              "the frozen six-archetype portfolio for general optimization",
+              "explicit candidate-batch and exact-winner approvals",
+            ],
+            produces: [
+              "durable frozen optimizer state",
+              "paired revision requests and evidence receipts",
+              "single-baseline or aggregate no-regression Pareto frontier",
+              "final canonical roster artifact",
+            ],
+            nextCommand:
+              "rosterpilot tessera optimizer-start --baseline-report result.json --file roster.json --mode guided",
           },
         ],
       },
@@ -536,6 +961,418 @@ async function main(): Promise<void> {
     }
     if (action === "forget") {
       const result = await forgetTesseraCredentials();
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "general-optimizer-start") {
+      const rosterPath = value(args, "file");
+      const portfolioPath = value(args, "portfolio");
+      const mode = value(args, "mode") ?? "guided";
+      if (!rosterPath || !portfolioPath) {
+        throw new Error(
+          "Tessera general-optimizer-start requires --file and --portfolio.",
+        );
+      }
+      if (mode !== "guided" && mode !== "recommend-only") {
+        throw new Error(
+          "Tessera general-optimizer-start --mode requires guided or recommend-only.",
+        );
+      }
+      const baselinePaths = generalArchetypeMappings(
+        args,
+        "baseline",
+        true,
+      );
+      const profilePolicyPaths = generalArchetypeMappings(
+        args,
+        "profile-policy",
+        false,
+      );
+      const result = await startTesseraGeneralOptimizer({
+        baselineRoster: await readRosterDraft(path.resolve(rosterPath)),
+        portfolioPath: path.resolve(portfolioPath),
+        baselines: GeneralThreatArchetypeIds.map((archetypeId) => ({
+          archetypeId,
+          reportPath: path.resolve(baselinePaths.get(archetypeId)!),
+          ...(profilePolicyPaths.has(archetypeId)
+            ? {
+                profilePolicyPath: path.resolve(
+                  profilePolicyPaths.get(archetypeId)!,
+                ),
+              }
+            : {}),
+        })),
+        mode,
+        outputDirectory:
+          value(args, "out-dir") ??
+          "exports/tessera/general-optimizers",
+        allowOutsideRoot: flag(args, "allow-outside-root"),
+      });
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "general-optimizer-status") {
+      const result = await getTesseraGeneralOptimizerStatus(
+        generalOptimizerStatePath(args),
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "general-optimizer-approve-candidates") {
+      const candidateIds = list(args, "candidate");
+      const approvalId = value(args, "approval-id");
+      const approvedBy = value(args, "approved-by");
+      if (!candidateIds.length || !approvalId || !approvedBy) {
+        throw new Error(
+          "Tessera general-optimizer-approve-candidates requires one or more --candidate values, --approval-id, and --approved-by.",
+        );
+      }
+      const result =
+        await approveAndMaterializeTesseraGeneralOptimizerCandidates(
+          generalOptimizerStatePath(args),
+          {
+            expectedStateRevision: requiredInteger(
+              args,
+              "expected-revision",
+            ),
+            candidateIds,
+            approvalId,
+            approvedBy,
+            approvedAt: value(args, "approved-at"),
+          },
+        );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "general-optimizer-record-comparison") {
+      const candidateId = value(args, "candidate");
+      const archetypeId = value(args, "archetype");
+      const requestSha256 = value(args, "request-sha256");
+      const reportPath = value(args, "report");
+      if (
+        !candidateId ||
+        !archetypeId ||
+        !requestSha256 ||
+        !reportPath
+      ) {
+        throw new Error(
+          "Tessera general-optimizer-record-comparison requires --candidate, --archetype, --request-sha256, and --report.",
+        );
+      }
+      if (!isGeneralThreatArchetype(archetypeId)) {
+        throw new Error(
+          `--archetype requires one of: ${
+            GeneralThreatArchetypeIds.join(", ")
+          }.`,
+        );
+      }
+      if (!/^[0-9a-f]{64}$/.test(requestSha256)) {
+        throw new Error(
+          "--request-sha256 requires a lowercase SHA-256 value.",
+        );
+      }
+      const result =
+        await recordStoredTesseraGeneralOptimizerComparison(
+          generalOptimizerStatePath(args),
+          {
+            expectedStateRevision: requiredInteger(
+              args,
+              "expected-revision",
+            ),
+            candidateId,
+            archetypeId,
+            requestSha256,
+            reportPath: path.resolve(reportPath),
+            recordedAt: value(args, "recorded-at"),
+          },
+        );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "general-optimizer-approve-winner") {
+      const candidateId = value(args, "candidate");
+      const approvalId = value(args, "approval-id");
+      const approvedBy = value(args, "approved-by");
+      if (!candidateId || !approvalId || !approvedBy) {
+        throw new Error(
+          "Tessera general-optimizer-approve-winner requires --candidate, --approval-id, and --approved-by.",
+        );
+      }
+      const result = await approveStoredTesseraGeneralOptimizerWinner(
+        generalOptimizerStatePath(args),
+        {
+          expectedStateRevision: requiredInteger(
+            args,
+            "expected-revision",
+          ),
+          candidateId,
+          approvalId,
+          approvedBy,
+          approvedAt: value(args, "approved-at"),
+        },
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "general-optimizer-retain-baseline") {
+      const approvalId = value(args, "approval-id");
+      const approvedBy = value(args, "approved-by");
+      if (!approvalId || !approvedBy) {
+        throw new Error(
+          "Tessera general-optimizer-retain-baseline requires --approval-id and --approved-by.",
+        );
+      }
+      const result = await retainStoredTesseraGeneralOptimizerBaseline(
+        generalOptimizerStatePath(args),
+        {
+          expectedStateRevision: requiredInteger(
+            args,
+            "expected-revision",
+          ),
+          approvalId,
+          approvedBy,
+          approvedAt: value(args, "approved-at"),
+        },
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "general-optimizer-finalize") {
+      const deliveryKind = value(args, "delivery-intent") ?? "none";
+      if (
+        deliveryKind !== "none" &&
+        deliveryKind !== "prepare-handoff" &&
+        deliveryKind !== "deliver-new-recruit"
+      ) {
+        throw new Error(
+          "Tessera general-optimizer-finalize --delivery-intent requires none, prepare-handoff, or deliver-new-recruit.",
+        );
+      }
+      const finalizedAt =
+        value(args, "finalized-at") ?? new Date().toISOString();
+      const intentId = value(args, "intent-id");
+      const recordedBy = value(args, "recorded-by");
+      if (deliveryKind !== "none" && (!intentId || !recordedBy)) {
+        throw new Error(
+          "A non-empty general optimizer delivery intent requires --intent-id and --recorded-by.",
+        );
+      }
+      const result = await finalizeStoredTesseraGeneralOptimizer(
+        generalOptimizerStatePath(args),
+        {
+          expectedStateRevision: requiredInteger(
+            args,
+            "expected-revision",
+          ),
+          deliveryIntent:
+            deliveryKind === "none"
+              ? {
+                  kind: "none",
+                  intentId: null,
+                  recordedBy: null,
+                  recordedAt: finalizedAt,
+                }
+              : {
+                  kind: deliveryKind,
+                  intentId: intentId!,
+                  recordedBy: recordedBy!,
+                  recordedAt: finalizedAt,
+                },
+          finalizedAt,
+        },
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "optimizer-start") {
+      const baselineReportPath = value(args, "baseline-report");
+      const rosterPath = value(args, "file");
+      const mode = value(args, "mode") ?? "guided";
+      if (!baselineReportPath || !rosterPath) {
+        throw new Error(
+          "Tessera optimizer-start requires --baseline-report and --file.",
+        );
+      }
+      if (mode !== "guided" && mode !== "recommend-only") {
+        throw new Error(
+          "Tessera optimizer-start --mode requires guided or recommend-only.",
+        );
+      }
+      const result = await startTesseraOptimizer({
+        baselineReportPath: path.resolve(baselineReportPath),
+        baselineRoster: await readRosterDraft(path.resolve(rosterPath)),
+        mode,
+        profilePolicyPath: value(args, "profile-policy"),
+        outputDirectory:
+          value(args, "out-dir") ??
+          "exports/tessera/optimizers",
+        allowOutsideRoot: flag(args, "allow-outside-root"),
+      });
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "optimizer-status") {
+      const result = await getTesseraOptimizerStatus(
+        optimizerStatePath(args),
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "optimizer-approve-candidates") {
+      const candidateIds = list(args, "candidate");
+      const approvalId = value(args, "approval-id");
+      const approvedBy = value(args, "approved-by");
+      if (!candidateIds.length || !approvalId || !approvedBy) {
+        throw new Error(
+          "Tessera optimizer-approve-candidates requires one or more --candidate values, --approval-id, and --approved-by.",
+        );
+      }
+      const result =
+        await approveAndMaterializeTesseraOptimizerCandidates(
+          optimizerStatePath(args),
+          {
+            expectedStateRevision: requiredInteger(
+              args,
+              "expected-revision",
+            ),
+            candidateIds,
+            approvalId,
+            approvedBy,
+            approvedAt: value(args, "approved-at"),
+          },
+        );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "optimizer-record-comparison") {
+      const candidateId = value(args, "candidate");
+      const reportPath = value(args, "report");
+      if (!candidateId || !reportPath) {
+        throw new Error(
+          "Tessera optimizer-record-comparison requires --candidate and --report.",
+        );
+      }
+      const result = await recordStoredTesseraOptimizerComparison(
+        optimizerStatePath(args),
+        {
+          expectedStateRevision: requiredInteger(
+            args,
+            "expected-revision",
+          ),
+          candidateId,
+          reportPath: path.resolve(reportPath),
+          recordedAt: value(args, "recorded-at"),
+        },
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "optimizer-approve-winner") {
+      const candidateId = value(args, "candidate");
+      const approvalId = value(args, "approval-id");
+      const approvedBy = value(args, "approved-by");
+      if (!candidateId || !approvalId || !approvedBy) {
+        throw new Error(
+          "Tessera optimizer-approve-winner requires --candidate, --approval-id, and --approved-by.",
+        );
+      }
+      const result = await approveStoredTesseraOptimizerWinner(
+        optimizerStatePath(args),
+        {
+          expectedStateRevision: requiredInteger(
+            args,
+            "expected-revision",
+          ),
+          candidateId,
+          approvalId,
+          approvedBy,
+          approvedAt: value(args, "approved-at"),
+        },
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "optimizer-retain-baseline") {
+      const approvalId = value(args, "approval-id");
+      const approvedBy = value(args, "approved-by");
+      if (!approvalId || !approvedBy) {
+        throw new Error(
+          "Tessera optimizer-retain-baseline requires --approval-id and --approved-by.",
+        );
+      }
+      const result = await retainStoredTesseraOptimizerBaseline(
+        optimizerStatePath(args),
+        {
+          expectedStateRevision: requiredInteger(
+            args,
+            "expected-revision",
+          ),
+          approvalId,
+          approvedBy,
+          approvedAt: value(args, "approved-at"),
+        },
+      );
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "optimizer-finalize") {
+      const deliveryKind = value(args, "delivery-intent") ?? "none";
+      if (
+        deliveryKind !== "none" &&
+        deliveryKind !== "prepare-handoff" &&
+        deliveryKind !== "deliver-new-recruit"
+      ) {
+        throw new Error(
+          "Tessera optimizer-finalize --delivery-intent requires none, prepare-handoff, or deliver-new-recruit.",
+        );
+      }
+      const finalizedAt =
+        value(args, "finalized-at") ?? new Date().toISOString();
+      const intentId = value(args, "intent-id");
+      const recordedBy = value(args, "recorded-by");
+      if (deliveryKind !== "none" && (!intentId || !recordedBy)) {
+        throw new Error(
+          "A non-empty optimizer delivery intent requires --intent-id and --recorded-by.",
+        );
+      }
+      const result = await finalizeStoredTesseraOptimizer(
+        optimizerStatePath(args),
+        {
+          expectedStateRevision: requiredInteger(
+            args,
+            "expected-revision",
+          ),
+          deliveryIntent:
+            deliveryKind === "none"
+              ? {
+                  kind: "none",
+                  intentId: null,
+                  recordedBy: null,
+                  recordedAt: finalizedAt,
+                }
+              : {
+                  kind: deliveryKind,
+                  intentId: intentId!,
+                  recordedBy: recordedBy!,
+                  recordedAt: finalizedAt,
+                },
+          finalizedAt,
+        },
+      );
       print(result);
       if (!result.ok) process.exitCode = 2;
       return;
@@ -756,6 +1593,11 @@ async function main(): Promise<void> {
             pointsLimit: value(args, "points")
               ? Number(value(args, "points"))
               : undefined,
+            legendsPolicy: requestedLegendsPolicy(args),
+            allowLegends: flag(args, "include-legends")
+              ? true
+              : undefined,
+            playContext: requestedPlayContext(args),
             requiredUnitIds: list(args, "required-unit"),
             excludedUnitIds: list(args, "exclude-unit"),
             requiredWarlordUnitId:
@@ -801,6 +1643,11 @@ async function main(): Promise<void> {
             opponentRoster: await readRosterDraft(
               path.resolve(opponentRosterFile),
             ),
+            legendsPolicy: requestedLegendsPolicy(args),
+            allowLegends: flag(args, "include-legends")
+              ? true
+              : undefined,
+            playContext: requestedPlayContext(args),
             collectionProfile: collectionPath
               ? CollectionProfileSchema.parse(
                   JSON.parse(
@@ -961,6 +1808,11 @@ async function main(): Promise<void> {
               pointsLimit: value(args, "points")
                 ? Number(value(args, "points"))
                 : undefined,
+              legendsPolicy: requestedLegendsPolicy(args),
+              allowLegends: flag(args, "include-legends")
+                ? true
+                : undefined,
+              playContext: requestedPlayContext(args),
               requiredUnitIds: list(args, "required-unit"),
               excludedUnitIds: list(args, "exclude-unit"),
               requiredWarlordUnitId:
@@ -1022,6 +1874,11 @@ async function main(): Promise<void> {
           pointsLimit: value(args, "points")
             ? Number(value(args, "points"))
             : undefined,
+          legendsPolicy: requestedLegendsPolicy(args),
+          allowLegends: flag(args, "include-legends")
+            ? true
+            : undefined,
+          playContext: requestedPlayContext(args),
           requiredUnitIds: list(args, "required-unit"),
           excludedUnitIds: list(args, "exclude-unit"),
           requiredWarlordUnitId: value(args, "required-warlord"),
@@ -1112,6 +1969,11 @@ async function main(): Promise<void> {
           ? Number(value(args, "points"))
           : undefined,
         opponentRoster,
+        legendsPolicy: requestedLegendsPolicy(args),
+        allowLegends: flag(args, "include-legends")
+          ? true
+          : undefined,
+        playContext: requestedPlayContext(args),
         collectionProfile,
         requiredUnitIds: list(args, "required-unit"),
         excludedUnitIds: list(args, "exclude-unit"),
@@ -1660,6 +2522,269 @@ async function main(): Promise<void> {
     print(compareFactions(positionals));
     return;
   }
+  if (command === "workflow") {
+    const prompt = value(args, "prompt") ?? positionals.join(" ");
+    const requestedIntent = value(args, "intent");
+    if (
+      requestedIntent &&
+      ![
+        "build",
+        "prepare-new-recruit",
+        "deliver-new-recruit",
+        "optimize",
+      ].includes(requestedIntent)
+    ) {
+      throw new Error(
+        "--intent requires build, prepare-new-recruit, deliver-new-recruit, or optimize.",
+      );
+    }
+    const requestedArtifact = value(args, "artifact");
+    if (
+      requestedArtifact &&
+      ![
+        "none",
+        "new-recruit-rosz",
+        "tessera-profile-rich",
+      ].includes(requestedArtifact)
+    ) {
+      throw new Error(
+        "--artifact requires none, new-recruit-rosz, or tessera-profile-rich.",
+      );
+    }
+    const requestedCoaching = value(args, "coaching");
+    if (
+      requestedCoaching &&
+      !["none", "concise", "full"].includes(requestedCoaching)
+    ) {
+      throw new Error(
+        "--coaching requires none, concise, or full.",
+      );
+    }
+    const requestedOptimizerMode = value(args, "optimizer-mode");
+    if (
+      requestedOptimizerMode &&
+      !["guided", "recommend-only"].includes(
+        requestedOptimizerMode,
+      )
+    ) {
+      throw new Error(
+        "--optimizer-mode requires guided or recommend-only.",
+      );
+    }
+    const preferences = list(
+      args,
+      "preferences",
+    ) as PreferenceTag[];
+    const collectionUnitIds = list(args, "collection");
+    const requiredUnitIds = list(args, "required-unit");
+    const excludedUnitIds = list(args, "exclude-unit");
+    const opponentRosterPath = value(args, "opponent-roster");
+    const opponentRoster = opponentRosterPath
+      ? await readRosterDraft(path.resolve(opponentRosterPath))
+      : undefined;
+    const result = await prepareRosterWorkflow({
+      prompt: prompt || undefined,
+      intent:
+        requestedIntent as RosterWorkflowIntent | undefined,
+      artifactRequirement:
+        requestedArtifact as
+          | RosterArtifactRequirement
+          | undefined,
+      coachingMode:
+        requestedCoaching as RosterCoachingMode | undefined,
+      optimizerMode:
+        requestedOptimizerMode as
+          | RosterOptimizerMode
+          | undefined,
+      playerFaction:
+        value(args, "player-faction") ?? value(args, "faction"),
+      opponentFaction: value(args, "opponent-faction"),
+      opponentContext: opponentRoster
+        ? { kind: "known-roster", roster: opponentRoster }
+        : undefined,
+      pointsLimit: value(args, "points")
+        ? Number(value(args, "points"))
+        : undefined,
+      name: value(args, "name"),
+      preferences: preferences.length
+        ? preferences
+        : undefined,
+      allowNamedCharacters: flag(args, "no-named")
+        ? false
+        : undefined,
+      legendsPolicy: requestedLegendsPolicy(args),
+      allowLegends: flag(args, "include-legends")
+        ? true
+        : undefined,
+      playContext: requestedPlayContext(args),
+      collectionUnitIds: collectionUnitIds.length
+        ? collectionUnitIds
+        : undefined,
+      requiredUnitIds: requiredUnitIds.length
+        ? requiredUnitIds
+        : undefined,
+      excludedUnitIds: excludedUnitIds.length
+        ? excludedUnitIds
+        : undefined,
+      requiredWarlordUnitId: value(args, "required-warlord"),
+      detachmentId: value(args, "detachment"),
+      forceDispositionId: value(args, "disposition"),
+    });
+    const writtenRoster =
+      result.data?.roster && value(args, "out")
+        ? await writeRosterDraft(
+            result.data.roster,
+            value(args, "out")!,
+            {
+              overwrite: flag(args, "overwrite"),
+              allowOutsideRoot: flag(
+                args,
+                "allow-outside-root",
+              ),
+            },
+          )
+        : null;
+    const portfolioOutput = value(args, "portfolio-out");
+    const generalPortfolio =
+      result.data?.optimization?.target.kind ===
+        "general-six-archetype"
+        ? result.data.optimization.target.portfolio
+        : null;
+    if (result.ok && portfolioOutput && !generalPortfolio) {
+      throw new Error(
+        "--portfolio-out is available only for an optimize workflow with the general six-archetype target.",
+      );
+    }
+    const writtenGeneralPortfolio =
+      result.ok && portfolioOutput && generalPortfolio
+        ? await writeExportArtifact(
+            {
+              format: "roster-json",
+              filename: path.basename(portfolioOutput),
+              mimeType: "application/json",
+              encoding: "utf8",
+              content:
+                `${JSON.stringify(generalPortfolio, null, 2)}\n`,
+            },
+            portfolioOutput,
+            {
+              overwrite: flag(args, "overwrite"),
+              allowOutsideRoot: flag(
+                args,
+                "allow-outside-root",
+              ),
+            },
+          )
+        : null;
+    let writtenHandoff: string[] = [];
+    let delivery: unknown = null;
+    const workflowIntent = result.data?.intent?.intent;
+    const handoff = result.data?.newRecruit.handoff;
+    const tesseraBaselineJobs =
+      result.ok &&
+      result.data &&
+      workflowIntent === "optimize"
+        ? await startWorkflowTesseraBaselines(result.data, args)
+        : [];
+    if (
+      result.ok &&
+      handoff &&
+      workflowIntent === "prepare-new-recruit"
+    ) {
+      writtenHandoff = await writeExportArtifacts(
+        handoff.artifacts,
+        value(args, "out-dir") ?? "exports/new-recruit",
+        {
+          overwrite: flag(args, "overwrite"),
+          allowOutsideRoot: flag(args, "allow-outside-root"),
+        },
+      );
+    }
+    if (
+      result.ok &&
+      result.data?.newRecruit.delivery.authorized &&
+      result.data.roster
+    ) {
+      const connection = await getNewRecruitConnectionStatus();
+      if (connection.ok && connection.data?.available) {
+        delivery = await deliverRosterToNewRecruit(
+          result.data.roster,
+          {
+            downloadEnrichedRosz: true,
+            downloadPrettyHtml: !flag(args, "no-pretty"),
+            outputDirectory:
+              value(args, "out-dir") ??
+              "exports/new-recruit",
+            overwrite: flag(args, "overwrite"),
+            allowOutsideRoot: flag(
+              args,
+              "allow-outside-root",
+            ),
+          },
+        );
+      } else {
+        delivery = {
+          ok: false,
+          data: null,
+          violations:
+            connection.violations.length > 0
+              ? connection.violations
+              : [
+                  {
+                    code: "NEW_RECRUIT_CONNECTION_UNAVAILABLE",
+                    message:
+                      "Direct delivery is unavailable; use the prepared .rosz handoff.",
+                    severity: "error",
+                  },
+                ],
+          warnings: connection.warnings,
+        };
+      }
+    }
+    const printableData = result.data
+      ? flag(args, "full-json")
+        ? {
+            ...result.data,
+            newRecruit: {
+              ...result.data.newRecruit,
+              handoff: handoff
+                ? {
+                    ...handoff,
+                    artifacts: handoff.artifacts.map(
+                      ({ content, ...artifact }) => {
+                        void content;
+                        return artifact;
+                      },
+                    ),
+                  }
+                : null,
+            },
+          }
+        : compactRosterWorkflowData(result.data)
+      : null;
+    print({
+      ...result,
+      data: printableData,
+      writtenRoster,
+      writtenGeneralPortfolio,
+      writtenHandoff,
+      delivery,
+      tesseraBaselineJobs,
+    });
+    if (
+      !result.ok ||
+      tesseraBaselineJobs.some((job) => !job.ok) ||
+      (
+        delivery &&
+        typeof delivery === "object" &&
+        "ok" in delivery &&
+        delivery.ok === false
+      )
+    ) {
+      process.exitCode = 2;
+    }
+    return;
+  }
   if (command === "build") {
     const preferences = list(args, "preferences") as PreferenceTag[];
     const collectionUnitIds = list(args, "collection");
@@ -1670,7 +2795,9 @@ async function main(): Promise<void> {
       name: value(args, "name"),
       preferences: preferences.length ? preferences : undefined,
       allowNamedCharacters: flag(args, "no-named") ? false : undefined,
+      legendsPolicy: requestedLegendsPolicy(args),
       allowLegends: flag(args, "include-legends") ? true : undefined,
+      playContext: requestedPlayContext(args),
       collectionUnitIds: collectionUnitIds.length ? collectionUnitIds : undefined,
       detachmentId: value(args, "detachment"),
       forceDispositionId: value(args, "disposition"),

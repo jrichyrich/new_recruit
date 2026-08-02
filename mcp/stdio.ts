@@ -37,6 +37,24 @@ import {
   resumeTesseraRun,
   startTesseraRun,
 } from "../local/tessera/jobs";
+import {
+  approveAndMaterializeTesseraOptimizerCandidates,
+  approveStoredTesseraOptimizerWinner,
+  finalizeStoredTesseraOptimizer,
+  getTesseraOptimizerStatus,
+  recordStoredTesseraOptimizerComparison,
+  retainStoredTesseraOptimizerBaseline,
+  startTesseraOptimizer,
+} from "../local/tessera/optimizer-store";
+import {
+  approveAndMaterializeTesseraGeneralOptimizerCandidates,
+  approveStoredTesseraGeneralOptimizerWinner,
+  finalizeStoredTesseraGeneralOptimizer,
+  getTesseraGeneralOptimizerStatus,
+  recordStoredTesseraGeneralOptimizerComparison,
+  retainStoredTesseraGeneralOptimizerBaseline,
+  startTesseraGeneralOptimizer,
+} from "../local/tessera/general-optimizer-store";
 import { getRuntimeProvenance } from "../local/runtime-provenance";
 import {
   getConfiguredDataBundleProvider,
@@ -94,6 +112,28 @@ const server = createRosterPilotMcpServer({
         jobPath,
       }),
     cancel: cancelTesseraRun,
+  },
+  tesseraOptimizerStore: {
+    start: startTesseraOptimizer,
+    status: getTesseraOptimizerStatus,
+    approveCandidates:
+      approveAndMaterializeTesseraOptimizerCandidates,
+    recordComparison:
+      recordStoredTesseraOptimizerComparison,
+    approveWinner: approveStoredTesseraOptimizerWinner,
+    retainBaseline: retainStoredTesseraOptimizerBaseline,
+    finalize: finalizeStoredTesseraOptimizer,
+  },
+  tesseraGeneralOptimizerStore: {
+    start: startTesseraGeneralOptimizer,
+    status: getTesseraGeneralOptimizerStatus,
+    approveCandidates:
+      approveAndMaterializeTesseraGeneralOptimizerCandidates,
+    recordComparison:
+      recordStoredTesseraGeneralOptimizerComparison,
+    approveWinner: approveStoredTesseraGeneralOptimizerWinner,
+    retainBaseline: retainStoredTesseraGeneralOptimizerBaseline,
+    finalize: finalizeStoredTesseraGeneralOptimizer,
   },
 });
 

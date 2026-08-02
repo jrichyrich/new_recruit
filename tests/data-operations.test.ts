@@ -236,6 +236,10 @@ test("provider-aware rebase verifies the retained historical bundle before curre
   const signed = await signRuntimeDataBundle(
     await buildRuntimeDataBundle({
       createdAt: "2026-07-30T00:00:00.000Z",
+      // The roster above comes from the compiled schema-v1 fallback. Keep
+      // this historical bundle on the same semantic methodology so the test
+      // isolates provenance-aware retained-bundle verification.
+      engineDataSchemaVersion: 1,
     }),
     signer,
   );

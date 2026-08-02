@@ -23,6 +23,7 @@ import type {
 import {
   DATA_BUNDLE_RELEASE_USAGE,
   deriveVerifiedEd25519PublicJwk,
+  parseDataBundleReleaseArgs,
   parseTrustedDataBundleKeyRegistry,
   prepareSignedBootstrapDataBundle,
   recoverInterruptedDataBundleRelease,
@@ -526,6 +527,31 @@ test("release CLI help is secret-free and a CI-env run emits only public identif
     },
   });
   assert.equal(help, DATA_BUNDLE_RELEASE_USAGE);
+  assert.deepEqual(
+    parseDataBundleReleaseArgs([
+      "--official-legend-source-artifact",
+      "aeldari-2026=/evidence/aeldari.pdf",
+    ]).officialLegendSourceArtifacts,
+    { "aeldari-2026": "/evidence/aeldari.pdf" },
+  );
+  assert.throws(
+    () =>
+      parseDataBundleReleaseArgs([
+        "--official-legend-source-artifact",
+        "aeldari-2026=/first.pdf",
+        "--official-legend-source-artifact",
+        "aeldari-2026=/second.pdf",
+      ]),
+    /repeats source id aeldari-2026/,
+  );
+  assert.throws(
+    () =>
+      parseDataBundleReleaseArgs([
+        "--official-legend-source-artifact",
+        "=/missing-source-id.pdf",
+      ]),
+    /requires <source-id=path>/,
+  );
 
   const root = mkdtempSync(
     path.join(os.tmpdir(), "rosterpilot-release-cli-"),

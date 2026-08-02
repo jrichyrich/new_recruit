@@ -27,6 +27,8 @@ import {
 
 import type {
   CatalogueCategoryReference,
+  CatalogueClassificationSignal,
+  CatalogueLegendCandidateEvidence,
   CatalogueModelReference,
   CatalogueSelectionReference,
   CatalogueUnitReference,
@@ -187,6 +189,115 @@ function selectionReference(
           group: text(group?.name) ?? "Options",
         }
       : {}),
+  };
+}
+
+function hasBracketedLegendMarker(value: string | undefined): boolean {
+  return value !== undefined && /\[\s*legends?\s*\]\s*$/i.test(value);
+}
+
+function withoutBracketedLegendMarker(value: string): string {
+  return value.replace(/\s*\[\s*legends?\s*\]\s*$/i, "").trim();
+}
+
+function rootLegendModifierComments(node: JsonRecord): string[] {
+  const queue = [
+    ...records(node.modifiers),
+    ...records(node.modifierGroups),
+  ];
+  const comments = new Set<string>();
+  while (queue.length > 0) {
+    const candidate = queue.shift() as JsonRecord;
+    const comment = text(candidate.comment);
+    if (
+      comment &&
+      ["legend", "legends"].includes(normalizeNewRecruitName(comment))
+    ) {
+      comments.add(comment);
+    }
+    queue.push(
+      ...records(candidate.modifiers),
+      ...records(candidate.modifierGroups),
+    );
+  }
+  return [...comments].sort();
+}
+
+/**
+ * Retains conservative BSData-authored hints as mapping evidence. The runtime
+ * rules source, not these labels, decides whether the unit is a Legend.
+ */
+export function bsdataLegendClassificationSignals(
+  rootLink: JsonRecord,
+  target: JsonRecord,
+  entryPath: string,
+): CatalogueClassificationSignal[] {
+  const signals: CatalogueClassificationSignal[] = [];
+  const add = (
+    kind: CatalogueClassificationSignal["kind"],
+    value: string | undefined,
+  ) => {
+    if (!value) return;
+    signals.push({
+      source: "bsdata",
+      classification: "legend",
+      kind,
+      value,
+      entryPath,
+    });
+  };
+  const linkName = text(rootLink.name);
+  if (hasBracketedLegendMarker(linkName)) {
+    add("entry-link-name", linkName);
+  }
+  const targetName = text(target.name);
+  if (hasBracketedLegendMarker(targetName)) {
+    add("selection-entry-name", targetName);
+  }
+  for (const category of records(target.categoryLinks)) {
+    const categoryName = text(category.name);
+    if (
+      categoryName &&
+      ["legend", "legends"].includes(
+        normalizeNewRecruitName(categoryName),
+      )
+    ) {
+      add("category", categoryName);
+    }
+  }
+  for (const comment of rootLegendModifierComments(target)) {
+    add("modifier-comment", comment);
+  }
+  return signals.sort(
+    (left, right) =>
+      left.kind.localeCompare(right.kind) ||
+      left.value.localeCompare(right.value),
+  );
+}
+
+function bsdataLegendCandidateEvidence(
+  candidate: UnitCandidate,
+): CatalogueLegendCandidateEvidence | undefined {
+  const signals = bsdataLegendClassificationSignals(
+    candidate.rootLink,
+    candidate.target,
+    candidate.entryPath,
+  );
+  const targetId = text(candidate.target.id);
+  const name = text(candidate.target.name) ?? text(candidate.rootLink.name);
+  if (signals.length === 0 || !targetId || !name) return undefined;
+  return {
+    source: "bsdata",
+    name,
+    normalizedName: normalizeNewRecruitName(
+      withoutBracketedLegendMarker(name),
+    ),
+    catalogueId: candidate.document.id,
+    catalogueRevision:
+      numberValue(candidate.document.root.revision) ?? 0,
+    targetId,
+    entryPath: candidate.entryPath,
+    signals,
   };
 }
 
@@ -871,6 +982,11 @@ function unitMapping(
       enhancementReferences[enhancementId] = matches[0].reference;
     }
   }
+  const classificationSignals = bsdataLegendClassificationSignals(
+    candidate.rootLink,
+    candidate.target,
+    candidate.entryPath,
+  );
   const mapping: CatalogueUnitReference = {
     ...rootReference,
     categories: categoryReferences(candidate.target),
@@ -882,6 +998,9 @@ function unitMapping(
     ...(warlord ? { warlord } : {}),
     enhancements: enhancementReferences,
     pointsByModelCount: {},
+    ...(classificationSignals.length > 0
+      ? { classificationSignals }
+      : {}),
   };
   return {
     mapping,
@@ -1208,6 +1327,102 @@ function detachmentEntriesForRoot(
   );
 }
 
+type LegendsVisibilityCandidate = {
+  document: CatalogueDocument;
+  parent: CatalogueSelectionReference;
+  choice: CatalogueSelectionReference;
+};
+
+function legendsVisibilityForConfiguration(
+  primary: CatalogueDocument,
+  documents: CatalogueDocument[],
+  index: SelectionIndex,
+  configurationCategoryId: string,
+  mappedDetachmentDocumentIds: ReadonlySet<string>,
+): NewRecruitConfiguration["legendsVisibility"] | undefined {
+  const candidates = documents.flatMap(
+    (document): LegendsVisibilityCandidate[] =>
+      records(document.root.entryLinks).flatMap((link) => {
+        if (
+          !["show/hide options", "show hide options"].includes(
+            normalizeNewRecruitName(text(link.name) ?? ""),
+          )
+        ) {
+          return [];
+        }
+        const rootId = text(link.id);
+        const resolved = resolveLink(link, index);
+        const targetId = text(resolved?.target.id);
+        if (
+          !rootId ||
+          !targetId ||
+          resolved?.kind !== "entry"
+        ) {
+          return [];
+        }
+        const choices = walkSelections(
+          resolved.target,
+          rootId,
+          index,
+        ).filter(
+          (item) =>
+            ["show legends", "legends are visible"].includes(
+              item.reference.normalizedName,
+            ) &&
+            isConfigurationEntry(
+              item.node,
+              configurationCategoryId,
+            ),
+        );
+        if (choices.length !== 1) return [];
+        return [
+          {
+            document,
+            parent: selectionReference(
+              resolved.target,
+              joinEntryId(rootId, targetId),
+            ),
+            choice: {
+              ...choices[0].reference,
+              name: "Legends are visible",
+              normalizedName: normalizeNewRecruitName(
+                "Legends are visible",
+              ),
+            },
+          },
+        ];
+      }),
+  );
+  const unique = [
+    ...new Map(
+      candidates.map((candidate) => [
+        `${candidate.document.id}\0${candidate.parent.entryId}\0${candidate.choice.entryId}`,
+        candidate,
+      ]),
+    ).values(),
+  ];
+  const primaryCandidates = unique.filter(
+    (candidate) => candidate.document.id === primary.id,
+  );
+  const detachmentCandidates = unique.filter((candidate) =>
+    mappedDetachmentDocumentIds.has(candidate.document.id),
+  );
+  const selected =
+    primaryCandidates.length === 1
+      ? primaryCandidates[0]
+      : detachmentCandidates.length === 1
+        ? detachmentCandidates[0]
+      : unique.length === 1
+        ? unique[0]
+        : undefined;
+  return selected
+    ? {
+        parent: selected.parent,
+        choice: selected.choice,
+      }
+    : undefined;
+}
+
 export function buildConfiguration(
   primary: CatalogueDocument,
   documents: CatalogueDocument[],
@@ -1345,6 +1560,7 @@ export function buildConfiguration(
 
   const detachmentChoices: NewRecruitConfiguration["detachment"]["choices"] =
     {};
+  const mappedDetachmentDocumentIds = new Set<string>();
   for (const detachment of engineDetachments) {
     const alias =
       overrides.detachmentAliases[`${factionId}:${detachment.id}`] ??
@@ -1427,6 +1643,7 @@ export function buildConfiguration(
       continue;
     }
     const matched = matches[0];
+    mappedDetachmentDocumentIds.add(matched.document.id);
     const dp =
       records(matched.node.costs).find(
         (cost) => cost.typeId === detachmentPointsTypeId,
@@ -1437,6 +1654,13 @@ export function buildConfiguration(
       rootReference: matched.rootReference,
     };
   }
+  const legendsVisibility = legendsVisibilityForConfiguration(
+    primary,
+    documents,
+    index,
+    configurationCategoryId,
+    mappedDetachmentDocumentIds,
+  );
 
   if (!incursion || !strikeForce) {
     conflicts.push(
@@ -1486,6 +1710,7 @@ export function buildConfiguration(
       ),
       choices: dispositionChoices,
     },
+    ...(legendsVisibility ? { legendsVisibility } : {}),
   };
 }
 
@@ -1599,7 +1824,9 @@ export function generate(
     const availableDocuments = dependencyDocuments(primary, byId);
     const shared = combinedSelectionIndex(availableDocuments, gameSystem);
     const unitCandidates = new Map<string, UnitCandidate[]>();
+    const legendUnitCandidates = new Map<string, UnitCandidate[]>();
     const unitCandidatesByPath = new Map<string, UnitCandidate[]>();
+    const allUnitCandidates: UnitCandidate[] = [];
     for (const document of availableDocuments) {
       const local = localSelectionIndex(document.root);
       for (const link of records(document.root.entryLinks)) {
@@ -1619,10 +1846,26 @@ export function generate(
           target,
           entryPath,
         };
+        allUnitCandidates.push(candidate);
         const key = normalizeNewRecruitName(name);
         const values = unitCandidates.get(key) ?? [];
         values.push(candidate);
         unitCandidates.set(key, values);
+        if (
+          bsdataLegendClassificationSignals(
+            candidate.rootLink,
+            candidate.target,
+            candidate.entryPath,
+          ).length > 0
+        ) {
+          const legendKey = normalizeNewRecruitName(
+            withoutBracketedLegendMarker(name),
+          );
+          legendUnitCandidates.set(legendKey, [
+            ...(legendUnitCandidates.get(legendKey) ?? []),
+            candidate,
+          ]);
+        }
         const pathKey = `${document.id}\0${entryPath}`;
         unitCandidatesByPath.set(pathKey, [
           ...(unitCandidatesByPath.get(pathKey) ?? []),
@@ -1630,6 +1873,28 @@ export function generate(
         ]);
       }
     }
+    const legendCandidateEvidence = [
+      ...new Map(
+        allUnitCandidates
+          .filter((candidate) => candidate.document.id === primary.id)
+          .map(bsdataLegendCandidateEvidence)
+          .filter(
+            (
+              candidate,
+            ): candidate is CatalogueLegendCandidateEvidence =>
+              candidate !== undefined,
+          )
+          .map((candidate) => [
+            `${candidate.catalogueId}\0${candidate.entryPath}`,
+            candidate,
+          ]),
+      ).values(),
+    ].sort(
+      (left, right) =>
+        left.normalizedName.localeCompare(right.normalizedName) ||
+        left.catalogueId.localeCompare(right.catalogueId) ||
+        left.entryPath.localeCompare(right.entryPath),
+    );
 
     const relevantEnhancements = new Map<string, string>();
     for (const detachment of engineDetachments) {
@@ -1646,6 +1911,7 @@ export function generate(
     }
 
     const mappedUnits: Record<string, CatalogueUnitReference> = {};
+    const mappedCandidatePaths = new Set<string>();
     let mappedBaseLoadouts = 0;
     for (const unit of engineUnits) {
       const alias =
@@ -1654,8 +1920,11 @@ export function generate(
         overrides.exactPathOverrides?.units?.[
           `${faction.id}:${unit.id}`
         ];
+      const normalizedAlias = normalizeNewRecruitName(alias);
       let candidates =
-        unitCandidates.get(normalizeNewRecruitName(alias)) ?? [];
+        unit.raw.is_legend === true
+          ? legendUnitCandidates.get(normalizedAlias) ?? []
+          : unitCandidates.get(normalizedAlias) ?? [];
       if (exactOverride) {
         const sourceDocument = availableDocuments.find(
           (document) => document.id === exactOverride.catalogueId,
@@ -1733,6 +2002,9 @@ export function generate(
         );
         continue;
       }
+      mappedCandidatePaths.add(
+        `${selected.document.id}\0${selected.entryPath}`,
+      );
       const equipment = validEquipment(unit);
       const mappingResult = unitMapping(
         selected,
@@ -1971,6 +2243,12 @@ export function generate(
     const mappedDetachments = configuration
       ? Object.keys(configuration.detachment.choices).length
       : 0;
+    const unmatchedLegendCandidates = legendCandidateEvidence.filter(
+      (candidate) =>
+        !mappedCandidatePaths.has(
+          `${candidate.catalogueId}\0${candidate.entryPath}`,
+        ),
+    );
     const complete =
       Object.keys(mappedUnits).length === engineUnits.length &&
       mappedBaseLoadouts === engineUnits.length &&
@@ -1993,6 +2271,13 @@ export function generate(
           left.localeCompare(right),
         ),
       ),
+      ...(unmatchedLegendCandidates.length > 0
+        ? {
+            classificationEvidence: {
+              legendCandidates: unmatchedLegendCandidates,
+            },
+          }
+        : {}),
       coverage: {
         engineUnits: engineUnits.length,
         mappedUnits: Object.keys(mappedUnits).length,
@@ -2088,8 +2373,14 @@ export function summarizeManifest(
     ...manifest,
     factions: Object.fromEntries(
       Object.entries(manifest.factions).map(([factionId, faction]) => {
-        const { configuration, units: _units, ...summary } = faction;
+        const {
+          configuration,
+          units: _units,
+          classificationEvidence: _classificationEvidence,
+          ...summary
+        } = faction;
         void _units;
+        void _classificationEvidence;
         return [
           factionId,
           {

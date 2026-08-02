@@ -949,6 +949,31 @@ ROSTERPILOT_BROWSER_TESTS=1 \
   node --import tsx --test tests/new-recruit-companion.test.ts
 ```
 
+Those tests use recorded local pages; they do not contact New Recruit or
+Tessera and do not read Keychain credentials. For a credential-backed live
+Tessera smoke test, first confirm the local agent and both providers report
+`ready`, then supply an already verified profile-rich New Recruit archive. If
+the archive contains alternate weapon profiles, also supply a matching
+canonical v1 profile policy:
+
+```bash
+npm run rosterpilot -- agent status
+npm run rosterpilot -- new-recruit status
+npm run rosterpilot -- tessera status
+
+ROSTERPILOT_TESSERA_LIVE_TESTS=1 \
+ROSTERPILOT_TESSERA_PLAYER_ROSZ=exports/player-new-recruit-enriched.rosz \
+ROSTERPILOT_TESSERA_PROFILE_POLICY_PATH=exports/profile-policy.json \
+  node --import tsx --test --test-concurrency=1 tests/tessera-live.test.ts
+```
+
+The live test uses the Tessera credential only inside the local agent on the
+exact Tessera origin, imports a renamed mirror of the supplied roster, and
+requires all 16 full-mode scenarios. It does not contact New Recruit or create
+a New Recruit list. The profile-policy variable may be omitted only when the
+archive has no alternate-profile decisions. Full live certification remains
+the test for New Recruit delivery plus Tessera simulation.
+
 ## Data and verification
 
 Faction-wide roster, New Recruit, and Tessera certification is documented in

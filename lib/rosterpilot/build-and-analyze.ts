@@ -1,5 +1,9 @@
 import type { DeterministicRosterRepairResult } from "./roster-repair";
 import type {
+  LegendsPlayContext,
+  LegendsPolicy,
+} from "./legends-policy";
+import type {
   CollectionProfile,
   ResultEnvelope,
   RosterDraftV1,
@@ -11,6 +15,10 @@ export type BuildAndAnalyzeRosterInput = {
   playerFaction?: string;
   pointsLimit?: number;
   opponentRoster: RosterDraftV1;
+  legendsPolicy?: LegendsPolicy;
+  /** Compatibility input for callers that predate `legendsPolicy`. */
+  allowLegends?: boolean;
+  playContext?: LegendsPlayContext;
   collectionProfile?: CollectionProfile;
   requiredUnitIds?: string[];
   excludedUnitIds?: string[];

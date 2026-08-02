@@ -51,6 +51,7 @@ import {
   DATA_BUNDLE_BUILD_USAGE,
   dataBundleSignerFromEnvironment,
   officialReconciliationAssessment,
+  parseDataBundleBuildArgs,
   publishSignedDataBundle,
   runBuildDataBundleCli,
 } from "../scripts/build-data-bundle";
@@ -313,6 +314,41 @@ test("bundle build and update help are read-only before signing configuration", 
     },
   });
   assert.equal(buildOutput, DATA_BUNDLE_BUILD_USAGE);
+  assert.deepEqual(
+    parseDataBundleBuildArgs([
+      "--official-legend-source-artifact",
+      "aeldari-2026=/evidence/aeldari.pdf",
+    ]).officialLegendSourceArtifacts,
+    { "aeldari-2026": "/evidence/aeldari.pdf" },
+  );
+  const reservedBuildSourceId = parseDataBundleBuildArgs([
+    "--official-legend-source-artifact",
+    "__proto__=/evidence/reserved.pdf",
+  ]).officialLegendSourceArtifacts;
+  assert.equal(Object.getPrototypeOf(reservedBuildSourceId), Object.prototype);
+  assert.equal(Object.hasOwn(reservedBuildSourceId, "__proto__"), true);
+  assert.equal(
+    reservedBuildSourceId.__proto__,
+    "/evidence/reserved.pdf",
+  );
+  assert.throws(
+    () =>
+      parseDataBundleBuildArgs([
+        "--official-legend-source-artifact",
+        "missing-separator",
+      ]),
+    /requires <source-id=path>/,
+  );
+  assert.throws(
+    () =>
+      parseDataBundleBuildArgs([
+        "--official-legend-source-artifact",
+        "aeldari-2026=/first.pdf",
+        "--official-legend-source-artifact",
+        "aeldari-2026=/second.pdf",
+      ]),
+    /repeats source id aeldari-2026/,
+  );
 
   let prepareOutput = "";
   await runPrepareDataBundleCli(["--help"], {
@@ -331,6 +367,7 @@ test("bundle build and update help are read-only before signing configuration", 
     previousManifest: null,
     officialReconciliationEvidence: null,
     officialSourceArtifact: null,
+    officialLegendSourceArtifacts: {},
     officialExtractionReceipt: null,
     officialExtractorTrustedKeys:
       "data/official-extractor-trusted-keys.json",
@@ -344,6 +381,28 @@ test("bundle build and update help are read-only before signing configuration", 
       "out/review",
     ]).reviewPackageDir,
     "out/review",
+  );
+  assert.deepEqual(
+    parsePrepareDataBundleArgs([
+      "--official-legend-source-artifact",
+      "aeldari-2026=/evidence/aeldari.pdf",
+      "--official-legend-source-artifact",
+      "custodes-2026=/evidence/custodes.pdf",
+    ]).officialLegendSourceArtifacts,
+    {
+      "aeldari-2026": "/evidence/aeldari.pdf",
+      "custodes-2026": "/evidence/custodes.pdf",
+    },
+  );
+  assert.throws(
+    () =>
+      parsePrepareDataBundleArgs([
+        "--official-legend-source-artifact",
+        "aeldari-2026=/first.pdf",
+        "--official-legend-source-artifact",
+        "aeldari-2026=/second.pdf",
+      ]),
+    /repeats source id aeldari-2026/,
   );
   assert.throws(
     () =>

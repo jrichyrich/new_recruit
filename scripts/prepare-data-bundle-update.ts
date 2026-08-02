@@ -56,6 +56,7 @@ type PrepareArgs = {
   previousManifest: string | null;
   officialReconciliationEvidence: string | null;
   officialSourceArtifact: string | null;
+  officialLegendSourceArtifacts: Record<string, string>;
   officialExtractionReceipt: string | null;
   officialExtractorTrustedKeys: string;
   officialAuthorityUnavailableReason: string | null;
@@ -126,6 +127,9 @@ Options:
                                Official rules overlay for a changed MFM.
   --official-source-artifact <path>
                                Exact source bytes covered by that overlay.
+  --official-legend-source-artifact <source-id=path>
+                               Exact faction-pack bytes for a schema-v2
+                               Legends source. Repeat once per source id.
   --official-extraction-receipt <path>
                                Reviewed extractor's signed inventory receipt.
   --official-extractor-trusted-keys <path>
@@ -219,6 +223,32 @@ function requiredValue(
   return value;
 }
 
+function assignKeyedPath(
+  target: Record<string, string>,
+  raw: string,
+  option: string,
+): void {
+  const separator = raw.indexOf("=");
+  const sourceId = raw.slice(0, separator).trim();
+  const filename = raw.slice(separator + 1).trim();
+  if (separator <= 0 || !sourceId || !filename) {
+    throw new PrepareDataBundleCliUsageError(
+      `${option} requires <source-id=path>.`,
+    );
+  }
+  if (Object.hasOwn(target, sourceId)) {
+    throw new PrepareDataBundleCliUsageError(
+      `${option} repeats source id ${sourceId}.`,
+    );
+  }
+  Object.defineProperty(target, sourceId, {
+    configurable: true,
+    enumerable: true,
+    value: filename,
+    writable: true,
+  });
+}
+
 export function parsePrepareDataBundleArgs(
   argv: readonly string[],
 ): PrepareArgs {
@@ -230,6 +260,7 @@ export function parsePrepareDataBundleArgs(
     previousManifest: null,
     officialReconciliationEvidence: null,
     officialSourceArtifact: null,
+    officialLegendSourceArtifacts: {},
     officialExtractionReceipt: null,
     officialExtractorTrustedKeys:
       "data/official-extractor-trusted-keys.json",
@@ -274,6 +305,15 @@ export function parsePrepareDataBundleArgs(
       parsed.officialSourceArtifact = requiredValue(
         argv,
         index,
+        argument,
+      );
+      index += 1;
+    } else if (
+      argument === "--official-legend-source-artifact"
+    ) {
+      assignKeyedPath(
+        parsed.officialLegendSourceArtifacts,
+        requiredValue(argv, index, argument),
         argument,
       );
       index += 1;
@@ -517,6 +557,7 @@ function buildCandidate(
     previousManifest: string | null;
     officialReconciliationEvidence: string | null;
     officialSourceArtifact?: string | null;
+    officialLegendSourceArtifacts?: Readonly<Record<string, string>>;
     officialExtractionReceipt?: string | null;
     officialExtractorTrustedKeys?: string | null;
     officialAuthorityUnavailableReason?: string | null;
@@ -604,6 +645,14 @@ function buildCandidate(
       "--official-extractor-trusted-keys",
       options.officialExtractorTrustedKeys,
     );
+    for (const [sourceId, artifactPath] of Object.entries(
+      options.officialLegendSourceArtifacts ?? {},
+    ).sort(([left], [right]) => left.localeCompare(right))) {
+      args.push(
+        "--official-legend-source-artifact",
+        `${sourceId}=${artifactPath}`,
+      );
+    }
   }
   if (options.officialAuthorityUnavailableReason) {
     args.push(
@@ -1069,6 +1118,7 @@ export async function prepareDataBundleUpdate(
     previousManifest?: string | null;
     officialReconciliationEvidence?: string | null;
     officialSourceArtifact?: string | null;
+    officialLegendSourceArtifacts?: Readonly<Record<string, string>>;
     officialExtractionReceipt?: string | null;
     officialExtractorTrustedKeys?: string | null;
     officialAuthorityUnavailableReason?: string | null;
@@ -1100,7 +1150,9 @@ export async function prepareDataBundleUpdate(
   const hasAnyOfficialEvidence = Boolean(
     options.officialReconciliationEvidence ||
       options.officialSourceArtifact ||
-      options.officialExtractionReceipt,
+      options.officialExtractionReceipt ||
+      Object.keys(options.officialLegendSourceArtifacts ?? {})
+        .length > 0,
   );
   const hasCompleteOfficialEvidence = Boolean(
     options.officialReconciliationEvidence &&
@@ -1161,6 +1213,14 @@ export async function prepareDataBundleUpdate(
     const officialSourceArtifact = options.officialSourceArtifact
       ? resolvedPath(root, options.officialSourceArtifact)
       : null;
+    const officialLegendSourceArtifacts = Object.fromEntries(
+      Object.entries(
+        options.officialLegendSourceArtifacts ?? {},
+      ).map(([sourceId, artifactPath]) => [
+        sourceId,
+        resolvedPath(root, artifactPath),
+      ]),
+    );
     const officialExtractionReceipt = options.officialExtractionReceipt
       ? resolvedPath(root, options.officialExtractionReceipt)
       : null;
@@ -1213,6 +1273,7 @@ export async function prepareDataBundleUpdate(
               )
             : null,
         officialSourceArtifact,
+        officialLegendSourceArtifacts,
         officialExtractionReceipt,
         officialExtractorTrustedKeys,
         officialAuthorityUnavailableReason:
@@ -1294,6 +1355,7 @@ export async function prepareDataBundleUpdate(
               )
             : null,
         officialSourceArtifact,
+        officialLegendSourceArtifacts,
         officialExtractionReceipt,
         officialExtractorTrustedKeys,
         officialAuthorityUnavailableReason:
@@ -1393,6 +1455,7 @@ export async function prepareDataBundleUpdate(
                 )
               : null,
           officialSourceArtifact,
+          officialLegendSourceArtifacts,
           officialExtractionReceipt,
           officialExtractorTrustedKeys,
           officialAuthorityUnavailableReason:
@@ -1470,6 +1533,8 @@ export async function runPrepareDataBundleCli(
     officialReconciliationEvidence:
       args.officialReconciliationEvidence,
     officialSourceArtifact: args.officialSourceArtifact,
+    officialLegendSourceArtifacts:
+      args.officialLegendSourceArtifacts,
     officialExtractionReceipt: args.officialExtractionReceipt,
     officialExtractorTrustedKeys:
       args.officialExtractorTrustedKeys,

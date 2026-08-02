@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rm,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -30,6 +31,7 @@ import {
   type TesseraStressPreparationFailureReport,
 } from "../lib/rosterpilot";
 import type { NewRecruitDeliveryOptions } from "../local/new-recruit/companion";
+import { readNewRecruitMutationReceipt } from "../local/new-recruit/cache";
 import {
   TesseraStressPreparationFailureReportSchema,
   runRosterStressTest,
@@ -64,6 +66,7 @@ function xmlAttribute(value: string): string {
 async function deliveryArtifacts(
   candidate: RosterDraftV1,
   catalogueRevisionOffset = 0,
+  gameSystemRevisionOffset = 0,
 ): Promise<{ source: Uint8Array; enriched: Uint8Array }> {
   const exported = await exportRoster(candidate, "rosz");
   assert.ok(exported.ok && exported.data);
@@ -80,6 +83,13 @@ async function deliveryArtifacts(
       /(<force\b[^>]*\bcatalogueRevision=")(\d+)(")/,
       (_match, prefix: string, value: string, suffix: string) =>
         `${prefix}${Number(value) + catalogueRevisionOffset}${suffix}`,
+    );
+  }
+  if (gameSystemRevisionOffset !== 0) {
+    xml = xml.replace(
+      /(<roster\b[^>]*\bgameSystemRevision=")(\d+)(")/,
+      (_match, prefix: string, value: string, suffix: string) =>
+        `${prefix}${Number(value) + gameSystemRevisionOffset}${suffix}`,
     );
   }
 
@@ -169,6 +179,7 @@ async function successfulDelivery(
   options: NewRecruitDeliveryOptions = {},
   fallbackDirectory: string,
   catalogueRevisionOffset = 0,
+  gameSystemRevisionOffset = 0,
 ): Promise<ResultEnvelope<NewRecruitDelivery>> {
   const outputDirectory =
     options.outputDirectory ?? fallbackDirectory;
@@ -176,6 +187,7 @@ async function successfulDelivery(
   const content = await deliveryArtifacts(
     candidate,
     catalogueRevisionOffset,
+    gameSystemRevisionOffset,
   );
   const contentSha256 = createHash("sha256")
     .update(content.enriched)
@@ -562,4 +574,132 @@ test("preparation failures retain verified state without making partial receipts
   );
   assert.deepEqual(partialManifest.preparedOpponents, {});
   assert.equal(browserCalls, 0);
+});
+
+test("a fresh diagnostic stress run reuses the strict-drift player artifact without redelivery", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-stress-diagnostic-reuse-"),
+  );
+  const previousSupport = process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+  process.env.ROSTERPILOT_SUPPORT_DIRECTORY = path.join(
+    directory,
+    "support",
+  );
+  try {
+    const player = roster(
+      "adeptus-custodes",
+      1_000,
+      "Strict drift diagnostic reuse player",
+    );
+    const policyPath = await profilePolicyPath(directory, player);
+    let playerDeliveryCalls = 0;
+    let opponentDeliveryCalls = 0;
+    const deliver = (
+      candidate: RosterDraftV1,
+      options?: NewRecruitDeliveryOptions,
+    ) => {
+      const isPlayer = candidate.id === player.id;
+      if (isPlayer) {
+        playerDeliveryCalls += 1;
+      } else {
+        opponentDeliveryCalls += 1;
+      }
+      return successfulDelivery(
+        candidate,
+        options,
+        directory,
+        0,
+        isPlayer ? 1 : 0,
+      );
+    };
+    const dependencies = {
+      deliver,
+      persistentCacheDelivery: true,
+      runtimeIssue: () => null,
+    };
+
+    const strict = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        executionMode: "prepare-only",
+        profilePolicyPath: policyPath,
+        outputDirectory: "strict",
+        rootDir: directory,
+      },
+      dependencies,
+    );
+    assert.equal(strict.ok, false);
+    assert.ok(strict.data);
+    assert.equal(
+      strict.data.reportKind,
+      "tessera-stress-preparation-failure",
+    );
+    const strictFailure =
+      strict.data as TesseraStressPreparationFailureReport;
+    TesseraStressPreparationFailureReportSchema.parse(strictFailure);
+    assert.ok(
+      strictFailure.failures.some(
+        (failure) =>
+          failure.code === "NEW_RECRUIT_CATALOGUE_DRIFT",
+      ),
+    );
+    assert.equal(playerDeliveryCalls, 1);
+    assert.equal(opponentDeliveryCalls, 0);
+    const created = await readNewRecruitMutationReceipt(player);
+    assert.equal(created?.attempts[0]?.outcome, "created");
+    assert.ok(created?.attempts[0]?.recoveryArtifact);
+
+    const diagnostic = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        executionMode: "prepare-only",
+        profilePolicyPath: policyPath,
+        catalogueDriftMode: "diagnostic",
+        outputDirectory: "diagnostic",
+        rootDir: directory,
+      },
+      dependencies,
+    );
+    assert.equal(
+      diagnostic.ok,
+      true,
+      diagnostic.violations.map((issue) => issue.message).join("\n"),
+    );
+    assert.ok(diagnostic.data);
+    assert.equal(diagnostic.data.reportKind, "tessera-stress-test");
+    if (diagnostic.data.reportKind !== "tessera-stress-test") {
+      throw new Error("Expected a completed stress-test report.");
+    }
+    assert.equal(diagnostic.data.player.cacheReused, true);
+    assert.equal(playerDeliveryCalls, 1);
+    assert.equal(opponentDeliveryCalls, 3);
+    assert.equal(
+      diagnostic.data.preparation?.cacheReuses,
+      1,
+    );
+    assert.equal(
+      diagnostic.data.preparation?.remoteMutations,
+      3,
+    );
+    const reused = await readNewRecruitMutationReceipt(player);
+    assert.equal(reused?.attempts[0]?.outcome, "created");
+    assert.ok(
+      reused?.attempts
+        .slice(1)
+        .every((attempt) => attempt.outcome === "reused"),
+    );
+  } finally {
+    if (previousSupport === undefined) {
+      delete process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+    } else {
+      process.env.ROSTERPILOT_SUPPORT_DIRECTORY = previousSupport;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 });

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   OfficialExtractorTrustRegistryV1Schema,
-  OfficialExtractionReceiptV1Schema,
+  OfficialExtractionReceiptSchema,
   verifyOfficialPublicationEvidence,
   verifyOfficialRulesOverlayCoverage,
 } from "../lib/rosterpilot/official-data";
@@ -21,6 +21,7 @@ const usage = `Usage:
   npm run data:official-overlay -- template --out <path>
   npm run data:official-overlay -- check --file <path> \\
     --source-artifact <path> --receipt <path> \\
+    [--legend-source-artifact <source-id=path>]... \\
     [--trusted-extractors <path>]
 
 "template" writes a source-bound but deliberately non-publishable schema-v1
@@ -28,6 +29,8 @@ overlay skeleton. Populate it from a reviewed machine-verifiable extractor,
 including complete coverage receipts. Publication additionally requires the
 exact downloaded source artifact and a signed inventory receipt from a key in
 data/official-extractor-trusted-keys.json (or --trusted-extractors).
+Schema-v2 overlays must supply every exact faction-pack PDF with a repeatable
+--legend-source-artifact option keyed by the overlay's source id.
 `;
 
 function value(
@@ -47,6 +50,37 @@ function resolved(root: string, filename: string): string {
   return path.isAbsolute(filename)
     ? path.normalize(filename)
     : path.resolve(root, filename);
+}
+
+function keyedPathValues(
+  argv: readonly string[],
+  option: string,
+): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== option) continue;
+    const raw = argv[index + 1];
+    if (!raw || raw.startsWith("--")) {
+      throw new Error(`${option} requires <source-id=path>.`);
+    }
+    const separator = raw.indexOf("=");
+    const sourceId = raw.slice(0, separator).trim();
+    const filename = raw.slice(separator + 1).trim();
+    if (separator <= 0 || !sourceId || !filename) {
+      throw new Error(`${option} requires <source-id=path>.`);
+    }
+    if (Object.hasOwn(values, sourceId)) {
+      throw new Error(`${option} repeats source id ${sourceId}.`);
+    }
+    Object.defineProperty(values, sourceId, {
+      configurable: true,
+      enumerable: true,
+      value: filename,
+      writable: true,
+    });
+    index += 1;
+  }
+  return values;
 }
 
 export async function officialOverlayTemplate(root: string) {
@@ -156,9 +190,21 @@ export async function runOfficialDataOverlayCli(
       "data/official-extractor-trusted-keys.json";
     const overlayInput = JSON.parse(readFileSync(filename, "utf8"));
     const overlay = await verifyOfficialRulesOverlayCoverage(overlayInput);
-    const receipt = OfficialExtractionReceiptV1Schema.parse(
+    const receipt = OfficialExtractionReceiptSchema.parse(
       JSON.parse(
         readFileSync(resolved(root, receiptInput), "utf8"),
+      ),
+    );
+    const legendSourceArtifactPaths = keyedPathValues(
+      argv,
+      "--legend-source-artifact",
+    );
+    const legendSourceArtifacts = Object.fromEntries(
+      Object.entries(legendSourceArtifactPaths).map(
+        ([sourceId, artifactPath]) => [
+          sourceId,
+          readFileSync(resolved(root, artifactPath)),
+        ],
       ),
     );
     const trustedExtractors =
@@ -175,6 +221,7 @@ export async function runOfficialDataOverlayCli(
       sourceArtifact: readFileSync(
         resolved(root, sourceArtifactInput),
       ),
+      legendSourceArtifacts,
       extractionReceipt: receipt,
       trustedExtractors,
     });
@@ -186,6 +233,8 @@ export async function runOfficialDataOverlayCli(
         overlayHash: await semanticHash(overlay),
         exactOverlaySha256: verified.overlaySha256,
         sourceArtifactSha256: verified.sourceArtifactSha256,
+        legendSourceArtifactSha256:
+          verified.legendSourceArtifactSha256,
         extractorId: verified.extractorId,
         extractorKeyId: verified.extractorKeyId,
         source: overlay.source,
@@ -197,6 +246,16 @@ export async function runOfficialDataOverlayCli(
             ...overlay.enhancementPoints.map(
               (entry) => entry.factionId,
             ),
+            ...(overlay.schemaVersion === 2
+              ? [
+                  ...overlay.legendFactionCoverage.map(
+                    (entry) => entry.factionId,
+                  ),
+                  ...overlay.legendUnits.map(
+                    (entry) => entry.factionId,
+                  ),
+                ]
+              : []),
           ]),
         ].sort(),
       }, null, 2)}\n`,

@@ -24,6 +24,7 @@ test("CLI standard help flag describes independent workflows", async () => {
   );
   assert.match(stdout, /rosterpilot data update-status/);
   assert.match(stdout, /rosterpilot rebase --file/);
+  assert.match(stdout, /--portfolio-out general-threat-portfolio\.json/);
 });
 
 test("CLI distinguishes the active, verified, and upstream data bundles", async () => {
@@ -73,12 +74,18 @@ test("CLI reports workflow readiness without starting an external action", async
   assert.match(result.data.principle, /opt-in/i);
   assert.deepEqual(
     result.data.workflows.map((workflow) => workflow.id),
-    ["build", "new-recruit", "tessera", "faction-stress"],
+    [
+      "build",
+      "new-recruit",
+      "tessera",
+      "faction-stress",
+      "tessera-optimizer",
+    ],
   );
   assert.equal(result.data.workflows[0].available, true);
   assert.deepEqual(
     result.data.workflows.map((workflow) => workflow.setupProfile),
-    ["core", "new-recruit", "tessera", "tessera"],
+    ["core", "new-recruit", "tessera", "tessera", "tessera"],
   );
 });
 

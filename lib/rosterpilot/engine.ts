@@ -65,6 +65,18 @@ import {
 import {
   getDataUpdateStatusSnapshot,
 } from "./data-operations";
+import {
+  detectLegendsPromptIntent,
+  LegendsPlayContextSchema,
+  LegendsPolicySchema,
+  resolveLegendsPolicy,
+  type LegendsClassificationAuthority,
+  type LegendsPolicyDecision,
+} from "./legends-policy";
+import {
+  activeFactionLegendsState,
+} from "./legends";
+import { resolveFactionIntent } from "./faction-intent";
 
 export let DATA_PACKAGE_VERSION =
   newRecruitCatalogue.sources.rules.version;
@@ -307,6 +319,38 @@ function factionUnits(factionId: string): UnitView[] {
     }
   }
   return result;
+}
+
+function factionLegendsStates(factionId: string) {
+  return factionAncestry(factionId).map((sourceFactionId) =>
+    activeFactionLegendsState(sourceFactionId),
+  );
+}
+
+function factionLegendsClassificationAuthority(
+  factionId: string,
+): LegendsClassificationAuthority {
+  const states = factionLegendsStates(factionId);
+  if (
+    states.every(
+      (state) =>
+        state.classificationAuthority ===
+          "games-workshop-verified" &&
+        (
+          state.coverageStatus === "complete" ||
+          state.coverageStatus === "not-published"
+        ),
+    )
+  ) {
+    return "verified";
+  }
+  return states.some(
+    (state) =>
+      state.classificationAuthority ===
+      "games-workshop-unverified-overlay",
+  )
+    ? "unverified-overlay"
+    : "unavailable";
 }
 
 function matchedPlayDetachments(factionId: string) {
@@ -815,6 +859,19 @@ function resolveUnit(unitId: string, factionId?: string): UnitView | undefined {
 }
 
 /**
+ * Resolve a unit only within the selected faction and its declared parent
+ * factions. Consumers that analyze an existing roster should use this helper
+ * instead of a process-wide unit lookup: unit ids are not globally unique and
+ * successor factions inherit their shared datasheets from a parent catalogue.
+ */
+export function resolveFactionUnit(
+  unitId: string,
+  factionId: string,
+): UnitView | undefined {
+  return resolveUnit(unitId, factionId);
+}
+
+/**
  * Returns only weapon groups that require an explicit same-phase profile
  * choice. A weapon with one shooting and one melee profile is not ambiguous.
  */
@@ -957,6 +1014,7 @@ export function parseRosterPrompt(
   const unitConstraints = faction
     ? promptUnitConstraints(prompt, faction)
     : { requiredUnitIds: [], excludedUnitIds: [] };
+  const legendsIntent = detectLegendsPromptIntent(prompt);
 
   return {
     prompt,
@@ -967,7 +1025,12 @@ export function parseRosterPrompt(
       : undefined,
     preferences,
     allowNamedCharacters: !/\b(no|without|exclude)\s+(named|epic)/i.test(prompt),
-    allowLegends: /\b(include|allow|with)\s+legends?\b/i.test(prompt),
+    ...(legendsIntent === "allow" || legendsIntent === "exclude"
+      ? {
+          legendsPolicy: legendsIntent,
+          allowLegends: legendsIntent === "allow",
+        }
+      : {}),
     ...unitConstraints,
   };
 }
@@ -977,6 +1040,10 @@ export function getDataStatus(): ResultEnvelope<DataStatus> {
   const supportedFactionIds = factions.all
     .filter((faction) => isBuildableFaction(faction.id))
     .map((faction) => faction.id);
+  const legendStates = factions.all.map((faction) =>
+    activeFactionLegendsState(faction.id),
+  );
+  const legendUnits = legendStates.flatMap((state) => state.units);
   return envelope({
     package: "@alpaca-software/40kdc-data",
     packageVersion: DATA_PACKAGE_VERSION,
@@ -1019,6 +1086,42 @@ export function getDataStatus(): ResultEnvelope<DataStatus> {
       checkedAt: newRecruitCatalogue.sources.official.checkedAt,
     },
     dataBundle: getDataUpdateStatusSnapshot(),
+    legends: {
+      factionCoverage: {
+        complete: legendStates.filter(
+          (state) => state.coverageStatus === "complete",
+        ).length,
+        notPublished: legendStates.filter(
+          (state) => state.coverageStatus === "not-published",
+        ).length,
+        unavailable: legendStates.filter(
+          (state) => state.coverageStatus === "unavailable",
+        ).length,
+      },
+      classificationAuthority: {
+        verified: legendStates.filter(
+          (state) =>
+            state.classificationAuthority ===
+            "games-workshop-verified",
+        ).length,
+        unverifiedOverlay: legendStates.filter(
+          (state) =>
+            state.classificationAuthority ===
+            "games-workshop-unverified-overlay",
+        ).length,
+        unavailable: legendStates.filter(
+          (state) =>
+            state.classificationAuthority === "unavailable",
+        ).length,
+      },
+      inventoryUnits: legendUnits.length,
+      buildSupportedUnits: legendUnits.filter(
+        (unit) => unit.buildSupported,
+      ).length,
+      inventoryOnlyUnits: legendUnits.filter(
+        (unit) => !unit.buildSupported,
+      ).length,
+    },
     newRecruitCoverage: {
       factionCount: newRecruitCatalogue.summary.factionCount,
       exportCapableFactions:
@@ -1109,8 +1212,53 @@ export function compareFactions(
   return envelope(matches, violations);
 }
 
+function legendBuildSupported(unit: UnitView): boolean {
+  if (unit.raw.is_legend !== true) return true;
+  return (
+    activeFactionLegendsState(unit.raw.faction_id).units.find(
+      (entry) => entry.unitId === unit.id,
+    )?.buildSupported === true
+  );
+}
+
+function verifiedLegendProvenance(
+  state: ReturnType<typeof activeFactionLegendsState>,
+  entry: ReturnType<typeof activeFactionLegendsState>["units"][number],
+): UnitSummary["legendProvenance"] {
+  if (
+    state.classificationAuthority !== "games-workshop-verified"
+  ) {
+    return undefined;
+  }
+  const source = state.sourceArtifacts.find(
+    (artifact) => artifact.sourceId === entry.sourceId,
+  );
+  if (!source) return undefined;
+  return {
+    classificationAuthority: "games-workshop-verified",
+    sourceId: source.sourceId,
+    version: source.version,
+    contentSha256: source.contentSha256,
+    url: source.url,
+    ...(entry.datasheetUrl
+      ? { datasheetUrl: entry.datasheetUrl }
+      : {}),
+  };
+}
+
 function summarizeUnit(unit: UnitView): UnitSummary {
   const modelCounts = availableModelCounts(unit, 1);
+  const buildSupported = legendBuildSupported(unit);
+  const legendState = activeFactionLegendsState(
+    unit.raw.faction_id,
+  );
+  const legendEntry =
+    unit.raw.is_legend === true
+      ? legendState.units.find((entry) => entry.unitId === unit.id)
+      : undefined;
+  const legendProvenance = legendEntry
+    ? verifiedLegendProvenance(legendState, legendEntry)
+    : undefined;
   return {
     id: unit.id,
     name: unit.name,
@@ -1119,12 +1267,16 @@ function summarizeUnit(unit: UnitView): UnitSummary {
     pointsFrom: Math.min(
       ...modelCounts.map((modelCount) => baseUnitPoints(unit.raw, modelCount, 1)),
     ),
+    pointsKnown: true,
     modelCounts,
     tags: unitTags(unit),
     keywords: [...(unit.raw.keywords ?? []), ...(unit.raw.faction_keywords ?? [])],
     isNamedCharacter: isNamedCharacter(unit),
     isLegend: unit.raw.is_legend === true,
-    supported: isBuildableFaction(unit.raw.faction_id),
+    legendBuildSupported: buildSupported,
+    ...(legendProvenance ? { legendProvenance } : {}),
+    supported:
+      isBuildableFaction(unit.raw.faction_id) && buildSupported,
   };
 }
 
@@ -1143,9 +1295,59 @@ export function searchUnits(input: {
   }
   const normalized = normalizeName(input.query ?? "");
   const desiredTags = new Set(input.tags ?? []);
-  const matches = factionUnits(faction.id)
+  const runtimeSummaries = factionUnits(faction.id)
     .filter((unit) => input.includeLegends || unit.raw.is_legend !== true)
-    .map(summarizeUnit)
+    .filter(
+      (unit) =>
+        unit.raw.is_legend !== true || legendBuildSupported(unit),
+    )
+    .map(summarizeUnit);
+  const runtimeUnitIds = new Set(
+    runtimeSummaries.map((unit) => unit.id),
+  );
+  const legendsStates = factionLegendsStates(faction.id);
+  const seenInventoryEntries = new Set<string>();
+  const inventorySummaries: UnitSummary[] = input.includeLegends
+    ? legendsStates
+        .flatMap((state) =>
+          state.units.map((entry) => ({ entry, state })),
+        )
+        .filter(({ entry }) => {
+          const key = `${entry.factionId}\u0000${entry.legendId}`;
+          if (seenInventoryEntries.has(key)) return false;
+          seenInventoryEntries.add(key);
+          return true;
+        })
+        .filter(
+          ({ entry }) =>
+            !entry.buildSupported ||
+            entry.unitId === null ||
+            !runtimeUnitIds.has(entry.unitId),
+        )
+        .map(({ entry, state }) => {
+          const legendProvenance = verifiedLegendProvenance(
+            state,
+            entry,
+          );
+          return {
+            id: entry.unitId ?? entry.legendId,
+            name: entry.name,
+            factionId: entry.factionId,
+            role: "Legends inventory",
+            pointsFrom: 0,
+            pointsKnown: false,
+            modelCounts: [],
+            tags: [],
+            keywords: ["Legends", "inventory-only"],
+            isNamedCharacter: false,
+            isLegend: true,
+            legendBuildSupported: false,
+            ...(legendProvenance ? { legendProvenance } : {}),
+            supported: false,
+          };
+        })
+    : [];
+  const matches = [...runtimeSummaries, ...inventorySummaries]
     .filter((unit) => {
       const textMatch =
         !normalized ||
@@ -1159,13 +1361,25 @@ export function searchUnits(input: {
     })
     .sort(
       (a, b) =>
+        Number(b.supported) - Number(a.supported) ||
         b.tags.filter((tag) => desiredTags.has(tag)).length -
           a.tags.filter((tag) => desiredTags.has(tag)).length ||
         a.pointsFrom - b.pointsFrom ||
         a.name.localeCompare(b.name),
     )
     .slice(0, Math.max(1, Math.min(input.limit ?? 30, 100)));
-  return envelope(matches);
+  const warnings =
+    input.includeLegends &&
+    factionLegendsClassificationAuthority(faction.id) !== "verified"
+      ? [
+          issue(
+            "LEGENDS_CLASSIFICATION_UNVERIFIED",
+            "The active faction bundle does not contain complete, verified Games Workshop Legends classification evidence.",
+            "warn",
+          ),
+        ]
+      : [];
+  return envelope(matches, [], warnings);
 }
 
 function mergeBuildInput(input: BuildRosterInput): Required<
@@ -1179,7 +1393,9 @@ function mergeBuildInput(input: BuildRosterInput): Required<
     | "allowLegends"
   >
 > &
-  BuildRosterInput {
+  BuildRosterInput & {
+    legendsPolicyDecision: LegendsPolicyDecision;
+  } {
   const parsed = input.prompt
     ? parseRosterPrompt(input.prompt, {
         playerFaction: input.playerFaction ?? input.faction,
@@ -1188,6 +1404,22 @@ function mergeBuildInput(input: BuildRosterInput): Required<
         ),
       })
     : {};
+  const factionQuery =
+    input.playerFaction ??
+    input.faction ??
+    parsed.playerFaction ??
+    parsed.faction ??
+    DEFAULT_FACTION_ID;
+  const factionId = resolveFaction(factionQuery)?.id ?? DEFAULT_FACTION_ID;
+  const classificationAuthority =
+    factionLegendsClassificationAuthority(factionId);
+  const legendsPolicyDecision = resolveLegendsPolicy({
+    legendsPolicy: input.legendsPolicy ?? parsed.legendsPolicy,
+    legacyAllowLegends: input.allowLegends ?? parsed.allowLegends,
+    playContext: input.playContext,
+    prompt: input.prompt,
+    classificationAuthority,
+  });
   return {
     ...parsed,
     ...input,
@@ -1229,7 +1461,9 @@ function mergeBuildInput(input: BuildRosterInput): Required<
     ],
     allowNamedCharacters:
       input.allowNamedCharacters ?? parsed.allowNamedCharacters ?? true,
-    allowLegends: input.allowLegends ?? parsed.allowLegends ?? false,
+    legendsPolicy: legendsPolicyDecision.requestedPolicy,
+    allowLegends: legendsPolicyDecision.effectiveAllowLegends,
+    legendsPolicyDecision,
     requiredUnitIds: [
       ...new Set([
         ...(parsed.requiredUnitIds ?? []),
@@ -1874,6 +2108,46 @@ function candidateScore(
 export function buildRoster(
   rawInput: BuildRosterInput,
 ): ResultEnvelope<RosterDraftV1> {
+  const legendsPolicy =
+    rawInput.legendsPolicy === undefined
+      ? null
+      : LegendsPolicySchema.safeParse(rawInput.legendsPolicy);
+  const playContext =
+    rawInput.playContext === undefined
+      ? null
+      : LegendsPlayContextSchema.safeParse(rawInput.playContext);
+  if (
+    (legendsPolicy !== null && !legendsPolicy.success) ||
+    (playContext !== null && !playContext.success) ||
+    (rawInput.allowLegends !== undefined &&
+      typeof rawInput.allowLegends !== "boolean")
+  ) {
+    const details = [
+      ...(legendsPolicy && !legendsPolicy.success
+        ? legendsPolicy.error.issues
+        : []),
+      ...(playContext && !playContext.success
+        ? playContext.error.issues
+        : []),
+    ]
+      .slice(0, 3)
+      .map(
+        (problem) =>
+          `${problem.path.join(".") || "Legends policy"}: ${problem.message}`,
+      );
+    if (
+      rawInput.allowLegends !== undefined &&
+      typeof rawInput.allowLegends !== "boolean"
+    ) {
+      details.push("allowLegends: Expected a boolean.");
+    }
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "LEGENDS_POLICY_INVALID",
+        `The Legends policy or play context is invalid. ${details.join(" ")}`,
+      ),
+    ]);
+  }
   if (rawInput.opponentContext?.kind === "known-roster") {
     const opponentValidation = validateRoster(
       rawInput.opponentContext.roster,
@@ -1906,59 +2180,55 @@ export function buildRoster(
       ]);
     }
   }
-  const explicitFactionQueries = [
-    rawInput.playerFaction,
-    rawInput.faction,
-  ].filter((value): value is string => Boolean(value));
-  const explicitFactionIds = [
-    ...new Set(
-      explicitFactionQueries
-        .map((query) => resolveFaction(query)?.id)
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ];
-  if (
-    explicitFactionQueries.length > 0 &&
-    explicitFactionIds.length !== 1
-  ) {
+  const factionResolution = resolveFactionIntent({
+    prompt: rawInput.prompt,
+    playerFaction: rawInput.playerFaction,
+    faction: rawInput.faction,
+    opponentFaction: opponentContextFactionId(rawInput.opponentContext),
+  });
+  if (factionResolution.status !== "resolved") {
+    const suggestionMessage =
+      factionResolution.suggestions.length > 0
+        ? ` Suggestions: ${factionResolution.suggestions
+            .map(
+              (suggestion) =>
+                `${suggestion.factionName} (${suggestion.factionId})`,
+            )
+            .join(", ")}.`
+        : "";
     return envelope<RosterDraftV1>(null, [
       issue(
-        explicitFactionIds.length > 1
-          ? "PLAYER_FACTION_CONFLICT"
-          : "FACTION_NOT_FOUND",
-        explicitFactionIds.length > 1
-          ? "The structured player-faction fields resolve to different factions."
-          : `No faction matched "${explicitFactionQueries.join(", ")}".`,
+        factionResolution.code,
+        `${factionResolution.message}${suggestionMessage}`,
       ),
     ]);
   }
-  let normalizedInput = rawInput;
-  if (explicitFactionIds.length === 0 && rawInput.prompt) {
-    const opponentFactionQuery = opponentContextFactionId(
-      rawInput.opponentContext,
-    );
-    const opponentFactionId = opponentFactionQuery
-      ? resolveFaction(opponentFactionQuery)?.id
-      : undefined;
-    const mentions = factionMentions(rawInput.prompt).filter(
-      (factionId) => factionId !== opponentFactionId,
-    );
-    if (mentions.length > 1) {
-      return envelope<RosterDraftV1>(null, [
-        issue(
-          "AMBIGUOUS_PLAYER_FACTION",
-          `The prompt names multiple possible player factions (${mentions.join(", ")}). Supply playerFaction explicitly.`,
-        ),
-      ]);
-    }
-    if (mentions.length === 1) {
-      normalizedInput = {
-        ...rawInput,
-        playerFaction: mentions[0],
-      };
-    }
-  }
+  const inferredOpponentFactionId =
+    rawInput.opponentContext === undefined &&
+    factionResolution.opponentFactionIds.length === 1
+      ? factionResolution.opponentFactionIds[0]
+      : null;
+  const normalizedInput: BuildRosterInput = {
+    ...rawInput,
+    playerFaction: factionResolution.factionId,
+    ...(inferredOpponentFactionId
+      ? {
+          opponentContext: {
+            kind: "known-faction" as const,
+            factionId: inferredOpponentFactionId,
+          },
+        }
+      : {}),
+  };
   const input = mergeBuildInput(normalizedInput);
+  if (input.legendsPolicyDecision.resolution === "blocked") {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "LEGENDS_POLICY_CONFLICT",
+        input.legendsPolicyDecision.reason,
+      ),
+    ]);
+  }
   const faction = resolveFaction(input.faction);
   if (!faction) {
     return envelope<RosterDraftV1>(null, [
@@ -2030,8 +2300,36 @@ export function buildRoster(
       ),
     ]);
   }
+  const legendsInventoryUnits = factionLegendsStates(faction.id).flatMap(
+    (state) => state.units,
+  );
+  const inventoryOnlyRequired = legendsInventoryUnits
+    .filter(
+      (entry) =>
+        !entry.buildSupported &&
+        requiredUnitIds.has(entry.unitId ?? entry.legendId),
+    )
+    .map((entry) => entry.unitId ?? entry.legendId);
+  if (inventoryOnlyRequired.length > 0) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        input.allowLegends
+          ? "LEGENDS_BUILD_SUPPORT_UNAVAILABLE"
+          : "LEGENDS_REQUIRED_BUT_NOT_ALLOWED",
+        input.allowLegends
+          ? `These Legends inventory records do not have complete deterministic build data: ${inventoryOnlyRequired.join(", ")}.`
+          : `Required Legends units cannot be selected under the resolved policy: ${inventoryOnlyRequired.join(", ")}. ${input.legendsPolicyDecision.reason}`,
+      ),
+    ]);
+  }
   const allFactionUnitIds = new Set(
-    factionUnits(faction.id).map((unit) => unit.id),
+    [
+      ...factionUnits(faction.id).map((unit) => unit.id),
+      ...legendsInventoryUnits.flatMap((entry) => [
+        entry.legendId,
+        ...(entry.unitId ? [entry.unitId] : []),
+      ]),
+    ],
   );
   const unknownRequired = [...requiredUnitIds].filter(
     (unitId) => !allFactionUnitIds.has(unitId),
@@ -2187,6 +2485,7 @@ export function buildRoster(
         !unit.raw.game_modes || unit.raw.game_modes.includes("matched-play"),
     )
     .filter((unit) => input.allowLegends || unit.raw.is_legend !== true)
+    .filter(legendBuildSupported)
     .filter((unit) => input.allowNamedCharacters || !isNamedCharacter(unit))
     .filter((unit) => !collection || collection.has(unit.id))
     .filter((unit) => !excludedUnitIds.has(unit.id))
@@ -2224,6 +2523,32 @@ export function buildRoster(
     return true;
   };
 
+  const requiredLegendIds = [...requiredUnitIds].filter(
+    (unitId) =>
+      resolveUnit(unitId, faction.id)?.raw.is_legend === true,
+  );
+  if (!input.allowLegends && requiredLegendIds.length > 0) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "LEGENDS_REQUIRED_BUT_NOT_ALLOWED",
+        `Required Legends units cannot be selected under the resolved policy: ${requiredLegendIds.join(", ")}. ${input.legendsPolicyDecision.reason}`,
+      ),
+    ]);
+  }
+  const unsupportedRequiredLegends = requiredLegendIds.filter(
+    (unitId) => {
+      const unit = resolveUnit(unitId, faction.id);
+      return unit ? !legendBuildSupported(unit) : false;
+    },
+  );
+  if (unsupportedRequiredLegends.length > 0) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "LEGENDS_BUILD_SUPPORT_UNAVAILABLE",
+        `These Legends inventory records do not have complete deterministic build data: ${unsupportedRequiredLegends.join(", ")}.`,
+      ),
+    ]);
+  }
   const unavailableRequired = [...requiredUnitIds].filter(
     (unitId) => !factionUnitPool.some((unit) => unit.id === unitId),
   );
@@ -3135,6 +3460,7 @@ export function buildRoster(
     constraints: {
       allowNamedCharacters: input.allowNamedCharacters,
       allowLegends: input.allowLegends,
+      legendsPolicyDecision: input.legendsPolicyDecision,
       collectionUnitIds: input.collectionUnitIds ?? null,
       collectionProfile: input.collectionProfile ?? null,
       requiredUnitIds: [...requiredUnitIds].sort(),
@@ -3266,6 +3592,60 @@ export function validateRoster(
       ),
     );
   }
+  const legendsDecision = draft.constraints.legendsPolicyDecision;
+  if (
+    legendsDecision &&
+    legendsDecision.effectiveAllowLegends !==
+      draft.constraints.allowLegends
+  ) {
+    violations.push(
+      issue(
+        "LEGENDS_POLICY_STATE_MISMATCH",
+        "The stored Legends policy decision disagrees with the roster's effective allowLegends constraint.",
+      ),
+    );
+  }
+  if (
+    legendsDecision?.requestedPolicy === "auto" &&
+    legendsDecision.contextPermission === "unknown"
+  ) {
+    warnings.push(
+      issue(
+        "LEGENDS_POLICY_UNKNOWN",
+        legendsDecision.reason,
+        "warn",
+      ),
+    );
+  }
+  if (
+    legendsDecision?.requestedPolicy === "allow" &&
+    legendsDecision.resolution === "excluded" &&
+    legendsDecision.classificationAuthority === "verified"
+  ) {
+    warnings.push(
+      issue(
+        "LEGENDS_POLICY_EXCLUDED",
+        legendsDecision.reason,
+        "warn",
+      ),
+    );
+  }
+  if (
+    legendsDecision &&
+    legendsDecision.classificationAuthority !== "verified" &&
+    (
+      legendsDecision.requestedPolicy === "allow" ||
+      legendsDecision.contextPermission === "allowed"
+    )
+  ) {
+    warnings.push(
+      issue(
+        "LEGENDS_CLASSIFICATION_UNVERIFIED",
+        legendsDecision.reason,
+        "warn",
+      ),
+    );
+  }
   if (draft.gameSystem !== SUPPORTED_GAME) {
     violations.push(issue("GAME_SYSTEM", `Unsupported game system "${draft.gameSystem}".`));
   }
@@ -3340,8 +3720,22 @@ export function validateRoster(
       );
     }
   }
+  const selectedLegends: DraftUnit[] = [];
   for (const selection of draft.units) {
     const unit = resolveUnit(selection.unitId, draft.factionId);
+    if (unit?.raw.is_legend === true) {
+      selectedLegends.push(selection);
+      if (!legendBuildSupported(unit)) {
+        violations.push(
+          issue(
+            "LEGENDS_BUILD_SUPPORT_UNAVAILABLE",
+            `${selection.name} is classified as Legends, but its active signed bundle does not contain complete deterministic build data.`,
+            "error",
+            selection.selectionId,
+          ),
+        );
+      }
+    }
     if (
       (draft.constraints.excludedUnitIds ?? []).includes(
         selection.unitId,
@@ -3389,13 +3783,47 @@ export function validateRoster(
     ) {
       violations.push(
         issue(
-          "LEGENDS_CONSTRAINT_VIOLATED",
-          `${selection.name} is a Legends unit, but Legends units are excluded by this roster's hard constraints.`,
+          "LEGENDS_REQUIRED_BUT_NOT_ALLOWED",
+          `${selection.name} is a Legends unit, but the resolved Legends policy excludes it.`,
           "error",
           selection.selectionId,
         ),
       );
     }
+  }
+  if (selectedLegends.length > 0) {
+    const activeClassificationAuthority =
+      factionLegendsClassificationAuthority(draft.factionId);
+    if (
+      activeClassificationAuthority !== "verified" ||
+      legendsDecision?.classificationAuthority !== "verified"
+    ) {
+      violations.push(
+        issue(
+          "LEGENDS_CLASSIFICATION_UNVERIFIED",
+          "Selected Legends require complete, verified Games Workshop classification for the faction and every inherited faction unit pool.",
+        ),
+      );
+    }
+    if (draft.constraints.allowLegends && !legendsDecision) {
+      violations.push(
+        issue(
+          "LEGENDS_POLICY_STATE_MISSING",
+          "This roster enables and selects Legends without a persisted resolved Legends policy decision.",
+        ),
+      );
+    }
+  }
+  if (selectedLegends.length > 0 && draft.constraints.allowLegends) {
+    warnings.push(
+      issue(
+        "LEGENDS_INCLUDED",
+        `This roster includes Legends units: ${selectedLegends
+          .map((selection) => selection.name)
+          .join(", ")}. ${legendsDecision?.reason ?? "Legends were enabled by a legacy roster constraint."}`,
+        "warn",
+      ),
+    );
   }
   if (
     draft.constraints.requiredWarlordUnitId &&
@@ -3965,16 +4393,31 @@ export function explainRoster(
 }
 
 function exportText(draft: RosterDraftV1): string {
+  const includesLegends = draft.units.some(
+    (selection) =>
+      resolveUnit(selection.unitId, draft.factionId)?.raw.is_legend ===
+      true,
+  );
   const lines = [
     draft.name,
     `${draft.factionName} — ${draft.totalPoints}/${draft.pointsLimit} pts`,
     `${draft.detachmentName} · ${draft.forceDispositionName}`,
     "",
     ...draft.units.map(
-      (selection) =>
-        `${selection.isWarlord ? "★ " : ""}${selection.modelCount}× ${selection.name} — ${selection.points} pts`,
+      (selection) => {
+        const isLegend =
+          resolveUnit(selection.unitId, draft.factionId)?.raw
+            .is_legend === true;
+        return `${selection.isWarlord ? "★ " : ""}${selection.modelCount}× ${selection.name}${isLegend ? " [Legends]" : ""} — ${selection.points} pts`;
+      },
     ),
     "",
+    ...(includesLegends
+      ? [
+          "Legends included: confirm that this play context or event permits Legends units.",
+          "",
+        ]
+      : []),
     `Data: 40kdc-data ${draft.sourceData.version} (${draft.sourceData.edition}, ${draft.sourceData.dataslate})`,
     "Validate against current event rules before play.",
   ];
@@ -3990,12 +4433,22 @@ function escapeHtml(value: string): string {
 }
 
 function exportHtml(draft: RosterDraftV1): string {
+  const includesLegends = draft.units.some(
+    (selection) =>
+      resolveUnit(selection.unitId, draft.factionId)?.raw.is_legend ===
+      true,
+  );
   const rows = draft.units
     .map(
-      (selection) => `<article>
-  <div><strong>${escapeHtml(selection.name)}</strong><span>${escapeHtml(selection.role)} · ${selection.modelCount} models${selection.isWarlord ? " · Warlord" : ""}</span></div>
+      (selection) => {
+        const isLegend =
+          resolveUnit(selection.unitId, draft.factionId)?.raw
+            .is_legend === true;
+        return `<article>
+  <div><strong>${escapeHtml(selection.name)}${isLegend ? " <small>Legends</small>" : ""}</strong><span>${escapeHtml(selection.role)} · ${selection.modelCount} models${selection.isWarlord ? " · Warlord" : ""}</span></div>
   <b>${selection.points} pts</b>
-</article>`,
+</article>`;
+      },
     )
     .join("\n");
   return `<!doctype html>
@@ -4006,10 +4459,11 @@ body{font:15px/1.45 system-ui,sans-serif;color:#171912;max-width:760px;margin:40
 header{border-bottom:3px solid #b18d27;padding-bottom:18px;margin-bottom:18px}h1{margin:0 0 6px}
 p{margin:4px 0;color:#555}article{display:flex;justify-content:space-between;gap:24px;padding:13px 0;border-bottom:1px solid #ddd}
 article div{display:flex;flex-direction:column}article span{font-size:12px;color:#666}footer{margin-top:30px;font-size:11px;color:#666}
+small{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#785f17}.caution{padding:10px 12px;border:1px solid #b18d27;background:#fff8dc;color:#5c480f}
 @media print{body{margin:0;max-width:none}a{color:inherit;text-decoration:none}}
 </style></head><body>
 <header><h1>${escapeHtml(draft.name)}</h1><p>${escapeHtml(draft.factionName)} · ${draft.totalPoints}/${draft.pointsLimit} points</p>
-<p>${escapeHtml(draft.detachmentName)} · ${escapeHtml(draft.forceDispositionName)}</p></header>
+<p>${escapeHtml(draft.detachmentName)} · ${escapeHtml(draft.forceDispositionName)}</p>${includesLegends ? '<p class="caution"><strong>Legends included.</strong> Confirm that this play context or event permits Legends units.</p>' : ""}</header>
 <main>${rows}</main>
 <footer>Powered by 40kdc-data · ${escapeHtml(draft.sourceData.version)} · Community data; verify event rules.</footer>
 </body></html>`;
@@ -4137,9 +4591,16 @@ export async function exportRoster(
     const newRecruitMappingFailure =
       (format === "ros" || format === "rosz") &&
       message.startsWith("New Recruit");
+    const legendsConfigurationFailure =
+      newRecruitMappingFailure &&
+      message.startsWith(
+        "New Recruit Legends visibility mapping",
+      );
     return envelope<ExportArtifact>(null, [
       issue(
-        newRecruitMappingFailure
+        legendsConfigurationFailure
+          ? "NEW_RECRUIT_LEGENDS_CONFIGURATION_UNAVAILABLE"
+          : newRecruitMappingFailure
           ? "NEW_RECRUIT_MAPPING_UNAVAILABLE"
           : "EXPORT_FAILED",
         message,

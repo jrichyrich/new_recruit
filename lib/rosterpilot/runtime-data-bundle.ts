@@ -55,16 +55,33 @@ import {
   setActiveDataBundleManifest,
 } from "./active-data-context";
 import {
-  OfficialRulesOverlayV1Schema,
+  OfficialRulesOverlaySchema,
   applyOfficialRulesOverlay,
   verifyOfficialRulesOverlayCoverage,
   type OfficialCommunityConflict,
-  type OfficialRulesOverlayV1,
+  type OfficialRulesOverlay,
 } from "./official-data";
+import {
+  RuntimeFactionLegendsStateSchema,
+  activateLegendsInventory,
+  unavailableFactionLegendsState,
+  type RuntimeFactionLegendsState,
+} from "./legends";
 
-export const RUNTIME_DATA_BUNDLE_SCHEMA_VERSION = 1;
+export const RUNTIME_DATA_BUNDLE_SCHEMA_VERSION = 2;
+export const RUNTIME_DATA_BUNDLE_SUPPORTED_SCHEMA_VERSIONS = [
+  1, 2,
+] as const;
 export const RUNTIME_DATA_BUNDLE_MEDIA_TYPE =
   "application/vnd.rosterpilot.data-shard+json";
+
+export function isSupportedRuntimeDataBundleSchemaVersion(
+  version: number,
+): version is 1 | 2 {
+  return RUNTIME_DATA_BUNDLE_SUPPORTED_SCHEMA_VERSIONS.includes(
+    version as 1 | 2,
+  );
+}
 
 type CatalogueBase = Pick<
   NewRecruitCatalogueManifest,
@@ -94,7 +111,10 @@ export type RuntimeGlobalShardDataV1 = {
    * effective snapshot, but cannot reapply official facts to a new rules
    * source without supplying the reviewed evidence again.
    */
-  officialEvidenceOverlay?: OfficialRulesOverlayV1 | null;
+  officialEvidenceOverlay?: Extract<
+    OfficialRulesOverlay,
+    { schemaVersion: 1 }
+  > | null;
   officialAuthority: DataBundleOfficialAuthorityStatus;
 };
 
@@ -111,9 +131,45 @@ export type RuntimeFactionShardDataV1 = {
   officialOverlayHash: string | null;
 };
 
-export type RuntimeDataBundleShardDataV1 =
+export type RuntimeGlobalShardDataV2 = {
+  payloadKind: "rosterpilot-runtime-global";
+  schemaVersion: 2;
+  rulesData: RuntimeRulesData;
+  catalogueBase: CatalogueBase;
+  catalogueSummaryBase: CatalogueSummaryBase;
+  certificationDefaults: unknown;
+  certificationBrowserFixtures: unknown;
+  officialReconciliation: {
+    overlayHash: string;
+    affectedFactions: string[];
+  } | null;
+  officialEvidenceOverlay?: OfficialRulesOverlay | null;
+  officialAuthority: DataBundleOfficialAuthorityStatus;
+};
+
+export type RuntimeFactionShardDataV2 = {
+  payloadKind: "rosterpilot-runtime-faction";
+  schemaVersion: 2;
+  factionId: string;
+  rulesData: RuntimeRulesData;
+  catalogue: NewRecruitCatalogueManifest["factions"][string];
+  catalogueSummary:
+    NewRecruitCatalogueSummaryManifest["factions"][string];
+  certification: unknown;
+  officialConflicts: OfficialCommunityConflict[];
+  officialOverlayHash: string | null;
+  legends: RuntimeFactionLegendsState;
+};
+
+export type RuntimeDataBundleShardData =
   | RuntimeGlobalShardDataV1
-  | RuntimeFactionShardDataV1;
+  | RuntimeFactionShardDataV1
+  | RuntimeGlobalShardDataV2
+  | RuntimeFactionShardDataV2;
+
+/** @deprecated Use RuntimeDataBundleShardData; retained for API compatibility. */
+export type RuntimeDataBundleShardDataV1 =
+  RuntimeDataBundleShardData;
 
 export function assertRuntimeDataBundleShardData(
   value: unknown,
@@ -132,17 +188,26 @@ export function assertRuntimeDataBundleShardData(
   const validOfficialEvidenceOverlay =
     item?.officialEvidenceOverlay === undefined ||
     item.officialEvidenceOverlay === null ||
-    OfficialRulesOverlayV1Schema.safeParse(
+    OfficialRulesOverlaySchema.safeParse(
       item.officialEvidenceOverlay,
     ).success;
-  const global =
+  const legacyGlobal =
     item?.payloadKind === "rosterpilot-runtime-global" &&
     item.schemaVersion === 1 &&
     validRules &&
     record(item.catalogueBase) !== null &&
     record(item.catalogueSummaryBase) !== null &&
+    validOfficialEvidenceOverlay &&
+    (item.officialEvidenceOverlay == null ||
+      record(item.officialEvidenceOverlay)?.schemaVersion === 1);
+  const currentGlobal =
+    item?.payloadKind === "rosterpilot-runtime-global" &&
+    item.schemaVersion === 2 &&
+    validRules &&
+    record(item.catalogueBase) !== null &&
+    record(item.catalogueSummaryBase) !== null &&
     validOfficialEvidenceOverlay;
-  const faction =
+  const legacyFaction =
     item?.payloadKind === "rosterpilot-runtime-faction" &&
     item.schemaVersion === 1 &&
     typeof item.factionId === "string" &&
@@ -150,6 +215,18 @@ export function assertRuntimeDataBundleShardData(
     validRules &&
     record(item.catalogue) !== null &&
     record(item.catalogueSummary) !== null;
+  const currentFaction =
+    item?.payloadKind === "rosterpilot-runtime-faction" &&
+    item.schemaVersion === 2 &&
+    typeof item.factionId === "string" &&
+    item.factionId.length > 0 &&
+    validRules &&
+    record(item.catalogue) !== null &&
+    record(item.catalogueSummary) !== null &&
+    RuntimeFactionLegendsStateSchema.safeParse(item.legends).success &&
+    record(item.legends)?.factionId === item.factionId;
+  const global = legacyGlobal || currentGlobal;
+  const faction = legacyFaction || currentFaction;
   const descriptorMatches =
     !descriptor ||
     (descriptor.kind === "global"
@@ -160,6 +237,16 @@ export function assertRuntimeDataBundleShardData(
   if ((!global && !faction) || !descriptorMatches) {
     throw new Error(
       `Data-bundle shard ${descriptor?.shardId ?? "payload"} is not a supported RosterPilot runtime shard.`,
+    );
+  }
+  if (currentFaction) {
+    const legends = RuntimeFactionLegendsStateSchema.parse(
+      item?.legends,
+    );
+    assertRuntimeFactionLegendsShardCoherence(
+      item?.rulesData as RuntimeRulesData,
+      legends,
+      descriptor?.shardId ?? `faction:${legends.factionId}`,
     );
   }
 }
@@ -176,7 +263,7 @@ export type RuntimeDataBundleBuild = {
 
 export type RuntimeOfficialCarryForward = {
   rulesData: RuntimeRulesData;
-  overlay: OfficialRulesOverlayV1 | null;
+  overlay: OfficialRulesOverlay | null;
   authority: Extract<
     DataBundleOfficialAuthorityStatus,
     { status: "verified" }
@@ -248,6 +335,124 @@ function stringValue(
   return typeof candidate === "string" && candidate.length > 0
     ? candidate
     : null;
+}
+
+function runtimeLegendBuildSupported(
+  rulesData: RuntimeRulesData,
+  factionId: string,
+  unitId: string | null,
+): boolean {
+  if (unitId === null) return false;
+  const unit = (rulesData.units as readonly unknown[]).find(
+    (entry) =>
+      stringValue(record(entry), "id") === unitId &&
+      stringValue(record(entry), "faction_id") === factionId,
+  );
+  const raw = record(unit);
+  if (
+    !raw ||
+    !Array.isArray(raw.profiles) ||
+    raw.profiles.length === 0 ||
+    !Array.isArray(raw.points) ||
+    raw.points.length === 0 ||
+    !Array.isArray(raw.weapon_ids)
+  ) {
+    return false;
+  }
+  const knownWeaponIds = new Set(
+    (rulesData.weapons as readonly unknown[])
+      .map((weapon) => stringValue(record(weapon), "id"))
+      .filter((id): id is string => id !== null),
+  );
+  if (
+    raw.weapon_ids.some(
+      (weaponId) =>
+        typeof weaponId !== "string" ||
+        !knownWeaponIds.has(weaponId),
+    )
+  ) {
+    return false;
+  }
+  return (rulesData.unitCompositions as readonly unknown[]).some(
+    (composition) =>
+      stringValue(record(composition), "unit_id") === unitId,
+  );
+}
+
+/**
+ * A shard signature authenticates bytes, not their internal agreement. Keep
+ * the authoritative Legends inventory, structured rules classification, and
+ * build-support claim mutually consistent before the shard can enter a
+ * verified snapshot or be activated directly by a trusted local caller.
+ */
+function assertRuntimeFactionLegendsShardCoherence(
+  rulesData: RuntimeRulesData,
+  legends: RuntimeFactionLegendsState,
+  shardId: string,
+): void {
+  const factionUnits = (rulesData.units as readonly unknown[]).filter(
+    (unit) =>
+      stringValue(record(unit), "faction_id") ===
+      legends.factionId,
+  );
+  const mappedUnitIds = new Set<string>();
+
+  for (const legend of legends.units) {
+    if (legend.unitId !== null) {
+      const matches = factionUnits.filter(
+        (unit) =>
+          stringValue(record(unit), "id") === legend.unitId,
+      );
+      if (matches.length !== 1) {
+        throw new Error(
+          `Runtime Legends entry ${legend.legendId} in ${shardId} maps to structured unit ${legend.unitId}, but that unit does not resolve exactly once in faction ${legends.factionId}.`,
+        );
+      }
+      mappedUnitIds.add(legend.unitId);
+    }
+  }
+
+  if (
+    legends.coverageStatus !== "complete" &&
+    legends.coverageStatus !== "not-published"
+  ) {
+    return;
+  }
+  for (const unit of factionUnits) {
+    const raw = record(unit);
+    const unitId = stringValue(raw, "id");
+    if (unitId === null) {
+      throw new Error(
+        `Runtime faction shard ${shardId} contains a ${legends.factionId} unit without an identity, so its authoritative Legends classification cannot be verified.`,
+      );
+    }
+    const expected = mappedUnitIds.has(unitId);
+    if (raw?.is_legend !== expected) {
+      throw new Error(
+        `Runtime unit ${unitId} in ${shardId} has is_legend=${String(raw?.is_legend)}, but authoritative ${legends.coverageStatus} Legends coverage requires ${expected}.`,
+      );
+    }
+  }
+}
+
+function assertRuntimeFactionLegendsBuildCoherence(
+  rulesData: RuntimeRulesData,
+  legends: RuntimeFactionLegendsState,
+  shardId: string,
+): void {
+  for (const legend of legends.units) {
+    const recomputedBuildSupported =
+      runtimeLegendBuildSupported(
+        rulesData,
+        legends.factionId,
+        legend.unitId,
+      );
+    if (legend.buildSupported !== recomputedBuildSupported) {
+      throw new Error(
+        `Runtime Legends entry ${legend.legendId} in ${shardId} claims buildSupported=${legend.buildSupported}, but its structured profile completeness recomputes to ${recomputedBuildSupported}.`,
+      );
+    }
+  }
 }
 
 type RuntimeRulesPartition = {
@@ -483,12 +688,65 @@ function catalogueBase(
   });
 }
 
+function runtimeFactionLegendsState(
+  overlay: OfficialRulesOverlay | null,
+  authority: DataBundleOfficialAuthorityStatus,
+  factionId: string,
+  rulesData: RuntimeRulesData,
+): RuntimeFactionLegendsState {
+  if (overlay?.schemaVersion !== 2) {
+    return unavailableFactionLegendsState(factionId);
+  }
+  const coverage = overlay.legendFactionCoverage.find(
+    (entry) => entry.factionId === factionId,
+  );
+  if (!coverage) {
+    return unavailableFactionLegendsState(factionId);
+  }
+  const sourceIds = new Set(coverage.sourceIds);
+  return RuntimeFactionLegendsStateSchema.parse({
+    schemaVersion: 1,
+    factionId,
+    coverageStatus: coverage.status,
+    classificationAuthority:
+      authority.status === "verified"
+        ? "games-workshop-verified"
+        : "games-workshop-unverified-overlay",
+    sourceArtifacts: overlay.legendSources
+      .filter((source) => sourceIds.has(source.sourceId))
+      .map((source) => ({
+        sourceId: source.sourceId,
+        version: source.version,
+        contentSha256: source.contentSha256,
+        url: source.url,
+      })),
+    units: overlay.legendUnits
+      .filter((unit) => unit.factionId === factionId)
+      .map((unit) => ({
+        legendId: unit.legendId,
+        factionId: unit.factionId,
+        name: unit.name,
+        unitId: unit.unitId,
+        sourceId: unit.sourceId,
+        ...(unit.datasheetUrl
+          ? { datasheetUrl: unit.datasheetUrl }
+          : {}),
+        buildSupported: runtimeLegendBuildSupported(
+          rulesData,
+          factionId,
+          unit.unitId,
+        ),
+      })),
+  });
+}
+
 async function factionSemanticHashes(
   source: ReturnType<typeof createRuntimeDataset>,
   catalogue: NewRecruitCatalogueManifest,
   certification: CertificationDocument | undefined,
   factionId: string,
   officialConflicts: readonly OfficialCommunityConflict[],
+  legends?: RuntimeFactionLegendsState,
 ) {
   const compatibility =
     deriveRosterCompatibilityFactionIdentity({
@@ -501,8 +759,25 @@ async function factionSemanticHashes(
     certification,
     factionId,
   );
+  const entityHashes = { ...compatibility.entityHashes };
+  if (legends) {
+    entityHashes["legends:coverage"] = await semanticHash({
+      coverageStatus: legends.coverageStatus,
+      classificationAuthority: legends.classificationAuthority,
+      sourceArtifacts: legends.sourceArtifacts,
+    });
+    for (const unit of legends.units) {
+      entityHashes[`legend:${unit.legendId}`] =
+        await semanticHash(unit);
+    }
+  }
   return {
-    factionRulesHash: compatibility.factionRulesHash,
+    factionRulesHash: legends
+      ? await semanticHash({
+          base: compatibility.factionRulesHash,
+          legends,
+        })
+      : compatibility.factionRulesHash,
     mappingHash: compatibility.mappingHash,
     portfolioHash: await semanticHash({
       methodology: "adaptive-threat-lenses-v1",
@@ -517,7 +792,7 @@ async function factionSemanticHashes(
       mapping: mapping?.conflicts ?? [],
       official: officialConflicts,
     }),
-    entityHashes: { ...compatibility.entityHashes },
+    entityHashes,
   };
 }
 
@@ -533,7 +808,15 @@ function runtimeMethodologyProjection(
     // Version 2 scopes roster and export identity to selected rules and
     // mapping paths. Advancing this value deliberately forces a one-time
     // full certification when compared with v1 bundles.
-    semanticHashSchemaVersion: 2,
+    semanticHashSchemaVersion:
+      engineDataSchemaVersion >= 2 ? 3 : 2,
+    ...(engineDataSchemaVersion >= 2
+      ? {
+          legendsInventorySchemaVersion: 1,
+          legendsClassificationAuthority:
+            "games-workshop-faction-packs",
+        }
+      : {}),
     portfolioMethodology: "adaptive-threat-lenses-v1",
     portfolioGeneratorVersion: "faction-stress-v6",
   };
@@ -561,6 +844,18 @@ export async function buildRuntimeDataBundle(
     engineDataSchemaVersion?: number;
   } = {},
 ): Promise<RuntimeDataBundleBuild> {
+  const engineDataSchemaVersion =
+    input.engineDataSchemaVersion ??
+    RUNTIME_DATA_BUNDLE_SCHEMA_VERSION;
+  if (
+    !isSupportedRuntimeDataBundleSchemaVersion(
+      engineDataSchemaVersion,
+    )
+  ) {
+    throw new Error(
+      `Runtime data build requires unsupported engine data schema ${engineDataSchemaVersion}.`,
+    );
+  }
   const catalogue =
     input.catalogue ?? newRecruitCatalogueMappings;
   const catalogueSummary =
@@ -578,7 +873,7 @@ export async function buildRuntimeDataBundle(
     input.inheritedOfficialReconciliation
       ? structuredClone(input.inheritedOfficialReconciliation)
       : null;
-  let officialEvidenceOverlay: OfficialRulesOverlayV1 | null = null;
+  let officialEvidenceOverlay: OfficialRulesOverlay | null = null;
   if (
     input.officialOverlay !== undefined &&
     input.inheritedOfficialReconciliation
@@ -591,6 +886,22 @@ export async function buildRuntimeDataBundle(
     const overlay = await verifyOfficialRulesOverlayCoverage(
       input.officialOverlay,
     );
+    if (
+      engineDataSchemaVersion === 1 &&
+      overlay.schemaVersion !== 1
+    ) {
+      throw new Error(
+        "Engine data schema 1 cannot retain an official V2 Legends overlay.",
+      );
+    }
+    if (
+      overlay.schemaVersion === 2 &&
+      overlay.gameEdition !== catalogue.sources.rules.edition
+    ) {
+      throw new Error(
+        `Official Legends overlay edition ${overlay.gameEdition} does not match runtime rules edition ${catalogue.sources.rules.edition}.`,
+      );
+    }
     if (
       overlay.source.contentSha256 !==
         catalogue.sources.official.contentSha256 ||
@@ -621,6 +932,22 @@ export async function buildRuntimeDataBundle(
     const overlay = await verifyOfficialRulesOverlayCoverage(
       input.inheritedOfficialEvidenceOverlay,
     );
+    if (
+      engineDataSchemaVersion === 1 &&
+      overlay.schemaVersion !== 1
+    ) {
+      throw new Error(
+        "Engine data schema 1 cannot inherit an official V2 Legends overlay.",
+      );
+    }
+    if (
+      overlay.schemaVersion === 2 &&
+      overlay.gameEdition !== catalogue.sources.rules.edition
+    ) {
+      throw new Error(
+        `Retained official Legends overlay edition ${overlay.gameEdition} does not match runtime rules edition ${catalogue.sources.rules.edition}.`,
+      );
+    }
     const overlayHash = await semanticHash(overlay);
     if (
       overlay.source.contentSha256 !==
@@ -664,6 +991,17 @@ export async function buildRuntimeDataBundle(
     rulesData,
     factionIds,
   );
+  const legendsByFaction = new Map(
+    factionIds.map((factionId) => [
+      factionId,
+      runtimeFactionLegendsState(
+        officialEvidenceOverlay,
+        officialAuthority,
+        factionId,
+        rulesData,
+      ),
+    ]),
+  );
   const semanticFactions: DataBundleSemanticHashesV1["factions"] = {};
   for (const factionId of factionIds) {
     const factionOfficialConflicts =
@@ -676,6 +1014,9 @@ export async function buildRuntimeDataBundle(
       input.certification,
       factionId,
       factionOfficialConflicts,
+      engineDataSchemaVersion === 2
+        ? legendsByFaction.get(factionId)
+        : undefined,
     );
     semanticFactions[factionId] = {
       factionRulesHash: hashes.factionRulesHash,
@@ -692,50 +1033,59 @@ export async function buildRuntimeDataBundle(
     }),
     methodologyHash: await semanticHash(
       runtimeMethodologyProjection(
-        input.engineDataSchemaVersion ??
-          RUNTIME_DATA_BUNDLE_SCHEMA_VERSION,
+        engineDataSchemaVersion,
       ),
     ),
     factions: semanticFactions,
   };
 
-  const globalShard: DataBundleShardV1<RuntimeDataBundleShardDataV1> = {
+  const globalBase = {
+    rulesData: partition.global,
+    catalogueBase: catalogueBase(catalogue),
+    catalogueSummaryBase: catalogueBase(catalogueSummary),
+    certificationDefaults:
+      input.certification?.defaults ?? null,
+    certificationBrowserFixtures:
+      input.certification?.browserFixtures ?? null,
+    officialReconciliation: officialReconciliation
+      ? {
+          overlayHash: officialReconciliation.overlayHash,
+          affectedFactions: [
+            ...officialReconciliation.affectedFactions,
+          ],
+        }
+      : null,
+    officialAuthority,
+  };
+  const globalData: RuntimeGlobalShardDataV1 | RuntimeGlobalShardDataV2 =
+    engineDataSchemaVersion === 1
+      ? {
+          payloadKind: "rosterpilot-runtime-global",
+          schemaVersion: 1,
+          ...globalBase,
+          officialEvidenceOverlay:
+            officialEvidenceOverlay as Extract<
+              OfficialRulesOverlay,
+              { schemaVersion: 1 }
+            > | null,
+        }
+      : {
+          payloadKind: "rosterpilot-runtime-global",
+          schemaVersion: 2,
+          ...globalBase,
+          officialEvidenceOverlay,
+        };
+  const globalShard: DataBundleShardV1<RuntimeDataBundleShardData> = {
     schemaVersion: 1,
     shardId: "global",
     kind: "global",
     factionIds: [],
-    data: {
-      payloadKind: "rosterpilot-runtime-global",
-      schemaVersion: 1,
-      rulesData: partition.global,
-      catalogueBase: catalogueBase(catalogue),
-      catalogueSummaryBase: catalogueBase(catalogueSummary),
-      certificationDefaults:
-        input.certification?.defaults ?? null,
-      certificationBrowserFixtures:
-        input.certification?.browserFixtures ?? null,
-      officialReconciliation: officialReconciliation
-        ? {
-            overlayHash: officialReconciliation.overlayHash,
-            affectedFactions: [
-              ...officialReconciliation.affectedFactions,
-            ],
-          }
-        : null,
-      officialEvidenceOverlay,
-      officialAuthority,
-    },
+    data: globalData,
   };
   const factionShards = factionIds.map<
-    DataBundleShardV1<RuntimeDataBundleShardDataV1>
-  >((factionId) => ({
-    schemaVersion: 1,
-    shardId: `faction:${factionId}`,
-    kind: "faction",
-    factionIds: [factionId],
-    data: {
-      payloadKind: "rosterpilot-runtime-faction",
-      schemaVersion: 1,
+    DataBundleShardV1<RuntimeDataBundleShardData>
+  >((factionId) => {
+    const factionBase = {
       factionId,
       rulesData:
         partition.factions.get(factionId) ??
@@ -756,8 +1106,30 @@ export async function buildRuntimeDataBundle(
         )
           ? officialReconciliation.overlayHash
           : null,
-    },
-  }));
+    };
+    const data: RuntimeFactionShardDataV1 | RuntimeFactionShardDataV2 =
+      engineDataSchemaVersion === 1
+        ? {
+            payloadKind: "rosterpilot-runtime-faction",
+            schemaVersion: 1,
+            ...factionBase,
+          }
+        : {
+            payloadKind: "rosterpilot-runtime-faction",
+            schemaVersion: 2,
+            ...factionBase,
+            legends:
+              legendsByFaction.get(factionId) ??
+              unavailableFactionLegendsState(factionId),
+          };
+    return {
+      schemaVersion: 1,
+      shardId: `faction:${factionId}`,
+      kind: "faction",
+      factionIds: [factionId],
+      data,
+    };
+  });
   const shards = [globalShard, ...factionShards];
   const descriptors: DataBundleShardDescriptorV1[] = [];
   for (const shard of shards) {
@@ -791,9 +1163,7 @@ export async function buildRuntimeDataBundle(
   return {
     draft: {
       schemaVersion: 1,
-      engineDataSchemaVersion:
-        input.engineDataSchemaVersion ??
-        RUNTIME_DATA_BUNDLE_SCHEMA_VERSION,
+      engineDataSchemaVersion,
       createdAt: input.createdAt ?? new Date().toISOString(),
       provenance: {
         official: {
@@ -1174,12 +1544,16 @@ export async function composeRuntimeDataBundleRetainingVerifiedShards(
 
 function runtimeGlobalData(
   snapshot: DataBundleSnapshot<RuntimeDataBundleShardDataV1>,
-): RuntimeGlobalShardDataV1 {
+): RuntimeGlobalShardDataV1 | RuntimeGlobalShardDataV2 {
   const value = snapshot.getShard("global")?.data;
   if (
     !value ||
     value.payloadKind !== "rosterpilot-runtime-global" ||
-    value.schemaVersion !== 1
+    !isSupportedRuntimeDataBundleSchemaVersion(
+      value.schemaVersion,
+    ) ||
+    value.schemaVersion !==
+      snapshot.manifest.engineDataSchemaVersion
   ) {
     throw new Error(
       "The verified data bundle has no supported runtime global shard.",
@@ -1206,7 +1580,7 @@ export async function runtimeOfficialCarryForward(
   ) {
     return null;
   }
-  let overlay: OfficialRulesOverlayV1 | null = null;
+  let overlay: OfficialRulesOverlay | null = null;
   if (global.officialEvidenceOverlay != null) {
     const parsed = await verifyOfficialRulesOverlayCoverage(
       global.officialEvidenceOverlay,
@@ -1493,6 +1867,10 @@ async function recomputeRuntimeSemanticHashes(
     string,
     OfficialCommunityConflict[]
   >();
+  const legendsByFaction = new Map<
+    string,
+    RuntimeFactionLegendsState
+  >();
 
   for (const descriptor of snapshot.manifest.shards) {
     if (descriptor.kind !== "faction") continue;
@@ -1500,7 +1878,9 @@ async function recomputeRuntimeSemanticHashes(
     if (
       !value ||
       value.payloadKind !== "rosterpilot-runtime-faction" ||
-      value.schemaVersion !== 1 ||
+      !isSupportedRuntimeDataBundleSchemaVersion(
+        value.schemaVersion,
+      ) ||
       descriptor.factionIds.length !== 1 ||
       value.factionId !== descriptor.factionIds[0]
     ) {
@@ -1508,12 +1888,21 @@ async function recomputeRuntimeSemanticHashes(
         `The verified faction shard ${descriptor.shardId} is not a supported runtime payload.`,
       );
     }
+    assertRuntimeDataBundleShardData(value, descriptor);
     catalogue.factions[value.factionId] =
       structuredClone(value.catalogue);
     ruleParts.push(value.rulesData);
     officialConflicts.set(
       value.factionId,
       structuredClone(value.officialConflicts),
+    );
+    legendsByFaction.set(
+      value.factionId,
+      value.schemaVersion === 2
+        ? RuntimeFactionLegendsStateSchema.parse(
+            structuredClone(value.legends),
+          )
+        : unavailableFactionLegendsState(value.factionId),
     );
     if (value.certification !== null) {
       const certificationEntry = record(value.certification);
@@ -1531,9 +1920,16 @@ async function recomputeRuntimeSemanticHashes(
   }
 
   catalogue.summary = runtimeCatalogueSummary(catalogue.factions);
-  const source = createRuntimeDataset(
-    mergeRuntimeRulesData(ruleParts),
-  );
+  const mergedRulesData = mergeRuntimeRulesData(ruleParts);
+  for (const [factionId, legends] of legendsByFaction) {
+    assertRuntimeFactionLegendsBuildCoherence(
+      mergedRulesData,
+      legends,
+      snapshot.getFactionShard(factionId)?.shardId ??
+        `faction:${factionId}`,
+    );
+  }
+  const source = createRuntimeDataset(mergedRulesData);
   const factions: DataBundleSemanticHashesV1["factions"] = {};
   for (const factionId of Object.keys(catalogue.factions).sort()) {
     factions[factionId] = await factionSemanticHashes(
@@ -1542,6 +1938,9 @@ async function recomputeRuntimeSemanticHashes(
       certification,
       factionId,
       officialConflicts.get(factionId) ?? [],
+      snapshot.manifest.engineDataSchemaVersion >= 2
+        ? legendsByFaction.get(factionId)
+        : undefined,
     );
   }
   return {
@@ -1611,13 +2010,19 @@ export function activateRuntimeDataBundle(
     factions: {},
     summary: mappings.summary,
   };
+  const nextLegends = new Map<
+    string,
+    RuntimeFactionLegendsState
+  >();
   for (const descriptor of snapshot.manifest.shards) {
     if (descriptor.kind !== "faction") continue;
     const value = snapshot.getShard(descriptor.shardId)?.data;
     if (
       !value ||
       value.payloadKind !== "rosterpilot-runtime-faction" ||
-      value.schemaVersion !== 1 ||
+      !isSupportedRuntimeDataBundleSchemaVersion(
+        value.schemaVersion,
+      ) ||
       descriptor.factionIds.length !== 1 ||
       value.factionId !== descriptor.factionIds[0]
     ) {
@@ -1625,23 +2030,40 @@ export function activateRuntimeDataBundle(
         `The verified faction shard ${descriptor.shardId} is not a supported runtime payload.`,
       );
     }
+    assertRuntimeDataBundleShardData(value, descriptor);
     mappings.factions[value.factionId] =
       structuredClone(value.catalogue);
     summary.factions[value.factionId] =
       structuredClone(value.catalogueSummary);
+    nextLegends.set(
+      value.factionId,
+      value.schemaVersion === 2
+        ? RuntimeFactionLegendsStateSchema.parse(
+            structuredClone(value.legends),
+          )
+        : unavailableFactionLegendsState(value.factionId),
+    );
     ruleParts.push(value.rulesData);
   }
   mappings.summary = runtimeCatalogueSummary(mappings.factions);
   summary.summary = structuredClone(mappings.summary);
-  const nextDataset = createRuntimeDataset(
-    mergeRuntimeRulesData(ruleParts),
-  );
+  const mergedRulesData = mergeRuntimeRulesData(ruleParts);
+  for (const [factionId, legends] of nextLegends) {
+    assertRuntimeFactionLegendsBuildCoherence(
+      mergedRulesData,
+      legends,
+      snapshot.getFactionShard(factionId)?.shardId ??
+        `faction:${factionId}`,
+    );
+  }
+  const nextDataset = createRuntimeDataset(mergedRulesData);
 
   // Every potentially throwing parse/construction step has completed. The
   // following synchronous assignments are one event-loop atomic activation.
   activateRuntimeDataset(nextDataset);
   activateNewRecruitCatalogueMappings(mappings);
   activateNewRecruitCatalogueSummary(summary);
+  activateLegendsInventory(nextLegends);
   resetRosterCompatibilityIdentityCache();
   setActiveDataBundleManifest(
     snapshot.manifest,
@@ -1677,6 +2099,17 @@ export async function verifyRuntimeDataBundle(input: {
     input.trustedKeys,
   );
   if (!manifest.ok) return manifest;
+  if (
+    !isSupportedRuntimeDataBundleSchemaVersion(
+      manifest.data.engineDataSchemaVersion,
+    )
+  ) {
+    return {
+      ok: false,
+      code: "SHARD_IDENTITY_MISMATCH",
+      message: `Bundle ${manifest.data.bundleId} requires unsupported engine data schema ${manifest.data.engineDataSchemaVersion}.`,
+    };
+  }
   const shards: Array<
     VerifiedDataBundleShardV1<RuntimeDataBundleShardDataV1>
   > = [];
@@ -1693,6 +2126,14 @@ export async function verifyRuntimeDataBundle(input: {
         shard.data.data,
         descriptor,
       );
+      if (
+        shard.data.data.schemaVersion !==
+        manifest.data.engineDataSchemaVersion
+      ) {
+        throw new Error(
+          `Runtime shard ${shard.data.shardId} schema ${shard.data.data.schemaVersion} does not match manifest engine schema ${manifest.data.engineDataSchemaVersion}.`,
+        );
+      }
     } catch (error) {
       return {
         ok: false,

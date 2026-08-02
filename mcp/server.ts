@@ -6,6 +6,18 @@ import type {
   TesseraRunRequest,
   TesseraRunResult,
 } from "../local/tessera/jobs";
+import type {
+  TesseraOptimizerDeliveryIntent,
+  TesseraOptimizerMode,
+} from "../local/tessera/optimizer";
+import type {
+  StartTesseraOptimizerInput,
+  TesseraOptimizerStoreResult,
+} from "../local/tessera/optimizer-store";
+import type {
+  StartTesseraGeneralOptimizerInput,
+  TesseraGeneralOptimizerStoreResult,
+} from "../local/tessera/general-optimizer-store";
 
 import {
   buildRoster,
@@ -24,6 +36,7 @@ import {
   listDataConflicts,
   modifyRoster,
   modifyRosterBatch,
+  prepareRosterWorkflow,
   prepareNewRecruitHandoff,
   rebaseRosterWithProvider,
   refreshDataNow,
@@ -34,10 +47,19 @@ import {
   validateRoster,
   withDataBundleSnapshotLease,
   CollectionProfileSchema,
+  GeneralThreatArchetypeIds,
+  LegendsPlayContextSchema,
+  LegendsPolicySchema,
   ModifyRosterOperationSchema,
+  RosterArtifactRequirementSchema,
+  RosterCoachingModeSchema,
   RosterDraftSchema,
+  RosterOptimizerModeSchema,
+  RosterWorkflowIntentSchema,
   type ExportArtifact,
   type ExportFormat,
+  type GeneralThreatArchetype,
+  type GeneralThreatPortfolio,
   type BuildAndStressRosterInput,
   type BuildAndStressRosterResult,
   type BuildAndAnalyzeRosterInput,
@@ -51,6 +73,7 @@ import {
   type PreferenceTag,
   type ResultEnvelope,
   type RosterDraftV1,
+  type RosterWorkflowResult,
   type RuntimeProvenance,
   type TesseraConnectionStatus,
   type TesseraMatchupReport,
@@ -233,10 +256,146 @@ type ServerOptions = {
     ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
     cancel: (jobPath: string) => Promise<TesseraRunJob>;
   };
+  tesseraOptimizerStore?: {
+    start: (
+      input: StartTesseraOptimizerInput,
+    ) => Promise<TesseraOptimizerStoreResult>;
+    status: (
+      statePath: string,
+    ) => Promise<TesseraOptimizerStoreResult>;
+    approveCandidates: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        candidateIds: string[];
+        approvalId: string;
+        approvedBy: string;
+        approvedAt?: string;
+      },
+    ) => Promise<TesseraOptimizerStoreResult>;
+    recordComparison: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        candidateId: string;
+        reportPath: string;
+        recordedAt?: string;
+      },
+    ) => Promise<TesseraOptimizerStoreResult>;
+    approveWinner: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        candidateId: string;
+        approvalId: string;
+        approvedBy: string;
+        approvedAt?: string;
+      },
+    ) => Promise<TesseraOptimizerStoreResult>;
+    retainBaseline: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        approvalId: string;
+        approvedBy: string;
+        approvedAt?: string;
+      },
+    ) => Promise<TesseraOptimizerStoreResult>;
+    finalize: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        deliveryIntent: TesseraOptimizerDeliveryIntent;
+        finalizedAt?: string;
+      },
+    ) => Promise<TesseraOptimizerStoreResult>;
+  };
+  tesseraGeneralOptimizerStore?: {
+    start: (
+      input: StartTesseraGeneralOptimizerInput,
+    ) => Promise<TesseraGeneralOptimizerStoreResult>;
+    status: (
+      statePath: string,
+    ) => Promise<TesseraGeneralOptimizerStoreResult>;
+    approveCandidates: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        candidateIds: string[];
+        approvalId: string;
+        approvedBy: string;
+        approvedAt?: string;
+      },
+    ) => Promise<TesseraGeneralOptimizerStoreResult>;
+    recordComparison: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        candidateId: string;
+        archetypeId: GeneralThreatArchetype;
+        requestSha256: string;
+        reportPath: string;
+        recordedAt?: string;
+      },
+    ) => Promise<TesseraGeneralOptimizerStoreResult>;
+    approveWinner: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        candidateId: string;
+        approvalId: string;
+        approvedBy: string;
+        approvedAt?: string;
+      },
+    ) => Promise<TesseraGeneralOptimizerStoreResult>;
+    retainBaseline: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        approvalId: string;
+        approvedBy: string;
+        approvedAt?: string;
+      },
+    ) => Promise<TesseraGeneralOptimizerStoreResult>;
+    finalize: (
+      statePath: string,
+      input: {
+        expectedStateRevision: number;
+        deliveryIntent: TesseraOptimizerDeliveryIntent;
+        finalizedAt?: string;
+      },
+    ) => Promise<TesseraGeneralOptimizerStoreResult>;
+  };
   freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
   freshnessCacheMs?: number;
   dataBundleProvider?: DataBundleProvider;
 };
+
+const GeneralThreatArchetypeSchema = z.enum(
+  GeneralThreatArchetypeIds,
+);
+
+const GeneralThreatPortfolioInputSchema = z.object({
+  schemaVersion: z.literal(1),
+  portfolioKind: z.literal("general-threat-portfolio"),
+  version: z.literal("general-threat-portfolio-v1"),
+  pointsLimit: z.union([z.literal(1000), z.literal(2000)]),
+  generatedFrom: z.literal("active-data-bundle"),
+  portfolioHash: z.string().regex(/^[0-9a-f]{64}$/),
+  items: z.array(z.object({
+    archetypeId: GeneralThreatArchetypeSchema,
+    label: z.string().min(1),
+    purpose: z.string().min(1),
+    representativeFactionId: z.string().min(1),
+    representativeFactionName: z.string().min(1),
+    roster: RosterDraftSchema,
+    simulationFingerprint: z.string().min(1),
+    traits: z.unknown(),
+    score: z.number(),
+    selectionEvidence: z.array(z.string()),
+  })).length(6),
+  limitations: z.array(z.string()),
+});
 
 function serializable<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -365,6 +524,300 @@ function inlineHandoff(result: ResultEnvelope<NewRecruitHandoff>) {
     violations: result.violations,
     warnings: result.warnings,
   });
+}
+
+function serializableRosterWorkflow(
+  workflow: RosterWorkflowResult,
+  responseDetail: "compact" | "full" = "compact",
+) {
+  const serialized = {
+    ...workflow,
+    newRecruit: {
+      ...workflow.newRecruit,
+      handoff: workflow.newRecruit.handoff
+        ? {
+            ...workflow.newRecruit.handoff,
+            artifacts:
+              workflow.newRecruit.handoff.artifacts.map(
+                serializableArtifact,
+              ),
+          }
+        : null,
+    },
+  };
+  if (responseDetail === "full") return serialized;
+  const target = workflow.optimization?.target;
+  return {
+    ...serialized,
+    explanation: workflow.explanation
+      ? {
+          summary: workflow.explanation.summary,
+          choices: workflow.explanation.choices,
+          cautions: workflow.explanation.cautions,
+        }
+      : null,
+    coaching: workflow.coaching
+      ? {
+          schemaVersion: workflow.coaching.schemaVersion,
+          reportKind: workflow.coaching.reportKind,
+          mode: workflow.coaching.mode,
+          rosterFingerprint:
+            workflow.coaching.rosterFingerprint,
+          heuristicPack: workflow.coaching.heuristicPack,
+          applicability: workflow.coaching.applicability,
+          summary: workflow.coaching.summary,
+          unitRoles: workflow.coaching.units.map((unit) => ({
+            selectionId: unit.selectionId,
+            name: unit.name,
+            roles: unit.roles.map((role) => role.role),
+          })),
+          advice: workflow.coaching.advice,
+          disclaimer: workflow.coaching.disclaimer,
+          warningCodes: workflow.coaching.warningCodes,
+        }
+      : null,
+    optimization: workflow.optimization
+      ? {
+          ...workflow.optimization,
+          target:
+            target?.kind === "general-six-archetype"
+              ? {
+                  kind: target.kind,
+                  portfolioHash: target.portfolio.portfolioHash,
+                  pointsLimit: target.portfolio.pointsLimit,
+                  items: target.portfolio.items.map((item) => ({
+                    archetypeId: item.archetypeId,
+                    label: item.label,
+                    representativeFactionId:
+                      item.representativeFactionId,
+                    representativeFactionName:
+                      item.representativeFactionName,
+                    simulationFingerprint:
+                      item.simulationFingerprint,
+                    selectionEvidence: item.selectionEvidence,
+                  })),
+                  limitations: target.portfolio.limitations,
+                }
+              : target?.kind === "known-faction"
+                ? {
+                    kind: target.kind,
+                    factionId: target.factionId,
+                    portfolioHash:
+                      target.portfolioPreview.portfolio.contract
+                        ?.portfolioHash ?? null,
+                    gates: target.portfolioPreview.gates,
+                    items: target.portfolioPreview.items,
+                  }
+                : target?.kind === "exact-opponent"
+                  ? {
+                      kind: target.kind,
+                      factionId: target.factionId,
+                      rosterId: target.roster.id,
+                      rosterName: target.roster.name,
+                    }
+                  : null,
+        }
+      : null,
+  };
+}
+
+function compactTesseraOptimizerStoreResult(
+  result: TesseraOptimizerStoreResult,
+): Record<string, unknown> {
+  const snapshot = result.data;
+  if (!snapshot) {
+    return {
+      ok: result.ok,
+      data: null,
+      violations: result.violations,
+      warnings: result.warnings,
+    };
+  }
+  const { state } = snapshot;
+  return {
+    ok: result.ok,
+    data: {
+      statePath: snapshot.statePath,
+      optimizerDirectory: snapshot.optimizerDirectory,
+      optimizerRunId: state.optimizerRunId,
+      mode: state.mode,
+      stage: state.stage,
+      stateRevision: state.stateRevision,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+      contextSha256: state.frozenIdentities.contextSha256,
+      baseline: {
+        kind: state.baseline.kind,
+        runId: state.baseline.runId,
+        reportPath: state.baseline.reportPath,
+        rosterId: state.baseline.roster.id,
+        rosterName: state.baseline.roster.name,
+        factionId: state.baseline.roster.factionId,
+        points: `${state.baseline.roster.totalPoints}/${state.baseline.roster.pointsLimit}`,
+      },
+      baselineSuggestions: state.baselineSuggestions,
+      candidates: state.candidates.map((candidate) => ({
+        candidateId: candidate.candidate.candidateId,
+        operation: candidate.candidate.operation,
+        status: candidate.status,
+        beforePoints: candidate.candidate.beforePoints,
+        afterPoints: candidate.candidate.afterPoints,
+        localRejection: candidate.localRejection,
+        comparisonRequestSha256:
+          candidate.comparisonRequest?.requestSha256 ?? null,
+        comparison: candidate.comparison,
+      })),
+      pareto: state.pareto,
+      finalization: state.finalization
+        ? {
+            disposition: state.finalization.disposition,
+            candidateId: state.finalization.candidateId,
+            rosterId: state.finalization.roster.id,
+            rosterName: state.finalization.roster.name,
+            deliveryIntent: state.finalization.deliveryIntent,
+            finalizedAt: state.finalization.finalizedAt,
+            finalizationSha256:
+              state.finalization.finalizationSha256,
+          }
+        : null,
+      invalidation: state.invalidation,
+      comparisonRequests: snapshot.comparisonRequests,
+      artifacts: {
+        baselineReport: snapshot.baselineReportArtifact,
+        profilePolicy: snapshot.profilePolicyArtifact,
+        candidateRosters: snapshot.candidateRosterArtifacts,
+        comparisons: snapshot.comparisonArtifacts,
+        finalRoster: snapshot.finalRosterArtifact,
+      },
+    },
+    violations: result.violations,
+    warnings: result.warnings,
+  };
+}
+
+function tesseraOptimizerStoreContent(
+  result: TesseraOptimizerStoreResult,
+  responseDetail: "compact" | "full",
+) {
+  if (responseDetail === "full") return resultContent(result);
+  const compact = compactTesseraOptimizerStoreResult(result);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(compact, null, 2),
+      },
+    ],
+    structuredContent: compact,
+    isError: !result.ok,
+  };
+}
+
+function compactTesseraGeneralOptimizerStoreResult(
+  result: TesseraGeneralOptimizerStoreResult,
+): Record<string, unknown> {
+  const snapshot = result.data;
+  if (!snapshot) {
+    return {
+      ok: result.ok,
+      data: null,
+      violations: result.violations,
+      warnings: result.warnings,
+    };
+  }
+  const { state } = snapshot;
+  return {
+    ok: result.ok,
+    data: {
+      statePath: snapshot.statePath,
+      optimizerDirectory: snapshot.optimizerDirectory,
+      optimizerRunId: state.optimizerRunId,
+      mode: state.mode,
+      stage: state.stage,
+      stateRevision: state.stateRevision,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+      contextSha256: state.frozenIdentities.contextSha256,
+      portfolio: {
+        pointsLimit: state.portfolio.pointsLimit,
+        portfolioHash: state.portfolio.portfolioHash,
+        archetypes: state.baselines.map((baseline) => ({
+          archetypeId: baseline.archetypeId,
+          label: baseline.label,
+          runId: baseline.runId,
+          reportPath: baseline.reportPath,
+        })),
+      },
+      baselineRoster: {
+        rosterId: state.baselineRoster.id,
+        rosterName: state.baselineRoster.name,
+        factionId: state.baselineRoster.factionId,
+        points:
+          `${state.baselineRoster.totalPoints}/${state.baselineRoster.pointsLimit}`,
+      },
+      baselineSuggestions: state.baselineSuggestions,
+      candidates: state.candidates.map((candidate) => ({
+        candidateId: candidate.candidate.candidateId,
+        operation: candidate.candidate.operation,
+        status: candidate.status,
+        beforePoints: candidate.candidate.beforePoints,
+        afterPoints: candidate.candidate.afterPoints,
+        sources: candidate.sources,
+        localRejection: candidate.localRejection,
+        comparisonRequests: candidate.comparisonRequests.map(
+          (request) => ({
+            archetypeId: request.archetypeId,
+            requestSha256: request.requestSha256,
+            runRequest: request.runRequest,
+          }),
+        ),
+        comparisonCount: candidate.comparisons.length,
+      })),
+      pareto: state.pareto,
+      finalization: state.finalization
+        ? {
+            disposition: state.finalization.disposition,
+            candidateId: state.finalization.candidateId,
+            rosterId: state.finalization.roster.id,
+            rosterName: state.finalization.roster.name,
+            deliveryIntent: state.finalization.deliveryIntent,
+            finalizedAt: state.finalization.finalizedAt,
+            finalizationSha256:
+              state.finalization.finalizationSha256,
+          }
+        : null,
+      invalidation: state.invalidation,
+      comparisonRequests: snapshot.comparisonRequests,
+      artifacts: {
+        portfolio: snapshot.portfolioArtifact,
+        baselineReports: snapshot.baselineReportArtifacts,
+        profilePolicies: snapshot.profilePolicyArtifacts,
+        candidateRosters: snapshot.candidateRosterArtifacts,
+        comparisons: snapshot.comparisonArtifacts,
+        finalRoster: snapshot.finalRosterArtifact,
+      },
+    },
+    violations: result.violations,
+    warnings: result.warnings,
+  };
+}
+
+function tesseraGeneralOptimizerStoreContent(
+  result: TesseraGeneralOptimizerStoreResult,
+  responseDetail: "compact" | "full",
+) {
+  if (responseDetail === "full") return resultContent(result);
+  const compact = compactTesseraGeneralOptimizerStoreResult(result);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(compact, null, 2),
+      },
+    ],
+    structuredContent: compact,
+    isError: !result.ok,
+  };
 }
 
 export function createRosterPilotMcpServer(
@@ -666,6 +1119,1452 @@ export function createRosterPilotMcpServer(
   );
 
   server.registerTool(
+    "run_roster_workflow",
+    {
+      title: "Build, coach, and optionally hand off a roster",
+      description:
+        "Resolve the player faction without fuzzy fallback, build and validate under one data-bundle lease, add calibrated competitive coaching, and prepare artifact-safe New Recruit or Tessera inputs. Direct New Recruit delivery occurs only when this same call explicitly requests deliver-new-recruit or uses an unambiguous upload/import instruction.",
+      inputSchema: {
+        prompt: z.string().optional(),
+        intent: RosterWorkflowIntentSchema.optional(),
+        artifactRequirement:
+          RosterArtifactRequirementSchema.optional(),
+        coachingMode: RosterCoachingModeSchema.optional(),
+        optimizerMode: RosterOptimizerModeSchema.optional(),
+        playerFaction: z.string().optional(),
+        faction: z.string().optional(),
+        opponentFaction: z.string().optional(),
+        opponentRoster: RosterDraftSchema.optional(),
+        pointsLimit: z.number().int().min(100).max(5000).optional(),
+        name: z.string().optional(),
+        preferences: z
+          .array(
+            z.enum([
+              "mobility",
+              "durability",
+              "objective",
+              "shooting",
+              "melee",
+              "elite",
+              "horde",
+            ]),
+          )
+          .optional(),
+        allowNamedCharacters: z.boolean().optional(),
+        legendsPolicy: LegendsPolicySchema.optional(),
+        allowLegends: z.boolean().optional(),
+        playContext: LegendsPlayContextSchema.optional(),
+        collectionUnitIds: z.array(z.string().min(1)).optional(),
+        collectionProfile: CollectionProfileSchema.optional(),
+        requiredUnitIds: z.array(z.string().min(1)).optional(),
+        excludedUnitIds: z.array(z.string().min(1)).optional(),
+        requiredWarlordUnitId: z.string().min(1).optional(),
+        detachmentId: z.string().min(1).optional(),
+        forceDispositionId: z.string().min(1).optional(),
+        missionContext: z
+          .object({
+            missionPackId: z.string().min(1),
+            missionId: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        terrainContext: z
+          .object({
+            formatId: z.string().min(1),
+            layoutId: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        downloadPrettyHtml: z.boolean().default(true),
+        outputDirectory: z
+          .string()
+          .min(1)
+          .default("exports/new-recruit"),
+        tesseraOutputDirectory: z
+          .string()
+          .min(1)
+          .default("exports/tessera"),
+        overwrite: z.boolean().default(false),
+        responseDetail: z
+          .enum(["compact", "full"])
+          .default("compact"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({
+      downloadPrettyHtml,
+      outputDirectory,
+      tesseraOutputDirectory,
+      overwrite,
+      responseDetail,
+      opponentRoster,
+      ...input
+    }) => {
+      const prepared = await prepareRosterWorkflow({
+        ...input,
+        opponentContext: opponentRoster
+          ? {
+              kind: "known-roster",
+              roster: opponentRoster as RosterDraftV1,
+            }
+          : undefined,
+        preferences:
+          input.preferences as PreferenceTag[] | undefined,
+      });
+      if (!prepared.data) return resultContent(prepared);
+      const workflow = serializableRosterWorkflow(
+        prepared.data,
+        responseDetail,
+      );
+      let tesseraBaselineExecution:
+        | {
+            status: "not-requested";
+          }
+        | {
+            status: "unavailable";
+            reason: string;
+          }
+        | {
+            status: "in-progress";
+            targetKind: RosterWorkflowResult["optimization"] extends
+              { target: infer Target }
+              ? Target extends { kind: infer Kind }
+                ? Kind
+                : string
+              : string;
+            jobs: Array<
+              (TesseraRunJob & {
+                targetId: string;
+                targetLabel: string;
+              }) | {
+                targetId: string;
+                targetLabel: string;
+                runId: string;
+                runKind: string;
+                status: string;
+                requestPath: string;
+                resultPath: string;
+              }
+            >;
+          } = { status: "not-requested" };
+      if (
+        prepared.ok &&
+        prepared.data.optimization &&
+        prepared.data.roster
+      ) {
+        if (!options.tesseraRunJobs) {
+          const reason =
+            "This transport cannot start durable Tessera runs. Use the local MCP/CLI transport; the source ROSZ is prepared, but no profile-rich archive or paired baseline exists yet.";
+          tesseraBaselineExecution = {
+            status: "unavailable",
+            reason,
+          };
+          return resultContent({
+            ok: false,
+            data: {
+              ...workflow,
+              execution: {
+                newRecruitDelivery: {
+                  status: "not-run",
+                  reason:
+                    "Optimization defers New Recruit winner delivery until an exact winner approval.",
+                },
+                tesseraBaseline: tesseraBaselineExecution,
+              },
+            },
+            violations: [
+              {
+                code: "TESSERA_DURABLE_RUNNER_UNAVAILABLE",
+                message: reason,
+                severity: "error" as const,
+              },
+            ],
+            warnings: prepared.warnings,
+          });
+        }
+        const target = prepared.data.optimization.target;
+        const commonExactOptions = {
+          outputDirectory: tesseraOutputDirectory,
+          overwrite: false,
+          executionMode: "simulate" as const,
+          fallbackMode: "none" as const,
+          experimental: false,
+          analysisMode: "full" as const,
+          allowPointMismatch: false,
+          includeChangeCandidates: true,
+          catalogueDriftMode: "reject" as const,
+        };
+        const requests: Array<{
+          targetId: string;
+          targetLabel: string;
+          request: TesseraRunRequest;
+        }> =
+          target.kind === "exact-opponent"
+            ? [
+                {
+                  targetId: target.roster.id,
+                  targetLabel: target.roster.name,
+                  request: {
+                    kind: "exact",
+                    playerRoster: prepared.data.roster,
+                    opponent: {
+                      kind: "roster",
+                      roster: target.roster,
+                    },
+                    options: commonExactOptions,
+                  },
+                },
+              ]
+            : target.kind === "known-faction"
+              ? [
+                  {
+                    targetId: target.factionId,
+                    targetLabel:
+                      target.portfolioPreview.portfolio.factionName,
+                    request: {
+                      kind: "stress",
+                      playerRoster: prepared.data.roster,
+                      factionId: target.factionId,
+                      options: {
+                        outputDirectory: tesseraOutputDirectory,
+                        overwrite: false,
+                        suite: "diverse-9",
+                        analysisStrategy: "staged",
+                        executionMode: "simulate",
+                        experimental: false,
+                        catalogueDriftMode: "reject",
+                        portfolioPreview: target.portfolioPreview,
+                      },
+                    },
+                  },
+                ]
+              : target.portfolio.items.map((item) => ({
+                  targetId: item.archetypeId,
+                  targetLabel:
+                    `${item.label} (${item.representativeFactionName})`,
+                  request: {
+                    kind: "exact" as const,
+                    playerRoster: prepared.data!.roster!,
+                    opponent: {
+                      kind: "roster" as const,
+                      roster: item.roster,
+                    },
+                    options: commonExactOptions,
+                  },
+                }));
+        const jobs: Array<{
+          targetId: string;
+          targetLabel: string;
+          job: TesseraRunJob;
+        }> = [];
+        try {
+          for (const entry of requests) {
+            jobs.push({
+              targetId: entry.targetId,
+              targetLabel: entry.targetLabel,
+              job: await options.tesseraRunJobs.start(entry.request, {
+                outputDirectory: tesseraOutputDirectory,
+              }),
+            });
+          }
+        } catch (error) {
+          return resultContent({
+            ok: false,
+            data: {
+              ...workflow,
+              execution: {
+                newRecruitDelivery: {
+                  status: "not-run",
+                  reason:
+                    "Optimization defers New Recruit winner delivery until an exact winner approval.",
+                },
+                tesseraBaseline: {
+                  status: "failed",
+                  targetKind: target.kind,
+                  startedJobs: jobs.map((entry) => ({
+                    targetId: entry.targetId,
+                    targetLabel: entry.targetLabel,
+                    ...entry.job,
+                  })),
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "A durable Tessera baseline run could not be started.",
+                },
+              },
+            },
+            violations: [
+              {
+                code: "TESSERA_BASELINE_START_FAILED",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "A durable Tessera baseline run could not be started.",
+                severity: "error" as const,
+              },
+            ],
+            warnings: prepared.warnings,
+          });
+        }
+        tesseraBaselineExecution = {
+          status: "in-progress",
+          targetKind: target.kind,
+          jobs:
+            responseDetail === "full"
+              ? jobs.map((entry) => ({
+                  targetId: entry.targetId,
+                  targetLabel: entry.targetLabel,
+                  ...entry.job,
+                }))
+              : jobs.map((entry) => ({
+                  targetId: entry.targetId,
+                  targetLabel: entry.targetLabel,
+                  runId: entry.job.runId,
+                  runKind: entry.job.runKind,
+                  status: entry.job.status,
+                  requestPath: entry.job.requestPath,
+                  resultPath: entry.job.resultPath,
+                })),
+        };
+      }
+      if (
+        !prepared.ok ||
+        !prepared.data.newRecruit.delivery.authorized
+      ) {
+        return resultContent({
+          ...prepared,
+          data: {
+            ...workflow,
+            execution: {
+              newRecruitDelivery: {
+                status: "not-run",
+                reason: prepared.data.newRecruit.delivery.authorized
+                  ? "Roster preparation did not complete."
+                  : "Delivery was not explicitly authorized by this request.",
+              },
+              tesseraBaseline: tesseraBaselineExecution,
+            },
+          },
+        });
+      }
+      if (!options.newRecruitCompanion) {
+        return resultContent({
+          ok: false,
+          data: {
+            ...workflow,
+            execution: {
+              newRecruitDelivery: {
+                status: "unavailable",
+                reason:
+                  "This transport has no local New Recruit companion. Use the included .rosz handoff for manual import.",
+              },
+            },
+          },
+          violations: [
+            {
+              code: "NEW_RECRUIT_COMPANION_UNAVAILABLE",
+              message:
+                "Direct delivery is unavailable on this transport; the validated .rosz handoff remains available for manual import.",
+              severity: "error",
+            },
+          ],
+          warnings: prepared.warnings,
+        });
+      }
+      const connection =
+        await options.newRecruitCompanion.status();
+      if (
+        !connection.ok ||
+        !connection.data?.available
+      ) {
+        return resultContent({
+          ok: false,
+          data: {
+            ...workflow,
+            execution: {
+              newRecruitDelivery: {
+                status: "unavailable",
+                connection: connection.data,
+                reason:
+                  connection.violations[0]?.message ??
+                  connection.warnings[0]?.message ??
+                  "The New Recruit companion is not ready.",
+              },
+            },
+          },
+          violations:
+            connection.violations.length > 0
+              ? connection.violations
+              : [
+                  {
+                    code: "NEW_RECRUIT_CONNECTION_UNAVAILABLE",
+                    message:
+                      "Direct delivery was requested, but the New Recruit companion is not ready. The .rosz handoff remains available.",
+                    severity: "error" as const,
+                  },
+                ],
+          warnings: [
+            ...prepared.warnings,
+            ...connection.warnings,
+          ],
+        });
+      }
+      const delivered =
+        await options.newRecruitCompanion.deliver(
+          prepared.data.roster!,
+          {
+            downloadEnrichedRosz: true,
+            downloadPrettyHtml,
+            outputDirectory,
+            overwrite,
+          },
+        );
+      return resultContent({
+        ok: delivered.ok,
+        data: {
+          ...workflow,
+          status: delivered.ok ? "complete" : "failed",
+          newRecruit: {
+            ...workflow.newRecruit,
+            delivery: {
+              authorized: true,
+              status: delivered.ok ? "delivered" : "failed",
+            },
+          },
+          execution: {
+            newRecruitDelivery: {
+              status: delivered.ok ? "delivered" : "failed",
+              connection: connection.data,
+              result: delivered.data,
+            },
+          },
+        },
+        violations: delivered.violations,
+        warnings: [
+          ...prepared.warnings,
+          ...connection.warnings,
+          ...delivered.warnings,
+        ],
+      });
+    },
+  );
+
+  if (options.tesseraOptimizerStore) {
+    server.registerTool(
+      "start_tessera_optimizer",
+      {
+        title: "Start a durable Tessera optimizer",
+        description:
+          "Freeze one completed, integrity-verified exact or faction-stress Tessera baseline into a durable optimizer state. Baseline suggestions remain unpaired until the candidate batch is explicitly approved and each revision is rerun against the frozen scenario contract.",
+        inputSchema: {
+          baselineReportPath: z.string().min(1),
+          baselineRoster: RosterDraftSchema,
+          mode: z
+            .enum(["guided", "recommend-only"])
+            .default("guided"),
+          profilePolicyPath: z.string().min(1).optional(),
+          outputDirectory: z
+            .string()
+            .min(1)
+            .default("exports/tessera/optimizers"),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        baselineReportPath,
+        baselineRoster,
+        mode,
+        profilePolicyPath,
+        outputDirectory,
+        responseDetail,
+      }) =>
+        tesseraOptimizerStoreContent(
+          await options.tesseraOptimizerStore!.start({
+            baselineReportPath,
+            baselineRoster: baselineRoster as RosterDraftV1,
+            mode: mode as TesseraOptimizerMode,
+            profilePolicyPath,
+            outputDirectory,
+          }),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "get_tessera_optimizer_status",
+      {
+        title: "Get durable Tessera optimizer status",
+        description:
+          "Verify the durable optimizer document, frozen artifacts, runtime identity, approvals, and current stage before taking another action.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ statePath, responseDetail }) =>
+        tesseraOptimizerStoreContent(
+          await options.tesseraOptimizerStore!.status(statePath),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "approve_tessera_optimizer_candidates",
+      {
+        title: "Approve Tessera candidates for paired testing",
+        description:
+          "Approve one to three exact frozen baseline suggestions, materialize only locally legal/exportable revisions, and emit durable paired Tessera comparison requests. This does not approve a winner.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          candidateIds: z.array(z.string().min(1)).min(1).max(3),
+          approvalId: z.string().min(1),
+          approvedBy: z.string().min(1),
+          approvedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        candidateIds,
+        approvalId,
+        approvedBy,
+        approvedAt,
+        responseDetail,
+      }) =>
+        tesseraOptimizerStoreContent(
+          await options.tesseraOptimizerStore!.approveCandidates(
+            statePath,
+            {
+              expectedStateRevision,
+              candidateIds,
+              approvalId,
+              approvedBy,
+              approvedAt,
+            },
+          ),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "record_tessera_optimizer_comparison",
+      {
+        title: "Record a paired Tessera comparison",
+        description:
+          "Verify and freeze one completed paired revision report for an approved candidate. Once every candidate reaches a terminal result, the optimizer computes the deterministic Pareto frontier or retains the baseline.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          candidateId: z.string().min(1),
+          reportPath: z.string().min(1),
+          recordedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        candidateId,
+        reportPath,
+        recordedAt,
+        responseDetail,
+      }) =>
+        tesseraOptimizerStoreContent(
+          await options.tesseraOptimizerStore!.recordComparison(
+            statePath,
+            {
+              expectedStateRevision,
+              candidateId,
+              reportPath,
+              recordedAt,
+            },
+          ),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "approve_tessera_optimizer_winner",
+      {
+        title: "Approve the exact Tessera optimizer winner",
+        description:
+          "Approve exactly one candidate on the current paired-tested Pareto frontier. This freezes a second approval receipt but still performs no New Recruit delivery.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          candidateId: z.string().min(1),
+          approvalId: z.string().min(1),
+          approvedBy: z.string().min(1),
+          approvedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        candidateId,
+        approvalId,
+        approvedBy,
+        approvedAt,
+        responseDetail,
+      }) =>
+        tesseraOptimizerStoreContent(
+          await options.tesseraOptimizerStore!.approveWinner(
+            statePath,
+            {
+              expectedStateRevision,
+              candidateId,
+              approvalId,
+              approvedBy,
+              approvedAt,
+            },
+          ),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "retain_tessera_optimizer_baseline",
+      {
+        title: "Approve retaining the Tessera baseline",
+        description:
+          "Explicitly choose the original baseline instead of a non-empty Pareto frontier. This is a separate approval and performs no New Recruit delivery.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          approvalId: z.string().min(1),
+          approvedBy: z.string().min(1),
+          approvedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        approvalId,
+        approvedBy,
+        approvedAt,
+        responseDetail,
+      }) =>
+        tesseraOptimizerStoreContent(
+          await options.tesseraOptimizerStore!.retainBaseline(
+            statePath,
+            {
+              expectedStateRevision,
+              approvalId,
+              approvedBy,
+              approvedAt,
+            },
+          ),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "finalize_tessera_optimizer",
+      {
+        title: "Finalize a Tessera optimizer result",
+        description:
+          "Freeze the approved winner (or retain the baseline when no candidate qualifies) and record an explicit delivery intent. Recording intent does not itself mutate New Recruit.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          deliveryKind: z
+            .enum(["none", "prepare-handoff", "deliver-new-recruit"])
+            .default("none"),
+          intentId: z.string().min(1).optional(),
+          recordedBy: z.string().min(1).optional(),
+          recordedAt: z.string().min(1).optional(),
+          finalizedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        deliveryKind,
+        intentId,
+        recordedBy,
+        recordedAt,
+        finalizedAt,
+        responseDetail,
+      }) => {
+        if (
+          deliveryKind !== "none" &&
+          (!intentId || !recordedBy)
+        ) {
+          return resultContent({
+            ok: false,
+            data: null,
+            violations: [
+              {
+                code: "TESSERA_OPTIMIZER_DELIVERY_INTENT_REQUIRED",
+                message:
+                  "A non-empty delivery intent requires intentId and recordedBy.",
+                severity: "error" as const,
+              },
+            ],
+            warnings: [],
+          });
+        }
+        const at = recordedAt ?? new Date().toISOString();
+        const deliveryIntent: TesseraOptimizerDeliveryIntent =
+          deliveryKind === "none"
+            ? {
+                kind: "none",
+                intentId: null,
+                recordedBy: null,
+                recordedAt: at,
+              }
+            : {
+                kind: deliveryKind,
+                intentId: intentId!,
+                recordedBy: recordedBy!,
+                recordedAt: at,
+              };
+        return tesseraOptimizerStoreContent(
+          await options.tesseraOptimizerStore!.finalize(
+            statePath,
+            {
+              expectedStateRevision,
+              deliveryIntent,
+              finalizedAt,
+            },
+          ),
+          responseDetail,
+        );
+      },
+    );
+
+    server.registerTool(
+      "deliver_tessera_optimizer_winner_to_new_recruit",
+      {
+        title: "Deliver a finalized Tessera winner to New Recruit",
+        description:
+          "After two optimizer approvals and finalization with deliver-new-recruit intent, explicitly deliver that exact frozen winner through the local New Recruit companion.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          confirmDelivery: z.literal(true),
+          outputDirectory: z
+            .string()
+            .min(1)
+            .default("exports/new-recruit"),
+          downloadPrettyHtml: z.boolean().default(true),
+          overwrite: z.boolean().default(false),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({
+        statePath,
+        outputDirectory,
+        downloadPrettyHtml,
+        overwrite,
+      }) => {
+        const stored = await options.tesseraOptimizerStore!.status(
+          statePath,
+        );
+        const finalization = stored.data?.state.finalization;
+        if (
+          !stored.ok ||
+          stored.data?.state.stage !== "finalized" ||
+          !finalization ||
+          finalization.deliveryIntent.kind !==
+            "deliver-new-recruit"
+        ) {
+          return resultContent({
+            ok: false,
+            data: stored.data
+              ? compactTesseraOptimizerStoreResult(stored).data
+              : null,
+            violations:
+              stored.violations.length > 0
+                ? stored.violations
+                : [
+                    {
+                      code:
+                        "TESSERA_OPTIMIZER_DELIVERY_NOT_AUTHORIZED",
+                      message:
+                        "The optimizer must be finalized with an exact approved winner and deliver-new-recruit intent before delivery.",
+                      severity: "error" as const,
+                    },
+                  ],
+            warnings: stored.warnings,
+          });
+        }
+        if (!options.newRecruitCompanion) {
+          return resultContent({
+            ok: false,
+            data: {
+              optimizerRunId: stored.data!.state.optimizerRunId,
+              statePath,
+              finalRosterArtifact:
+                stored.data!.finalRosterArtifact,
+              delivery: null,
+            },
+            violations: [
+              {
+                code: "NEW_RECRUIT_COMPANION_UNAVAILABLE",
+                message:
+                  "This transport cannot deliver to New Recruit. The exact finalized roster artifact remains available for manual handoff.",
+                severity: "error" as const,
+              },
+            ],
+            warnings: stored.warnings,
+          });
+        }
+        const connection =
+          await options.newRecruitCompanion.status();
+        if (!connection.ok || !connection.data?.available) {
+          return resultContent({
+            ok: false,
+            data: {
+              optimizerRunId: stored.data!.state.optimizerRunId,
+              statePath,
+              finalRosterArtifact:
+                stored.data!.finalRosterArtifact,
+              connection: connection.data,
+              delivery: null,
+            },
+            violations:
+              connection.violations.length > 0
+                ? connection.violations
+                : [
+                    {
+                      code:
+                        "NEW_RECRUIT_CONNECTION_UNAVAILABLE",
+                      message:
+                        "The finalized winner is approved, but the New Recruit companion is not ready.",
+                      severity: "error" as const,
+                    },
+                  ],
+            warnings: [
+              ...stored.warnings,
+              ...connection.warnings,
+            ],
+          });
+        }
+        const delivered =
+          await options.newRecruitCompanion.deliver(
+            finalization.roster,
+            {
+              downloadEnrichedRosz: true,
+              downloadPrettyHtml,
+              outputDirectory,
+              overwrite,
+            },
+          );
+        return resultContent({
+          ok: delivered.ok,
+          data: {
+            optimizerRunId: stored.data!.state.optimizerRunId,
+            statePath,
+            candidateId: finalization.candidateId,
+            finalizationSha256:
+              finalization.finalizationSha256,
+            finalRosterArtifact:
+              stored.data!.finalRosterArtifact,
+            connection: connection.data,
+            delivery: delivered.data,
+          },
+          violations: delivered.violations,
+          warnings: [
+            ...stored.warnings,
+            ...connection.warnings,
+            ...delivered.warnings,
+          ],
+        });
+      },
+    );
+  }
+
+  if (options.tesseraGeneralOptimizerStore) {
+    server.registerTool(
+      "start_tessera_general_optimizer",
+      {
+        title: "Start a durable general-six Tessera optimizer",
+        description:
+          "Freeze one player roster, the six-archetype portfolio, and exactly six completed exact Tessera baselines into one aggregate optimizer. Suggestions remain unpaired until candidate approval and all six paired revisions complete.",
+        inputSchema: {
+          baselineRoster: RosterDraftSchema,
+          portfolio: GeneralThreatPortfolioInputSchema.optional(),
+          portfolioPath: z.string().min(1).optional(),
+          baselines: z.array(z.object({
+            archetypeId: GeneralThreatArchetypeSchema,
+            reportPath: z.string().min(1),
+            profilePolicyPath: z.string().min(1).optional(),
+          })).length(6),
+          mode: z
+            .enum(["guided", "recommend-only"])
+            .default("guided"),
+          outputDirectory: z
+            .string()
+            .min(1)
+            .default("exports/tessera/general-optimizers"),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        baselineRoster,
+        portfolio,
+        portfolioPath,
+        baselines,
+        mode,
+        outputDirectory,
+        responseDetail,
+      }) => {
+        if (!portfolio && !portfolioPath) {
+          return resultContent({
+            ok: false,
+            data: null,
+            violations: [
+              {
+                code: "TESSERA_GENERAL_OPTIMIZER_PORTFOLIO_REQUIRED",
+                message:
+                  "Starting a general-six optimizer requires the frozen portfolio object or its JSON path.",
+                severity: "error" as const,
+              },
+            ],
+            warnings: [],
+          });
+        }
+        return tesseraGeneralOptimizerStoreContent(
+          await options.tesseraGeneralOptimizerStore!.start({
+            baselineRoster: baselineRoster as RosterDraftV1,
+            portfolio: portfolio as GeneralThreatPortfolio | undefined,
+            portfolioPath,
+            baselines,
+            mode: mode as TesseraOptimizerMode,
+            outputDirectory,
+          }),
+          responseDetail,
+        );
+      },
+    );
+
+    server.registerTool(
+      "get_tessera_general_optimizer_status",
+      {
+        title: "Get general-six Tessera optimizer status",
+        description:
+          "Verify the aggregate optimizer, six baseline artifacts, candidate/archetype receipts, runtime identity, approvals, and current stage.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ statePath, responseDetail }) =>
+        tesseraGeneralOptimizerStoreContent(
+          await options.tesseraGeneralOptimizerStore!.status(
+            statePath,
+          ),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "approve_tessera_general_optimizer_candidates",
+      {
+        title: "Approve general-six candidates for paired testing",
+        description:
+          "Approve one to three aggregate candidates, materialize each legal/exportable roster once, and emit six request-SHA-bound paired revision requests per candidate. This does not approve a winner.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          candidateIds: z.array(z.string().min(1)).min(1).max(3),
+          approvalId: z.string().min(1),
+          approvedBy: z.string().min(1),
+          approvedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        candidateIds,
+        approvalId,
+        approvedBy,
+        approvedAt,
+        responseDetail,
+      }) =>
+        tesseraGeneralOptimizerStoreContent(
+          await options.tesseraGeneralOptimizerStore!
+            .approveCandidates(statePath, {
+              expectedStateRevision,
+              candidateIds,
+              approvalId,
+              approvedBy,
+              approvedAt,
+            }),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "record_tessera_general_optimizer_comparison",
+      {
+        title: "Record one general-six paired comparison",
+        description:
+          "Verify and freeze one completed candidate/archetype paired revision report. The request SHA prevents a result from being attached to another candidate, archetype, or baseline.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          candidateId: z.string().min(1),
+          archetypeId: GeneralThreatArchetypeSchema,
+          requestSha256: z.string().regex(/^[0-9a-f]{64}$/),
+          reportPath: z.string().min(1),
+          recordedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        candidateId,
+        archetypeId,
+        requestSha256,
+        reportPath,
+        recordedAt,
+        responseDetail,
+      }) =>
+        tesseraGeneralOptimizerStoreContent(
+          await options.tesseraGeneralOptimizerStore!
+            .recordComparison(statePath, {
+              expectedStateRevision,
+              candidateId,
+              archetypeId,
+              requestSha256,
+              reportPath,
+              recordedAt,
+            }),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "approve_tessera_general_optimizer_winner",
+      {
+        title: "Approve the aggregate Tessera optimizer winner",
+        description:
+          "Approve exactly one no-regression candidate on the aggregate six-archetype Pareto frontier. This is the second approval and performs no New Recruit delivery.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          candidateId: z.string().min(1),
+          approvalId: z.string().min(1),
+          approvedBy: z.string().min(1),
+          approvedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        candidateId,
+        approvalId,
+        approvedBy,
+        approvedAt,
+        responseDetail,
+      }) =>
+        tesseraGeneralOptimizerStoreContent(
+          await options.tesseraGeneralOptimizerStore!.approveWinner(
+            statePath,
+            {
+              expectedStateRevision,
+              candidateId,
+              approvalId,
+              approvedBy,
+              approvedAt,
+            },
+          ),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "retain_tessera_general_optimizer_baseline",
+      {
+        title: "Approve retaining the general-six baseline",
+        description:
+          "Explicitly retain the original roster after the aggregate comparisons. This separate approval performs no New Recruit delivery.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          approvalId: z.string().min(1),
+          approvedBy: z.string().min(1),
+          approvedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        approvalId,
+        approvedBy,
+        approvedAt,
+        responseDetail,
+      }) =>
+        tesseraGeneralOptimizerStoreContent(
+          await options.tesseraGeneralOptimizerStore!.retainBaseline(
+            statePath,
+            {
+              expectedStateRevision,
+              approvalId,
+              approvedBy,
+              approvedAt,
+            },
+          ),
+          responseDetail,
+        ),
+    );
+
+    server.registerTool(
+      "finalize_tessera_general_optimizer",
+      {
+        title: "Finalize a general-six Tessera optimizer result",
+        description:
+          "Freeze the separately approved aggregate winner or retained baseline and record delivery intent. Finalization alone does not mutate New Recruit.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          expectedStateRevision: z.number().int().nonnegative(),
+          deliveryKind: z
+            .enum(["none", "prepare-handoff", "deliver-new-recruit"])
+            .default("none"),
+          intentId: z.string().min(1).optional(),
+          recordedBy: z.string().min(1).optional(),
+          recordedAt: z.string().min(1).optional(),
+          finalizedAt: z.string().min(1).optional(),
+          responseDetail: z
+            .enum(["compact", "full"])
+            .default("compact"),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        statePath,
+        expectedStateRevision,
+        deliveryKind,
+        intentId,
+        recordedBy,
+        recordedAt,
+        finalizedAt,
+        responseDetail,
+      }) => {
+        if (
+          deliveryKind !== "none" &&
+          (!intentId || !recordedBy)
+        ) {
+          return resultContent({
+            ok: false,
+            data: null,
+            violations: [
+              {
+                code:
+                  "TESSERA_GENERAL_OPTIMIZER_DELIVERY_INTENT_REQUIRED",
+                message:
+                  "A non-empty delivery intent requires intentId and recordedBy.",
+                severity: "error" as const,
+              },
+            ],
+            warnings: [],
+          });
+        }
+        const at = recordedAt ?? new Date().toISOString();
+        const deliveryIntent: TesseraOptimizerDeliveryIntent =
+          deliveryKind === "none"
+            ? {
+                kind: "none",
+                intentId: null,
+                recordedBy: null,
+                recordedAt: at,
+              }
+            : {
+                kind: deliveryKind,
+                intentId: intentId!,
+                recordedBy: recordedBy!,
+                recordedAt: at,
+              };
+        return tesseraGeneralOptimizerStoreContent(
+          await options.tesseraGeneralOptimizerStore!.finalize(
+            statePath,
+            {
+              expectedStateRevision,
+              deliveryIntent,
+              finalizedAt,
+            },
+          ),
+          responseDetail,
+        );
+      },
+    );
+
+    server.registerTool(
+      "deliver_tessera_general_optimizer_winner_to_new_recruit",
+      {
+        title: "Deliver a finalized general-six winner to New Recruit",
+        description:
+          "After aggregate candidate and winner approvals plus finalization with deliver-new-recruit intent, explicitly deliver that exact frozen roster through the local companion.",
+        inputSchema: {
+          statePath: z.string().min(1),
+          confirmDelivery: z.literal(true),
+          outputDirectory: z
+            .string()
+            .min(1)
+            .default("exports/new-recruit"),
+          downloadPrettyHtml: z.boolean().default(true),
+          overwrite: z.boolean().default(false),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({
+        statePath,
+        outputDirectory,
+        downloadPrettyHtml,
+        overwrite,
+      }) => {
+        const stored =
+          await options.tesseraGeneralOptimizerStore!.status(
+            statePath,
+          );
+        const finalization = stored.data?.state.finalization;
+        if (
+          !stored.ok ||
+          stored.data?.state.stage !== "finalized" ||
+          !finalization ||
+          finalization.deliveryIntent.kind !==
+            "deliver-new-recruit"
+        ) {
+          return resultContent({
+            ok: false,
+            data: stored.data
+              ? compactTesseraGeneralOptimizerStoreResult(stored).data
+              : null,
+            violations:
+              stored.violations.length > 0
+                ? stored.violations
+                : [
+                    {
+                      code:
+                        "TESSERA_GENERAL_OPTIMIZER_DELIVERY_NOT_AUTHORIZED",
+                      message:
+                        "The general-six optimizer must be finalized with an approved result and deliver-new-recruit intent before delivery.",
+                      severity: "error" as const,
+                    },
+                  ],
+            warnings: stored.warnings,
+          });
+        }
+        if (!options.newRecruitCompanion) {
+          return resultContent({
+            ok: false,
+            data: {
+              optimizerRunId: stored.data!.state.optimizerRunId,
+              statePath,
+              finalRosterArtifact:
+                stored.data!.finalRosterArtifact,
+              delivery: null,
+            },
+            violations: [
+              {
+                code: "NEW_RECRUIT_COMPANION_UNAVAILABLE",
+                message:
+                  "This transport cannot deliver to New Recruit. The aggregate optimizer's exact finalized roster remains available for manual handoff.",
+                severity: "error" as const,
+              },
+            ],
+            warnings: stored.warnings,
+          });
+        }
+        const connection =
+          await options.newRecruitCompanion.status();
+        if (!connection.ok || !connection.data?.available) {
+          return resultContent({
+            ok: false,
+            data: {
+              optimizerRunId: stored.data!.state.optimizerRunId,
+              statePath,
+              finalRosterArtifact:
+                stored.data!.finalRosterArtifact,
+              connection: connection.data,
+              delivery: null,
+            },
+            violations:
+              connection.violations.length > 0
+                ? connection.violations
+                : [
+                    {
+                      code: "NEW_RECRUIT_CONNECTION_UNAVAILABLE",
+                      message:
+                        "The aggregate winner is approved, but the New Recruit companion is not ready.",
+                      severity: "error" as const,
+                    },
+                  ],
+            warnings: [
+              ...stored.warnings,
+              ...connection.warnings,
+            ],
+          });
+        }
+        const delivered =
+          await options.newRecruitCompanion.deliver(
+            finalization.roster,
+            {
+              downloadEnrichedRosz: true,
+              downloadPrettyHtml,
+              outputDirectory,
+              overwrite,
+            },
+          );
+        return resultContent({
+          ok: delivered.ok,
+          data: {
+            optimizerRunId: stored.data!.state.optimizerRunId,
+            statePath,
+            candidateId: finalization.candidateId,
+            finalizationSha256:
+              finalization.finalizationSha256,
+            finalRosterArtifact:
+              stored.data!.finalRosterArtifact,
+            connection: connection.data,
+            delivery: delivered.data,
+          },
+          violations: delivered.violations,
+          warnings: [
+            ...stored.warnings,
+            ...connection.warnings,
+            ...delivered.warnings,
+          ],
+        });
+      },
+    );
+  }
+
+  server.registerTool(
     "build_roster",
     {
       title: "Build a deterministic roster",
@@ -691,7 +2590,9 @@ export function createRosterPilotMcpServer(
           )
           .optional(),
         allowNamedCharacters: z.boolean().optional(),
+        legendsPolicy: LegendsPolicySchema.optional(),
         allowLegends: z.boolean().optional(),
+        playContext: LegendsPlayContextSchema.optional(),
         collectionUnitIds: z.array(z.string()).optional(),
         requiredUnitIds: z.array(z.string()).optional(),
         excludedUnitIds: z.array(z.string()).optional(),
@@ -1234,6 +3135,9 @@ export function createRosterPilotMcpServer(
             playerFaction: z.string().min(1).optional(),
             pointsLimit: z.number().int().min(100).max(5000).optional(),
             opponentRoster: RosterDraftSchema,
+            legendsPolicy: LegendsPolicySchema.optional(),
+            allowLegends: z.boolean().optional(),
+            playContext: LegendsPlayContextSchema.optional(),
             collectionProfile: CollectionProfileSchema.optional(),
             requiredUnitIds: z.array(z.string().min(1)).optional(),
             excludedUnitIds: z.array(z.string().min(1)).optional(),
@@ -1265,6 +3169,9 @@ export function createRosterPilotMcpServer(
           playerFaction,
           pointsLimit,
           opponentRoster,
+          legendsPolicy,
+          allowLegends,
+          playContext,
           collectionProfile,
           requiredUnitIds,
           excludedUnitIds,
@@ -1294,6 +3201,9 @@ export function createRosterPilotMcpServer(
                   pointsLimit,
                   opponentRoster:
                     opponentRoster as RosterDraftV1,
+                  legendsPolicy,
+                  allowLegends,
+                  playContext,
                   collectionProfile,
                   requiredUnitIds,
                   excludedUnitIds,
@@ -1326,6 +3236,9 @@ export function createRosterPilotMcpServer(
                 playerFaction,
                 pointsLimit,
                 opponentRoster: opponentRoster as RosterDraftV1,
+                legendsPolicy,
+                allowLegends,
+                playContext,
                 collectionProfile,
                 requiredUnitIds,
                 excludedUnitIds,
@@ -1483,6 +3396,9 @@ export function createRosterPilotMcpServer(
             playerFaction: z.string().min(1).optional(),
             againstFaction: z.string().min(1),
             pointsLimit: z.number().int().min(100).max(5000).optional(),
+            legendsPolicy: LegendsPolicySchema.optional(),
+            allowLegends: z.boolean().optional(),
+            playContext: LegendsPlayContextSchema.optional(),
             requiredUnitIds: z.array(z.string().min(1)).optional(),
             excludedUnitIds: z.array(z.string().min(1)).optional(),
             requiredWarlordUnitId: z.string().min(1).optional(),
@@ -1520,6 +3436,9 @@ export function createRosterPilotMcpServer(
           playerFaction,
           againstFaction,
           pointsLimit,
+          legendsPolicy,
+          allowLegends,
+          playContext,
           requiredUnitIds,
           excludedUnitIds,
           requiredWarlordUnitId,
@@ -1556,6 +3475,9 @@ export function createRosterPilotMcpServer(
                   playerFaction,
                   againstFaction,
                   pointsLimit,
+                  legendsPolicy,
+                  allowLegends,
+                  playContext,
                   requiredUnitIds,
                   excludedUnitIds,
                   requiredWarlordUnitId,
@@ -1596,6 +3518,9 @@ export function createRosterPilotMcpServer(
                 playerFaction,
                 againstFaction,
                 pointsLimit,
+                legendsPolicy,
+                allowLegends,
+                playContext,
                 requiredUnitIds,
                 excludedUnitIds,
                 requiredWarlordUnitId,
@@ -1929,6 +3854,9 @@ export function createRosterPilotMcpServer(
         playerFaction: z.string().min(1).optional(),
         againstFaction: z.string().min(1),
         pointsLimit: z.number().int().min(100).max(5000).optional(),
+        legendsPolicy: LegendsPolicySchema.optional(),
+        allowLegends: z.boolean().optional(),
+        playContext: LegendsPlayContextSchema.optional(),
         requiredUnitIds: z.array(z.string().min(1)).optional(),
         excludedUnitIds: z.array(z.string().min(1)).optional(),
         requiredWarlordUnitId: z.string().min(1).optional(),
@@ -1951,6 +3879,9 @@ export function createRosterPilotMcpServer(
         playerFaction: z.string().min(1).optional(),
         pointsLimit: z.number().int().min(100).max(5000).optional(),
         opponentRoster: RosterDraftSchema,
+        legendsPolicy: LegendsPolicySchema.optional(),
+        allowLegends: z.boolean().optional(),
+        playContext: LegendsPlayContextSchema.optional(),
         collectionProfile: CollectionProfileSchema.optional(),
         requiredUnitIds: z.array(z.string().min(1)).optional(),
         excludedUnitIds: z.array(z.string().min(1)).optional(),
@@ -2068,6 +3999,9 @@ export function createRosterPilotMcpServer(
               playerFaction: request.playerFaction,
               againstFaction: request.againstFaction,
               pointsLimit: request.pointsLimit,
+              legendsPolicy: request.legendsPolicy,
+              allowLegends: request.allowLegends,
+              playContext: request.playContext,
               requiredUnitIds: request.requiredUnitIds,
               excludedUnitIds: request.excludedUnitIds,
               requiredWarlordUnitId:
@@ -2102,6 +4036,9 @@ export function createRosterPilotMcpServer(
               pointsLimit: request.pointsLimit,
               opponentRoster:
                 request.opponentRoster as RosterDraftV1,
+              legendsPolicy: request.legendsPolicy,
+              allowLegends: request.allowLegends,
+              playContext: request.playContext,
               collectionProfile: request.collectionProfile,
               requiredUnitIds: request.requiredUnitIds,
               excludedUnitIds: request.excludedUnitIds,

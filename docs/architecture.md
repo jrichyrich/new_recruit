@@ -22,6 +22,8 @@ capabilities:
 | Known-faction stress testing | A validated player roster plus deterministic legal, exportable faction proxies within points tolerance | Shared portfolio and mission-readiness core, local New Recruit enrichment, and local Tessera adapter |
 | Exact-aware roster construction | A validated canonical opponent roster plus player build constraints and optional owned-model quantities | Shared roster engine, exact opponent threat profile, deterministic repair, and exact Tessera adapter |
 | Durable Tessera jobs | Exact, stress, build-and-stress, and build-and-analyze requests on local CLI or stdio MCP | Persistent job document, local-agent-owned detached worker, retained result bundle, and stress manifest where applicable |
+| Unified roster workflow | Fail-closed intent and faction resolution, deterministic build/validation, calibrated coaching, artifact-safe handoff, and explicit delivery authority | Shared `lib/rosterpilot/` orchestration under one transport-owned data-bundle lease |
+| Approval-gated optimization | Frozen exact/faction baseline or six-archetype exact-report set, at most three candidate revisions, paired evidence, Pareto ranking, and exact winner or baseline-retention approval | Single-baseline and general-six optimizer coordinators plus existing durable Tessera exact/stress and paired-revision jobs |
 
 ### Workflow composition
 
@@ -66,6 +68,12 @@ testing are also separate explicit choices. Counter-building uses the supplied
 canonical opponent rather than silently reducing it to a faction heuristic.
 Comparison suggestions never mutate a canonical roster.
 
+The unified workflow composes those dotted edges only when the same request
+names the action. A New Recruit capability question is not delivery authority.
+An optimize request authorizes preparation and analysis, but candidate and
+winner approvals are separate durable transitions; it never converts a
+suggestion into a roster mutation by itself.
+
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation
 context. Missing or ambiguous data fails closed for New Recruit exports;
@@ -93,14 +101,16 @@ extractor.
 
 The authority order is scoped, not global. Machine-verifiable Games Workshop
 downloads are authoritative for published points, leader links, Detachment
-Points, Force Dispositions, errata, and dataslates. 40kdc-data remains the
+Points, Force Dispositions, errata, dataslates, and current Legends
+classification. Legends classification comes from exact faction-pack
+artifacts, not from the points manual or a BSData label. 40kdc-data remains the
 structured operational source for units, weapons, stats, loadouts, and
 community-authored mechanics. BSData is the New Recruit interoperability
 source for catalogue IDs, selection paths, constraints, and export structure.
 An unresolved official/community disagreement is quarantined at entity or
 faction scope; RosterPilot never silently chooses a community interpretation.
 Official overrides cross a separate publication trust boundary: the publisher
-must hash the actual Games Workshop source artifact and verify a one-to-one
+must hash the actual Games Workshop source artifacts and verify a one-to-one
 inventory receipt signed by an independently reviewed extractor key. Runtime
 overlay application is intentionally reusable, but it cannot by itself
 authorize a signed bundle or application bootstrap.
@@ -120,6 +130,12 @@ official value is revalidated, and conflicts are recomputed. Missing or
 mismatched entities fail closed. A Games Workshop source change still requires
 new reviewed extraction evidence; a legacy bundle that did not retain the
 overlay also cannot authorize reapplication to changed structured data.
+
+An official Legends datasheet whose full structured unit is unavailable is
+retained as an inventory-only record. It remains discoverable, but cannot be
+built, validated, exported as a playable unit, or synthesized from BSData.
+The update and roster-policy workflow is documented in
+[Legends classification and roster policy](legends.md).
 
 Roster export decomposes each validated unit-wide equipment bag with the same
 exact model-composition solver used by `40kdc-data` legality checks. The shared
@@ -807,6 +823,8 @@ Security invariants:
 | Exact-aware build loop | Validate an exact opponent, build and repair from its threat profile, enforce readiness, and invoke exact analysis | `local/tessera/exact-full-loop.ts`, `lib/rosterpilot/build-and-analyze.ts` |
 | Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
 | Durable Tessera jobs | Persist requests and results; ask the local agent to start workers; inspect, resume, resolve profiles, and cancel background runs | `local/tessera/jobs.ts`, `local/agent/server.ts` |
+| Tessera optimizer coordinator | Freeze a verified baseline and active bundle identity; atomically persist candidate, comparison, Pareto, retention/winner approval, and finalization receipts; reject stale revisions and identity drift | `local/tessera/optimizer.ts`, `local/tessera/optimizer-store.ts` |
+| General-six Tessera optimizer | Freeze one deterministic portfolio and six completed exact baselines; materialize each candidate once; bind six paired revisions by candidate, archetype, and request hash; enforce aggregate no-regression Pareto and separate approvals | `local/tessera/general-optimizer.ts`, `local/tessera/general-optimizer-store.ts` |
 | Tessera UI and reports | Visible simulator control/extraction plus exact-matchup and faction-stress HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts`, `local/tessera/stress-report.ts` |
 | Isolated workers | Hold credentials in memory and return sanitized results; New Recruit is job-scoped and Tessera is session-scoped | `local/new-recruit/worker.ts`, `local/tessera/worker.ts` |
 | Keychain broker | Native secure configuration and restricted credential access | `native/NewRecruitKeychainBroker.swift` |

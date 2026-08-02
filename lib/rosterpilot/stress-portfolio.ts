@@ -4,6 +4,7 @@ import {
   factionHasLegalNamedAnchor,
   inspectRosterUnitThreatProperties,
   listDetachments,
+  modifyRoster,
   rosterHasNamedCharacter,
   rosterProfileRequirements,
   searchUnits,
@@ -1221,9 +1222,16 @@ function buildExportableRoster(
   if (!factionId) return null;
   const catalogue = getNewRecruitFactionCatalogue(factionId);
   if (!catalogue) return null;
-  const requestedCollection = input.collectionUnitIds
-    ? new Set(input.collectionUnitIds)
-    : null;
+  const ownedCollection =
+    input.collectionProfile?.mode === "owned"
+      ? new Set(
+          input.collectionProfile.units.map((unit) => unit.unitId),
+        )
+      : null;
+  const requestedCollection = ownedCollection ??
+    (input.collectionUnitIds
+      ? new Set(input.collectionUnitIds)
+      : null);
   const allowed = new Set(
     Object.keys(catalogue.units).filter(
       (unitId) =>
@@ -1241,9 +1249,22 @@ function buildExportableRoster(
     ]),
   );
   for (let attempt = 0; attempt < 8; attempt += 1) {
+    const ownedMappingExclusions = ownedCollection
+      ? [...ownedCollection].filter((unitId) => !allowed.has(unitId))
+      : [];
     const built = buildRoster({
       ...input,
-      collectionUnitIds: [...allowed].sort(),
+      collectionUnitIds: ownedCollection
+        ? undefined
+        : [...allowed].sort(),
+      excludedUnitIds: ownedCollection
+        ? [
+            ...new Set([
+              ...(input.excludedUnitIds ?? []),
+              ...ownedMappingExclusions,
+            ]),
+          ].sort()
+        : input.excludedUnitIds,
       internalSelectionExclusions: [
         ...selectionExclusions.values(),
       ],
@@ -1286,14 +1307,105 @@ export function buildExportableRosterCandidate(
     : listDetachments(explicitFactionId).map(
         (detachment) => detachment.id,
       );
+  let best: RosterDraftV1 | null = null;
   for (const detachmentId of detachments) {
     const candidate = buildExportableRoster(
       { ...input, detachmentId },
       knownBlockedUnitIds(explicitFactionId),
     );
-    if (candidate) return candidate;
+    if (
+      candidate &&
+      candidate.totalPoints /
+        Math.max(1, candidate.pointsLimit) >=
+        0.98
+    ) {
+      return candidate;
+    }
+    if (
+      candidate &&
+      (
+        !best ||
+        candidate.totalPoints > best.totalPoints ||
+        (
+          candidate.totalPoints === best.totalPoints &&
+          rosterSimulationFingerprint(candidate) <
+            rosterSimulationFingerprint(best)
+        )
+      )
+    ) {
+      best = candidate;
+    }
   }
-  return null;
+  if (!best) return null;
+  const targetUtilization = 0.98;
+  if (
+    best.totalPoints / Math.max(1, best.pointsLimit) >=
+    targetUtilization
+  ) {
+    return best;
+  }
+
+  // A catalogue conflict can remove one greedy selection after the engine has
+  // already filled the list. Try a bounded, deterministic one-for-two repair
+  // using selections whose current base loadouts already export. This keeps
+  // the shared builder generic while recovering otherwise stranded points
+  // (for example, after excluding one transport configuration).
+  const addUnitIds = [
+    ...new Set(best.units.map((selection) => selection.unitId)),
+  ].sort();
+  let repairedBest = best;
+  const removalCandidates = best.units
+    .filter((selection) => !selection.isWarlord)
+    .sort((left, right) =>
+      left.selectionId.localeCompare(right.selectionId),
+    );
+  for (const removedSelection of removalCandidates) {
+    const removed = modifyRoster(best, {
+      type: "remove",
+      selectionId: removedSelection.selectionId,
+    });
+    if (!removed.data) continue;
+    for (let leftIndex = 0; leftIndex < addUnitIds.length; leftIndex += 1) {
+      const first = modifyRoster(removed.data, {
+        type: "add",
+        unitId: addUnitIds[leftIndex],
+      });
+      if (!first.data) continue;
+      for (
+        let rightIndex = leftIndex;
+        rightIndex < addUnitIds.length;
+        rightIndex += 1
+      ) {
+        const second = modifyRoster(first.data, {
+          type: "add",
+          unitId: addUnitIds[rightIndex],
+        });
+        if (!second.ok || !second.data) continue;
+        const candidate = second.data;
+        if (
+          candidate.totalPoints > candidate.pointsLimit ||
+          candidate.totalPoints <= repairedBest.totalPoints ||
+          !validateRoster(candidate).ok
+        ) {
+          continue;
+        }
+        try {
+          newRecruitRos(candidate);
+        } catch {
+          continue;
+        }
+        repairedBest = candidate;
+        if (
+          repairedBest.totalPoints /
+            Math.max(1, repairedBest.pointsLimit) >=
+          targetUtilization
+        ) {
+          return repairedBest;
+        }
+      }
+    }
+  }
+  return repairedBest;
 }
 
 interface StressCandidate {

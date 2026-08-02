@@ -363,7 +363,11 @@ function mappingUnitBasePayload(
     | undefined,
 ) {
   if (!mapping) return null;
-  const loadoutKeys = new Set([
+  const excludedKeys = new Set([
+    // BSData classification hints are reconciliation evidence only. Runtime
+    // Games Workshop classification decides whether a roster is a Legend.
+    "classificationSignals",
+    // These export paths receive narrower entity hashes below.
     "directEquipment",
     "models",
     "warlord",
@@ -372,7 +376,7 @@ function mappingUnitBasePayload(
   ]);
   return Object.fromEntries(
     Object.entries(mapping).filter(
-      ([key]) => !loadoutKeys.has(key),
+      ([key]) => !excludedKeys.has(key),
     ),
   );
 }
@@ -639,6 +643,12 @@ export function deriveRosterCompatibilityFactionIdentity(input: {
     mappingConfigurationBasePayload(catalogue, factionId),
   );
   const configuration = mapping?.configuration;
+  entityHashes["mapping:configuration:legends-visibility"] =
+    semanticHash(configuration?.legendsVisibility ?? null);
+  entityHashes["mapping:classification-evidence:legends"] =
+    semanticHash(
+      mapping?.classificationEvidence?.legendCandidates ?? [],
+    );
   for (const [battleSize, choice] of Object.entries(
     configuration?.battleSize.choices ?? {},
   )) {
@@ -702,6 +712,16 @@ function selectedEntityKeys(roster: {
   forceDispositionId: string;
   units: RosterDraftV3["units"];
 }): string[] {
+  const factionUnitsById = new Map(
+    datasetFactionUnits(dataset, roster.factionId).map((unit) => [
+      unit.id,
+      unit,
+    ]),
+  );
+  const selectsLegend = roster.units.some(
+    (unit) =>
+      factionUnitsById.get(unit.unitId)?.raw.is_legend === true,
+  );
   return [
     `faction:${roster.factionId}`,
     `detachment:${roster.detachmentId}`,
@@ -710,6 +730,9 @@ function selectedEntityKeys(roster: {
     `mapping:configuration:battle-size:${roster.battleSize}`,
     `mapping:configuration:detachment:${roster.detachmentId}`,
     `mapping:configuration:force-disposition:${roster.forceDispositionId}`,
+    ...(selectsLegend
+      ? ["mapping:configuration:legends-visibility"]
+      : []),
     ...roster.units.flatMap((unit) => [
       `unit:${unit.unitId}`,
       `mapping:unit:${unit.unitId}:base`,

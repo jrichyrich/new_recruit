@@ -3,12 +3,14 @@ import {
 } from "@alpaca-software/40kdc-data";
 import type { UnitView } from "@alpaca-software/40kdc-data";
 
-import { validateRoster } from "./engine";
+import {
+  resolveFactionUnit,
+  validateRoster,
+} from "./engine";
 import {
   missionCards,
   missionMatchups,
   missions,
-  units,
 } from "./runtime-dataset";
 import { rosterExecutionFingerprint } from "./stress-portfolio";
 import type {
@@ -79,18 +81,10 @@ function resolveUnit(
   roster: RosterDraftV1,
   selection: RosterDraftV1["units"][number],
 ): UnitView | null {
-  return (
-    units
-      .byFaction(roster.factionId)
-      .find((unit) => unit.id === selection.unitId) ??
-    units.all.find(
-      (unit) =>
-        unit.id === selection.unitId &&
-        normalizeName(unit.name) === normalizeName(selection.name),
-    ) ??
-    units.getAny(selection.unitId) ??
-    null
-  );
+  return resolveFactionUnit(
+    selection.unitId,
+    roster.factionId,
+  ) ?? null;
 }
 
 function effectContainsType(value: unknown, type: string): boolean {

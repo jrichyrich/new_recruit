@@ -1628,6 +1628,25 @@
         },
         "additionalProperties": false
       },
+      "LegendProvenance": {
+        "type": "object",
+        "required": [
+          "classificationAuthority",
+          "sourceId",
+          "version",
+          "contentSha256",
+          "url"
+        ],
+        "properties": {
+          "classificationAuthority": { "type": "string", "enum": ["games-workshop-verified"] },
+          "sourceId": { "type": "string" },
+          "version": { "type": "string" },
+          "contentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "url": { "type": "string", "format": "uri" },
+          "datasheetUrl": { "type": "string", "format": "uri" }
+        },
+        "additionalProperties": false
+      },
       "UnitSummary": {
         "type": "object",
         "required": [
@@ -1636,11 +1655,13 @@
           "factionId",
           "role",
           "pointsFrom",
+          "pointsKnown",
           "modelCounts",
           "tags",
           "keywords",
           "isNamedCharacter",
           "isLegend",
+          "legendBuildSupported",
           "supported"
         ],
         "properties": {
@@ -1649,11 +1670,14 @@
           "factionId": { "type": "string" },
           "role": { "type": "string" },
           "pointsFrom": { "type": "number", "minimum": 0 },
+          "pointsKnown": { "type": "boolean" },
           "modelCounts": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
           "tags": { "type": "array", "items": { "$ref": "#/components/schemas/PreferenceTag" } },
           "keywords": { "type": "array", "items": { "type": "string" } },
           "isNamedCharacter": { "type": "boolean" },
           "isLegend": { "type": "boolean" },
+          "legendBuildSupported": { "type": "boolean" },
+          "legendProvenance": { "$ref": "#/components/schemas/LegendProvenance" },
           "supported": { "type": "boolean" }
         },
         "additionalProperties": false

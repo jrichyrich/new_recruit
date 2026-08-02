@@ -819,11 +819,12 @@ test("release-authority trust never bypasses schema or shard integrity", async (
     });
   };
 
+  const unsupportedBuild = await buildRuntimeDataBundle({
+    createdAt: "2026-07-31T00:00:00.000Z",
+  });
+  unsupportedBuild.draft.engineDataSchemaVersion = 3;
   const unsupported = await signRuntimeDataBundle(
-    await buildRuntimeDataBundle({
-      engineDataSchemaVersion: 2,
-      createdAt: "2026-07-31T00:00:00.000Z",
-    }),
+    unsupportedBuild,
     signer,
   );
   const unsupportedProvider = await providerFor(
@@ -832,7 +833,7 @@ test("release-authority trust never bypasses schema or shard integrity", async (
   );
   await assert.rejects(
     unsupportedProvider.refresh({ force: true }),
-    /unsupported engine data schema 2/,
+    /unsupported engine data schema 3/,
   );
 
   const candidate = await signRuntimeDataBundle(

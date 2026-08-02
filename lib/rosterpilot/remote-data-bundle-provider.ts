@@ -23,7 +23,7 @@ import {
   assertRuntimeDataBundleSemanticIdentity,
   assertRuntimeDataBundleShardData,
   FACTION_DATA_DEPENDENCIES,
-  RUNTIME_DATA_BUNDLE_SCHEMA_VERSION,
+  isSupportedRuntimeDataBundleSchemaVersion,
   type RuntimeDataBundleShardDataV1,
 } from "./runtime-data-bundle";
 import {
@@ -632,8 +632,9 @@ export class RemoteRuntimeDataBundleProvider
         );
       }
       if (
-        manifest.data.engineDataSchemaVersion !==
-        RUNTIME_DATA_BUNDLE_SCHEMA_VERSION
+        !isSupportedRuntimeDataBundleSchemaVersion(
+          manifest.data.engineDataSchemaVersion,
+        )
       ) {
         throw new Error(
           `Bundle ${manifest.data.bundleId} requires unsupported engine data schema ${manifest.data.engineDataSchemaVersion}.`,
@@ -665,6 +666,14 @@ export class RemoteRuntimeDataBundleProvider
           shard.data.data,
           descriptor,
         );
+        if (
+          shard.data.data.schemaVersion !==
+          manifest.data.engineDataSchemaVersion
+        ) {
+          throw new Error(
+            `Runtime shard ${shard.data.shardId} schema ${shard.data.data.schemaVersion} does not match manifest engine schema ${manifest.data.engineDataSchemaVersion}.`,
+          );
+        }
         verifiedShards.push(shard.data);
       }
       const snapshot = createDataBundleSnapshot<

@@ -2,6 +2,11 @@ import { z } from "zod";
 import type {
   DataBundleDeltaResult,
 } from "./semantic-hash";
+import {
+  LegendsPolicyDecisionSchema,
+  type LegendsPlayContext,
+  type LegendsPolicy,
+} from "./legends-policy";
 
 export const ROSTER_SCHEMA_VERSION = 3 as const;
 export const SUPPORTED_GAME = "warhammer-40000-11e" as const;
@@ -134,6 +139,7 @@ export const RosterConstraintsSchema = z
   .object({
     allowNamedCharacters: z.boolean(),
     allowLegends: z.boolean(),
+    legendsPolicyDecision: LegendsPolicyDecisionSchema.optional(),
     collectionUnitIds: z.array(z.string().min(1)).nullable(),
     requiredUnitIds: z.array(z.string().min(1)).optional(),
     excludedUnitIds: z.array(z.string().min(1)).optional(),
@@ -144,7 +150,21 @@ export const RosterConstraintsSchema = z
     opponentThreatProfile:
       OpponentThreatProfileSchema.nullable().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((constraints, context) => {
+    if (
+      constraints.legendsPolicyDecision &&
+      constraints.legendsPolicyDecision.effectiveAllowLegends !==
+        constraints.allowLegends
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["legendsPolicyDecision"],
+        message:
+          "The Legends policy decision must match allowLegends.",
+      });
+    }
+  });
 
 const RosterDraftBodySchema = z.object({
   gameSystem: z.literal(SUPPORTED_GAME),
@@ -314,7 +334,11 @@ export type BuildRosterInput = {
   name?: string;
   preferences?: PreferenceTag[];
   allowNamedCharacters?: boolean;
+  /** Preferred policy input. `allowLegends` remains a compatibility alias. */
+  legendsPolicy?: LegendsPolicy;
   allowLegends?: boolean;
+  /** Structured play or event ruling resolved before deterministic building. */
+  playContext?: LegendsPlayContext;
   collectionUnitIds?: string[];
   collectionProfile?: CollectionProfile;
   requiredUnitIds?: string[];
@@ -1701,11 +1725,28 @@ export type UnitSummary = {
   factionId: string;
   role: string;
   pointsFrom: number;
+  /** False for official inventory-only records without structured points. */
+  pointsKnown: boolean;
   modelCounts: number[];
   tags: PreferenceTag[];
   keywords: string[];
   isNamedCharacter: boolean;
   isLegend: boolean;
+  /** False only when an inventory record lacks full deterministic build data. */
+  legendBuildSupported: boolean;
+  /**
+   * Exact signed Games Workshop artifact that classified this unit as a
+   * Legend. This is deliberately absent for community-only or unverified
+   * classifications so consumers cannot mistake provenance for authority.
+   */
+  legendProvenance?: {
+    classificationAuthority: "games-workshop-verified";
+    sourceId: string;
+    version: string;
+    contentSha256: string;
+    url: string;
+    datasheetUrl?: string;
+  };
   supported: boolean;
 };
 
@@ -1808,6 +1849,21 @@ export type DataStatus = {
     checkedAt: string;
   };
   dataBundle: DataUpdateStatus;
+  legends: {
+    factionCoverage: {
+      complete: number;
+      notPublished: number;
+      unavailable: number;
+    };
+    classificationAuthority: {
+      verified: number;
+      unverifiedOverlay: number;
+      unavailable: number;
+    };
+    inventoryUnits: number;
+    buildSupportedUnits: number;
+    inventoryOnlyUnits: number;
+  };
   newRecruitCoverage: {
     factionCount: number;
     exportCapableFactions: number;

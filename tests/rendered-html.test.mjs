@@ -91,6 +91,15 @@ test("publishes an authenticated OpenAPI surface without enabling secrets", asyn
     openapi.components.schemas.UnitSummary.properties.supported.type,
     "boolean",
   );
+  assert.equal(
+    openapi.components.schemas.UnitSummary.properties.legendProvenance.$ref,
+    "#/components/schemas/LegendProvenance",
+  );
+  assert.deepEqual(
+    openapi.components.schemas.LegendProvenance.properties
+      .classificationAuthority.enum,
+    ["games-workshop-verified"],
+  );
   assert.deepEqual(
     openapi.components.schemas.RosterDraft.required,
     [

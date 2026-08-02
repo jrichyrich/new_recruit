@@ -205,8 +205,13 @@ type ManifestPreparedOpponent = {
   sha256: string;
 };
 
+type ManifestStageContracts = {
+  screening: Record<string, TesseraFrozenScenarioContract[]>;
+  deepDive: Record<string, TesseraFrozenScenarioContract[]>;
+};
+
 type TesseraStressManifest = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   reportKind: "tessera-stress-manifest";
   runId: string;
   createdAt: string;
@@ -222,10 +227,7 @@ type TesseraStressManifest = {
   profilePolicy: ProfilePolicyV1 | null;
   profilePolicyHash: string | null;
   enrichedProfileRequirements: TesseraProfileRequirement[] | null;
-  stageContracts: {
-    screening: TesseraFrozenScenarioContract[] | null;
-    deepDive: TesseraFrozenScenarioContract[] | null;
-  };
+  stageContracts: ManifestStageContracts;
   warnings: string[];
   cachedLiveUpdateCheck: LiveDataFreshness | null;
   playerPreparationStartedAt: string | null;
@@ -609,11 +611,22 @@ const FrozenScenarioContractSchema = z.object({
   iterations: z.number().int().positive().nullable(),
 });
 
+const LegacyStageContractsSchema = z.object({
+  screening: z.array(FrozenScenarioContractSchema).nullable(),
+  deepDive: z.array(FrozenScenarioContractSchema).nullable(),
+});
+
+const PerTemplateStageContractsSchema = z.object({
+  screening: z.record(z.array(FrozenScenarioContractSchema)),
+  deepDive: z.record(z.array(FrozenScenarioContractSchema)),
+});
+
 const StressManifestSchema = z.object({
   schemaVersion: z.union([
     z.literal(1),
     z.literal(2),
     z.literal(3),
+    z.literal(4),
   ]),
   reportKind: z.literal("tessera-stress-manifest"),
   runId: z.string().min(1),
@@ -632,10 +645,10 @@ const StressManifestSchema = z.object({
   profilePolicyHash: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   enrichedProfileRequirements:
     z.array(ProfileRequirementSchema).nullable().optional(),
-  stageContracts: z.object({
-    screening: z.array(FrozenScenarioContractSchema).nullable(),
-    deepDive: z.array(FrozenScenarioContractSchema).nullable(),
-  }).optional(),
+  stageContracts: z.union([
+    LegacyStageContractsSchema,
+    PerTemplateStageContractsSchema,
+  ]).optional(),
   warnings: z.array(z.string()),
   cachedLiveUpdateCheck: z.unknown().nullable().optional(),
   playerPreparationStartedAt: z.string().min(1).nullable(),
@@ -2068,32 +2081,67 @@ function stageEntryIsReusable(
     : entry.status === "complete" || entry.status === "partial";
 }
 
+function stageContractFor(
+  manifest: TesseraStressManifest,
+  stage: "screening" | "deepDive",
+  templateId: string,
+): TesseraFrozenScenarioContract[] | null {
+  const contract = manifest.stageContracts[stage][templateId];
+  return contract?.length ? contract : null;
+}
+
+function cloneStageContractMap(
+  contracts: Record<string, TesseraFrozenScenarioContract[]>,
+): Record<string, TesseraFrozenScenarioContract[]> {
+  return Object.fromEntries(
+    Object.entries(contracts)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([templateId, contract]) => [
+        templateId,
+        sortedScenarioContract(contract),
+      ]),
+  );
+}
+
+function cloneStageContracts(
+  contracts: ManifestStageContracts,
+): ManifestStageContracts {
+  return {
+    screening: cloneStageContractMap(contracts.screening),
+    deepDive: cloneStageContractMap(contracts.deepDive),
+  };
+}
+
+function stageEvidenceIsReusable(
+  manifest: TesseraStressManifest,
+  stage: "screening" | "deepDive",
+  templateId: string,
+): boolean {
+  return (
+    stageEntryIsReusable(
+      manifest[stage][templateId],
+      manifest.simulationRequested,
+    ) &&
+    (
+      !manifest.simulationRequested ||
+      stageContractFor(manifest, stage, templateId) !== null
+    )
+  );
+}
+
 function manifestHasRetryableWork(
   manifest: TesseraStressManifest,
 ): boolean {
-  if (
-    manifest.simulationRequested &&
-    (
-      manifest.stageContracts.screening === null ||
-      (
-        manifest.configuration.analysisStrategy === "staged" &&
-        manifest.representatives.length ===
-          requiredStressEvidence(manifest.portfolio).representatives &&
-        manifest.stageContracts.deepDive === null
-      )
-    )
-  ) {
-    return true;
-  }
   const readyTemplateIds = manifest.portfolio.items
     .filter((item) => item.status === "ready" && item.roster !== null)
     .map((item) => item.templateId);
   if (
     readyTemplateIds.some(
       (templateId) =>
-        !stageEntryIsReusable(
-          manifest.screening[templateId],
-          manifest.simulationRequested,
+        !stageEvidenceIsReusable(
+          manifest,
+          "screening",
+          templateId,
         ),
     )
   ) {
@@ -2104,9 +2152,10 @@ function manifestHasRetryableWork(
   }
   return manifest.representatives.some(
     (representative) =>
-      !stageEntryIsReusable(
-        manifest.deepDive[representative.templateId],
-        manifest.simulationRequested,
+      !stageEvidenceIsReusable(
+        manifest,
+        "deepDive",
+        representative.templateId,
       ),
   );
 }
@@ -2125,7 +2174,7 @@ function newManifest(
 ): TesseraStressManifest {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     reportKind: "tessera-stress-manifest",
     runId,
     createdAt: now,
@@ -2143,8 +2192,8 @@ function newManifest(
       profilePolicy === null ? null : profilePolicyHash(profilePolicy),
     enrichedProfileRequirements: null,
     stageContracts: {
-      screening: null,
-      deepDive: null,
+      screening: {},
+      deepDive: {},
     },
     warnings,
     cachedLiveUpdateCheck,
@@ -2159,6 +2208,131 @@ function newManifest(
     finalArtifacts: null,
     completedAt: null,
   };
+}
+
+type LegacyManifestStageContracts = {
+  screening: TesseraFrozenScenarioContract[] | null;
+  deepDive: TesseraFrozenScenarioContract[] | null;
+};
+
+type ParsedStageContracts =
+  | LegacyManifestStageContracts
+  | ManifestStageContracts
+  | undefined;
+
+function legacyStageContracts(
+  contracts: ParsedStageContracts,
+): LegacyManifestStageContracts | null {
+  if (
+    !contracts ||
+    (
+      contracts.screening !== null &&
+      !Array.isArray(contracts.screening)
+    )
+  ) {
+    return null;
+  }
+  return contracts as LegacyManifestStageContracts;
+}
+
+function migratedLegacyStageContracts(
+  contract: TesseraFrozenScenarioContract[] | null,
+  entries: Record<string, ManifestStageEntry>,
+): Record<string, TesseraFrozenScenarioContract[]> {
+  if (!contract?.length) return {};
+  return Object.fromEntries(
+    Object.entries(entries)
+      .filter(([, entry]) => entry.status === "complete")
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([templateId]) => [
+        templateId,
+        sortedScenarioContract(contract),
+      ]),
+  );
+}
+
+function normalizeStageContracts(
+  contracts: ParsedStageContracts,
+  screening: Record<string, ManifestStageEntry>,
+  deepDive: Record<string, ManifestStageEntry>,
+): ManifestStageContracts {
+  if (!contracts) {
+    return { screening: {}, deepDive: {} };
+  }
+  const legacy = legacyStageContracts(contracts);
+  if (legacy) {
+    return {
+      screening: migratedLegacyStageContracts(
+        legacy.screening,
+        screening,
+      ),
+      deepDive: migratedLegacyStageContracts(
+        legacy.deepDive,
+        deepDive,
+      ),
+    };
+  }
+  return cloneStageContracts(contracts as ManifestStageContracts);
+}
+
+function uniqueContractIteration(
+  contract: TesseraFrozenScenarioContract[] | null,
+): number | null {
+  const values = [
+    ...new Set(
+      (contract ?? [])
+        .map((entry) => entry.iterations)
+        .filter((value): value is number => value !== null),
+    ),
+  ];
+  return values.length === 1 ? values[0] : null;
+}
+
+function repairLegacyCrossProxyIterationReplayFailures(
+  legacyContracts: LegacyManifestStageContracts | null,
+  contracts: ManifestStageContracts,
+  screening: Record<string, ManifestStageEntry>,
+  deepDive: Record<string, ManifestStageEntry>,
+): string[] {
+  if (!legacyContracts) return [];
+  const repaired: string[] = [];
+  for (const stage of ["screening", "deepDive"] as const) {
+    const expectedIterations = uniqueContractIteration(
+      legacyContracts[stage],
+    );
+    if (expectedIterations === null) continue;
+    for (const [templateId, entry] of Object.entries(
+      stage === "screening" ? screening : deepDive,
+    )) {
+      if (
+        entry.status === "complete" ||
+        contracts[stage][templateId] !== undefined ||
+        entry.error?.code !== "TESSERA_SETTINGS_REPLAY_FAILED"
+      ) {
+        continue;
+      }
+      const match = entry.error.message.match(
+        /^Tessera is using ([1-9]\d*) iterations and did not expose one control for the frozen value ([1-9]\d*)\.$/,
+      );
+      if (!match) continue;
+      const observedIterations = Number(match[1]);
+      const replayedIterations = Number(match[2]);
+      if (
+        observedIterations === replayedIterations ||
+        replayedIterations !== expectedIterations
+      ) {
+        continue;
+      }
+      entry.error = {
+        ...entry.error,
+        retryable: true,
+      };
+      entry.nextAction =
+        "Resume this run to recapture the proxy under its own frozen Tessera settings contract.";
+      repaired.push(`${stage}/${templateId}`);
+    }
+  }
+  return repaired;
 }
 
 async function readManifest(
@@ -2186,11 +2360,11 @@ async function readManifest(
   const computedPortfolioSha256 =
     portfolioContentSha256(normalizedPortfolio);
   if (
-    data.schemaVersion === 3 &&
+    data.schemaVersion >= 3 &&
     data.portfolioSha256 === undefined
   ) {
     throw new Error(
-      "The v3 resume manifest does not contain its required frozen portfolio SHA-256.",
+      `The v${data.schemaVersion} resume manifest does not contain its required frozen portfolio SHA-256.`,
     );
   }
   if (
@@ -2236,9 +2410,25 @@ async function readManifest(
             },
       ]),
     );
+  const screening = migrateStage(data.screening);
+  const deepDive = migrateStage(data.deepDive);
+  const parsedStageContracts =
+    data.stageContracts as ParsedStageContracts;
+  const stageContracts = normalizeStageContracts(
+    parsedStageContracts,
+    screening,
+    deepDive,
+  );
+  const repairedLegacyIterationFailures =
+    repairLegacyCrossProxyIterationReplayFailures(
+      legacyStageContracts(parsedStageContracts),
+      stageContracts,
+      screening,
+      deepDive,
+    );
   const manifest = {
     ...data,
-    schemaVersion: 3,
+    schemaVersion: 4,
     configuration: {
       ...data.configuration,
       profilePolicyHash:
@@ -2248,10 +2438,15 @@ async function readManifest(
     profilePolicyHash: data.profilePolicyHash ?? null,
     enrichedProfileRequirements:
       data.enrichedProfileRequirements ?? null,
-    stageContracts: data.stageContracts ?? {
-      screening: null,
-      deepDive: null,
-    },
+    stageContracts,
+    warnings: unique([
+      ...data.warnings,
+      ...(repairedLegacyIterationFailures.length === 0
+        ? []
+        : [
+            `Migrated legacy cross-proxy Tessera iteration replay failures to per-proxy recovery for ${repairedLegacyIterationFailures.join(", ")}; existing attempt history was preserved.`,
+          ]),
+    ]),
     cachedLiveUpdateCheck:
       (data.cachedLiveUpdateCheck as
         | LiveDataFreshness
@@ -2259,8 +2454,8 @@ async function readManifest(
         | undefined) ?? null,
     portfolioSha256: computedPortfolioSha256,
     portfolio: normalizedPortfolio,
-    screening: migrateStage(data.screening),
-    deepDive: migrateStage(data.deepDive),
+    screening,
+    deepDive,
   } as TesseraStressManifest;
   Object.defineProperty(manifest, "__migratedFrom", {
     value: raw.schemaVersion === 1 ? 1 : null,
@@ -2274,8 +2469,8 @@ async function readManifest(
 }
 
 /**
- * Verify a v1/v2/v3 stress manifest and rewrite it in the current portable
- * v3 format. Durable jobs use this only after copying the complete run bundle
+ * Verify a v1/v2/v3/v4 stress manifest and rewrite it in the current portable
+ * v4 format. Durable jobs use this only after copying the complete run bundle
  * into their own isolated directory.
  */
 export async function verifyAndMigrateTesseraStressManifest(
@@ -2559,7 +2754,9 @@ function createDeliveryCache(
     dependencies: {
       ...dependencies,
       deliver,
-      persistentCacheDelivery: !dependencies.deliver,
+      persistentCacheDelivery:
+        dependencies.persistentCacheDelivery === true ||
+        !dependencies.deliver,
     },
     seed: async (roster, prepared) => {
       cache.set(
@@ -3799,6 +3996,7 @@ function scenarioContractFromReport(
 function freezeOrValidateStageContract(
   manifest: TesseraStressManifest,
   stage: "screening" | "deepDive",
+  templateId: string,
   report: TesseraMatchupReport,
   metrics: TesseraMetric[],
 ): {
@@ -3819,9 +4017,14 @@ function freezeOrValidateStageContract(
         "The stage report does not retain exact Tessera settings provenance.",
     };
   }
-  const frozen = manifest.stageContracts[stage];
+  const frozen = stageContractFor(
+    manifest,
+    stage,
+    templateId,
+  );
   if (frozen === null) {
-    manifest.stageContracts[stage] = observed.contract;
+    manifest.stageContracts[stage][templateId] =
+      observed.contract;
     return { changed: true, code: null, message: null };
   }
   if (
@@ -3893,6 +4096,7 @@ async function runStage(
         const contract = freezeOrValidateStageContract(
           input.manifest,
           stage,
+          item.templateId,
           report,
           metrics,
         );
@@ -4023,7 +4227,11 @@ async function runStage(
           ),
           opponentRosterContext: item.roster,
           frozenScenarioContract:
-            input.manifest.stageContracts[stage],
+            stageContractFor(
+              input.manifest,
+              stage,
+              item.templateId,
+            ),
           sessionId: input.manifest.runId,
           allowPointMismatch: false,
           includeChangeCandidates: stage === "screening",
@@ -4037,6 +4245,7 @@ async function runStage(
           ? freezeOrValidateStageContract(
               input.manifest,
               stage,
+              item.templateId,
               result.data,
               metrics,
             )
@@ -6832,20 +7041,9 @@ export async function runRosterStressTest(
       };
       restartedManifest.enrichedProfileRequirements =
         sourceManifest.enrichedProfileRequirements;
-      restartedManifest.stageContracts = {
-        screening:
-          sourceManifest.stageContracts.screening === null
-            ? null
-            : sortedScenarioContract(
-                sourceManifest.stageContracts.screening,
-              ),
-        deepDive:
-          sourceManifest.stageContracts.deepDive === null
-            ? null
-            : sortedScenarioContract(
-                sourceManifest.stageContracts.deepDive,
-              ),
-      };
+      restartedManifest.stageContracts = cloneStageContracts(
+        sourceManifest.stageContracts,
+      );
       manifest = restartedManifest;
       try {
         await materializeManifestPreparedArtifacts(
@@ -7358,16 +7556,39 @@ export async function compareRosterStressRevision(
       "The paired revision baseline does not retain a policy verified against the complete New Recruit-enriched profile inventory. Run a new v2 baseline; RosterPilot will not infer the missing choices.",
     );
   }
+  const baselineScreeningContractTemplates =
+    baselineManifest.portfolio.items
+      .filter(
+        (item) => item.status === "ready" && item.roster !== null,
+      )
+      .map((item) => item.templateId);
+  const baselineDeepDiveContractTemplates =
+    baselineManifest.configuration.analysisStrategy === "staged"
+      ? baselineManifest.representatives.map(
+          (representative) => representative.templateId,
+        )
+      : [];
   if (
-    baselineManifest.stageContracts.screening === null ||
-    (
-      baselineManifest.configuration.analysisStrategy === "staged" &&
-      baselineManifest.stageContracts.deepDive === null
+    baselineScreeningContractTemplates.some(
+      (templateId) =>
+        stageContractFor(
+          baselineManifest,
+          "screening",
+          templateId,
+        ) === null,
+    ) ||
+    baselineDeepDiveContractTemplates.some(
+      (templateId) =>
+        stageContractFor(
+          baselineManifest,
+          "deepDive",
+          templateId,
+        ) === null,
     )
   ) {
     return failure(
       "TESSERA_STRESS_BASELINE_SETTINGS_PROVENANCE_REQUIRED",
-      "The paired revision baseline does not retain an exact frozen Tessera settings and iteration contract for every required stage. Run a new v2 baseline; RosterPilot will not infer missing execution settings.",
+      "The paired revision baseline does not retain an exact frozen Tessera settings and iteration contract for every required proxy. Run a new baseline; RosterPilot will not infer missing execution settings.",
     );
   }
   if (
@@ -7863,20 +8084,9 @@ export async function compareRosterStressRevision(
   );
   manifest.outputDirectory = path.resolve(revisionRunDirectory);
   manifest.representatives = baseline.representatives;
-  manifest.stageContracts = {
-    screening:
-      baselineManifest.stageContracts.screening === null
-        ? null
-        : sortedScenarioContract(
-            baselineManifest.stageContracts.screening,
-          ),
-    deepDive:
-      baselineManifest.stageContracts.deepDive === null
-        ? null
-        : sortedScenarioContract(
-            baselineManifest.stageContracts.deepDive,
-          ),
-  };
+  manifest.stageContracts = cloneStageContracts(
+    baselineManifest.stageContracts,
+  );
   const manifestPath = path.join(
     revisionRunDirectory,
     "stress-manifest.json",

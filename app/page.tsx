@@ -16,7 +16,9 @@ import {
   type ModifyRosterOperation,
   type NewRecruitHandoff,
   type LiveDataFreshness,
+  type LegendsPolicy,
   type PreferenceTag,
+  type RosterIssue,
   type RosterDraftV1,
   type UnitSummary,
 } from "@/lib/rosterpilot";
@@ -43,6 +45,33 @@ const PROMPT_IDEAS = [
   "Build a 1,000 point fast Custodes army with no named characters",
   "Build a fast 1,000 point Aeldari army for objective play",
   "Build a durable 1,500 point Ork army with melee pressure",
+];
+
+type BrowserPlayContext =
+  | "unspecified"
+  | "open-play"
+  | "casual"
+  | "narrative"
+  | "matched-play";
+
+const LEGENDS_POLICIES: Array<{
+  id: LegendsPolicy;
+  label: string;
+}> = [
+  { id: "auto", label: "Check play context" },
+  { id: "allow", label: "Allow Legends" },
+  { id: "exclude", label: "Exclude Legends" },
+];
+
+const PLAY_CONTEXTS: Array<{
+  id: BrowserPlayContext;
+  label: string;
+}> = [
+  { id: "unspecified", label: "Unspecified" },
+  { id: "open-play", label: "Open play" },
+  { id: "casual", label: "Casual" },
+  { id: "narrative", label: "Narrative" },
+  { id: "matched-play", label: "Matched play" },
 ];
 
 type DraftStore = {
@@ -159,6 +188,9 @@ export default function Home() {
   const [history, setHistory] = useState<RosterDraftV1[]>([]);
   const [factionResult, setFactionResult] = useState<FactionSummary[]>([]);
   const [unitResult, setUnitResult] = useState<UnitSummary[]>([]);
+  const [unitSearchWarnings, setUnitSearchWarnings] = useState<
+    RosterIssue[]
+  >([]);
   const [selectedFactionSummary, setSelectedFactionSummary] =
     useState<FactionSummary | null>(null);
   const [factionQuery, setFactionQuery] = useState("");
@@ -168,6 +200,11 @@ export default function Home() {
   const [target, setTarget] = useState(1000);
   const [preferences, setPreferences] = useState<PreferenceTag[]>(["mobility"]);
   const [allowNamed, setAllowNamed] = useState(false);
+  const [legendsPolicy, setLegendsPolicy] =
+    useState<LegendsPolicy>("auto");
+  const [playContext, setPlayContext] =
+    useState<BrowserPlayContext>("unspecified");
+  const [showLegends, setShowLegends] = useState(false);
   const [agentNote, setAgentNote] = useState(
     "A legal 1,000-point Custodes draft is ready. The engine calculated every point and loadout from one frozen roster-data snapshot.",
   );
@@ -263,12 +300,14 @@ export default function Home() {
         factionQuery,
         selectedFaction,
         unitQuery,
+        includeLegends: String(showLegends),
       });
       void browserEngineRequest<BrowserEngineSearch>(
         `/api/browser-engine?${parameters.toString()}`,
         { signal: controller.signal },
       )
         .then((result) => {
+          setUnitSearchWarnings(result.warnings);
           if (!result.data) return;
           setFactionResult(result.data.factions);
           setUnitResult(result.data.units);
@@ -282,7 +321,13 @@ export default function Home() {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [factionQuery, selectedFaction, unitQuery, workspace]);
+  }, [
+    factionQuery,
+    selectedFaction,
+    showLegends,
+    unitQuery,
+    workspace,
+  ]);
 
   const draft = workspace?.roster ?? null;
   const validation = workspace?.validation ?? null;
@@ -327,6 +372,8 @@ export default function Home() {
       pointsLimit: target,
       preferences,
       allowNamedCharacters: allowNamed,
+      legendsPolicy,
+      playContext: { kind: playContext },
       name: `${target.toLocaleString()}pt ${
         selectedFactionSummary?.name ?? "Army"
       } Draft`,
@@ -398,6 +445,12 @@ export default function Home() {
 
   function addUnit(unit: UnitSummary): void {
     if (!draft) return;
+    if (!unit.supported || unit.modelCounts.length === 0) {
+      setAgentNote(
+        `${unit.name} is visible in the official Legends inventory, but complete deterministic build data is not available yet.`,
+      );
+      return;
+    }
     if (selectedFaction !== draft.factionId) {
       setAgentNote(
         `${unit.name} belongs to the selected faction, but the active roster is ${draft.factionName}. Build the selected faction before adding units.`,
@@ -797,6 +850,45 @@ export default function Home() {
                 Named characters
               </label>
             </div>
+            <div
+              className="configuration-row legends-controls"
+              aria-label="Legends roster policy"
+            >
+              <label>
+                <span>Legends policy</span>
+                <select
+                  aria-label="Legends policy"
+                  value={legendsPolicy}
+                  onChange={(event) =>
+                    setLegendsPolicy(event.target.value as LegendsPolicy)
+                  }
+                >
+                  {LEGENDS_POLICIES.map((policy) => (
+                    <option key={policy.id} value={policy.id}>
+                      {policy.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Play context</span>
+                <select
+                  aria-label="Play context"
+                  value={playContext}
+                  onChange={(event) =>
+                    setPlayContext(
+                      event.target.value as BrowserPlayContext,
+                    )
+                  }
+                >
+                  {PLAY_CONTEXTS.map((context) => (
+                    <option key={context.id} value={context.id}>
+                      {context.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="agent-actions">
               <div className="prompt-chips" aria-label="Prompt examples">
                 {PROMPT_IDEAS.map((idea) => (
@@ -954,24 +1046,84 @@ export default function Home() {
                 onChange={(event) => setUnitQuery(event.target.value)}
               />
             </label>
+            <label className="named-toggle legends-visibility-toggle">
+              <input
+                type="checkbox"
+                checked={showLegends}
+                onChange={(event) =>
+                  setShowLegends(event.target.checked)
+                }
+              />
+              Show Legends
+            </label>
+            {unitSearchWarnings.length > 0 && (
+              <div
+                className="check-list catalog-warning-list"
+                role="status"
+                aria-live="polite"
+                aria-label="Unit search warnings"
+              >
+                {unitSearchWarnings.map((warning) => (
+                  <div className="neutral" key={warning.code}>
+                    <span>→</span>
+                    <p>
+                      <strong>{warning.code.replaceAll("_", " ")}</strong>
+                      <small>{warning.message}</small>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="unit-grid">
               {unitResult.map((unit) => (
                 <article className="unit-card" key={unit.id}>
                   <div className="unit-card-top">
                     <span>{unit.role}</span>
-                    <strong>{unit.pointsFrom} pts+</strong>
+                    <strong>
+                      {unit.pointsKnown
+                        ? `${unit.pointsFrom} pts+`
+                        : "Official card"}
+                    </strong>
                   </div>
                   <h3>{unit.name}</h3>
                   <p>
-                    {unit.modelCounts.join(", ")} model options ·{" "}
-                    {unit.isNamedCharacter ? "Epic Hero" : "standard datasheet"}
+                    {unit.modelCounts.length > 0
+                      ? `${unit.modelCounts.join(", ")} model options`
+                      : "Inventory only"}{" "}
+                    ·{" "}
+                    {unit.isLegend
+                      ? "Legends datasheet"
+                      : unit.isNamedCharacter
+                        ? "Epic Hero"
+                        : "standard datasheet"}
                   </p>
+                  {unit.legendProvenance && (
+                    <p>
+                      Verified Games Workshop source:{" "}
+                      <a
+                        href={
+                          unit.legendProvenance.datasheetUrl ??
+                          unit.legendProvenance.url
+                        }
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`SHA-256 ${unit.legendProvenance.contentSha256}`}
+                      >
+                        {unit.legendProvenance.sourceId}
+                      </a>{" "}
+                      · {unit.legendProvenance.version}
+                    </p>
+                  )}
                   <div className="tag-row">
                     {unit.tags.slice(0, 5).map((tag) => (
                       <span key={tag}>{tag}</span>
                     ))}
                   </div>
-                  <button type="button" onClick={() => addUnit(unit)}>
+                  <button
+                    type="button"
+                    disabled={!unit.supported}
+                    onClick={() => addUnit(unit)}
+                  >
                     {unit.supported ? "Add to roster" : "Research only"}{" "}
                     <span aria-hidden="true">＋</span>
                   </button>

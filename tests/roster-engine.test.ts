@@ -77,18 +77,21 @@ test("searches and builds real faction data across the supported catalog", () =>
   assert.ok(aeldari.data?.units.some((unit) => unit.tags.includes("mobility")));
 });
 
-test("requires an explicit player faction when prose names two armies", () => {
-  const ambiguous = buildRoster({
+test("distinguishes the player faction from an opponent in prose", () => {
+  const inferred = buildRoster({
     prompt:
       "Build a 1000 point Aeldari army to battle an unknown Adeptus Custodes list.",
     pointsLimit: 1000,
   });
-  assert.equal(ambiguous.ok, false);
-  assert.equal(ambiguous.data, null);
-  assert.ok(
-    ambiguous.violations.some(
-      (violation) => violation.code === "AMBIGUOUS_PLAYER_FACTION",
-    ),
+  assert.equal(
+    inferred.ok,
+    true,
+    inferred.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.equal(inferred.data?.factionId, "aeldari");
+  assert.equal(
+    inferred.data?.constraints.opponentFactionId,
+    "adeptus-custodes",
   );
 
   const explicit = buildRoster({
@@ -470,16 +473,20 @@ test("a canonical faction name suppresses nested generic aliases", () => {
   );
   assert.equal(deathGuard.data?.factionId, "death-guard");
 
-  const ambiguousOpponent = buildRoster({
+  const inferredOpponent = buildRoster({
     prompt:
       "Build a 1000 point Death Guard army against an unknown Orks list.",
     pointsLimit: 1000,
   });
-  assert.equal(ambiguousOpponent.ok, false);
-  assert.deepEqual(
-    ambiguousOpponent.violations.map((violation) => violation.code),
-    ["AMBIGUOUS_PLAYER_FACTION"],
+  assert.equal(
+    inferredOpponent.ok,
+    true,
+    inferredOpponent.violations
+      .map((violation) => violation.message)
+      .join("; "),
   );
+  assert.equal(inferredOpponent.data?.factionId, "death-guard");
+  assert.equal(inferredOpponent.data?.constraints.opponentFactionId, "orks");
 });
 
 test("honors prompt and structured hard unit constraints", () => {
@@ -801,6 +808,7 @@ test("builds the acceptance Custodes roster deterministically", async () => {
 
 test("uses model-count and army-ordinal pricing", () => {
   const base = buildRoster({
+    playerFaction: "adeptus-custodes",
     pointsLimit: 2000,
     preferences: ["mobility"],
     allowNamedCharacters: false,
@@ -845,6 +853,7 @@ test("uses model-count and army-ordinal pricing", () => {
 
 test("honors collection and named-character constraints", () => {
   const result = buildRoster({
+    playerFaction: "adeptus-custodes",
     pointsLimit: 1000,
     preferences: ["mobility"],
     allowNamedCharacters: false,
@@ -879,7 +888,10 @@ test("honors collection and named-character constraints", () => {
 });
 
 test("surfaces illegal loadouts and the sanitized Golden Boys fixture", async () => {
-  const valid = buildRoster({ pointsLimit: 1000 });
+  const valid = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
   assert.ok(valid.data);
   const selection = valid.data.units.find((unit) => unit.equipment.length > 0);
   assert.ok(selection);

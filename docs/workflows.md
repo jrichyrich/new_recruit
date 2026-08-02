@@ -21,6 +21,7 @@ plan are documented in
 | Compare known armies and collect Tessera simulations | `tessera` | macOS | Creates verified New Recruit list copies during profile enrichment, then runs Tessera only with `--execution-mode simulate` (the deprecated `--experimental` alias is still accepted) |
 | Test a roster against an unknown list from a known faction | `tessera` | macOS | Creates one player copy plus the unique exportable proxy copies required by the selected suite when the verified cache cannot satisfy them; runs Tessera only with `--execution-mode simulate` |
 | Build and analyze against one exact known roster | `tessera` | macOS | Builds locally first; profile enrichment creates verified New Recruit list copies only after validation and readiness gates pass |
+| Approval-gated roster optimization | `tessera` | macOS | Starts only from a complete paired baseline; candidate and winner approvals are durable local receipts, while comparisons retain Tessera's explicit enrichment side effects |
 
 The macOS limitation belongs only to credential-backed browser automation. The
 deterministic engine, web app, CLI, local MCP, validation, and file exports are
@@ -116,6 +117,214 @@ RosterPilot continues from the application release's compiled data. A release
 may advertise that fallback as a verified signed bootstrap only when the
 bootstrap manifest, shards, and installed public key have actually been
 verified. Network failure never changes data mid-operation.
+
+## Unified conversation and CLI workflow
+
+`run_roster_workflow` is the MCP entry point for the common path. The CLI
+equivalent is `rosterpilot workflow`. One invocation resolves the player and
+opponent factions, leases one immutable data snapshot, builds, validates,
+explains, adds calibrated competitive coaching, and prepares any artifact the
+explicitly requested next step needs.
+
+```bash
+npm run rosterpilot -- workflow \
+  --prompt "Build a 1,000 point Custodes army to battle Aeldari" \
+  --coaching concise \
+  --out custodes-vs-aeldari.json
+```
+
+Faction resolution is fail-closed. Canonical names, IDs, and reviewed aliases
+resolve automatically. A voice-like or fuzzy name such as `Death Gourd` or
+`Coto del Darri` returns suggestions and creates no roster. A prompt that names
+both sides distinguishes the player's army from the opponent; unresolved or
+conflicting sides require an explicit `--player-faction` or
+`--opponent-faction`.
+
+Competitive coaching defaults to `concise`; use `--coaching full` for
+per-selection evidence or `--coaching none` to omit it. The pinned Foundation
+Codex V2 pack is a user-supplied heuristic layer, not an official rule source.
+It reports economic roles, OC/point, wounds/point, a roster-selection activation
+upper bound, action economy, mobility, and mission readiness. Mission- and terrain-specific advice
+is omitted unless the caller supplies the corresponding context. Reliable
+trade claims still require opponent-specific paired evidence.
+
+New Recruit preparation and delivery remain different authorities:
+
+```bash
+# Writes an export-safe handoff; does not open New Recruit.
+npm run rosterpilot -- workflow \
+  --prompt "Build 2,000 points of Death Guard and export it for New Recruit" \
+  --out-dir exports/new-recruit
+
+# Explicitly authorizes a new-list mutation in this same request.
+npm run rosterpilot -- workflow \
+  --prompt "Build 2,000 points of Death Guard and upload it to New Recruit" \
+  --out-dir exports/new-recruit
+```
+
+A capability question such as “Can you upload this to New Recruit?” never
+authorizes delivery. Direct delivery first probes the local companion, creates
+a new list rather than replacing one, and verifies the result. When the local
+capability is unavailable, the response retains the validated `.rosz` manual
+handoff and reports the delivery failure explicitly.
+
+Artifact-backed builds constrain construction to conflict-free New Recruit
+mappings and require at least 98% point use. If a required unit or loadout is
+unmapped, the workflow names the blocking required selection instead of
+silently removing it. Without an owned collection profile, construction uses
+the open catalogue and labels that fact. Legends remain excluded by default
+when permission or verified classification is unavailable; they are advisory
+and are not a prerequisite for the main workflow.
+
+An explicit optimize request defaults to approval-gated guided mode:
+
+```bash
+npm run rosterpilot -- workflow \
+  --prompt "Build a 1,000 point Custodes army and Tessera optimize it" \
+  --optimizer-mode guided \
+  --out custodes-optimizer-baseline.json \
+  --portfolio-out general-threat-portfolio.json \
+  --tessera-out-dir exports/tessera
+```
+
+The CLI optimize intent starts durable Tessera baseline work immediately. An
+exact opponent starts one exact job, a known faction starts one stress job with
+the already-frozen `diverse-9` preview, and the general robustness target
+starts six separately inventoried exact jobs. The response returns compact run
+IDs and manifest paths. A failed client wait does not erase those jobs. Source
+`.rosz` preparation is not described as profile-rich: each durable job must
+still complete New Recruit enrichment and Tessera before it is eligible to
+become an optimizer baseline.
+
+With an exact opponent, the target is that frozen roster. With only a known
+faction, it uses the existing frozen faction stress portfolio. When no opponent
+is supplied, 1,000- and 2,000-point workflows deterministically build six
+legal, New Recruit-exportable robustness lenses: horde, elite infantry,
+armour/monsters, fast scoring MSU, ranged pressure, and melee pressure. The
+portfolio hash binds the six simulation payloads. Other points limits require
+a named faction or exact opponent.
+
+Guided optimization is two-stage: the user first approves at most three
+candidate revisions, each revision is compared against the same frozen
+baseline inputs, and the user then approves the exact Pareto-ranked winner (or
+keeps the baseline) before delivery. For the general target, each candidate is
+materialized once and compared against all six frozen exact baselines. It
+qualifies only when at least one trusted archetype aggregate improves, none
+worsen or remain ambiguous, and mission readiness does not regress. Any
+bundle, portfolio, profile-policy, heuristic, runtime, or baseline identity
+drift invalidates approval.
+`recommend-only` stops with unpaired findings and cannot authorize roster
+changes. Combat outputs remain directional math-hammer, never a whole-game win
+probability.
+
+After an exact or known-faction baseline job completes, create the durable
+approval coordinator from that verified report and the exact canonical player
+roster:
+
+```bash
+npm run rosterpilot -- tessera optimizer-start \
+  --baseline-report exports/tessera/run-.../result.json \
+  --file custodes-optimizer-baseline.json \
+  --mode guided
+
+npm run rosterpilot -- tessera optimizer-status \
+  --optimizer exports/tessera/optimizers/optimizer-.../tessera-optimizer.json
+```
+
+The optimizer directory freezes its own baseline report, optional profile
+policy, candidate rosters, paired comparison reports, approval receipts, and
+final roster. Every mutating command requires the exact current state revision:
+
+```bash
+npm run rosterpilot -- tessera optimizer-approve-candidates \
+  --optimizer <state.json> --expected-revision 0 \
+  --candidate <candidate-id> --approval-id <approval-id> \
+  --approved-by <name>
+
+# Run the returned exact-revision or stress-revision request as a durable
+# Tessera comparison, then record its completed report.
+npm run rosterpilot -- tessera optimizer-record-comparison \
+  --optimizer <state.json> --expected-revision 2 \
+  --candidate <candidate-id> --report <comparison-report.json>
+
+npm run rosterpilot -- tessera optimizer-approve-winner \
+  --optimizer <state.json> --expected-revision 3 \
+  --candidate <candidate-id> --approval-id <winner-approval-id> \
+  --approved-by <name>
+
+# Or explicitly keep the frozen baseline at the same Pareto revision.
+npm run rosterpilot -- tessera optimizer-retain-baseline \
+  --optimizer <state.json> --expected-revision 3 \
+  --approval-id <baseline-decision-id> --approved-by <name>
+
+npm run rosterpilot -- tessera optimizer-finalize \
+  --optimizer <state.json> --expected-revision 4 \
+  --delivery-intent none
+```
+
+Revision numbers after recording comparisons depend on the number of approved
+candidates; always read the current status instead of copying the example
+literally. Finalization only records an independently identified handoff or
+delivery intent and writes `final-roster.json`; it never uploads to New Recruit.
+After a separately approved `deliver-new-recruit` intent, the CLI delivery
+remains an explicit command against that exact frozen artifact:
+
+```bash
+npm run rosterpilot -- new-recruit deliver \
+  --file exports/tessera/optimizers/optimizer-.../final-roster.json
+```
+
+After all six general baseline jobs complete, start the aggregate coordinator
+with the portfolio written by `--portfolio-out` and one report keyed to each
+archetype (argument order is irrelevant):
+
+```bash
+npm run rosterpilot -- tessera general-optimizer-start \
+  --file custodes-optimizer-baseline.json \
+  --portfolio general-threat-portfolio.json \
+  --baseline horde=<horde-result.json> \
+  --baseline elite=<elite-result.json> \
+  --baseline ranged-pressure=<ranged-result.json> \
+  --baseline armour-monster=<armour-result.json> \
+  --baseline fast-scoring-msu=<msu-result.json> \
+  --baseline melee-pressure=<melee-result.json>
+
+npm run rosterpilot -- tessera general-optimizer-approve-candidates \
+  --optimizer <state.json> --expected-revision 0 \
+  --candidate <candidate-id> --approval-id <approval-id> \
+  --approved-by <name>
+
+# Run each returned exact-revision request, then bind its report to the
+# candidate/archetype/request tuple.
+npm run rosterpilot -- tessera general-optimizer-record-comparison \
+  --optimizer <state.json> --expected-revision <current-revision> \
+  --candidate <candidate-id> --archetype horde \
+  --request-sha256 <request-sha256> --report <comparison.json>
+```
+
+After every approved candidate has six terminal comparisons, use
+`general-optimizer-approve-winner` or
+`general-optimizer-retain-baseline`, followed by
+`general-optimizer-finalize`. The durable store keeps separate
+`(candidate, archetype)` artifacts and request hashes while producing one
+no-regression aggregate Pareto decision.
+
+The local stdio MCP mirrors the durable lifecycle with
+`start_tessera_optimizer`, `get_tessera_optimizer_status`, candidate approval,
+comparison recording, exact winner or baseline-retention approval, and
+finalization tools. Finalization only records intent. Direct delivery is a
+separate `deliver_tessera_optimizer_winner_to_new_recruit` call, requires a
+finalized `deliver-new-recruit` receipt plus `confirmDelivery=true`, probes the
+companion first, and sends only the exact frozen final roster.
+
+The aggregate MCP lifecycle uses the parallel
+`start_tessera_general_optimizer`, status, candidate approval, comparison,
+winner/retention, finalization, and
+`deliver_tessera_general_optimizer_winner_to_new_recruit` tools. Starting it
+requires the full frozen portfolio (or its path), exactly six keyed baseline
+reports, and the canonical player roster. Recording a comparison additionally
+requires its returned `requestSha256`, preventing evidence from one archetype
+or candidate from being attached to another.
 
 ## Workflow 1: build and stop
 

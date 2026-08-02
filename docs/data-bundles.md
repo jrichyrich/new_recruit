@@ -52,8 +52,8 @@ legacy tracked-file transaction remains available only as
 `npm run data:prepare-update:legacy-direct-sync`; it is not used by routine CI.
 
 An official MFM version or content-hash change is never treated as
-provenance-only by assumption. The candidate must include a schema-v1 official
-rules overlay, exact downloaded source artifact, and independently signed
+provenance-only by assumption. The candidate must include a supported official
+rules overlay, exact downloaded source artifacts, and independently signed
 extraction receipt whose source version and SHA-256 match the candidate Games
 Workshop publication:
 
@@ -64,6 +64,28 @@ npm run data:prepare-update -- \
   --official-extraction-receipt /absolute/path/official-receipt.json
 ```
 
+Schema v2 adds current Legends classification. It retains the MFM as the
+primary artifact and binds every inspected faction-pack PDF separately:
+
+```bash
+npm run data:prepare-update -- \
+  --official-reconciliation-evidence /absolute/path/official-overlay-v2.json \
+  --official-source-artifact /absolute/path/munitorum-field-manual.pdf \
+  --official-legend-source-artifact aeldari-pack-2026=/absolute/path/aeldari-faction-pack.pdf \
+  --official-legend-source-artifact custodes-pack-2026=/absolute/path/custodes-faction-pack.pdf \
+  --official-extraction-receipt /absolute/path/official-receipt-v2.json
+```
+
+The faction-pack option is repeatable and keyed by `legendSources.sourceId`.
+The supplied set must match the overlay exactly. Runtime schema v1 remains
+readable, but it has no Legends inventory and reports classification coverage
+as unavailable. See [Legends classification and roster policy](legends.md).
+The application-release, data-freshness, and certification-review workflows
+accept the same inventory in `official_legend_source_artifacts` as a JSON array
+of `source-id=HTTPS-or-checkout-relative-path` strings. Each workflow downloads
+those artifacts, runs the overlay check against their exact bytes, and
+forwards the resolved paths to the signing command.
+
 The release verifier hashes the actual source bytes, recomputes normalized
 payload hashes and stable entity keys for every scope, requires exact
 one-to-one inventory coverage, binds the exact overlay bytes, and verifies the
@@ -71,8 +93,9 @@ receipt's Ed25519 signature against
 `data/official-extractor-trusted-keys.json`. Merely setting an overlay count
 equal to an array length cannot authorize publication. The overlay is then
 parsed by the engine, applies official points, leader links,
-Detachment Points/Force Dispositions, and enhancement points over community
-data, and records conflicts as explicit official overrides. Missing,
+Detachment Points/Force Dispositions, enhancement points, and schema-v2
+Legends classification over community data, and records conflicts as explicit
+official overrides. Missing,
 malformed, stale, or entity-incomplete evidence classifies the official scope
 as `ambiguous/regressive`; the stable pointer does not move.
 
@@ -212,8 +235,10 @@ review skeleton with
 `npm run data:official-overlay -- template --out <path>`, populate it through a
 reviewed machine-verifiable extractor, and require
 `npm run data:official-overlay -- check --file <path> --source-artifact
-<downloaded-source> --receipt <signed-receipt>` before passing all three files
-to the release command. The check verifies the exact source bytes, normalized
+<downloaded-source> --receipt <signed-receipt>` before passing the evidence
+to the release command. A schema-v2 check also repeats
+`--legend-source-artifact <source-id=path>` for every faction pack. The check
+verifies the exact source bytes, normalized
 payloads, one-to-one entity inventory, and reviewed-extractor signature; an
 empty template or untrusted key cannot authorize publication.
 
@@ -245,22 +270,30 @@ reason input. It must never be used as shorthand for an unreviewed overlay.
 
 ### Reviewed official extractor contract
 
-The external extractor emits the schema-v1 overlay plus a separate schema-v1
-receipt. Its unsigned receipt payload contains the official version, URL,
+The external extractor emits a same-version overlay and receipt. Schema v1
+covers the original official scopes. Schema v2 additionally carries exact
+faction-pack provenance plus `legendUnits` and `legendFactionCoverage` scopes;
+every supported faction has explicit complete or not-published coverage, and
+an unresolved official title remains inventory-only with `unitId: null`.
+The unsigned receipt payload contains the official version, URL,
 source byte length and SHA-256; extractor ID and version; the exact overlay
 SHA-256; issue time; and, for each of `unitPoints`, `leaderLinks`,
 `detachments`, and `enhancementPoints`, a status, sorted
 `sourceEntityKeys`, and normalized payload SHA-256. Entity keys are
 `<factionId>:<unitId>`, `<factionId>:<leaderId>`,
 `<factionId>:<detachmentId>`, or `<factionId>:<enhancementId>` as appropriate.
+Schema v2 adds `<factionId>:<legendId>` and one
+`<factionId>:<factionId>` coverage key per inspected faction.
 Duplicate keys are invalid. The payload is signed as canonical JSON with
 Ed25519 and the receipt adds `{algorithm, keyId, value}` under `signature`.
 
-Extractor implementations should use
-`createOfficialExtractionReceiptDraft` from
-`lib/rosterpilot/official-data.ts` to produce the canonical unsigned payload,
-then sign that exact canonical JSON in the separately controlled extractor
-environment. The helper neither grants trust nor accesses a private key;
+Schema-v2 extractor implementations use
+`createOfficialExtractionReceiptDraftV2` and supply the exact faction-pack byte
+map. Schema-v1 implementations continue to use
+`createOfficialExtractionReceiptDraft`. Both helpers are exported from
+`lib/rosterpilot/official-data.ts` and produce only the canonical unsigned
+payload. They do not grant trust or access a private key. The extractor signs
+that exact canonical JSON in its separately controlled environment;
 publication succeeds only after the matching reviewed public key is installed:
 
 ```json

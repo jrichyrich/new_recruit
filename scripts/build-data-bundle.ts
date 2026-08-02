@@ -78,6 +78,9 @@ Options:
                                Official rules overlay JSON.
   --official-source-artifact <path>
                                Exact source bytes covered by that overlay.
+  --official-legend-source-artifact <source-id=path>
+                               Exact faction-pack bytes for a schema-v2
+                               Legends source. Repeat once per source id.
   --official-extraction-receipt <path>
                                Reviewed extractor's signed inventory receipt.
   --official-extractor-trusted-keys <path>
@@ -113,6 +116,7 @@ export type DataBundleBuildCliArgs = {
   trustedKeys: string | null;
   officialReconciliationEvidence: string | null;
   officialSourceArtifact: string | null;
+  officialLegendSourceArtifacts: Record<string, string>;
   officialExtractionReceipt: string | null;
   officialExtractorTrustedKeys: string;
   officialAuthorityUnavailableReason: string | null;
@@ -165,6 +169,32 @@ function requiredValue(
   return value;
 }
 
+function assignKeyedPath(
+  target: Record<string, string>,
+  raw: string,
+  option: string,
+): void {
+  const separator = raw.indexOf("=");
+  const sourceId = raw.slice(0, separator).trim();
+  const filename = raw.slice(separator + 1).trim();
+  if (separator <= 0 || !sourceId || !filename) {
+    throw new DataBundleBuildCliUsageError(
+      `${option} requires <source-id=path>.`,
+    );
+  }
+  if (Object.hasOwn(target, sourceId)) {
+    throw new DataBundleBuildCliUsageError(
+      `${option} repeats source id ${sourceId}.`,
+    );
+  }
+  Object.defineProperty(target, sourceId, {
+    configurable: true,
+    enumerable: true,
+    value: filename,
+    writable: true,
+  });
+}
+
 export function parseDataBundleBuildArgs(
   argv: readonly string[],
 ): DataBundleBuildCliArgs {
@@ -181,6 +211,7 @@ export function parseDataBundleBuildArgs(
     trustedKeys: null,
     officialReconciliationEvidence: null,
     officialSourceArtifact: null,
+    officialLegendSourceArtifacts: {},
     officialExtractionReceipt: null,
     officialExtractorTrustedKeys:
       "data/official-extractor-trusted-keys.json",
@@ -263,6 +294,15 @@ export function parseDataBundleBuildArgs(
       parsed.officialSourceArtifact = requiredValue(
         argv,
         index,
+        argument,
+      );
+      index += 1;
+    } else if (
+      argument === "--official-legend-source-artifact"
+    ) {
+      assignKeyedPath(
+        parsed.officialLegendSourceArtifacts,
+        requiredValue(argv, index, argument),
         argument,
       );
       index += 1;
@@ -957,7 +997,8 @@ export async function runBuildDataBundleCli(
   const hasAnyOfficialEvidence = Boolean(
     args.officialReconciliationEvidence ||
       args.officialSourceArtifact ||
-      args.officialExtractionReceipt,
+      args.officialExtractionReceipt ||
+      Object.keys(args.officialLegendSourceArtifacts).length > 0,
   );
   const hasCompleteOfficialEvidence = Boolean(
     args.officialReconciliationEvidence &&
@@ -983,6 +1024,14 @@ export async function runBuildDataBundleCli(
           overlay: officialOverlay,
           sourceArtifact: readFileSync(
             resolvedPath(root, args.officialSourceArtifact!),
+          ),
+          legendSourceArtifacts: Object.fromEntries(
+            Object.entries(
+              args.officialLegendSourceArtifacts,
+            ).map(([sourceId, artifactPath]) => [
+              sourceId,
+              readFileSync(resolvedPath(root, artifactPath)),
+            ]),
           ),
           extractionReceipt: JSON.parse(
             readFileSync(

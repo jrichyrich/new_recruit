@@ -82,6 +82,9 @@ export async function buildAndStressRosterAgainstFaction(
     prompt: input.prompt,
     playerFaction: input.playerFaction,
     pointsLimit: input.pointsLimit,
+    legendsPolicy: input.legendsPolicy,
+    allowLegends: input.allowLegends,
+    playContext: input.playContext,
     requiredUnitIds: input.requiredUnitIds,
     excludedUnitIds: input.excludedUnitIds,
     requiredWarlordUnitId: input.requiredWarlordUnitId,
@@ -124,7 +127,9 @@ export async function buildAndStressRosterAgainstFaction(
     ),
     preferences: seed.data.preferences,
     allowNamedCharacters: seed.data.constraints.allowNamedCharacters,
-    allowLegends: seed.data.constraints.allowLegends,
+    legendsPolicy: input.legendsPolicy,
+    allowLegends: input.allowLegends,
+    playContext: input.playContext,
     requiredUnitIds:
       seed.data.constraints.requiredUnitIds ??
       input.requiredUnitIds,

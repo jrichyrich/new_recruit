@@ -16,7 +16,7 @@ import {
 } from "./remote-data-bundle-provider";
 import {
   activateRuntimeDataBundle,
-  RUNTIME_DATA_BUNDLE_SCHEMA_VERSION,
+  isSupportedRuntimeDataBundleSchemaVersion,
   verifyRuntimeDataBundle,
 } from "./runtime-data-bundle";
 import type {
@@ -192,8 +192,9 @@ async function verifyStoredBundle(
     throw new Error(verified.message);
   }
   if (
-    verified.data.manifest.engineDataSchemaVersion !==
-    RUNTIME_DATA_BUNDLE_SCHEMA_VERSION
+    !isSupportedRuntimeDataBundleSchemaVersion(
+      verified.data.manifest.engineDataSchemaVersion,
+    )
   ) {
     throw new Error(
       `Bundle ${verified.data.bundleId} requires unsupported engine data schema ${verified.data.manifest.engineDataSchemaVersion}.`,

@@ -567,7 +567,7 @@ test("default stress outputs are unique and recovery paths fail closed", async (
         }>;
       };
     };
-    assert.equal(seededManifest.schemaVersion, 3);
+    assert.equal(seededManifest.schemaVersion, 4);
     assert.equal(
       seeded.data.configuration.catalogueDriftMode,
       "diagnostic",
@@ -907,7 +907,7 @@ test("unreviewed diverse portfolio gaps stop before New Recruit delivery", async
   }
 });
 
-test("durable jobs adopt verified stress manifests v1, v2, and v3", async () => {
+test("durable jobs adopt verified stress manifests v1 through v4", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "tessera-stress-job-adoption-"),
   );
@@ -1035,10 +1035,20 @@ test("durable jobs adopt verified stress manifests v1, v2, and v3", async () => 
   const current = JSON.parse(
     await readFile(manifestPath, "utf8"),
   );
-  for (const version of [1, 2, 3] as const) {
+  for (const version of [1, 2, 3, 4] as const) {
     const legacy = structuredClone(current);
     legacy.schemaVersion = version;
-    delete legacy.configuration.catalogueDriftMode;
+    if (version < 4) {
+      delete legacy.configuration.catalogueDriftMode;
+      legacy.stageContracts = {
+        screening:
+          Object.values(current.stageContracts.screening)[0] ??
+          null,
+        deepDive:
+          Object.values(current.stageContracts.deepDive)[0] ??
+          null,
+      };
+    }
     if (version < 3) delete legacy.portfolioSha256;
     const candidatePath = path.join(
       baselineDirectory,
@@ -1078,7 +1088,7 @@ test("durable jobs adopt verified stress manifests v1, v2, and v3", async () => 
     const migrated = JSON.parse(
       await readFile(adopted, "utf8"),
     );
-    assert.equal(migrated.schemaVersion, 3);
+    assert.equal(migrated.schemaVersion, 4);
     assert.equal(
       migrated.configuration.catalogueDriftMode,
       "reject",
@@ -1368,23 +1378,11 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     );
     assert.equal(new Set(delivered).size, 4);
     assert.equal(browserInputs.length, 6);
-    assert.equal(browserInputs[0].frozenScenarioContract, null);
-    assert.equal(
-      browserInputs[1].frozenScenarioContract?.length,
-      4,
-    );
-    assert.equal(
-      browserInputs[2].frozenScenarioContract?.length,
-      4,
-    );
-    assert.equal(browserInputs[3].frozenScenarioContract, null);
-    assert.equal(
-      browserInputs[4].frozenScenarioContract?.length,
-      12,
-    );
-    assert.equal(
-      browserInputs[5].frozenScenarioContract?.length,
-      12,
+    assert.ok(
+      browserInputs.every(
+        (input) => input.frozenScenarioContract === null,
+      ),
+      "each template freezes its own first screening and deep-dive capture",
     );
     assert.ok(
       browserInputs.slice(0, 3).every(
@@ -1449,12 +1447,32 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
       0,
     );
     assert.equal(
-      frozenExecutionManifest.stageContracts.screening.length,
-      4,
+      Object.keys(
+        frozenExecutionManifest.stageContracts.screening,
+      ).length,
+      3,
+    );
+    assert.ok(
+      Object.values(
+        frozenExecutionManifest.stageContracts.screening,
+      ).every(
+        (contract) =>
+          Array.isArray(contract) && contract.length === 4,
+      ),
     );
     assert.equal(
-      frozenExecutionManifest.stageContracts.deepDive.length,
-      12,
+      Object.keys(
+        frozenExecutionManifest.stageContracts.deepDive,
+      ).length,
+      3,
+    );
+    assert.ok(
+      Object.values(
+        frozenExecutionManifest.stageContracts.deepDive,
+      ).every(
+        (contract) =>
+          Array.isArray(contract) && contract.length === 12,
+      ),
     );
     assert.match(
       frozenExecutionManifest.preparedPlayer.listUrl,
@@ -1585,6 +1603,16 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const legacyManifest = JSON.parse(
       await readFile(manifestPath, "utf8"),
     );
+    legacyManifest.stageContracts = {
+      screening:
+        Object.values(
+          legacyManifest.stageContracts.screening,
+        )[0] ?? null,
+      deepDive:
+        Object.values(
+          legacyManifest.stageContracts.deepDive,
+        )[0] ?? null,
+    };
     legacyManifest.schemaVersion = 1;
     delete legacyManifest.portfolioSha256;
     delete legacyManifest.profilePolicy;
@@ -1658,7 +1686,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const adoptedLegacyManifestJson = JSON.parse(
       await readFile(adoptedLegacyManifest, "utf8"),
     );
-    assert.equal(adoptedLegacyManifestJson.schemaVersion, 3);
+    assert.equal(adoptedLegacyManifestJson.schemaVersion, 4);
     assert.match(
       adoptedLegacyManifestJson.portfolioSha256,
       /^[0-9a-f]{64}$/,
@@ -1689,7 +1717,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const rewrittenManifest = JSON.parse(
       await readFile(legacyManifestPath, "utf8"),
     );
-    assert.equal(rewrittenManifest.schemaVersion, 3);
+    assert.equal(rewrittenManifest.schemaVersion, 4);
     assert.equal(
       rewrittenManifest.portfolioSha256,
       portfolioContentHash(rewrittenManifest.portfolio),
@@ -1723,6 +1751,16 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const legacyV2Manifest = structuredClone(
       frozenExecutionManifest,
     );
+    legacyV2Manifest.stageContracts = {
+      screening:
+        Object.values(
+          legacyV2Manifest.stageContracts.screening,
+        )[0] ?? null,
+      deepDive:
+        Object.values(
+          legacyV2Manifest.stageContracts.deepDive,
+        )[0] ?? null,
+    };
     legacyV2Manifest.schemaVersion = 2;
     delete legacyV2Manifest.portfolioSha256;
     await writeFile(
@@ -1763,7 +1801,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     assert.equal(
       JSON.parse(await readFile(adoptedV2Manifest, "utf8"))
         .schemaVersion,
-      3,
+      4,
     );
     const migratedV2Resume = await runRosterStressTest(
       player,
@@ -1785,7 +1823,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const rewrittenV2Manifest = JSON.parse(
       await readFile(legacyV2ManifestPath, "utf8"),
     );
-    assert.equal(rewrittenV2Manifest.schemaVersion, 3);
+    assert.equal(rewrittenV2Manifest.schemaVersion, 4);
     assert.equal(
       rewrittenV2Manifest.portfolioSha256,
       portfolioContentHash(rewrittenV2Manifest.portfolio),
@@ -2258,6 +2296,505 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     );
     assert.equal(delivered.length, 8);
     assert.equal(browserInputs.length, 23);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("freezes Tessera iteration contracts per stress template", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-template-settings-"),
+  );
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Per-template settings player",
+  );
+  const rostersByName = new Map<string, RosterDraftV1>([
+    [player.name, player],
+  ]);
+  const browserInputs: TesseraBrowserInput[] = [];
+  const iterationsByOpponent = new Map<string, number>();
+
+  const deliver = async (
+    candidate: RosterDraftV1,
+    options: NewRecruitDeliveryOptions = {},
+  ): Promise<ResultEnvelope<NewRecruitDelivery>> => {
+    rostersByName.set(candidate.name, candidate);
+    const outputDirectory = options.outputDirectory ?? directory;
+    await mkdir(outputDirectory, { recursive: true });
+    const source = path.join(outputDirectory, "source.rosz");
+    const enriched = path.join(outputDirectory, "enriched.rosz");
+    const content = await enrichedFixture(candidate);
+    await Promise.all([
+      writeFile(source, content),
+      writeFile(enriched, content),
+    ]);
+    return {
+      ok: true,
+      data: {
+        rosterId: candidate.id,
+        rosterName: candidate.name,
+        listUrl:
+          "https://www.newrecruit.eu/app/Lists/template-settings-fixture",
+        imported: true,
+        sessionReused: true,
+        verification: null,
+        enrichedSummary: summaryFor(candidate),
+        artifacts: [
+          {
+            format: "rosterpilot-source-rosz",
+            filename: "source.rosz",
+            mimeType: "application/zip",
+            written: source,
+          },
+          {
+            format: "new-recruit-enriched-rosz",
+            filename: "enriched.rosz",
+            mimeType: "application/zip",
+            written: enriched,
+          },
+        ],
+      },
+      violations: [],
+      warnings: [],
+    };
+  };
+
+  const runBrowser = async (
+    input: TesseraBrowserInput,
+  ): Promise<TesseraBrowserResult> => {
+    browserInputs.push(input);
+    const playerRoster = rostersByName.get(input.playerName);
+    const opponentRoster = rostersByName.get(input.opponentName);
+    assert.ok(playerRoster, input.playerName);
+    assert.ok(opponentRoster, input.opponentName);
+    if (!iterationsByOpponent.has(input.opponentName)) {
+      iterationsByOpponent.set(
+        input.opponentName,
+        iterationsByOpponent.size === 0 ? 1_000 : 2_000,
+      );
+    }
+    const iterations = iterationsByOpponent.get(input.opponentName)!;
+    const frozenIterations = [
+      ...new Set(
+        (input.frozenScenarioContract ?? [])
+          .map((entry) => entry.iterations)
+          .filter((value): value is number => value !== null),
+      ),
+    ];
+    if (
+      frozenIterations.length > 0 &&
+      (
+        frozenIterations.length !== 1 ||
+        frozenIterations[0] !== iterations
+      )
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_SETTINGS_REPLAY_FAILED",
+        `Tessera is using ${iterations} iterations and did not expose one control for the frozen value ${frozenIterations[0]}.`,
+      );
+    }
+    const result = browserResult(
+      input,
+      playerRoster,
+      opponentRoster,
+    );
+    result.settings.iterations = String(iterations);
+    for (const scenario of result.scenarios) {
+      scenario.iterations = iterations;
+      scenario.settings.iterations = String(iterations);
+    }
+    return result;
+  };
+
+  const portfolio = generateFactionStressPortfolio({
+    faction: "aeldari",
+    pointsLimit: 1_000,
+    suite: "core-3",
+  });
+  assert.ok(portfolio.data);
+  const profileRequirements = aggregateProfileRequirements([
+    player,
+    ...portfolio.data.items.flatMap((item) =>
+      item.roster ? [item.roster] : [],
+    ),
+  ]);
+  const profilePolicyPath = path.join(
+    directory,
+    "profiles.json",
+  );
+  await writeFile(
+    profilePolicyPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      policyKind: "tessera-profile-policy",
+      entries: profileRequirements.map((requirement) => ({
+        faction: requirement.faction,
+        unit: requirement.unit,
+        weaponGroup: requirement.weaponGroup,
+        phase: requirement.phase,
+        selectedProfile: requirement.availableProfiles[0],
+        activeCount: requirement.activeCount,
+      })),
+    }, null, 2)}\n`,
+  );
+
+  try {
+    const baseline = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        experimental: true,
+        profilePolicyPath,
+        outputDirectory: "baseline",
+        rootDir: directory,
+      },
+      { deliver, runBrowser },
+    );
+    assert.equal(
+      baseline.ok,
+      true,
+      JSON.stringify(baseline.violations, null, 2),
+    );
+    assert.ok(baseline.data);
+    assert.equal(
+      baseline.data.status,
+      "complete",
+      JSON.stringify(baseline.data.warnings, null, 2),
+    );
+    assert.equal(browserInputs.length, 6);
+    assert.ok(
+      browserInputs.every(
+        (input) => input.frozenScenarioContract === null,
+      ),
+      "each template's first screening and deep-dive capture starts without another template's contract",
+    );
+    assert.deepEqual(
+      new Set(iterationsByOpponent.values()),
+      new Set([1_000, 2_000]),
+    );
+
+    const outputDirectory = path.join(directory, "baseline");
+    const manifestArtifact = baseline.data.artifacts.find(
+      (artifact) => artifact.format === "stress-manifest",
+    )?.written;
+    const baselineArtifact = baseline.data.artifacts.find(
+      (artifact) => artifact.format === "stress-json",
+    )?.written;
+    assert.ok(manifestArtifact);
+    assert.ok(baselineArtifact);
+    const manifestPath = path.resolve(
+      outputDirectory,
+      manifestArtifact,
+    );
+    const baselinePath = path.resolve(
+      outputDirectory,
+      baselineArtifact,
+    );
+    const manifest = JSON.parse(
+      await readFile(manifestPath, "utf8"),
+    );
+    assert.equal(manifest.schemaVersion, 4);
+
+    const expectedIterationsByTemplate = new Map<string, number>();
+    for (const item of baseline.data.portfolio.items) {
+      if (!item.roster || item.status !== "ready") continue;
+      const iterations = iterationsByOpponent.get(item.roster.name);
+      assert.ok(iterations, item.roster.name);
+      expectedIterationsByTemplate.set(
+        item.templateId,
+        iterations,
+      );
+    }
+    const readyTemplateIds = [
+      ...expectedIterationsByTemplate.keys(),
+    ].sort();
+    for (const stage of ["screening", "deepDive"] as const) {
+      assert.deepEqual(
+        Object.keys(manifest.stageContracts[stage]).sort(),
+        readyTemplateIds,
+      );
+      for (const templateId of readyTemplateIds) {
+        const contract = manifest.stageContracts[stage][templateId];
+        assert.ok(Array.isArray(contract));
+        assert.deepEqual(
+          new Set(
+            contract.map(
+              (entry: { iterations: number | null }) =>
+                entry.iterations,
+            ),
+          ),
+          new Set([
+            expectedIterationsByTemplate.get(templateId),
+          ]),
+        );
+      }
+    }
+    const completedManifest = structuredClone(manifest);
+    const firstTemplateId = readyTemplateIds.find(
+      (templateId) =>
+        expectedIterationsByTemplate.get(templateId) === 1_000,
+    );
+    assert.ok(firstTemplateId);
+
+    const retryTemplateId = readyTemplateIds.find(
+      (templateId) =>
+        expectedIterationsByTemplate.get(templateId) === 2_000,
+    );
+    assert.ok(retryTemplateId);
+    const retryItem = baseline.data.portfolio.items.find(
+      (item) => item.templateId === retryTemplateId,
+    );
+    assert.ok(retryItem?.roster);
+    const retryOpponentName = retryItem.roster.name;
+    manifest.screening[retryTemplateId].status = "partial";
+    manifest.screening[retryTemplateId].error = {
+      code: "TESSERA_STALE_MATRIX",
+      message: "Synthetic interrupted template capture.",
+      retryable: true,
+    };
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
+    const beforeRetry = browserInputs.length;
+    const retried = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        experimental: true,
+        resumeManifestPath: manifestPath,
+        rootDir: directory,
+      },
+      { deliver, runBrowser },
+    );
+    assert.equal(
+      retried.ok,
+      true,
+      JSON.stringify(retried.violations, null, 2),
+    );
+    assert.equal(retried.data?.status, "complete");
+    assert.equal(browserInputs.length, beforeRetry + 1);
+    const retryInput = browserInputs.at(-1)!;
+    assert.equal(retryInput.opponentName, retryOpponentName);
+    assert.deepEqual(
+      new Set(
+        retryInput.frozenScenarioContract?.map(
+          (entry) => entry.iterations,
+        ),
+      ),
+      new Set([2_000]),
+    );
+
+    const revised: RosterDraftV1 = {
+      ...player,
+      name: "Per-template settings player revised",
+      updatedAt: new Date().toISOString(),
+    };
+    rostersByName.set(revised.name, revised);
+    const beforeRevision = browserInputs.length;
+    const compared = await compareRosterStressRevision(
+      baselinePath,
+      revised,
+      {
+        experimental: true,
+        outputDirectory: "revision",
+        rootDir: directory,
+      },
+      { deliver, runBrowser },
+    );
+    assert.equal(
+      compared.ok,
+      true,
+      JSON.stringify(compared.violations, null, 2),
+    );
+    const revisionInputs = browserInputs.slice(beforeRevision);
+    const revisedTemplateInput = revisionInputs.find(
+      (input) =>
+        input.analysisMode === "quick" &&
+        input.opponentName === retryOpponentName,
+    );
+    assert.ok(revisedTemplateInput);
+    assert.deepEqual(
+      new Set(
+        revisedTemplateInput.frozenScenarioContract?.map(
+          (entry) => entry.iterations,
+        ),
+      ),
+      new Set([2_000]),
+    );
+
+    const legacyReplayFailure = structuredClone(
+      completedManifest,
+    );
+    legacyReplayFailure.schemaVersion = 3;
+    legacyReplayFailure.stageContracts = {
+      screening: structuredClone(
+        completedManifest.stageContracts.screening[
+          firstTemplateId
+        ],
+      ),
+      deepDive: null,
+    };
+    legacyReplayFailure.completedAt = null;
+    if (legacyReplayFailure.finalArtifacts) {
+      legacyReplayFailure.finalArtifacts.jsonSha256 = null;
+      legacyReplayFailure.finalArtifacts.htmlSha256 = null;
+    }
+    for (const templateId of readyTemplateIds) {
+      if (
+        templateId === firstTemplateId ||
+        templateId === retryTemplateId
+      ) {
+        continue;
+      }
+      Object.assign(
+        legacyReplayFailure.screening[templateId],
+        {
+          status: "pending",
+          reportPath: null,
+          reportSha256: null,
+          error: null,
+          attemptCount: 0,
+          attemptHistory: [],
+          firstAttemptAt: null,
+          lastAttemptAt: null,
+          nextAction: null,
+        },
+      );
+    }
+    Object.assign(
+      legacyReplayFailure.screening[retryTemplateId],
+      {
+        status: "failed",
+        reportPath: null,
+        reportSha256: null,
+        error: {
+          code: "TESSERA_SETTINGS_REPLAY_FAILED",
+          message:
+            "Tessera is using 2000 iterations and did not expose one control for the frozen value 1000.",
+          retryable: false,
+        },
+        attemptCount: 1,
+        attemptHistory: [],
+        firstAttemptAt: "2026-08-01T06:01:35.000Z",
+        lastAttemptAt: "2026-08-01T06:01:55.000Z",
+        nextAction:
+          "Resolve the terminal error, then resume with --force-retry.",
+      },
+    );
+    const genericReplayFailure = structuredClone(
+      legacyReplayFailure,
+    );
+    genericReplayFailure.screening[
+      retryTemplateId
+    ].error.message =
+      "Tessera settings replay failed for an unrelated terminal reason.";
+    const legacyReplayPath = path.join(
+      outputDirectory,
+      "legacy-v3-iteration-replay.json",
+    );
+    const genericReplayPath = path.join(
+      outputDirectory,
+      "legacy-v3-generic-replay.json",
+    );
+    await Promise.all([
+      writeFile(
+        legacyReplayPath,
+        `${JSON.stringify(legacyReplayFailure, null, 2)}\n`,
+      ),
+      writeFile(
+        genericReplayPath,
+        `${JSON.stringify(genericReplayFailure, null, 2)}\n`,
+      ),
+    ]);
+
+    const beforeLegacyReplay = browserInputs.length;
+    const migratedReplay = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        experimental: true,
+        resumeManifestPath: legacyReplayPath,
+        rootDir: directory,
+      },
+      { deliver, runBrowser },
+    );
+    assert.equal(
+      migratedReplay.ok,
+      true,
+      JSON.stringify(migratedReplay.violations, null, 2),
+    );
+    assert.equal(migratedReplay.data?.status, "complete");
+    const migratedReplayInputs = browserInputs.slice(
+      beforeLegacyReplay,
+    );
+    const migratedTemplateInput = migratedReplayInputs.find(
+      (input) => input.opponentName === retryOpponentName,
+    );
+    assert.ok(migratedTemplateInput);
+    assert.equal(
+      migratedTemplateInput.frozenScenarioContract,
+      null,
+      "the one recognized legacy cross-template replay failure must start a fresh template contract",
+    );
+    const migratedReplayManifest = JSON.parse(
+      await readFile(legacyReplayPath, "utf8"),
+    );
+    assert.equal(migratedReplayManifest.schemaVersion, 4);
+    assert.deepEqual(
+      new Set(
+        migratedReplayManifest.stageContracts.screening[
+          retryTemplateId
+        ].map(
+          (entry: { iterations: number | null }) =>
+            entry.iterations,
+        ),
+      ),
+      new Set([2_000]),
+    );
+
+    const beforeGenericReplay = browserInputs.length;
+    const genericReplay = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "staged",
+        experimental: true,
+        resumeManifestPath: genericReplayPath,
+        rootDir: directory,
+      },
+      { deliver, runBrowser },
+    );
+    assert.ok(
+      genericReplay.data?.status !== "complete",
+      "an unrelated terminal replay failure must not be silently reopened",
+    );
+    assert.equal(
+      browserInputs
+        .slice(beforeGenericReplay)
+        .some(
+          (input) =>
+            input.opponentName === retryOpponentName,
+        ),
+      false,
+    );
+    const migratedGenericManifest = JSON.parse(
+      await readFile(genericReplayPath, "utf8"),
+    );
+    assert.equal(migratedGenericManifest.schemaVersion, 4);
+    assert.deepEqual(
+      migratedGenericManifest.screening[retryTemplateId].error,
+      genericReplayFailure.screening[retryTemplateId].error,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

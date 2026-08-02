@@ -178,7 +178,6 @@ export async function repairRosterDeterministically(
         detachmentId,
         allowNamedCharacters:
           initial.data.constraints.allowNamedCharacters,
-        allowLegends: initial.data.constraints.allowLegends,
         collectionUnitIds:
           initial.data.constraints.collectionProfile?.mode === "owned"
             ? undefined

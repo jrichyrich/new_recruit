@@ -1,6 +1,10 @@
 import { compactStressResult } from "./stress-summary";
 import type { DeterministicRosterRepairResult } from "./roster-repair";
 import type {
+  LegendsPlayContext,
+  LegendsPolicy,
+} from "./legends-policy";
+import type {
   ResultEnvelope,
   TesseraStressAnalysisStrategy,
   TesseraStressPortfolioPreview,
@@ -13,6 +17,10 @@ export type BuildAndStressRosterInput = {
   playerFaction?: string;
   againstFaction: string;
   pointsLimit?: number;
+  legendsPolicy?: LegendsPolicy;
+  /** Compatibility input for callers that predate `legendsPolicy`. */
+  allowLegends?: boolean;
+  playContext?: LegendsPlayContext;
   requiredUnitIds?: string[];
   excludedUnitIds?: string[];
   requiredWarlordUnitId?: string;

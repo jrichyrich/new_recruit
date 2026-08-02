@@ -192,6 +192,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "rebase_roster",
         "refresh_data_now",
         "rollback_data_bundle",
+        "run_roster_workflow",
         "search_factions",
         "search_units",
         "validate_roster",

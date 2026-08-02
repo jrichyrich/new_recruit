@@ -20,6 +20,40 @@ export type CatalogueCategoryReference = {
   primary: boolean;
 };
 
+/**
+ * A catalogue-authored classification hint retained for reconciliation and
+ * diagnostics. These signals never decide RosterPilot legality or whether a
+ * unit is a Legend; the active runtime rules snapshot remains authoritative.
+ */
+export type CatalogueClassificationSignal = {
+  source: "bsdata";
+  classification: "legend";
+  kind:
+    | "entry-link-name"
+    | "selection-entry-name"
+    | "category"
+    | "modifier-comment";
+  value: string;
+  entryPath: string;
+};
+
+/**
+ * A BSData unit candidate retained even when no structured-rules unit maps to
+ * it. This is non-authoritative cross-check evidence for reconciling the
+ * official Legends inventory; deliberately no effective `isLegend` boolean is
+ * stored here.
+ */
+export type CatalogueLegendCandidateEvidence = {
+  source: "bsdata";
+  name: string;
+  normalizedName: string;
+  catalogueId: string;
+  catalogueRevision: number;
+  targetId: string;
+  entryPath: string;
+  signals: CatalogueClassificationSignal[];
+};
+
 export type CatalogueModelReference = CatalogueSelectionReference & {
   type: "model";
   equipment: CatalogueSelectionReference[];
@@ -32,6 +66,7 @@ export type CatalogueUnitReference = CatalogueSelectionReference & {
   warlord?: CatalogueSelectionReference;
   enhancements: Record<string, CatalogueSelectionReference>;
   pointsByModelCount: Record<string, number>;
+  classificationSignals?: CatalogueClassificationSignal[];
 };
 
 export type NewRecruitConfiguration = {
@@ -62,6 +97,15 @@ export type NewRecruitConfiguration = {
   forceDisposition: {
     reference: CatalogueSelectionReference;
     choices: Record<string, CatalogueSelectionReference>;
+  };
+  /**
+   * Optional because ordinary rosters do not need this branch. Export fails
+   * closed if a runtime-classified Legends unit is selected and the exact
+   * Show/Hide Options -> Legends are visible path was not reconciled.
+   */
+  legendsVisibility?: {
+    parent: CatalogueSelectionReference;
+    choice: CatalogueSelectionReference;
   };
 };
 
@@ -127,6 +171,9 @@ export type NewRecruitFactionCatalogue = {
   };
   configuration: NewRecruitConfiguration | null;
   units: Record<string, CatalogueUnitReference>;
+  classificationEvidence?: {
+    legendCandidates: CatalogueLegendCandidateEvidence[];
+  };
   coverage: {
     engineUnits: number;
     mappedUnits: number;
@@ -194,7 +241,7 @@ export type NewRecruitCatalogueManifest = {
 
 export type NewRecruitFactionSummary = Omit<
   NewRecruitFactionCatalogue,
-  "configuration" | "units"
+  "configuration" | "units" | "classificationEvidence"
 > & {
   configurationAvailable: boolean;
 };

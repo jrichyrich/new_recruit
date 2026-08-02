@@ -8,6 +8,7 @@ import type {
   NewRecruitFactionCatalogue,
 } from "./catalogue-types";
 import { resolveNewRecruitUnit } from "./new-recruit-resolver";
+import { factions, units } from "./runtime-dataset";
 import type { DraftUnit, RosterDraftV1 } from "./types";
 
 type XmlNode = Record<string, unknown>;
@@ -85,6 +86,22 @@ function selectionFromReference(
     number,
     type: reference.type,
   };
+}
+
+function unitInFactionAncestry(
+  unitId: string,
+  factionId: string,
+) {
+  const seen = new Set<string>();
+  let current = factions.get(factionId);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    const unit = units.getInFaction(unitId, current.id);
+    if (unit) return unit;
+    const parentId = current.raw.parent_faction_id;
+    current = parentId ? factions.get(parentId) : undefined;
+  }
+  return undefined;
 }
 
 function rosterUnitSelection(
@@ -240,8 +257,25 @@ export function configurationSelections(
     name: configuration.category.name,
     primary: true,
   };
+  const selectedLegendUnits = (draft.units ?? []).filter(
+    (selection) =>
+      unitInFactionAncestry(
+        selection.unitId,
+        draft.factionId ?? faction.factionId,
+      )?.raw.is_legend === true,
+  );
+  if (
+    selectedLegendUnits.length > 0 &&
+    !configuration.legendsVisibility
+  ) {
+    throw new Error(
+      `New Recruit Legends visibility mapping is unavailable for selected Legends unit${
+        selectedLegendUnits.length === 1 ? "" : "s"
+      }: ${selectedLegendUnits.map((unit) => unit.name).join(", ")}.`,
+    );
+  }
 
-  return [
+  const selections: XmlNode[] = [
     {
       ...selectionFromReference(
         configuration.battleSize.reference,
@@ -311,6 +345,37 @@ export function configurationSelections(
       ],
     },
   ];
+  if (selectedLegendUnits.length > 0) {
+    const visibility = configuration.legendsVisibility;
+    if (!visibility) {
+      throw new Error(
+        "New Recruit Legends visibility mapping became unavailable during export.",
+      );
+    }
+    selections.push({
+      ...selectionFromReference(
+        visibility.parent,
+        deterministicId([draft.id, "legends-visibility"]),
+        1,
+      ),
+      categories: [category],
+      selections: [
+        {
+          ...selectionFromReference(
+            visibility.choice,
+            deterministicId([
+              draft.id,
+              "legends-visibility",
+              visibility.choice.entryId,
+            ]),
+            1,
+          ),
+          categories: [{ ...category, primary: false }],
+        },
+      ],
+    });
+  }
+  return selections;
 }
 
 export function newRecruitRos(draft: RosterDraftV1): string {

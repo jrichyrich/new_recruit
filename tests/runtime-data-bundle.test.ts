@@ -36,6 +36,7 @@ import {
   signRuntimeDataBundle,
   activateRuntimeDataBundle,
   verifyRuntimeDataBundle,
+  type RuntimeFactionShardDataV2,
   type RuntimeDataBundleShardDataV1,
 } from "../lib/rosterpilot/runtime-data-bundle";
 import {
@@ -51,6 +52,9 @@ import {
 import {
   resetRosterCompatibilityIdentityCache,
 } from "../lib/rosterpilot/draft";
+import {
+  resetActiveLegendsInventoryForTests,
+} from "../lib/rosterpilot/legends";
 import {
   rosterExecutionFingerprint,
   rosterStructuralFingerprint,
@@ -80,6 +84,7 @@ afterEach(() => {
   activateNewRecruitCatalogueSummary(originalSummary);
   clearActiveDataBundleManifestForTests();
   resetRosterCompatibilityIdentityCache();
+  resetActiveLegendsInventoryForTests();
 });
 
 test("compiled fallback rosters disclose unverified official authority", () => {
@@ -117,6 +122,25 @@ async function signer() {
       "runtime-test": keys.publicKey,
     },
   };
+}
+
+async function refreshBuildShardDescriptor(
+  build: Awaited<ReturnType<typeof buildRuntimeDataBundle>>,
+  shardId: string,
+): Promise<void> {
+  const shard = build.shards.find(
+    (candidate) => candidate.shardId === shardId,
+  );
+  const descriptor = build.draft.shards.find(
+    (candidate) => candidate.shardId === shardId,
+  );
+  assert.ok(shard && descriptor);
+  const canonical = canonicalJson(shard);
+  descriptor.contentSha256 = await sha256Hex(canonical);
+  descriptor.semanticHash = await semanticHash(shard.data);
+  descriptor.byteLength = new TextEncoder().encode(
+    canonical,
+  ).byteLength;
 }
 
 async function activateSignedBuild(
@@ -362,6 +386,204 @@ test("runtime verification recomputes signed shard and compatibility semantics",
   }
 });
 
+test("signed schema-v2 shards reject incoherent Legends mappings, classifications, and build support", async () => {
+  const baseline = await buildRuntimeDataBundle({
+    createdAt: "2026-07-30T00:00:00.000Z",
+  });
+  const baselineAeldari = baseline.shards.find(
+    (shard) => shard.shardId === "faction:aeldari",
+  );
+  if (
+    !baselineAeldari ||
+    baselineAeldari.data.payloadKind !==
+      "rosterpilot-runtime-faction" ||
+    baselineAeldari.data.schemaVersion !== 2
+  ) {
+    assert.fail("Expected a schema-v2 Aeldari faction shard.");
+  }
+  const baselineAeldariData =
+    baselineAeldari.data as RuntimeFactionShardDataV2;
+  type RawUnit = {
+    id?: string;
+    faction_id?: string;
+    name?: string;
+    profiles?: unknown[];
+    points?: unknown[];
+    weapon_ids?: unknown[];
+    is_legend?: boolean;
+  };
+  const weaponIds = new Set(
+    baselineAeldariData.rulesData.weapons
+      .map((weapon) => (weapon as { id?: string }).id)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const completeUnit = baselineAeldariData.rulesData.units.find(
+    (candidate) => {
+      const unit = candidate as RawUnit;
+      return (
+        unit.faction_id === "aeldari" &&
+        typeof unit.id === "string" &&
+        typeof unit.name === "string" &&
+        Array.isArray(unit.profiles) &&
+        unit.profiles.length > 0 &&
+        Array.isArray(unit.points) &&
+        unit.points.length > 0 &&
+        Array.isArray(unit.weapon_ids) &&
+        unit.weapon_ids.every(
+          (weaponId) =>
+            typeof weaponId === "string" &&
+            weaponIds.has(weaponId),
+        ) &&
+        baselineAeldariData.rulesData.unitCompositions.some(
+          (composition) =>
+            (composition as { unit_id?: string }).unit_id ===
+            unit.id,
+        )
+      );
+    },
+  ) as RawUnit | undefined;
+  assert.ok(completeUnit?.id && completeUnit.name);
+  const signing = await signer();
+  const sourceArtifact = {
+    sourceId: "aeldari-legends-fixture",
+    version: "2026-07-30",
+    contentSha256: "a".repeat(64),
+    url: "https://assets.example.test/aeldari-legends.pdf",
+  };
+  const stateFor = (input: {
+    unitId: string;
+    buildSupported: boolean;
+  }) => ({
+    schemaVersion: 1 as const,
+    factionId: "aeldari",
+    coverageStatus: "complete" as const,
+    classificationAuthority:
+      "games-workshop-unverified-overlay" as const,
+    sourceArtifacts: [sourceArtifact],
+    units: [
+      {
+        legendId: "aeldari-legend-fixture",
+        factionId: "aeldari",
+        name: completeUnit.name as string,
+        unitId: input.unitId,
+        sourceId: sourceArtifact.sourceId,
+        buildSupported: input.buildSupported,
+      },
+    ],
+  });
+  const verifyCorruption = async (
+    mutate: (
+      shard: RuntimeFactionShardDataV2,
+    ) => void,
+  ) => {
+    const corrupted = structuredClone(baseline);
+    const shard = corrupted.shards.find(
+      (candidate) => candidate.shardId === "faction:aeldari",
+    );
+    if (
+      !shard ||
+      shard.data.payloadKind !== "rosterpilot-runtime-faction" ||
+      shard.data.schemaVersion !== 2
+    ) {
+      assert.fail("Expected a mutable schema-v2 Aeldari shard.");
+    }
+    mutate(shard.data as RuntimeFactionShardDataV2);
+    await refreshBuildShardDescriptor(
+      corrupted,
+      "faction:aeldari",
+    );
+    const signed = await signRuntimeDataBundle(
+      corrupted,
+      signing.signer,
+    );
+    return verifyRuntimeDataBundle({
+      manifest: signed.manifest,
+      shards: signed.shards,
+      trustedKeys: signing.registry,
+    });
+  };
+
+  const missingMapping = await verifyCorruption((shard) => {
+    shard.legends = stateFor({
+      unitId: "missing-aeldari-legend",
+      buildSupported: false,
+    });
+  });
+  assert.equal(missingMapping.ok, false);
+  if (!missingMapping.ok) {
+    assert.equal(missingMapping.code, "SHARD_IDENTITY_MISMATCH");
+    assert.match(missingMapping.message, /does not resolve exactly once/);
+  }
+
+  const classificationMismatch = await verifyCorruption((shard) => {
+    shard.legends = stateFor({
+      unitId: completeUnit.id as string,
+      buildSupported: true,
+    });
+  });
+  assert.equal(classificationMismatch.ok, false);
+  if (!classificationMismatch.ok) {
+    assert.equal(
+      classificationMismatch.code,
+      "SHARD_IDENTITY_MISMATCH",
+    );
+    assert.match(classificationMismatch.message, /is_legend=false/);
+  }
+
+  const buildSupportMismatch = await verifyCorruption((shard) => {
+    const selected = shard.rulesData.units.find(
+      (unit) => (unit as RawUnit).id === completeUnit.id,
+    ) as RawUnit | undefined;
+    assert.ok(selected);
+    selected.is_legend = true;
+    shard.legends = stateFor({
+      unitId: completeUnit.id as string,
+      buildSupported: false,
+    });
+  });
+  assert.equal(buildSupportMismatch.ok, false);
+  if (!buildSupportMismatch.ok) {
+    assert.equal(
+      buildSupportMismatch.code,
+      "SHARD_IDENTITY_MISMATCH",
+    );
+    assert.match(
+      buildSupportMismatch.message,
+      /profile completeness recomputes to true/,
+    );
+  }
+
+  const staleNotPublishedClassification = await verifyCorruption(
+    (shard) => {
+      const selected = shard.rulesData.units.find(
+        (unit) => (unit as RawUnit).id === completeUnit.id,
+      ) as RawUnit | undefined;
+      assert.ok(selected);
+      selected.is_legend = true;
+      shard.legends = {
+        schemaVersion: 1,
+        factionId: "aeldari",
+        coverageStatus: "not-published",
+        classificationAuthority:
+          "games-workshop-unverified-overlay",
+        sourceArtifacts: [sourceArtifact],
+        units: [],
+      };
+    },
+  );
+  assert.equal(staleNotPublishedClassification.ok, false);
+  if (!staleNotPublishedClassification.ok) {
+    assert.equal(
+      staleNotPublishedClassification.code,
+      "SHARD_IDENTITY_MISMATCH",
+    );
+    assert.match(
+      staleNotPublishedClassification.message,
+      /not-published Legends coverage requires false/,
+    );
+  }
+});
+
 test("provenance churn reuses every shard and classifies without certification churn", async () => {
   const current = await buildRuntimeDataBundle({
     catalogue: {
@@ -493,7 +715,7 @@ test("a New Recruit game-system revision is mapping-only, not a global methodolo
   );
 });
 
-test("expert review rules evidence survives provenance-only activation and invalidates on signed rules changes", async () => {
+test("expert review rules evidence survives provenance-only activation and invalidates on signed semantic changes", async () => {
   const reviewDocument = structuredClone(
     certificationManifestDocument,
   );
@@ -535,6 +757,9 @@ test("expert review rules evidence survives provenance-only activation and inval
   await activateSignedBuild(
     await buildRuntimeDataBundle({
       createdAt: "2026-07-31T01:00:00.000Z",
+      // The compiled bootstrap uses schema v1 semantics. Keep this activation
+      // on that schema so the only change under test is provenance.
+      engineDataSchemaVersion: 1,
     }),
   );
   const provenanceOnlyReview =
@@ -542,6 +767,46 @@ test("expert review rules evidence survives provenance-only activation and inval
       (faction) => faction.id === "adeptus-custodes",
     )?.expertReview;
   assert.equal(provenanceOnlyReview?.status, "reviewed");
+
+  // Schema v2 adds the official Legends classification state to faction
+  // rules identity. Even with identical 40kdc bytes, that is a semantic and
+  // methodology transition rather than a provenance-only release.
+  await activateSignedBuild(
+    await buildRuntimeDataBundle({
+      rulesData: originalRules,
+      createdAt: "2026-07-31T01:30:00.000Z",
+      engineDataSchemaVersion: 2,
+    }),
+  );
+  const classificationManifest = getActiveDataBundleManifest();
+  assert.ok(classificationManifest);
+  const classificationReview =
+    CertificationManifestSchema.parse(reviewDocument).factions.find(
+      (faction) => faction.id === "adeptus-custodes",
+    )?.expertReview;
+  assert.equal(classificationReview?.status, "pending");
+  if (
+    classificationReview?.status === "pending" &&
+    classificationReview.binding?.schemaVersion === 2
+  ) {
+    assert.equal(
+      classificationReview.invalidationReason,
+      "binding-mismatch",
+    );
+    assert.equal(
+      classificationReview.binding.semanticEvidence
+        .runtimeFactionRulesSha256,
+      classificationManifest.semanticHashes.factions[
+        "adeptus-custodes"
+      ].factionRulesHash,
+    );
+    assert.notEqual(
+      classificationReview.binding.semanticEvidence
+        .runtimeFactionRulesSha256,
+      baselineBinding.semanticEvidence
+        .runtimeFactionRulesSha256,
+    );
+  }
 
   const changedRules = structuredClone(originalRules);
   const changedUnit = changedRules.units.find(
@@ -556,6 +821,7 @@ test("expert review rules evidence survives provenance-only activation and inval
     await buildRuntimeDataBundle({
       rulesData: changedRules,
       createdAt: "2026-07-31T02:00:00.000Z",
+      engineDataSchemaVersion: 1,
     }),
   );
   const changedManifest = getActiveDataBundleManifest();

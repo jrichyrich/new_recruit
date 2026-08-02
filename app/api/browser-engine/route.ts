@@ -178,24 +178,48 @@ async function guarded<T>(
   }
 }
 
-function searchPayload(url: URL): BrowserEngineSearch {
+function searchPayload(
+  url: URL,
+): ResultEnvelope<BrowserEngineSearch> {
   const selectedFactionId =
     url.searchParams.get("selectedFaction") ?? "adeptus-custodes";
-  const factions =
-    searchFactions(url.searchParams.get("factionQuery") ?? "", 40)
-      .data ?? [];
-  const units =
-    searchUnits({
-      faction: selectedFactionId,
-      query: url.searchParams.get("unitQuery") ?? "",
-      includeLegends: false,
-      limit: 12,
-    }).data ?? [];
+  const factionResult = searchFactions(
+    url.searchParams.get("factionQuery") ?? "",
+    40,
+  );
+  const unitResult = searchUnits({
+    faction: selectedFactionId,
+    query: url.searchParams.get("unitQuery") ?? "",
+    includeLegends:
+      url.searchParams.get("includeLegends") === "true",
+    limit: 12,
+  });
+  const selectedFactionResult = searchFactions(selectedFactionId, 5);
   const selectedFaction =
-    searchFactions(selectedFactionId, 5).data?.find(
+    selectedFactionResult.data?.find(
       (faction) => faction.id === selectedFactionId,
     ) ?? null;
-  return { factions, units, selectedFaction };
+  return {
+    ok:
+      factionResult.ok &&
+      unitResult.ok &&
+      selectedFactionResult.ok,
+    data: {
+      factions: factionResult.data ?? [],
+      units: unitResult.data ?? [],
+      selectedFaction,
+    },
+    violations: [
+      ...factionResult.violations,
+      ...unitResult.violations,
+      ...selectedFactionResult.violations,
+    ],
+    warnings: [
+      ...factionResult.warnings,
+      ...unitResult.warnings,
+      ...selectedFactionResult.warnings,
+    ],
+  };
 }
 
 export function GET(request: Request): Promise<Response> {
@@ -203,13 +227,9 @@ export function GET(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const search = searchPayload(url);
     if (url.searchParams.get("bootstrap") !== "true") {
-      return {
-        ok: true,
-        data: search,
-        violations: [],
-        warnings: [],
-      } satisfies ResultEnvelope<BrowserEngineSearch>;
+      return search;
     }
+    if (!search.data) return search;
     const built = buildRoster({
       prompt:
         "Build a 1,000 point fast Custodes army with no named characters",
@@ -221,19 +241,25 @@ export function GET(request: Request): Promise<Response> {
     const dataStatus = getDataStatus();
     if (!dataStatus.data) return dataStatus;
     return {
-      ok: built.ok && currentWorkspace.ok && dataStatus.ok,
+      ok:
+        search.ok &&
+        built.ok &&
+        currentWorkspace.ok &&
+        dataStatus.ok,
       data: {
         dataStatus: dataStatus.data,
         runtimeData: initialization,
-        ...search,
+        ...search.data,
         workspace: currentWorkspace.data,
       },
       violations: [
+        ...search.violations,
         ...built.violations,
         ...currentWorkspace.violations,
         ...dataStatus.violations,
       ],
       warnings: [
+        ...search.warnings,
         ...built.warnings,
         ...currentWorkspace.warnings,
         ...dataStatus.warnings,

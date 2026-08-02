@@ -37,6 +37,8 @@
     "data:bundle:prepare-release": "node --import tsx scripts/prepare-data-bundle-release.ts",
     "data:bundle:verify-release": "node --import tsx scripts/verify-data-bundle-release.ts",
     "data:official-overlay": "node --import tsx scripts/official-data-overlay.ts",
+    "data:legends:discover": "node --import tsx scripts/discover-gw-faction-packs.ts",
+    "data:legends:extract": "node --import tsx scripts/extract-gw-legends-faction-pack.ts",
     "data:prepare-update:legacy-direct-sync": "node --import tsx scripts/prepare-data-update.ts",
     "data:sync": "node --import tsx scripts/sync-bsdata.ts --write",
     "data:sync-check": "node --import tsx scripts/sync-bsdata.ts --check",
