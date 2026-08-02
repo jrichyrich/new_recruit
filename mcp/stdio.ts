@@ -25,6 +25,9 @@ import {
   runRosterStressTest,
 } from "../local/tessera/stress";
 import {
+  runTesseraProviderParityWorkflow,
+} from "../local/tessera/provider-parity-workflow";
+import {
   buildAndStressRosterAgainstFaction,
 } from "../local/tessera/full-loop";
 import {
@@ -100,6 +103,8 @@ const server = createRosterPilotMcpServer({
         revisedRoster,
         options,
       ),
+    compareProviders: (options) =>
+      runTesseraProviderParityWorkflow(options),
   },
   tesseraRunJobs: {
     start: startTesseraRun,

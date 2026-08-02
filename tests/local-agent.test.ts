@@ -92,7 +92,9 @@ for await (const line of lines) {
       profileDirectory,
       savedListStatePresent,
       frozenScenarioContract: envelope.request.frozenScenarioContract,
-      savedListReuse: envelope.request.savedListReuse
+      savedListReuse: envelope.request.savedListReuse,
+      semanticSnapshotCacheDirectory:
+        envelope.request.semanticSnapshotCacheDirectory
     });
     if (
       envelope.request.opponentName === "Transient" &&
@@ -856,12 +858,18 @@ test("persistent Tessera sessions reuse one worker and reset poisoned contexts",
   const workerLog = path.join(directory, "worker.log");
   await writePersistentTesseraWorkerFixture(workerPath, workerLog);
   const spoolDirectory = path.join(directory, "spool");
+  const semanticSnapshotCacheDirectory = path.join(
+    directory,
+    "semantic-snapshots",
+  );
   const running = await startLocalAgent({
     socketEnabled: false,
     socketPath: path.join(directory, "agent.sock"),
     spoolDirectory,
     brokerPath: path.join(directory, "unused-broker"),
     tesseraPersistentWorkerPath: workerPath,
+    tesseraSemanticSnapshotDirectory:
+      semanticSnapshotCacheDirectory,
   });
   const frozenScenarioContract = [
     {
@@ -909,6 +917,7 @@ test("persistent Tessera sessions reuse one worker and reset poisoned contexts",
     profileDirectory: string;
     frozenScenarioContract?: unknown;
     savedListReuse?: unknown;
+    semanticSnapshotCacheDirectory?: string;
   };
   const records = async (): Promise<WorkerLog[]> =>
     (await readFile(workerLog, "utf8"))
@@ -930,6 +939,10 @@ test("persistent Tessera sessions reuse one worker and reset poisoned contexts",
       frozenScenarioContract,
     );
     assert.deepEqual(log[0].savedListReuse, savedListReuse);
+    assert.equal(
+      log[0].semanticSnapshotCacheDirectory,
+      semanticSnapshotCacheDirectory,
+    );
 
     await assert.rejects(
       runTesseraThroughLocalAgent(

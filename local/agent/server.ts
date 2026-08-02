@@ -50,6 +50,7 @@ import {
   localAgentSocketPath,
   newRecruitProfileDirectory,
   projectRoot,
+  tesseraSemanticSnapshotDirectory,
 } from "./paths";
 import type {
   WorkerProbeResult,
@@ -113,6 +114,7 @@ type LocalAgentServerOptions = {
   tesseraJobWorkerPath?: string;
   tesseraSessionTtlMs?: number;
   tesseraSessionCleanupIntervalMs?: number;
+  tesseraSemanticSnapshotDirectory?: string;
 };
 
 type TesseraWorkerResult =
@@ -408,6 +410,9 @@ export async function startLocalAgent(
     options.tesseraPersistentWorkerPath ?? tesseraWorkerPath;
   const configuredTesseraJobWorkerPath =
     options.tesseraJobWorkerPath ?? tesseraJobWorkerPath;
+  const semanticSnapshotDirectory =
+    options.tesseraSemanticSnapshotDirectory ??
+    tesseraSemanticSnapshotDirectory();
   const useInjectedOneShotTesseraWorker =
     options.tesseraWorkerPath !== undefined;
   let activeJob = false;
@@ -858,6 +863,7 @@ export async function startLocalAgent(
         profilePolicy: payload.profilePolicy,
         frozenScenarioContract: payload.frozenScenarioContract,
         savedListReuse: payload.savedListReuse,
+        semanticSnapshotCacheDirectory: semanticSnapshotDirectory,
       };
       let worker: TesseraWorkerResult;
       if (

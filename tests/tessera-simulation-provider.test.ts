@@ -8,6 +8,7 @@ import type {
   TesseraBrowserInput,
   TesseraBrowserResult,
 } from "../local/tessera/browser";
+import { TESSERA_WEBSITE_ADAPTER_VERSION } from "../local/tessera/browser";
 import {
   createWebsiteTesseraProvider,
   routeTesseraSimulation,
@@ -136,6 +137,10 @@ test("website provider preserves the browser contract and records UI identity", 
   assert.equal(routed.selection.selectedBackend, "website");
   assert.equal(routed.selection.reason, "explicit-website");
   assert.equal(routed.identity.provider, "website");
+  assert.equal(
+    routed.identity.adapterVersion,
+    TESSERA_WEBSITE_ADAPTER_VERSION,
+  );
   assert.equal(routed.selection.selectedBackend, "website");
   assert.equal(routed.identity.uiIdentity, "website-ui-fixture");
   if (routed.selection.selectedBackend !== "website") {

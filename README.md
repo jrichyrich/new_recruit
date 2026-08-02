@@ -507,6 +507,113 @@ npm run rosterpilot -- tessera analyze \
 `status: prepared`. The old `--experimental` flag remains a deprecated
 compatibility alias for simulation.
 
+For a deterministic replay, pass a canonical JSON scenario contract with
+`--scenario-contract <file>`. Each entry fixes one phase, direction, metric,
+complete simulator-settings object, and positive iteration count; the file
+must exactly cover the requested phase/metric scope. The report and durable
+job retain its SHA-256, and resume cannot change it. For the explicit local
+engine, `--iterations <positive-int>` is a shortcut that generates the same
+baseline settings for every selected scenario at the requested sampling
+depth. It is local-engine-only. The two flags are mutually exclusive and
+require `--execution-mode simulate`.
+
+Website reports also retain provider-compatibility evidence. RosterPilot does
+not assume that Tessera Web has a public semantic-data version: any declared
+version is advisory, while the fetched bytes of same-origin scripts and the
+normalized imported army/unit/weapon/effect snapshots are content-hashed.
+Those hashes are bound to the activated signature-verified manifest (including
+its signing key and manifest hash), current update-provider identity, canonical
+roster inputs, observed New Recruit catalogue identities, profile policy, and
+scenario contract. Syntax-valid roster hashes without verified runtime bundle
+trust remain incomplete. New Recruit observations prove handoff compatibility
+only; they never replace the signed bundle as the rules source.
+
+Provider compatibility defaults to `observe`: reports retain failures without
+changing the legacy simulation-completeness decision. Use
+`--enforce-provider-compatibility` only after the live rollout gate has
+activated; it makes missing website deployment/import evidence fail closed.
+`npm run certify:provider-compatibility` verifies retained canary artifacts and
+switches the release gate after three consecutive complete rotations. The live
+workflow then creates the durable repository tag
+`rosterpilot-provider-compatibility-enforced-v1`. Later canaries and releases
+read that tag, run with enforcement enabled, and block if current evidence or
+retained history is unavailable; expiring Actions artifacts cannot silently
+return the system to observation mode. A live runtime can apply the same latch
+with `ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED=true`.
+
+When comparing website and local results, an identity or normalized-input
+difference is data/input or deployment drift and must be resolved before
+numerical parity is evaluated. Model drift means the identities match but a
+cell exceeds the uncertainty-aware tolerance or the canonical winner differs
+outside its uncertainty boundary. Reports retain sample counts and available
+variance/standard error so ordinary Monte Carlo noise is not confused with a
+model disagreement.
+
+Compare a completed local exact report with the corresponding completed
+Tessera Web exact report using only evidence bound into those report bundles:
+
+```bash
+npm run rosterpilot -- tessera compare-providers \
+  --local-report exports/tessera/local/army-matchup.json \
+  --website-report exports/tessera/web/army-matchup.json \
+  --out-dir exports/tessera/parity
+```
+
+Each input must have its adjacent `*.receipt.json`, exactly one opponent, a
+complete provider-compatibility envelope, complete sample uncertainty, and
+the provider-specific evidence needed to derive the same neutral combat
+snapshot. Local evidence is rebuilt from hash-verified local-engine inputs
+inside the report bundle. Web evidence is rebuilt only from the captured
+deployment, selected-list state bindings, and visible import semantics; hidden
+characteristics or effects are never filled from RosterPilot data. The command
+writes canonical `tessera-provider-parity.json`, its detached
+`tessera-provider-parity.json.sha256`, and a printable HTML comparison with
+strengths, weaknesses, the largest cell differences, and next actions. The
+canonical artifact does not embed machine-absolute paths. It identifies each
+source by portable filename, run ID, report/receipt SHA-256, and receipt
+evidence SHA-256; a downstream gate resolves the originals within an explicit
+reports root and re-verifies their exact receipts before recomputing parity.
+
+Raw simulator settings remain in each source report. For parity, RosterPilot
+maps only known gameplay settings (cover, charging, rapid-fire and melta range,
+stationary state, and indirect fire) into one provider-neutral contract. It
+strips the provider-only `provider` label, while an unknown setting name or
+value fails with an actionable mapping error. This permits an observed Web
+contract and the local engine's baseline contract to prove semantic equality
+without falsely claiming their provider-specific settings objects are byte
+identical.
+
+To turn a portable paired comparison into strict certification evidence, keep
+the comparison's `.sha256` plus both exact reports and adjacent receipts, then
+run `npm run certify:provider-parity -- --comparison <comparison.json>
+--reports-root <downloaded-report-root> --rotation-id <run-id>
+--expected-bundle-id <bundle-id> --expected-git-head <commit>`. The gate relocates reports by hash,
+run ID, and provider; independently recomputes parity; rejects fixture-only
+evidence; and emits `pass`, `fail`, `incomplete`, `ineligible`, or
+`unavailable` with its own detached checksum. See
+[`docs/certification.md`](docs/certification.md#live-numerical-parity-gate) for
+the required bundle layout. The distinct-faction Death Guard/Orks exact canary
+produces the live local/Web pair. Its certificates remain observational until
+three consecutive verified passes activate the separate
+`rosterpilot-live-numerical-parity-enforced-v1` latch; once active, missing,
+stale, or current non-pass evidence blocks release. An enforced application
+release takes only the exact live-certification run ID: it verifies the source
+workflow, default branch, successful conclusion, release commit, artifact
+uniqueness and expiry, then derives the prepared bundle ID and reruns the gate
+instead of trusting operator-supplied hashes. Both rollout checks require that
+exact run as `--current-rotation-id`, preventing an older retained pass from
+masking absent current evidence. A claimed passing certificate is rederived
+from its exact comparison, reports, and receipts; its detached checksum alone
+is never treated as proof that a live execution occurred.
+
+This action intentionally compares two already completed reports rather than
+launching both providers as one transaction. The Web half depends on signed-in
+New Recruit/Tessera state and external mutations, while the local half uses
+bundle-native immutable inputs; treating two independently failing executions
+as atomic would leave ambiguous evidence. Run each exact matchup against the
+same canonical rosters, profile policy, scope, and iteration count, then use
+`compare-providers` as the fail-closed pairing step.
+
 For an explicitly authorized live-deployment diagnostic, add
 `--verified-catalogue-drift-diagnostic` to the Tessera command:
 
@@ -1051,6 +1158,12 @@ node --import tsx --test \
   tests/tessera-local-engine.test.ts \
   tests/tessera-simulation-provider.test.ts \
   tests/tessera-provider-parity.test.ts \
+  tests/tessera-provider-parity-report-adapter.test.ts \
+  tests/tessera-provider-parity-scenario-contract.test.ts \
+  tests/tessera-provider-parity-workflow.test.ts \
+  tests/tessera-website-provider-parity-evidence.test.ts \
+  tests/tessera-provider-compatibility.test.ts \
+  tests/tessera-scenario-contract.test.ts \
   tests/tessera-stress-local-provider.test.ts
 ```
 
@@ -1058,10 +1171,12 @@ node --import tsx --test \
 test suite. To verify separately downloaded source bytes, add
 `-- --archive /absolute/path/tessera-engine.tar.gz` to
 `npm run tessera:engine:check`. These deterministic tests do not contact the
-website. The parity tests validate completeness, normalized-input and scenario
-contract identity, metric-specific Monte Carlo tolerances, and winner
-classification behavior; they do not themselves constitute live promotion
-evidence.
+website. The parity tests validate completeness, provider-neutral combat and
+model-capability identities, normalized-input and scenario-contract identity,
+retained sampling uncertainty, metric-specific Monte Carlo tolerances, and
+winner-classification behavior. The compatibility tests validate the outer
+bundle/New Recruit/provider/import envelope. They do not themselves constitute
+live promotion evidence.
 
 Fixture-based Chrome tests are opt-in because they launch an actual isolated
 browser process:

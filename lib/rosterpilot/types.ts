@@ -649,6 +649,237 @@ export type TesseraSimulationProviderIdentity =
       licenseState: "evaluation-only" | "approved";
     };
 
+export type TesseraProviderEvidenceCompleteness =
+  | "complete"
+  | "partial"
+  | "fallback"
+  | "unavailable";
+
+export type TesseraImportedSemanticValue = {
+  name: string;
+  value: string;
+};
+
+export type TesseraImportedSemanticToggle = {
+  name: string;
+  state: boolean | null;
+};
+
+export type TesseraImportedWeaponSemantic = {
+  occurrence: number;
+  name: string;
+  profile: string | null;
+  count: number | null;
+  visibleCharacteristics: TesseraImportedSemanticValue[];
+  effectToggles: TesseraImportedSemanticToggle[];
+};
+
+export type TesseraImportedUnitSemantic = {
+  occurrence: number;
+  name: string;
+  modelCount: number | null;
+  included: boolean | null;
+  weapons: TesseraImportedWeaponSemantic[];
+  visibleCharacteristics: TesseraImportedSemanticValue[];
+  effectToggles: TesseraImportedSemanticToggle[];
+};
+
+export type TesseraImportedArmySemanticSnapshot = {
+  schemaVersion: 1;
+  side: "player" | "opponent";
+  armyName: string | null;
+  reportedUnitCount: number | null;
+  units: TesseraImportedUnitSemantic[];
+  warningCodes: string[];
+  alternateProfileResolutions: Array<{
+    unit: string | null;
+    weaponGroup: string | null;
+    availableProfiles: string[];
+    selectedProfile: string | null;
+    resolvedByPolicy: boolean;
+  }>;
+  completeness: "complete" | "partial" | "unavailable";
+  incompleteReasons: string[];
+};
+
+/**
+ * Visible proof that one retained import snapshot was the exact saved list
+ * selected for a Tessera Web matrix run. The snapshot itself stays immutable
+ * (and cacheable); this receipt binds its digest to the live selector state.
+ */
+export type TesseraImportedArmySimulationStateBinding = {
+  schemaVersion: 1;
+  side: "player" | "opponent";
+  snapshotSha256: string;
+  savedListName: string;
+  selectedUnitCount: number;
+  selectorValueSha256: string;
+  selectorLabel: string;
+  selectorLabelSha256: string;
+  stateSha256: string;
+};
+
+export type TesseraWebsiteProviderEvidence = {
+  schemaVersion: 1;
+  deployment: {
+    identitySha256: string | null;
+    declaredVersion: string | null;
+    assets: Array<{
+      url: string;
+      sameOrigin: boolean;
+      sha256: string | null;
+      byteLength?: number | null;
+    }>;
+    complete: boolean;
+    completeness: TesseraProviderEvidenceCompleteness;
+    declarationSha256: string | null;
+    incompleteReasons: string[];
+  };
+  importSemantics: {
+    combinedSha256: string | null;
+    playerSha256: string | null;
+    opponentSha256: string | null;
+    complete: boolean;
+    completeness: Exclude<
+      TesseraProviderEvidenceCompleteness,
+      "fallback"
+    >;
+    unresolvedEffectCount: number;
+    playerSnapshot: TesseraImportedArmySemanticSnapshot | null;
+    opponentSnapshot: TesseraImportedArmySemanticSnapshot | null;
+    /** Absent only on legacy evidence, which must be treated as incomplete. */
+    stateBindings?: {
+      player: TesseraImportedArmySimulationStateBinding | null;
+      opponent: TesseraImportedArmySimulationStateBinding | null;
+    };
+    incompleteReasons: string[];
+  };
+};
+
+export type TesseraProviderCompatibilityIssue = {
+  code:
+    | "DATA_BUNDLE_TRUST_UNVERIFIED"
+    | "DATA_BUNDLE_UPDATE_IDENTITY_INCOMPLETE"
+    | "SOURCE_IDENTITY_INCOMPLETE"
+    | "ROSTER_IDENTITY_INCOMPLETE"
+    | "NEW_RECRUIT_IDENTITY_UNVERIFIED"
+    | "NEW_RECRUIT_CATALOGUE_DRIFT"
+    | "TESSERA_PROVIDER_IDENTITY_INCOMPLETE"
+    | "TESSERA_DEPLOYMENT_IDENTITY_INCOMPLETE"
+    | "TESSERA_IMPORT_SEMANTICS_INCOMPLETE"
+    | "TESSERA_IMPORT_EFFECTS_UNRESOLVED"
+    | "PROFILE_POLICY_IDENTITY_INCOMPLETE"
+    | "SCENARIO_CONTRACT_IDENTITY_INCOMPLETE";
+  message: string;
+  side: "player" | "opponent" | null;
+  occurrence: number | null;
+};
+
+export type TesseraProviderCompatibilityEnvelope = {
+  schemaVersion: 1;
+  kind: "rosterpilot-provider-compatibility";
+  data: {
+    bundleId: string;
+    semanticIdentitySha256: string;
+    engineDataSchemaVersion: number;
+    rules: {
+      package: "@alpaca-software/40kdc-data";
+      version: string;
+      edition: "11th";
+      dataslate: string;
+    };
+    bsData: {
+      repository: "BSData/wh40k-11e";
+      commit: string;
+    };
+    official: {
+      mfmVersion: string;
+      updatedAt: string;
+      contentSha256: string;
+      authorityStatus:
+        | "verified"
+        | "unavailable"
+        | "unverified-overlay"
+        | null;
+    };
+    rosterRulesHash: string;
+    factionRulesHash: string;
+    mappingHash: string;
+    entityHashesSha256: string;
+    bundleTrust: {
+      schemaVersion: 1;
+      manifest: {
+        bundleId: string;
+        signingKeyId: string;
+        manifestSha256: string;
+        semanticIdentitySha256: string;
+      } | null;
+      update: {
+        providerConfigured: boolean;
+        dataTrust: "signed-verified" | "compiled-unverified";
+        state:
+          | "ready"
+          | "checking"
+          | "candidate-ready"
+          | "degraded"
+          | "offline";
+        activeBundleId: string | null;
+        latestVerifiedBundleId: string | null;
+        latestUpstreamBundleId: string | null;
+        candidate: {
+          bundleId: string;
+          classificationSha256: string;
+        } | null;
+        quarantinedScopesSha256: string;
+        officialAuthoritySha256: string;
+        rollbackHold: {
+          bundleId: string;
+          engagedAt: string;
+          release: "force-refresh";
+        } | null;
+        durability: {
+          mode: "memory" | "persistent";
+          state: "ready" | "degraded";
+          reason: string | null;
+        } | null;
+      };
+      identitySha256: string;
+    };
+  };
+  rosters: Array<{
+    side: "player" | "opponent";
+    occurrence: number;
+    factionId: string | null;
+    rosterFingerprint: string | null;
+    simulationInputKind:
+      | "new-recruit-enriched-rosz"
+      | "rosterpilot-local-engine-input"
+      | null;
+    simulationInputSha256: string | null;
+    enrichedRoszSha256: string | null;
+    newRecruit: {
+      status:
+        | "matched"
+        | "drift"
+        | "unverifiable"
+        | "not-applicable";
+      pinned: NewRecruitCataloguePin | null;
+      observed: NewRecruitObservedCatalogueIdentity | null;
+    };
+  }>;
+  tessera: {
+    provider: TesseraSimulationProvider;
+    providerIdentitySha256: string;
+    providerIdentity: TesseraSimulationProviderIdentity;
+    website: TesseraWebsiteProviderEvidence | null;
+  };
+  profilePolicyHash: string | null;
+  scenarioContractSha256: string;
+  complete: boolean;
+  issues: TesseraProviderCompatibilityIssue[];
+  envelopeSha256: string;
+};
+
 export type TesseraSimulationFallbackReceipt = {
   from: "local-engine";
   to: "website";
@@ -697,10 +928,21 @@ export type TesseraMetricValues = {
   damagePer100Points: number | null;
 };
 
+export type TesseraCellUncertainty = {
+  sampleCount: number | null;
+  standardDeviation: number | null;
+  standardError: number | null;
+  completeness: "complete" | "partial" | "unavailable";
+};
+
 export type TesseraScenarioCell = {
   attacker: TesseraUnitInstance;
   target: TesseraUnitInstance;
   values: TesseraMetricValues;
+  /** Per-metric uncertainty shown by the provider; never inferred. */
+  uncertainty?: Partial<
+    Record<TesseraMetric, TesseraCellUncertainty>
+  >;
   confidence: TesseraConfidence;
   warningRefs: string[];
 };
@@ -780,6 +1022,8 @@ export type TesseraAnalysisConfiguration = {
   pointsTolerancePercent: number;
   allowPointMismatch: boolean;
   includeChangeCandidates: boolean;
+  /** Website provenance is observational until live rollout enables enforcement. */
+  providerCompatibilityMode?: "observe" | "enforce";
 };
 
 export type TesseraPointsComparison = {
@@ -900,6 +1144,9 @@ export type TesseraMatchupReport = {
     retryable: boolean;
   }>;
   profilePolicyHash?: string | null;
+  /** Canonical execution contract retained for deterministic replay. */
+  scenarioContract?: TesseraFrozenScenarioContract[] | null;
+  scenarioContractSha256?: string | null;
   /**
    * Complete profile inventory used to validate the frozen policy. Paired
    * revisions retain this inventory so removing a profiled unit does not
@@ -908,6 +1155,9 @@ export type TesseraMatchupReport = {
   frozenProfileRequirements?: TesseraProfileRequirement[];
   runtime?: RuntimeProvenance;
   tesseraUiIdentity?: string | null;
+  /** Complete per-opponent data/provider compatibility evidence. */
+  providerCompatibility?: TesseraProviderCompatibilityEnvelope;
+  providerCompatibilityEnvelopes?: TesseraProviderCompatibilityEnvelope[];
   connectorEvents?: ConnectorEvent[];
   pinnedData?: RosterDraftV2["sourceData"];
   comparisonClass?: "matched" | "unmatched";
@@ -939,6 +1189,13 @@ export type TesseraMatchupReport = {
     requestedBackend?: TesseraSimulationBackend;
     selectedBackend?: TesseraSimulationProvider;
     providerIdentity?: TesseraSimulationProviderIdentity;
+    /** Website deployment and imported-army semantic provenance. */
+    providerEvidence?: TesseraWebsiteProviderEvidence;
+    /** Per-opponent captures retained when one report spans multiple runs. */
+    providerEvidenceCaptures?: Array<{
+      opponentName: string;
+      evidence: TesseraWebsiteProviderEvidence;
+    }>;
     fallback?: TesseraSimulationFallbackReceipt | null;
     engine?: "tessera-ui" | "tessera-engine";
     settings: Record<string, string>;
@@ -958,6 +1215,7 @@ export type TesseraMatchupReport = {
         killProbability: number | null;
         expectedDamage: number | null;
         damagePer100Points: number | null;
+        uncertainty?: TesseraCellUncertainty;
       }>;
     }>;
   };
@@ -1499,6 +1757,8 @@ export type TesseraStressConfiguration = {
   suite: TesseraStressSuite;
   analysisStrategy: TesseraStressAnalysisStrategy;
   catalogueDriftMode: "reject" | "diagnostic";
+  /** Website provenance is observational until rollout enables enforcement. */
+  providerCompatibilityMode: "observe" | "enforce";
   pointsTolerancePercent: number;
   proxyWeights: "equal";
   screeningMetric: "half-wipe-probability";
@@ -1585,6 +1845,8 @@ export type TesseraStressTestReport = {
   generatedAt: string;
   runtime?: RuntimeProvenance;
   tesseraUiIdentity?: string | null;
+  /** Child matchup compatibility evidence retained by a stress run. */
+  providerCompatibilityEnvelopes?: TesseraProviderCompatibilityEnvelope[];
   connectorEvents?: ConnectorEvent[];
   source:
     | "prepare-only"
@@ -1632,6 +1894,15 @@ export type TesseraStressTestReport = {
     retryable: boolean;
   }>;
   profilePolicyHash?: string | null;
+  /** Full caller-supplied replay contract, when this run was contract-bound. */
+  scenarioContract?: TesseraFrozenScenarioContract[] | null;
+  scenarioContractSha256?: string | null;
+  /** Explicit per-template projections actually used by each stress stage. */
+  stageScenarioContracts?: {
+    screening: Record<string, TesseraFrozenScenarioContract[]>;
+    deepDive: Record<string, TesseraFrozenScenarioContract[]>;
+  };
+  stageScenarioContractsSha256?: string;
   pinnedData?: {
     player: RosterDraftV2["sourceData"];
     opponents: RosterDraftV2["sourceData"][];

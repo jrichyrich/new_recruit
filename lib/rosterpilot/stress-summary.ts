@@ -113,6 +113,24 @@ function compactStressReport(
     recovery: report.recovery,
     preparation: report.preparation ?? null,
     simulation: report.simulation ?? null,
+    providerCompatibility: {
+      mode:
+        report.configuration?.providerCompatibilityMode ??
+        "observe",
+      complete:
+        (report.providerCompatibilityEnvelopes?.length ?? 0) > 0 &&
+        (report.providerCompatibilityEnvelopes ?? []).every(
+          (envelope) => envelope.complete,
+        ),
+      envelopes: (report.providerCompatibilityEnvelopes ?? []).map(
+        (envelope) => ({
+          provider: envelope.tessera.provider,
+          envelopeSha256: envelope.envelopeSha256,
+          complete: envelope.complete,
+          issueCodes: envelope.issues.map((issue) => issue.code),
+        }),
+      ),
+    },
     representatives: report.representatives,
     robustness:
       report.robustness === null

@@ -41,6 +41,7 @@ import {
   type TesseraMissionReadinessReport,
   type TesseraPreparedRoster,
   type TesseraProfileRequirement,
+  type TesseraProviderCompatibilityEnvelope,
   type TesseraStressAnalysisStrategy,
   type TesseraStressConfiguration,
   type TesseraStressFrozenOpponentArtifact,
@@ -60,6 +61,7 @@ import {
   type TesseraSimulationBackend,
   type TesseraSimulationProvider,
   type TesseraSimulationProviderIdentity,
+  type TesseraWebsiteProviderEvidence,
 } from "../../lib/rosterpilot";
 import {
   pathExists,
@@ -117,6 +119,16 @@ import {
 import {
   localTesseraEngineIsAutoSelectable,
 } from "./local-engine";
+import {
+  assertTesseraScenarioContractProvider,
+  assertTesseraScenarioContractScope,
+  canonicalTesseraScenarioContract,
+  observedTesseraScenarioContract,
+  projectTesseraScenarioContract,
+  TESSERA_SCENARIO_PHASES,
+  tesseraScenarioContractSha256,
+} from "./scenario-contract";
+import { effectiveProviderCompatibilityMode } from "./provider-compatibility";
 
 const SCREENING_METRICS: TesseraMetric[] = [
   "half-wipe-probability",
@@ -152,6 +164,8 @@ export type TesseraStressOptions = WriteOptions & {
   experimental?: boolean;
   /** Proceed with visibly provisional results after verified catalogue drift. */
   catalogueDriftMode?: "reject" | "diagnostic";
+  /** Freeze whether incomplete website compatibility evidence blocks the run. */
+  providerCompatibilityMode?: "observe" | "enforce";
   /**
    * Internal durable-run contract. A durable coordinator owns the three
    * automatic attempts and the two explicit lifetime attempts, so a single
@@ -165,6 +179,8 @@ export type TesseraStressOptions = WriteOptions & {
    * revalidated below and prevents preview/execution regeneration drift.
    */
   portfolioPreview?: TesseraStressPortfolioPreview;
+  /** Caller-supplied full deterministic contract for the stress workflow. */
+  scenarioContract?: TesseraFrozenScenarioContract[];
 };
 
 function stressSimulationRequested(
@@ -250,7 +266,7 @@ type ManifestStageContracts = {
 };
 
 type TesseraStressManifest = {
-  schemaVersion: 5;
+  schemaVersion: 6;
   reportKind: "tessera-stress-manifest";
   runId: string;
   createdAt: string;
@@ -268,7 +284,10 @@ type TesseraStressManifest = {
   profilePolicy: ProfilePolicyV1 | null;
   profilePolicyHash: string | null;
   enrichedProfileRequirements: TesseraProfileRequirement[] | null;
+  requestedScenarioContract: TesseraFrozenScenarioContract[] | null;
+  requestedScenarioContractSha256: string | null;
   stageContracts: ManifestStageContracts;
+  stageContractsSha256: string;
   warnings: string[];
   cachedLiveUpdateCheck: LiveDataFreshness | null;
   playerPreparationStartedAt: string | null;
@@ -402,6 +421,104 @@ const SimulationFallbackSchema = z.object({
   discardedLocalEvidence: z.literal(true),
 });
 
+const ImportedSemanticValueSchema = z.object({
+  name: z.string(),
+  value: z.string(),
+});
+
+const ImportedSemanticToggleSchema = z.object({
+  name: z.string(),
+  state: z.boolean().nullable(),
+});
+
+const ImportedWeaponSemanticSchema = z.object({
+  occurrence: z.number().int().positive(),
+  name: z.string(),
+  profile: z.string().nullable(),
+  count: z.number().int().nonnegative().nullable(),
+  visibleCharacteristics: z.array(ImportedSemanticValueSchema),
+  effectToggles: z.array(ImportedSemanticToggleSchema),
+});
+
+const ImportedUnitSemanticSchema = z.object({
+  occurrence: z.number().int().positive(),
+  name: z.string(),
+  modelCount: z.number().int().positive().nullable(),
+  included: z.boolean().nullable(),
+  weapons: z.array(ImportedWeaponSemanticSchema),
+  visibleCharacteristics: z.array(ImportedSemanticValueSchema),
+  effectToggles: z.array(ImportedSemanticToggleSchema),
+});
+
+const ImportedArmySemanticSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  side: z.enum(["player", "opponent"]),
+  armyName: z.string().nullable(),
+  reportedUnitCount: z.number().int().nonnegative().nullable(),
+  units: z.array(ImportedUnitSemanticSchema),
+  warningCodes: z.array(z.string()),
+  alternateProfileResolutions: z.array(z.object({
+    unit: z.string().nullable(),
+    weaponGroup: z.string().nullable(),
+    availableProfiles: z.array(z.string()),
+    selectedProfile: z.string().nullable(),
+    resolvedByPolicy: z.boolean(),
+  })),
+  completeness: z.enum(["complete", "partial", "unavailable"]),
+  incompleteReasons: z.array(z.string()),
+});
+
+const ImportedArmySimulationStateBindingSchema = z.object({
+  schemaVersion: z.literal(1),
+  side: z.enum(["player", "opponent"]),
+  snapshotSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+  savedListName: z.string().min(1),
+  selectedUnitCount: z.number().int().positive(),
+  selectorValueSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+  selectorLabel: z.string().min(1),
+  selectorLabelSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+  stateSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+});
+
+const WebsiteProviderEvidenceSchema = z.object({
+  schemaVersion: z.literal(1),
+  deployment: z.object({
+    identitySha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    declaredVersion: z.string().nullable(),
+    assets: z.array(z.object({
+      url: z.string(),
+      sameOrigin: z.boolean(),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+      byteLength: z.number().int().nonnegative().nullable().optional(),
+    })),
+    complete: z.boolean(),
+    completeness: z.enum([
+      "complete",
+      "partial",
+      "fallback",
+      "unavailable",
+    ]),
+    declarationSha256:
+      z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    incompleteReasons: z.array(z.string()),
+  }),
+  importSemantics: z.object({
+    combinedSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    playerSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    opponentSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    complete: z.boolean(),
+    completeness: z.enum(["complete", "partial", "unavailable"]),
+    unresolvedEffectCount: z.number().int().nonnegative(),
+    playerSnapshot: ImportedArmySemanticSnapshotSchema.nullable(),
+    opponentSnapshot: ImportedArmySemanticSnapshotSchema.nullable(),
+    stateBindings: z.object({
+      player: ImportedArmySimulationStateBindingSchema.nullable(),
+      opponent: ImportedArmySimulationStateBindingSchema.nullable(),
+    }).optional(),
+    incompleteReasons: z.array(z.string()),
+  }),
+});
+
 const SimulationInputSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("new-recruit-enriched-rosz"),
@@ -507,6 +624,9 @@ const StressConfigurationSchema = z.object({
   catalogueDriftMode: z
     .enum(["reject", "diagnostic"])
     .default("reject"),
+  providerCompatibilityMode: z
+    .enum(["observe", "enforce"])
+    .default("observe"),
   pointsTolerancePercent: z.number().nonnegative(),
   proxyWeights: z.literal("equal"),
   screeningMetric: z.literal("half-wipe-probability"),
@@ -724,6 +844,7 @@ const StressManifestSchema = z.object({
     z.literal(3),
     z.literal(4),
     z.literal(5),
+    z.literal(6),
   ]),
   reportKind: z.literal("tessera-stress-manifest"),
   runId: z.string().min(1),
@@ -748,10 +869,16 @@ const StressManifestSchema = z.object({
   profilePolicyHash: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   enrichedProfileRequirements:
     z.array(ProfileRequirementSchema).nullable().optional(),
+  requestedScenarioContract:
+    z.array(FrozenScenarioContractSchema).nullable().optional(),
+  requestedScenarioContractSha256:
+    z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   stageContracts: z.union([
     LegacyStageContractsSchema,
     PerTemplateStageContractsSchema,
   ]).optional(),
+  stageContractsSha256:
+    z.string().regex(/^[0-9a-f]{64}$/).optional(),
   warnings: z.array(z.string()),
   cachedLiveUpdateCheck: z.unknown().nullable().optional(),
   playerPreparationStartedAt: z.string().min(1).nullable(),
@@ -954,6 +1081,24 @@ const ScenarioResultSchema = z.object({
       meanDamage: z.number().nullable(),
       damagePer100Points: z.number().nullable(),
     }),
+    uncertainty: z.record(
+      z.enum([
+        "wipe-probability",
+        "half-wipe-probability",
+        "mean-kills",
+        "mean-damage",
+      ]),
+      z.object({
+        sampleCount: z.number().int().positive().nullable(),
+        standardDeviation: z.number().nonnegative().nullable(),
+        standardError: z.number().nonnegative().nullable(),
+        completeness: z.enum([
+          "complete",
+          "partial",
+          "unavailable",
+        ]),
+      }),
+    ).optional(),
     confidence: z.enum(["high", "review", "ambiguous"]),
     warningRefs: z.array(z.string()),
   })),
@@ -1000,6 +1145,9 @@ const MatchupReportSchema = z.object({
     pointsTolerancePercent: z.number(),
     allowPointMismatch: z.boolean(),
     includeChangeCandidates: z.boolean(),
+    providerCompatibilityMode: z
+      .enum(["observe", "enforce"])
+      .default("observe"),
   }),
   player: PreparedRosterSchema,
   opponents: z.array(z.object({
@@ -1030,6 +1178,11 @@ const MatchupReportSchema = z.object({
       .enum(["local-engine", "website"])
       .optional(),
     providerIdentity: SimulationProviderIdentitySchema.optional(),
+    providerEvidence: WebsiteProviderEvidenceSchema.optional(),
+    providerEvidenceCaptures: z.array(z.object({
+      opponentName: z.string().min(1),
+      evidence: WebsiteProviderEvidenceSchema,
+    })).optional(),
     fallback: SimulationFallbackSchema.nullable().optional(),
     engine: z.enum(["tessera-ui", "tessera-engine"]).optional(),
     settings: z.record(z.string()),
@@ -1476,6 +1629,20 @@ function tesseraOutputFailure(error: unknown): {
 
 function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+export function combineTesseraUiIdentities(
+  identities: Array<string | null | undefined>,
+): string | null {
+  return (
+    unique(
+      identities.filter(
+        (identity): identity is string => Boolean(identity),
+      ),
+    )
+      .sort()
+      .join("|") || null
+  );
 }
 
 function canonicalValue(value: unknown): unknown {
@@ -2203,6 +2370,9 @@ function stressConfiguration(
       (suite === "core-3" ? "full-all" : "staged"),
     catalogueDriftMode:
       options.catalogueDriftMode ?? "reject",
+    providerCompatibilityMode: effectiveProviderCompatibilityMode(
+      options.providerCompatibilityMode,
+    ),
     pointsTolerancePercent: 5,
     proxyWeights: "equal",
     screeningMetric: "half-wipe-probability",
@@ -2284,6 +2454,60 @@ function cloneStageContracts(
   };
 }
 
+function stageContractsSha256(
+  contracts: ManifestStageContracts,
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(canonicalJson(cloneStageContracts(contracts)))
+    .digest("hex");
+}
+
+function projectedStageContracts(
+  portfolio: TesseraStressPortfolio,
+  configuration: TesseraStressConfiguration,
+  contract: TesseraFrozenScenarioContract[] | null,
+): ManifestStageContracts {
+  if (!contract) return { screening: {}, deepDive: {} };
+  const templateIds = portfolio.items
+    .filter((item) => item.status === "ready" && item.roster !== null)
+    .map((item) => item.templateId)
+    .sort();
+  const screeningMetrics =
+    configuration.analysisStrategy === "full-all"
+      ? FULL_METRICS
+      : SCREENING_METRICS;
+  const screening = projectTesseraScenarioContract(
+    contract,
+    TESSERA_SCENARIO_PHASES,
+    screeningMetrics,
+  );
+  const deepDive =
+    configuration.analysisStrategy === "full-all"
+      ? null
+      : projectTesseraScenarioContract(
+          contract,
+          TESSERA_SCENARIO_PHASES,
+          DEEP_DIVE_METRICS,
+        );
+  return {
+    screening: Object.fromEntries(
+      templateIds.map((templateId) => [
+        templateId,
+        structuredClone(screening),
+      ]),
+    ),
+    deepDive: deepDive
+      ? Object.fromEntries(
+          templateIds.map((templateId) => [
+            templateId,
+            structuredClone(deepDive),
+          ]),
+        )
+      : {},
+  };
+}
+
 function stageEvidenceIsReusable(
   manifest: TesseraStressManifest,
   stage: "screening" | "deepDive",
@@ -2344,10 +2568,19 @@ function newManifest(
   warnings: string[] = [],
   runId = crypto.randomUUID(),
   cachedLiveUpdateCheck: LiveDataFreshness | null = null,
+  requestedScenarioContract: TesseraFrozenScenarioContract[] | null = null,
 ): TesseraStressManifest {
   const now = new Date().toISOString();
+  const canonicalRequestedContract = requestedScenarioContract
+    ? canonicalTesseraScenarioContract(requestedScenarioContract)
+    : null;
+  const stageContracts = projectedStageContracts(
+    portfolio,
+    configuration,
+    canonicalRequestedContract,
+  );
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     reportKind: "tessera-stress-manifest",
     runId,
     createdAt: now,
@@ -2367,10 +2600,12 @@ function newManifest(
     profilePolicyHash:
       profilePolicy === null ? null : profilePolicyHash(profilePolicy),
     enrichedProfileRequirements: null,
-    stageContracts: {
-      screening: {},
-      deepDive: {},
-    },
+    requestedScenarioContract: canonicalRequestedContract,
+    requestedScenarioContractSha256: canonicalRequestedContract
+      ? tesseraScenarioContractSha256(canonicalRequestedContract)
+      : null,
+    stageContracts,
+    stageContractsSha256: stageContractsSha256(stageContracts),
     warnings,
     cachedLiveUpdateCheck,
     playerPreparationStartedAt: null,
@@ -2531,7 +2766,7 @@ async function readManifest(
   }
   const data = parsed.data;
   if (
-    data.schemaVersion === 5 &&
+    data.schemaVersion >= 5 &&
     (
       data.simulationBackend === undefined ||
       data.selectedSimulationBackend === undefined
@@ -2619,6 +2854,56 @@ async function readManifest(
     screening,
     deepDive,
   );
+  if (
+    data.schemaVersion === 6 &&
+    (
+      data.requestedScenarioContract === undefined ||
+      data.requestedScenarioContractSha256 === undefined ||
+      data.stageContractsSha256 === undefined
+    )
+  ) {
+    throw new Error(
+      "The v6 resume manifest does not contain its required scenario-contract provenance.",
+    );
+  }
+  const requestedScenarioContract =
+    data.requestedScenarioContract === undefined ||
+      data.requestedScenarioContract === null
+      ? null
+      : assertTesseraScenarioContractScope(
+          data.requestedScenarioContract,
+          TESSERA_SCENARIO_PHASES,
+          FULL_METRICS,
+        );
+  const requestedScenarioContractSha256 = requestedScenarioContract
+    ? tesseraScenarioContractSha256(requestedScenarioContract)
+    : null;
+  if (
+    data.schemaVersion === 6 &&
+    data.requestedScenarioContractSha256 !== undefined &&
+    data.requestedScenarioContractSha256 !==
+      requestedScenarioContractSha256
+  ) {
+    throw new Error(
+      "The resume manifest's requested scenario contract does not match its SHA-256.",
+    );
+  }
+  if (
+    data.schemaVersion === 6 &&
+    data.stageContractsSha256 !== undefined &&
+    data.stageContractsSha256 !==
+      stageContractsSha256(stageContracts)
+  ) {
+    throw new Error(
+      "The resume manifest's projected stage contracts do not match their SHA-256.",
+    );
+  }
+  if (requestedScenarioContract) {
+    assertTesseraScenarioContractProvider(
+      requestedScenarioContract,
+      migratedSelectedSimulationBackend,
+    );
+  }
   const repairedLegacyIterationFailures =
     repairLegacyCrossProxyIterationReplayFailures(
       legacyStageContracts(parsedStageContracts),
@@ -2628,7 +2913,7 @@ async function readManifest(
     );
   const manifest = {
     ...data,
-    schemaVersion: 5,
+    schemaVersion: 6,
     simulationBackend: migratedSimulationBackend,
     selectedSimulationBackend:
       migratedSelectedSimulationBackend,
@@ -2641,7 +2926,10 @@ async function readManifest(
     profilePolicyHash: data.profilePolicyHash ?? null,
     enrichedProfileRequirements:
       data.enrichedProfileRequirements ?? null,
+    requestedScenarioContract,
+    requestedScenarioContractSha256,
     stageContracts,
+    stageContractsSha256: stageContractsSha256(stageContracts),
     warnings: unique([
       ...data.warnings,
       ...(repairedLegacyIterationFailures.length === 0
@@ -2672,8 +2960,8 @@ async function readManifest(
 }
 
 /**
- * Verify a v1/v2/v3/v4/v5 stress manifest and rewrite it in the current portable
- * v5 format. Durable jobs use this only after copying the complete run bundle
+ * Verify a v1/v2/v3/v4/v5/v6 stress manifest and rewrite it in the current
+ * portable v6 format. Durable jobs use this only after copying the complete run bundle
  * into their own isolated directory.
  */
 export async function verifyAndMigrateTesseraStressManifest(
@@ -2704,6 +2992,23 @@ async function writeManifest(
       "The frozen stress portfolio changed after its manifest hash was established.",
     );
   }
+  const currentRequestedScenarioContractSha256 =
+    manifest.requestedScenarioContract
+      ? tesseraScenarioContractSha256(
+          manifest.requestedScenarioContract,
+        )
+      : null;
+  if (
+    currentRequestedScenarioContractSha256 !==
+      manifest.requestedScenarioContractSha256
+  ) {
+    throw new Error(
+      "The requested Tessera scenario contract changed after its manifest hash was established.",
+    );
+  }
+  manifest.stageContractsSha256 = stageContractsSha256(
+    manifest.stageContracts,
+  );
   manifest.updatedAt = new Date().toISOString();
   const portableManifest = portableManifestValue(
     manifest,
@@ -2962,6 +3267,13 @@ function createDeliveryCache(
         !dependencies.deliver,
     },
     seed: async (roster, prepared) => {
+      // Local-engine JSON is run-local evidence, not a New Recruit delivery.
+      if (
+        prepared.simulationInput?.kind ===
+        "rosterpilot-local-engine-input"
+      ) {
+        return;
+      }
       cache.set(
         newRecruitCacheKey(roster),
         Promise.resolve(preparedDelivery(roster, prepared)),
@@ -2997,6 +3309,7 @@ function preparedOpponent(
     listUrl: null,
     sourceRoszPath: opponent.enrichedRoszPath,
     enrichedRoszPath: opponent.enrichedRoszPath,
+    simulationInput: opponent.simulationInput,
     summary: opponent.summary,
     fingerprint: item.fingerprint ?? undefined,
     units: opponent.units,
@@ -3010,6 +3323,7 @@ type StoredStageExpectation = {
   mode: "quick" | "full";
   simulationRequested: boolean;
   simulationBackend: TesseraSimulationProvider;
+  providerCompatibilityMode: "observe" | "enforce";
   includeChangeCandidates: boolean;
   opponentEnrichedRoszPath?: string;
 };
@@ -3219,6 +3533,8 @@ function combinedStageValidationError(
         simulationRequested: true,
         simulationBackend:
           report.simulation.selectedBackend ?? "website",
+        providerCompatibilityMode:
+          configuration.providerCompatibilityMode ?? "observe",
         includeChangeCandidates,
       },
     );
@@ -3427,6 +3743,11 @@ async function readMatchupReport(
       expected.includeChangeCandidates
       ? "change-candidate mode"
       : null,
+    configuration &&
+    (configuration.providerCompatibilityMode ?? "observe") !==
+      expected.providerCompatibilityMode
+      ? "provider compatibility mode"
+      : null,
     report.simulation.requested !== expected.simulationRequested
       ? "simulation mode"
       : null,
@@ -3471,6 +3792,7 @@ async function readMatchupReport(
 function manualAnalysisConfiguration(
   metrics: TesseraMetric[],
   mode: "quick" | "full",
+  providerCompatibilityMode: "observe" | "enforce",
 ): TesseraAnalysisConfiguration {
   return {
     analysisMode: mode,
@@ -3480,7 +3802,219 @@ function manualAnalysisConfiguration(
     pointsTolerancePercent: 5,
     allowPointMismatch: false,
     includeChangeCandidates: false,
+    providerCompatibilityMode,
   };
+}
+
+function aggregateEvidenceSha256(
+  values: Array<string | null>,
+): string | null {
+  if (values.length === 0 || values.some((value) => value === null)) {
+    return null;
+  }
+  const uniqueValues = [...new Set(values as string[])].sort();
+  return uniqueValues.length === 1
+    ? uniqueValues[0]
+    : crypto
+        .createHash("sha256")
+        .update(canonicalJson(uniqueValues))
+        .digest("hex");
+}
+
+function aggregateStressWebsiteProviderEvidence(
+  captures: Array<{
+    opponentName: string;
+    evidence: TesseraWebsiteProviderEvidence;
+  }>,
+  expectedCount: number,
+): TesseraWebsiteProviderEvidence | undefined {
+  if (captures.length === 0) return undefined;
+  if (captures.length === 1 && expectedCount === 1) {
+    return structuredClone(captures[0].evidence);
+  }
+
+  const evidences = captures.map((capture) => capture.evidence);
+  const assetsByUrl = new Map<
+    string,
+    TesseraWebsiteProviderEvidence["deployment"]["assets"][number]
+  >();
+  let assetConflict = false;
+  for (const asset of evidences.flatMap(
+    (evidence) => evidence.deployment.assets,
+  )) {
+    const existing = assetsByUrl.get(asset.url);
+    if (
+      existing &&
+      (
+        existing.sha256 !== asset.sha256 ||
+        existing.sameOrigin !== asset.sameOrigin ||
+        existing.byteLength !== asset.byteLength
+      )
+    ) {
+      assetConflict = true;
+      continue;
+    }
+    assetsByUrl.set(asset.url, structuredClone(asset));
+  }
+
+  const deploymentIdentities = evidences.map(
+    (evidence) => evidence.deployment.identitySha256,
+  );
+  const deploymentComplete =
+    captures.length === expectedCount &&
+    !assetConflict &&
+    evidences.every((evidence) => evidence.deployment.complete) &&
+    new Set(deploymentIdentities).size === 1;
+  const deploymentReasons = [
+    ...(captures.length === expectedCount
+      ? []
+      : [`capture-count:${captures.length}/${expectedCount}`]),
+    ...(assetConflict ? ["asset-digest-conflict"] : []),
+    ...captures.flatMap((capture) =>
+      capture.evidence.deployment.incompleteReasons.map(
+        (reason) => `${capture.opponentName}:${reason}`,
+      ),
+    ),
+  ];
+
+  const playerHashes = evidences.map(
+    (evidence) => evidence.importSemantics.playerSha256,
+  );
+  const opponentHashes = evidences.map(
+    (evidence) => evidence.importSemantics.opponentSha256,
+  );
+  const playerSha256 = aggregateEvidenceSha256(playerHashes);
+  const opponentSha256 = aggregateEvidenceSha256(opponentHashes);
+  const playerHashStable = new Set(playerHashes).size === 1;
+  const importComplete =
+    captures.length === 1 &&
+    captures.length === expectedCount &&
+    playerHashStable &&
+    evidences.every((evidence) => evidence.importSemantics.complete);
+  const playerSnapshot = playerHashStable
+    ? evidences[0].importSemantics.playerSnapshot
+    : null;
+  const importReasons = [
+    ...(captures.length === expectedCount
+      ? []
+      : [`capture-count:${captures.length}/${expectedCount}`]),
+    ...(playerHashStable ? [] : ["player-semantic-digest-conflict"]),
+    ...(captures.length > 1
+      ? [
+          "multi-opponent-semantic-snapshots-retained-in-provider-evidence-captures",
+        ]
+      : []),
+    ...captures.flatMap((capture) =>
+      capture.evidence.importSemantics.incompleteReasons.map(
+        (reason) => `${capture.opponentName}:${reason}`,
+      ),
+    ),
+  ];
+
+  return {
+    schemaVersion: 1,
+    deployment: {
+      identitySha256: aggregateEvidenceSha256(deploymentIdentities),
+      declaredVersion:
+        new Set(
+          evidences.map(
+            (evidence) => evidence.deployment.declaredVersion,
+          ),
+        ).size === 1
+          ? evidences[0].deployment.declaredVersion
+          : null,
+      assets: [...assetsByUrl.values()].sort((left, right) =>
+        left.url.localeCompare(right.url)
+      ),
+      complete: deploymentComplete,
+      completeness: deploymentComplete
+        ? "complete"
+        : evidences.some((evidence) =>
+              ["complete", "partial"].includes(
+                evidence.deployment.completeness,
+              )
+            )
+          ? "partial"
+          : evidences.some(
+                (evidence) =>
+                  evidence.deployment.completeness === "fallback",
+              )
+            ? "fallback"
+            : "unavailable",
+      declarationSha256: aggregateEvidenceSha256(
+        evidences.map(
+          (evidence) => evidence.deployment.declarationSha256,
+        ),
+      ),
+      incompleteReasons: deploymentComplete
+        ? []
+        : [...new Set(deploymentReasons)].sort(),
+    },
+    importSemantics: {
+      combinedSha256:
+        playerSha256 && opponentSha256
+          ? crypto
+              .createHash("sha256")
+              .update(
+                canonicalJson({ playerSha256, opponentSha256 }),
+              )
+              .digest("hex")
+          : null,
+      playerSha256,
+      opponentSha256,
+      complete: importComplete,
+      completeness: importComplete
+        ? "complete"
+        : evidences.some(
+              (evidence) =>
+                evidence.importSemantics.completeness !==
+                "unavailable",
+            )
+          ? "partial"
+          : "unavailable",
+      unresolvedEffectCount: evidences.reduce(
+        (total, evidence) =>
+          total + evidence.importSemantics.unresolvedEffectCount,
+        0,
+      ),
+      playerSnapshot: playerSnapshot
+        ? structuredClone(playerSnapshot)
+        : null,
+      opponentSnapshot:
+        captures.length === 1
+          ? structuredClone(
+              evidences[0].importSemantics.opponentSnapshot,
+            )
+          : null,
+      incompleteReasons: importComplete
+        ? []
+        : [...new Set(importReasons)].sort(),
+    },
+  };
+}
+
+function compatibilityEnvelopesFromReports(
+  reports: Array<TesseraMatchupReport | null | undefined>,
+): TesseraProviderCompatibilityEnvelope[] {
+  const envelopes = reports.flatMap((report) => {
+    if (!report) return [];
+    return [
+      ...(report.providerCompatibilityEnvelopes ?? []),
+      ...(report.providerCompatibility
+        ? [report.providerCompatibility]
+        : []),
+    ];
+  });
+  return [
+    ...new Map(
+      envelopes.map((envelope) => [
+        envelope.envelopeSha256,
+        structuredClone(envelope),
+      ]),
+    ).values(),
+  ].sort((left, right) =>
+    left.envelopeSha256.localeCompare(right.envelopeSha256)
+  );
 }
 
 function combineMatchupReports(
@@ -3494,17 +4028,49 @@ function combineMatchupReports(
   mode: "quick" | "full",
   warnings: string[],
   frozenProfilePolicyHash: string | null,
+  expectedScenarioContract: TesseraFrozenScenarioContract[] | null,
+  providerCompatibilityMode: "observe" | "enforce",
 ): TesseraMatchupReport {
   const values = [...reports.values()];
   const configuration =
     values.find((report) => report.configuration)?.configuration ??
-    manualAnalysisConfiguration(metrics, mode);
+    manualAnalysisConfiguration(
+      metrics,
+      mode,
+      providerCompatibilityMode,
+    );
   const scenarios = values.flatMap(
     (report) => report.simulation.scenarios ?? [],
   );
   const matrices = values.flatMap(
     (report) => report.simulation.matrices,
   );
+  const providerEvidenceCaptures = values.flatMap((report) => {
+    if (report.simulation.providerEvidenceCaptures) {
+      return report.simulation.providerEvidenceCaptures.map(
+        (capture) => structuredClone(capture),
+      );
+    }
+    if (
+      report.simulation.providerEvidence &&
+      report.opponents.length === 1
+    ) {
+      return [{
+        opponentName: report.opponents[0].rosterName,
+        evidence: structuredClone(
+          report.simulation.providerEvidence,
+        ),
+      }];
+    }
+    return [];
+  });
+  const providerEvidence =
+    aggregateStressWebsiteProviderEvidence(
+      providerEvidenceCaptures,
+      expectedCount,
+    );
+  const providerCompatibilityEnvelopes =
+    compatibilityEnvelopesFromReports(values);
   const requestedBackends = new Set(
     values.map(
       (report) => report.simulation.requestedBackend ?? "website",
@@ -3636,9 +4202,122 @@ function combineMatchupReports(
       retryable: false,
     });
   }
+  const childScenarioContracts = values.map((report) => {
+    let observedContract: TesseraFrozenScenarioContract[] | null = null;
+    let valid = true;
+    const reportScenarios = report.simulation.scenarios ?? [];
+    try {
+      if (simulationRequested && reportScenarios.length > 0) {
+        observedContract = observedTesseraScenarioContract(
+          reportScenarios,
+          configuration.phases,
+          configuration.metrics,
+        );
+      }
+    } catch (error) {
+      valid = false;
+      failures.push({
+        stage: "simulation",
+        code: "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+        message:
+          error instanceof Error
+            ? error.message
+            : "A stored stage report has no canonical scenario contract.",
+        opponentName: report.opponents[0]?.rosterName ?? null,
+        retryable: false,
+      });
+    }
+    let declaredContract: TesseraFrozenScenarioContract[] | null = null;
+    try {
+      declaredContract = report.scenarioContract
+        ? canonicalTesseraScenarioContract(report.scenarioContract)
+        : null;
+    } catch (error) {
+      valid = false;
+      failures.push({
+        stage: "simulation",
+        code: "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+        message:
+          error instanceof Error
+            ? error.message
+            : "A stored stage report declares an invalid scenario contract.",
+        opponentName: report.opponents[0]?.rosterName ?? null,
+        retryable: false,
+      });
+    }
+    const declaredHash = report.scenarioContractSha256 ??
+      (declaredContract
+        ? tesseraScenarioContractSha256(declaredContract)
+        : null);
+    const observedHash = observedContract
+      ? tesseraScenarioContractSha256(observedContract)
+      : null;
+    if (
+      declaredHash !== null &&
+      observedHash !== null &&
+      declaredHash !== observedHash
+    ) {
+      valid = false;
+      failures.push({
+        stage: "simulation",
+        code: "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+        message:
+          "A stored stage report's declared scenario-contract hash does not match its observed metric runs.",
+        opponentName: report.opponents[0]?.rosterName ?? null,
+        retryable: false,
+      });
+    }
+    return {
+      contract: declaredContract ?? observedContract,
+      hash: declaredHash ?? observedHash,
+      valid,
+    };
+  });
+  const expectedCanonicalContract = expectedScenarioContract
+    ? canonicalTesseraScenarioContract(expectedScenarioContract)
+    : null;
+  const expectedScenarioContractHash = expectedCanonicalContract
+    ? tesseraScenarioContractSha256(expectedCanonicalContract)
+    : null;
+  const resolvedChildContracts =
+    childScenarioContracts.length === values.length &&
+    childScenarioContracts.every(
+      (contract) => contract.valid && contract.hash !== null,
+    );
+  const childScenarioContractHashes = new Set(
+    childScenarioContracts.flatMap((contract) =>
+      contract.hash ? [contract.hash] : [],
+    ),
+  );
+  const scenarioContractConsistent =
+    !simulationRequested ||
+    (
+      resolvedChildContracts &&
+      (
+        expectedScenarioContractHash === null ||
+        childScenarioContracts.every(
+          (contract) =>
+            contract.hash === expectedScenarioContractHash,
+        )
+      )
+    );
+  const sharedObservedContract =
+    expectedCanonicalContract ??
+    (
+      resolvedChildContracts &&
+      childScenarioContractHashes.size === 1
+        ? childScenarioContracts.find(
+            (contract) => contract.contract !== null,
+          )?.contract ?? null
+        : null
+    );
+  const scenarioContractHash = sharedObservedContract
+    ? tesseraScenarioContractSha256(sharedObservedContract)
+    : null;
   const complete =
     values.length === expectedCount &&
     providerConsistent &&
+    scenarioContractConsistent &&
     values.every((report) =>
       simulationRequested
         ? report.status === "complete"
@@ -3692,6 +4371,8 @@ function combineMatchupReports(
     },
     failures,
     profilePolicyHash: frozenProfilePolicyHash,
+    scenarioContract: sharedObservedContract,
+    scenarioContractSha256: scenarioContractHash,
     runtime: getRuntimeProvenance(),
     tesseraUiIdentity:
       [...new Set(values.flatMap((report) =>
@@ -3700,6 +4381,14 @@ function combineMatchupReports(
     connectorEvents: values.flatMap(
       (report) => report.connectorEvents ?? [],
     ),
+    providerCompatibility:
+      providerCompatibilityEnvelopes.length === 1
+        ? providerCompatibilityEnvelopes[0]
+        : undefined,
+    providerCompatibilityEnvelopes:
+      providerCompatibilityEnvelopes.length > 0
+        ? providerCompatibilityEnvelopes
+        : undefined,
     pinnedData: values.find((report) => report.pinnedData)?.pinnedData,
     comparisonClass: values.every(
       (report) => report.comparisonClass !== "unmatched",
@@ -3743,6 +4432,11 @@ function combineMatchupReports(
       requestedBackend,
       selectedBackend,
       providerIdentity,
+      providerEvidence,
+      providerEvidenceCaptures:
+        providerEvidenceCaptures.length > 0
+          ? providerEvidenceCaptures
+          : undefined,
       fallback: null,
       engine:
         selectedBackend === "local-engine"
@@ -4434,6 +5128,8 @@ async function runStage(
             input.manifest.simulationRequested,
           simulationBackend:
             input.manifest.selectedSimulationBackend,
+          providerCompatibilityMode:
+            input.manifest.configuration.providerCompatibilityMode,
           includeChangeCandidates: stage === "screening",
           opponentEnrichedRoszPath:
             input.manifest.preparedOpponents[item.templateId]
@@ -4577,6 +5273,8 @@ async function runStage(
             : "prepare-only",
           simulationBackend:
             input.manifest.selectedSimulationBackend,
+          providerCompatibilityMode:
+            input.manifest.configuration.providerCompatibilityMode,
           experimental: input.options.experimental,
           analysisMode: mode,
           phases: ["shooting", "fight"],
@@ -4595,6 +5293,7 @@ async function runStage(
             ),
           ),
           opponentRosterContext: item.roster,
+          scenarioContract: undefined,
           ...(preparedReuse ? { preparedReuse } : {}),
           frozenScenarioContract:
             stageContractFor(
@@ -4608,10 +5307,17 @@ async function runStage(
         },
         delivery.dependencies,
       );
+      const exactContractMismatch = result.violations.some(
+        (violation) =>
+          violation.code === "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+      );
       const contract =
         input.manifest.simulationRequested &&
-        result.ok &&
-        result.data?.status === "complete"
+        result.data &&
+        (
+          (result.ok && result.data.status === "complete") ||
+          exactContractMismatch
+        )
           ? freezeOrValidateStageContract(
               input.manifest,
               stage,
@@ -6259,6 +6965,14 @@ async function executeStressTest(
     screeningMode,
     screening.warnings,
     input.manifest.profilePolicyHash,
+    input.manifest.requestedScenarioContract
+      ? projectTesseraScenarioContract(
+          input.manifest.requestedScenarioContract,
+          ["shooting", "fight"],
+          screeningMetrics,
+        )
+      : null,
+    input.configuration.providerCompatibilityMode,
   );
   const screeningIntegrity = screening.integrity;
   quarantineIntegrityAffectedScenarios(
@@ -6372,6 +7086,14 @@ async function executeStressTest(
       "full",
       deepDive.warnings,
       input.manifest.profilePolicyHash,
+      input.manifest.requestedScenarioContract
+        ? projectTesseraScenarioContract(
+            input.manifest.requestedScenarioContract,
+            ["shooting", "fight"],
+            DEEP_DIVE_METRICS,
+          )
+        : null,
+      input.configuration.providerCompatibilityMode,
     );
   } else if (!screeningStable) {
     deepWarnings.push(
@@ -6559,6 +7281,11 @@ async function executeStressTest(
     screeningReport,
     deepDiveReport,
   ]);
+  const providerCompatibilityEnvelopes =
+    compatibilityEnvelopesFromReports([
+      screeningReport,
+      deepDiveReport,
+    ]);
   if (providerIdentityDrift) {
     failures.push({
       stage: "report",
@@ -6591,14 +7318,15 @@ async function executeStressTest(
     runtime: getRuntimeProvenance(),
     tesseraUiIdentity:
       input.manifest.selectedSimulationBackend === "website"
-        ? [
+        ? combineTesseraUiIdentities([
             screeningReport?.tesseraUiIdentity,
             deepDiveReport?.tesseraUiIdentity,
-          ]
-            .filter((identity): identity is string => Boolean(identity))
-            .sort()
-            .join("|") || null
+          ])
         : null,
+    providerCompatibilityEnvelopes:
+      providerCompatibilityEnvelopes.length > 0
+        ? providerCompatibilityEnvelopes
+        : undefined,
     connectorEvents: [
       ...(screeningReport?.connectorEvents ?? []),
       ...(deepDiveReport?.connectorEvents ?? []),
@@ -6670,6 +7398,14 @@ async function executeStressTest(
     },
     failures,
     profilePolicyHash: input.configuration.profilePolicyHash,
+    scenarioContract: input.manifest.requestedScenarioContract,
+    scenarioContractSha256:
+      input.manifest.requestedScenarioContractSha256,
+    stageScenarioContracts: cloneStageContracts(
+      input.manifest.stageContracts,
+    ),
+    stageScenarioContractsSha256:
+      input.manifest.stageContractsSha256,
     pinnedData: {
       player: input.playerRoster.sourceData,
       opponents: unique(
@@ -7027,6 +7763,46 @@ export async function runRosterStressTest(
   );
   let simulationRequested = stressSimulationRequested(options);
   let simulationBackend = requestedSimulationBackend(options);
+  let requestedScenarioContract: TesseraFrozenScenarioContract[] | null = null;
+  try {
+    if (options.scenarioContract) {
+      if (
+        !simulationRequested &&
+        !options.resumeManifestPath &&
+        !options.restartManifestPath
+      ) {
+        throw Object.assign(
+          new Error(
+            "A Tessera scenario contract requires executionMode=simulate.",
+          ),
+          { code: "TESSERA_SCENARIO_CONTRACT_MISMATCH" },
+        );
+      }
+      requestedScenarioContract =
+        assertTesseraScenarioContractScope(
+          options.scenarioContract,
+          TESSERA_SCENARIO_PHASES,
+          FULL_METRICS,
+        );
+      assertTesseraScenarioContractProvider(
+        requestedScenarioContract,
+        selectedSimulationBackend(simulationBackend),
+      );
+    }
+  } catch (error) {
+    return failure(
+      error &&
+        typeof error === "object" &&
+        "code" in error &&
+        typeof error.code === "string"
+        ? error.code
+        : "TESSERA_SCENARIO_CONTRACT_INVALID",
+      error instanceof Error
+        ? error.message
+        : "The Tessera scenario contract is invalid.",
+      validation.warnings,
+    );
+  }
   const prospectiveRunId = crypto.randomUUID();
   const requestedOutput =
     options.outputDirectory ??
@@ -7108,12 +7884,44 @@ export async function runRosterStressTest(
           manifest.configuration.catalogueDriftMode,
       };
     }
+    if (options.providerCompatibilityMode === undefined) {
+      options = {
+        ...options,
+        providerCompatibilityMode:
+          manifest.configuration.providerCompatibilityMode,
+      };
+    }
     if (options.simulationBackend === undefined) {
       simulationBackend = manifest.simulationBackend;
       options = {
         ...options,
         simulationBackend,
       };
+    }
+    if (options.scenarioContract === undefined) {
+      requestedScenarioContract =
+        manifest.requestedScenarioContract;
+      options = {
+        ...options,
+        scenarioContract:
+          requestedScenarioContract ?? undefined,
+      };
+    }
+    try {
+      if (requestedScenarioContract) {
+        assertTesseraScenarioContractProvider(
+          requestedScenarioContract,
+          selectedSimulationBackend(simulationBackend),
+        );
+      }
+    } catch (error) {
+      return failure(
+        "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+        error instanceof Error
+          ? error.message
+          : "The requested scenario contract does not match the frozen simulation provider.",
+        validation.warnings,
+      );
     }
     resumed = !restarting;
     manifest.cachedLiveUpdateCheck =
@@ -7223,6 +8031,12 @@ export async function runRosterStressTest(
       manifest.simulationBackend !== simulationBackend ||
       manifest.selectedSimulationBackend !==
         selectedSimulationBackend(simulationBackend) ||
+      manifest.requestedScenarioContractSha256 !==
+        (requestedScenarioContract
+          ? tesseraScenarioContractSha256(
+              requestedScenarioContract,
+            )
+          : null) ||
       (
         !configurationMatches(manifest.configuration, configuration) &&
         !legacyConfigurationMatches &&
@@ -7231,7 +8045,7 @@ export async function runRosterStressTest(
     ) {
       return failure(
         "TESSERA_STRESS_RESUME_MISMATCH",
-        "The resume manifest does not match this player roster, opponent faction, suite, analysis strategy, simulation provider, or catalogue-drift policy.",
+        "The resume manifest does not match this player roster, opponent faction, suite, analysis strategy, simulation provider, scenario contract, or catalogue-drift policy.",
         validation.warnings,
       );
     }
@@ -7527,7 +8341,7 @@ export async function runRosterStressTest(
     ]);
     if (restarting) {
       const sourceManifest = manifest;
-    const restartedManifest = newManifest(
+      const restartedManifest = newManifest(
         playerRoster,
         sourceManifest.opponentFactionId,
         sourceManifest.portfolio,
@@ -7543,6 +8357,7 @@ export async function runRosterStressTest(
         prospectiveRunId,
         freshnessAtEntry?.data ??
           sourceManifest.cachedLiveUpdateCheck,
+        sourceManifest.requestedScenarioContract,
       );
       restartedManifest.preparedPlayer =
         sourceManifest.preparedPlayer;
@@ -7757,6 +8572,7 @@ export async function runRosterStressTest(
       initialWarnings,
       prospectiveRunId,
       freshnessAtEntry?.data ?? null,
+      requestedScenarioContract,
     );
     try {
       await resolveExportArtifactTargets(
@@ -8602,6 +9418,8 @@ export async function compareRosterStressRevision(
     baselineManifest.profilePolicy,
     [],
     revisionRunId,
+    null,
+    baselineManifest.requestedScenarioContract,
   );
   const revisionRunDirectory = path.join(
     outputDirectory,

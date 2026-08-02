@@ -125,12 +125,18 @@ function fullResult(): TesseraBrowserResult {
         expectedUnitCount: 1,
         action: "reused",
         contentSha256: "a".repeat(64),
+        semanticSnapshotSource: "verified-cache" as const,
+        semanticSnapshotSha256: "c".repeat(64),
+        semanticSnapshotReceiptSha256: "d".repeat(64),
       },
       opponent: {
         name: `RP-CERT-B-${"b".repeat(24)}`,
         expectedUnitCount: 1,
         action: "imported",
         contentSha256: "b".repeat(64),
+        semanticSnapshotSource: "fresh-import" as const,
+        semanticSnapshotSha256: "e".repeat(64),
+        semanticSnapshotReceiptSha256: "f".repeat(64),
       },
     },
     warnings: ["One scenario could not be captured."],
@@ -687,6 +693,103 @@ test("the certification boundary rejects malformed local-agent Tessera responses
     },
   );
   assert.equal(writes, 0);
+});
+
+test("the certification boundary retains validated website provider evidence and uncertainty", () => {
+  const result = fullResult();
+  result.scenarios[0].cells[0].uncertainty = {
+    sampleCount: 10_000,
+    standardDeviation: 0.4,
+    standardError: 0.004,
+    completeness: "complete",
+  };
+  const semanticSnapshot = {
+    schemaVersion: 1 as const,
+    side: "player" as const,
+    armyName: "Fixture player",
+    reportedUnitCount: 1,
+    units: [
+      {
+        occurrence: 1,
+        name: "Fixture unit",
+        modelCount: 1,
+        included: true,
+        weapons: [
+          {
+            occurrence: 1,
+            name: "Fixture weapon",
+            profile: null,
+            count: 1,
+            visibleCharacteristics: [
+              { name: "Strength", value: "4" },
+            ],
+            effectToggles: [
+              { name: "Lethal Hits", state: false },
+            ],
+          },
+        ],
+        visibleCharacteristics: [
+          { name: "Toughness", value: "4" },
+        ],
+        effectToggles: [],
+      },
+    ],
+    warningCodes: [],
+    alternateProfileResolutions: [],
+    completeness: "complete" as const,
+    incompleteReasons: [],
+  };
+  result.providerEvidence = {
+    schemaVersion: 1,
+    deployment: {
+      identitySha256: "1".repeat(64),
+      declaredVersion: null,
+      assets: [
+        {
+          url: "https://playtessera.gg/app.js",
+          sameOrigin: true,
+          sha256: "2".repeat(64),
+          byteLength: 128,
+        },
+      ],
+      complete: true,
+      completeness: "complete",
+      declarationSha256: "3".repeat(64),
+      incompleteReasons: [],
+    },
+    importSemantics: {
+      combinedSha256: "4".repeat(64),
+      playerSha256: "5".repeat(64),
+      opponentSha256: "6".repeat(64),
+      complete: true,
+      completeness: "complete",
+      unresolvedEffectCount: 0,
+      playerSnapshot: semanticSnapshot,
+      opponentSnapshot: {
+        ...semanticSnapshot,
+        side: "opponent",
+        armyName: "Fixture opponent",
+      },
+      incompleteReasons: [],
+    },
+  };
+
+  const parsed = parseCertificationTesseraBrowserResult(result);
+  assert.deepEqual(parsed.providerEvidence, result.providerEvidence);
+  assert.deepEqual(
+    parsed.scenarios[0].cells[0].uncertainty,
+    result.scenarios[0].cells[0].uncertainty,
+  );
+
+  const malformed = structuredClone(result);
+  malformed.providerEvidence!.deployment.identitySha256 = "not-a-hash";
+  assert.throws(
+    () => parseCertificationTesseraBrowserResult(malformed),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { code?: string }).code ===
+        "CERTIFICATION_TESSERA_RESULT_INVALID",
+  );
 });
 
 test("live resume preserves the exact prior report as a content-addressed bundle artifact", async () => {

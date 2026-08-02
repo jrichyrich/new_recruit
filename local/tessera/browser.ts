@@ -8,8 +8,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
   ProfilePolicyV1,
+  TesseraCellUncertainty,
   TesseraFrozenScenarioContract,
+  TesseraImportedArmySemanticSnapshot,
+  TesseraImportedArmySimulationStateBinding,
+  TesseraImportedSemanticToggle,
+  TesseraImportedSemanticValue,
+  TesseraImportedUnitSemantic,
+  TesseraImportedWeaponSemantic,
   TesseraPreparedRoster,
+  TesseraWebsiteProviderEvidence,
 } from "../../lib/rosterpilot";
 import {
   normalizeProfileIdentity,
@@ -22,8 +30,21 @@ import {
   type TesseraSavedListReuse,
   type TesseraSavedListReuseAction,
 } from "./saved-list-reuse";
+import {
+  createTesseraImportSemanticSnapshotCacheKey,
+  loadTesseraImportSemanticSnapshot,
+  storeTesseraImportSemanticSnapshot,
+  type TesseraImportSemanticSnapshotCacheKey,
+} from "./semantic-snapshot-cache";
+import {
+  createTesseraImportedArmySimulationStateBinding,
+  tesseraImportedArmySemanticEvidenceIncompleteReasons,
+  tesseraImportedArmySemanticSnapshotIncompleteReasons,
+} from "./website-semantic-evidence";
 
 export const TESSERA_URL = "https://playtessera.gg/" as const;
+export const TESSERA_WEBSITE_ADAPTER_VERSION =
+  "website-browser-v3" as const;
 
 export const TESSERA_PHASES = ["shooting", "fight"] as const;
 export type TesseraPhase = (typeof TESSERA_PHASES)[number];
@@ -113,6 +134,8 @@ export type TesseraMatrixCell = {
   killProbability: number | null;
   expectedDamage: number | null;
   damagePer100Points: number | null;
+  /** Uncertainty visibly exposed for this cell; never inferred. */
+  uncertainty?: TesseraCellUncertainty;
 };
 
 export type TesseraScenarioCell = TesseraMatrixCell & {
@@ -184,6 +207,7 @@ export type TesseraImportIssue = {
 
 export type TesseraBrowserResult = {
   uiIdentity?: string | null;
+  providerEvidence?: TesseraWebsiteProviderEvidence;
   legacyProjection?: {
     status: "derived" | "unavailable";
     phase: TesseraPhase | null;
@@ -205,9 +229,105 @@ export type TesseraBrowserResult = {
   warnings: string[];
 };
 
-async function tesseraUiIdentity(page: Page): Promise<string | null> {
+export type TesseraUiAssetObservation = {
+  url: string;
+  sameOrigin: boolean;
+  sha256: string | null;
+  byteLength: number | null;
+  failureCode: string | null;
+};
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function canonicalSha256(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalValue(value)))
+    .digest("hex");
+}
+
+export function tesseraDeploymentEvidenceFromObservations(input: {
+  origin: string;
+  declaredVersion: string | null;
+  declarations: string[];
+  assets: TesseraUiAssetObservation[];
+}): TesseraWebsiteProviderEvidence["deployment"] {
+  const declarations = [...input.declarations].sort();
+  const assets = [...input.assets].sort((left, right) =>
+    left.url.localeCompare(right.url)
+  );
+  const declarationSha256 = canonicalSha256({
+    origin: input.origin,
+    declaredVersion: input.declaredVersion,
+    scripts: declarations,
+  });
+  const hashedAssets = assets.filter((asset) => asset.sha256 !== null);
+  const sameOriginAssets = assets.filter((asset) => asset.sameOrigin);
+  const unresolvedSameOriginAssets = sameOriginAssets.filter(
+    (asset) => asset.sha256 === null,
+  );
+  const incompleteReasons = [
+    ...(unresolvedSameOriginAssets.length > 0
+      ? ["same-origin-script-bytes-unavailable"]
+      : []),
+    ...(sameOriginAssets.length === 0
+      ? ["no-same-origin-script-assets"]
+      : []),
+  ];
+  const completeness =
+    sameOriginAssets.length > 0 &&
+    unresolvedSameOriginAssets.length === 0
+      ? "complete"
+      : hashedAssets.length > 0
+        ? "partial"
+        : "fallback";
+  const identitySha256 =
+    hashedAssets.length === 0
+      ? declarationSha256
+      : canonicalSha256({
+          schemaVersion: 1,
+          origin: input.origin,
+          declaredVersion: input.declaredVersion,
+          scripts: assets.map((asset) => ({
+            url: asset.url,
+            sameOrigin: asset.sameOrigin,
+            sha256: asset.sha256,
+            byteLength: asset.byteLength,
+          })),
+        });
+  return {
+    identitySha256,
+    declaredVersion: input.declaredVersion,
+    assets: assets.map((asset) => ({
+      url: asset.url,
+      sameOrigin: asset.sameOrigin,
+      sha256: asset.sha256,
+      byteLength: asset.byteLength,
+    })),
+    complete: completeness === "complete",
+    completeness,
+    declarationSha256,
+    incompleteReasons,
+  };
+}
+
+async function tesseraDeploymentEvidence(
+  page: Page,
+): Promise<TesseraWebsiteProviderEvidence["deployment"]> {
   try {
-    const scripts = await page
+    const pageUrl = new URL(page.url());
+    const origin = pageUrl.origin;
+    const declarations = await page
       .locator("script[src]")
       .evaluateAll((elements) =>
         elements
@@ -215,22 +335,143 @@ async function tesseraUiIdentity(page: Page): Promise<string | null> {
           .filter(Boolean)
           .sort(),
       );
-    const declaredVersion = await page
+    const versionMeta = page
       .locator('meta[name="version"], meta[name="app-version"]')
-      .first()
-      .getAttribute("content")
-      .catch(() => null);
-    return createHash("sha256")
-      .update(
-        JSON.stringify({
-          origin: new URL(page.url()).origin,
-          declaredVersion,
-          scripts,
-        }),
-      )
-      .digest("hex");
+      .first();
+    const declaredVersion =
+      (await versionMeta.count()) === 1
+        ? await versionMeta.getAttribute("content").catch(() => null)
+        : null;
+    const resolved = declarations.map((declaration) => {
+      try {
+        const url = new URL(declaration, pageUrl);
+        url.hash = "";
+        url.username = "";
+        url.password = "";
+        return {
+          url: url.toString(),
+          sameOrigin:
+            (url.protocol === "http:" || url.protocol === "https:") &&
+            url.origin === origin,
+        };
+      } catch {
+        return {
+          url: declaration,
+          sameOrigin: false,
+        };
+      }
+    });
+    const safeUrls = [
+      ...new Set(
+        resolved
+          .filter((asset) => asset.sameOrigin)
+          .map((asset) => asset.url),
+      ),
+    ];
+    const fetched = await page.evaluate(
+      async ({ urls, maximumAssetBytes }) => {
+        const observations: Array<{
+          url: string;
+          sha256: string | null;
+          byteLength: number | null;
+          failureCode: string | null;
+        }> = [];
+        for (const url of urls) {
+          try {
+            const response = await fetch(url, {
+              cache: "no-store",
+              credentials: "same-origin",
+              redirect: "error",
+            });
+            if (!response.ok) {
+              observations.push({
+                url,
+                sha256: null,
+                byteLength: null,
+                failureCode: `http-${response.status}`,
+              });
+              continue;
+            }
+            const declaredLength = Number(
+              response.headers.get("content-length"),
+            );
+            if (
+              Number.isFinite(declaredLength) &&
+              declaredLength > maximumAssetBytes
+            ) {
+              observations.push({
+                url,
+                sha256: null,
+                byteLength: declaredLength,
+                failureCode: "asset-too-large",
+              });
+              continue;
+            }
+            const bytes = await response.arrayBuffer();
+            if (bytes.byteLength > maximumAssetBytes) {
+              observations.push({
+                url,
+                sha256: null,
+                byteLength: bytes.byteLength,
+                failureCode: "asset-too-large",
+              });
+              continue;
+            }
+            const digest = await crypto.subtle.digest("SHA-256", bytes);
+            const sha256 = [...new Uint8Array(digest)]
+              .map((value) => value.toString(16).padStart(2, "0"))
+              .join("");
+            observations.push({
+              url,
+              sha256,
+              byteLength: bytes.byteLength,
+              failureCode: null,
+            });
+          } catch {
+            observations.push({
+              url,
+              sha256: null,
+              byteLength: null,
+              failureCode: "fetch-failed",
+            });
+          }
+        }
+        return observations;
+      },
+      {
+        urls: safeUrls,
+        maximumAssetBytes: 16 * 1024 * 1024,
+      },
+    );
+    const fetchedByUrl = new Map(
+      fetched.map((asset) => [asset.url, asset]),
+    );
+    return tesseraDeploymentEvidenceFromObservations({
+      origin,
+      declaredVersion,
+      declarations,
+      assets: resolved.map((asset) => {
+        const observation = fetchedByUrl.get(asset.url);
+        return {
+          ...asset,
+          sha256: observation?.sha256 ?? null,
+          byteLength: observation?.byteLength ?? null,
+          failureCode:
+            observation?.failureCode ??
+            (asset.sameOrigin ? "fetch-unavailable" : "cross-origin"),
+        };
+      }),
+    });
   } catch {
-    return null;
+    return {
+      identitySha256: null,
+      declaredVersion: null,
+      assets: [],
+      complete: false,
+      completeness: "unavailable",
+      declarationSha256: null,
+      incompleteReasons: ["deployment-evidence-capture-failed"],
+    };
   }
 }
 
@@ -250,6 +491,8 @@ export type TesseraBrowserInput = {
   profilePolicy?: ProfilePolicyV1 | null;
   frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
   savedListReuse?: TesseraSavedListReuse | null;
+  /** Local-agent-owned evidence store; never sent to Tessera. */
+  semanticSnapshotCacheDirectory?: string | null;
   sessionId?: string;
 };
 
@@ -268,11 +511,13 @@ type PreparedSavedListReuse = {
     name: string;
     expectedUnitCount: number;
     contentSha256: string;
+    semanticSnapshotCacheKey: TesseraImportSemanticSnapshotCacheKey;
   };
   opponent: {
     name: string;
     expectedUnitCount: number;
     contentSha256: string;
+    semanticSnapshotCacheKey: TesseraImportSemanticSnapshotCacheKey;
   };
 };
 
@@ -359,6 +604,11 @@ async function prepareSavedListReuse(
       expectedUnitCount: reuse.player.expectedUnitCount,
       contentSha256:
         reuse.player.enrichedRoszSha256.toLocaleLowerCase(),
+      semanticSnapshotCacheKey:
+        createTesseraImportSemanticSnapshotCacheKey(
+          "player",
+          reuse.player,
+        ),
     },
     opponent: {
       name: deterministicTesseraSavedListName(
@@ -368,6 +618,11 @@ async function prepareSavedListReuse(
       expectedUnitCount: reuse.opponent.expectedUnitCount,
       contentSha256:
         reuse.opponent.enrichedRoszSha256.toLocaleLowerCase(),
+      semanticSnapshotCacheKey:
+        createTesseraImportSemanticSnapshotCacheKey(
+          "opponent",
+          reuse.opponent,
+        ),
     },
   };
 }
@@ -379,6 +634,56 @@ function numberFrom(
 ): number | null {
   const match = value.match(pattern);
   return match ? Number(match[1]) / divisor : null;
+}
+
+function visibleStatistic(
+  text: string,
+  pattern: RegExp,
+): number | null {
+  const match = text.match(pattern);
+  if (!match) return null;
+  const value = Number(match[1].replaceAll(",", ""));
+  if (!Number.isFinite(value) || value < 0) return null;
+  return match[2] === "%" ? value / 100 : value;
+}
+
+export function parseTesseraCellUncertainty(
+  text: string,
+): TesseraCellUncertainty {
+  const sampleMatch = text.match(
+    /(?:^|[\s[(;,])(?:n|samples?|sample\s+count)\s*[:=]?\s*(\d[\d,]*)\b/i,
+  );
+  const sampleCount = sampleMatch
+    ? Number(sampleMatch[1].replaceAll(",", ""))
+    : null;
+  const standardError = visibleStatistic(
+    text,
+    /(?:standard\s+error|std\.?\s*err(?:or)?|s\.?e\.?)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
+  );
+  const standardDeviation = visibleStatistic(
+    text,
+    /(?:standard\s+deviation|std\.?\s*dev(?:iation)?|s\.?d\.?|σ)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
+  );
+  const validSampleCount =
+    Number.isSafeInteger(sampleCount) && sampleCount! > 0
+      ? sampleCount
+      : null;
+  const observed = [
+    validSampleCount,
+    standardDeviation,
+    standardError,
+  ].filter((value) => value !== null).length;
+  return {
+    sampleCount: validSampleCount,
+    standardDeviation,
+    standardError,
+    completeness:
+      observed === 3
+        ? "complete"
+        : observed > 0
+          ? "partial"
+          : "unavailable",
+  };
 }
 
 export function parseTesseraMatrixTable(
@@ -417,6 +722,7 @@ export function parseTesseraMatrixTable(
           killProbability,
           expectedDamage,
           damagePer100Points,
+          uncertainty: parseTesseraCellUncertainty(text),
         });
       }
     });
@@ -525,6 +831,61 @@ function importedUnitModelCount(text: string): number | null {
   return null;
 }
 
+function importedUnitName(label: string): string {
+  return label
+    .replace(/^include\s+/i, "")
+    .replace(
+      /\s*(?:[,;:()\-–—]\s*)?\d+\s*(?:models?|miniatures?)\b.*$/i,
+      "",
+    )
+    .trim();
+}
+
+type ImportedReviewUnitRow = {
+  checkbox: Locator;
+  row: Locator;
+  name: string;
+  occurrence: number;
+  modelCount: number | null;
+};
+
+async function allImportedUnitRows(
+  page: Page,
+): Promise<ImportedReviewUnitRow[]> {
+  const checkboxes = page.locator(
+    'main input[type="checkbox"][aria-label]',
+  );
+  const rows: ImportedReviewUnitRow[] = [];
+  const occurrences = new Map<string, number>();
+  for (let index = 0; index < (await checkboxes.count()); index += 1) {
+    const checkbox = checkboxes.nth(index);
+    const label =
+      (await checkbox.getAttribute("aria-label").catch(() => null)) ?? "";
+    if (!/^include\s+/i.test(label)) continue;
+    const name = importedUnitName(label);
+    if (!name) continue;
+    let row = checkbox.locator(
+      "xpath=ancestor::*[.//button[normalize-space()='Edit']][1]",
+    );
+    if ((await row.count()) !== 1) {
+      row = checkbox.locator("xpath=ancestor::label[1]/..");
+    }
+    if ((await row.count()) !== 1) continue;
+    const key = normalized(name);
+    const occurrence = (occurrences.get(key) ?? 0) + 1;
+    occurrences.set(key, occurrence);
+    const text = await row.innerText().catch(() => "");
+    rows.push({
+      checkbox,
+      row,
+      name,
+      occurrence,
+      modelCount: importedUnitModelCount(`${label} ${text}`),
+    });
+  }
+  return rows;
+}
+
 async function importedUnitRows(
   page: Page,
   unit: string,
@@ -533,38 +894,13 @@ async function importedUnitRows(
   row: Locator;
   modelCount: number | null;
 }>> {
-  const checkboxes = page.locator(
-    'main input[type="checkbox"][aria-label]',
-  );
-  const rows: Array<{
-    checkbox: Locator;
-    row: Locator;
-    modelCount: number | null;
-  }> = [];
-  for (let index = 0; index < (await checkboxes.count()); index += 1) {
-    const checkbox = checkboxes.nth(index);
-    const label =
-      (await checkbox.getAttribute("aria-label").catch(() => null)) ?? "";
-    const includedUnit = label.replace(/^include\s+/i, "").trim();
-    const includedUnitName = includedUnit
-      .replace(
-        /\s*(?:[,;:()\-–—]\s*)?\d+\s*(?:models?|miniatures?)\b.*$/i,
-        "",
-      )
-      .trim();
-    if (normalized(includedUnitName) !== normalized(unit)) continue;
-    const row = checkbox.locator(
-      "xpath=ancestor::*[.//button[normalize-space()='Edit']][1]",
-    );
-    if ((await row.count()) !== 1) continue;
-    const text = await row.innerText().catch(() => "");
-    rows.push({
+  return (await allImportedUnitRows(page))
+    .filter((row) => normalized(row.name) === normalized(unit))
+    .map(({ checkbox, row, modelCount }) => ({
       checkbox,
       row,
-      modelCount: importedUnitModelCount(`${label} ${text}`),
-    });
-  }
-  return rows;
+      modelCount,
+    }));
 }
 
 async function importedUnitRowForEntry(
@@ -878,6 +1214,525 @@ async function applyProfilePolicy(
   }
 }
 
+function normalizedSemanticText(value: string): string {
+  return normalized(value.replace(/\s+/g, " "));
+}
+
+function uniqueSemanticValues(
+  values: TesseraImportedSemanticValue[],
+): TesseraImportedSemanticValue[] {
+  return [
+    ...new Map(
+      values
+        .filter((entry) => entry.name && entry.value)
+        .map((entry) => [
+          `${entry.name}\u0000${entry.value}`,
+          entry,
+        ]),
+    ).values(),
+  ].sort(
+    (left, right) =>
+      left.name.localeCompare(right.name) ||
+      left.value.localeCompare(right.value),
+  );
+}
+
+function uniqueSemanticToggles(
+  toggles: TesseraImportedSemanticToggle[],
+): TesseraImportedSemanticToggle[] {
+  return [
+    ...new Map(
+      toggles
+        .filter((entry) => entry.name)
+        .map((entry) => [
+          `${entry.name}\u0000${String(entry.state)}`,
+          entry,
+        ]),
+    ).values(),
+  ].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function semanticSurface(locator: Locator): Promise<{
+  visibleCharacteristics: TesseraImportedSemanticValue[];
+  effectToggles: TesseraImportedSemanticToggle[];
+}> {
+  const observed = await locator.evaluate((root) => {
+    const visible = (element: Element): boolean => {
+      const html = element as HTMLElement;
+      const style = window.getComputedStyle(html);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        !html.hidden &&
+        html.getClientRects().length > 0
+      );
+    };
+    const labelFor = (element: Element): string => {
+      const control = element as HTMLInputElement;
+      return (
+        element.getAttribute("aria-label") ??
+        element.getAttribute("name") ??
+        element.getAttribute("placeholder") ??
+        control.labels?.[0]?.textContent ??
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+    };
+    const values: Array<{ name: string; value: string }> = [];
+    const toggles: Array<{
+      name: string;
+      state: boolean | null;
+    }> = [];
+    for (const element of root.querySelectorAll(
+      "input, select, textarea, output",
+    )) {
+      if (!visible(element)) continue;
+      const input = element as HTMLInputElement;
+      const type = (input.type ?? "").toLocaleLowerCase();
+      const name = labelFor(element);
+      if (!name || type === "hidden" || type === "file") continue;
+      if (type === "checkbox" || type === "radio") {
+        if (!/^include\s+/i.test(name)) {
+          toggles.push({ name, state: input.checked });
+        }
+        continue;
+      }
+      const value =
+        element instanceof HTMLSelectElement
+          ? element.selectedOptions[0]?.textContent ?? element.value
+          : input.value ?? element.textContent ?? "";
+      values.push({ name, value: value.trim() });
+    }
+    for (const element of root.querySelectorAll(
+      '[role="switch"], [aria-checked], button[aria-pressed]',
+    )) {
+      if (!visible(element)) continue;
+      const raw =
+        element.getAttribute("aria-checked") ??
+        element.getAttribute("aria-pressed");
+      toggles.push({
+        name:
+          labelFor(element) ||
+          (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+        state: raw === "true" ? true : raw === "false" ? false : null,
+      });
+    }
+    for (const row of root.querySelectorAll("tr")) {
+      if (!visible(row)) continue;
+      const cells = [...row.querySelectorAll("th, td")]
+        .map((cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      if (cells.length === 2) {
+        values.push({ name: cells[0], value: cells[1] });
+      }
+    }
+    const terms = [...root.querySelectorAll("dt")];
+    for (const term of terms) {
+      if (!visible(term)) continue;
+      const description = term.nextElementSibling;
+      if (!description || description.tagName !== "DD") continue;
+      values.push({
+        name: (term.textContent ?? "").trim(),
+        value: (description.textContent ?? "").trim(),
+      });
+    }
+    return { values, toggles };
+  });
+  return {
+    visibleCharacteristics: uniqueSemanticValues(
+      observed.values.map((entry) => ({
+        name: normalizedSemanticText(entry.name),
+        value: normalizedSemanticText(entry.value),
+      })),
+    ),
+    effectToggles: uniqueSemanticToggles(
+      observed.toggles.map((entry) => ({
+        name: normalizedSemanticText(entry.name),
+        state: entry.state,
+      })),
+    ),
+  };
+}
+
+function splitImportedWeaponName(value: string): {
+  name: string;
+  profile: string | null;
+} {
+  const delimiter = value.match(/\s+(?:-|–|—|:)\s+/);
+  if (!delimiter?.index) {
+    return { name: normalizedSemanticText(value), profile: null };
+  }
+  return {
+    name: normalizedSemanticText(value.slice(0, delimiter.index)),
+    profile: normalizedSemanticText(
+      value.slice(delimiter.index + delimiter[0].length),
+    ),
+  };
+}
+
+async function closeImportedUnitEditor(page: Page): Promise<void> {
+  const cancel = page
+    .getByRole("button", { name: /^(?:cancel|back|close)$/i })
+    .first();
+  if (await cancel.isVisible().catch(() => false)) {
+    await cancel.click();
+  } else {
+    const save = page.getByRole("button", {
+      name: "Save",
+      exact: true,
+    });
+    if (
+      (await save.count()) !== 1 ||
+      !(await save.isEnabled().catch(() => false))
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_IMPORT_SEMANTIC_CAPTURE_INCOMPLETE",
+        "Tessera did not expose a safe way to leave its imported-unit editor after semantic inspection.",
+      );
+    }
+    await save.click();
+  }
+  await page
+    .getByText("Review import", { exact: true })
+    .waitFor({ state: "visible", timeout: 10_000 });
+}
+
+async function captureImportedUnitEditor(
+  page: Page,
+  identity: Pick<
+    ImportedReviewUnitRow,
+    "name" | "occurrence" | "modelCount"
+  >,
+): Promise<{
+  weapons: TesseraImportedWeaponSemantic[];
+  visibleCharacteristics: TesseraImportedSemanticValue[];
+  effectToggles: TesseraImportedSemanticToggle[];
+} | null> {
+  const row = (await allImportedUnitRows(page)).find(
+    (candidate) =>
+      normalized(candidate.name) === normalized(identity.name) &&
+      candidate.occurrence === identity.occurrence &&
+      (
+        identity.modelCount === null ||
+        candidate.modelCount === identity.modelCount
+      ),
+  );
+  if (!row) return null;
+  const edit = row.row.getByRole("button", {
+    name: "Edit",
+    exact: true,
+  });
+  if ((await edit.count()) !== 1) return null;
+  await edit.click();
+  await page
+    .getByText("Edit imported unit", { exact: true })
+    .waitFor({ state: "visible", timeout: 10_000 });
+  try {
+    const weaponNames = page.locator('main input[placeholder="Weapon name"]');
+    const occurrences = new Map<string, number>();
+    const weapons: TesseraImportedWeaponSemantic[] = [];
+    for (let index = 0; index < (await weaponNames.count()); index += 1) {
+      const weaponNameControl = weaponNames.nth(index);
+      const rawName = await weaponNameControl.inputValue();
+      const split = splitImportedWeaponName(rawName);
+      const countControl = await profileCountControl(weaponNameControl);
+      const parsedCount = countControl
+        ? Number(await countControl.inputValue())
+        : Number.NaN;
+      let container = weaponNameControl.locator("xpath=..");
+      for (let depth = 0; depth < 4; depth += 1) {
+        if (
+          (await container
+            .locator('input[placeholder="Weapon name"]')
+            .count()) === 1 &&
+          (await container
+            .locator(
+              'input[aria-label="Count" i], input[name="count" i], input[type="number"]',
+            )
+            .count()) >= 1
+        ) {
+          break;
+        }
+        container = container.locator("xpath=..");
+      }
+      const surface = await semanticSurface(container);
+      const key = `${split.name}\u0000${split.profile ?? ""}`;
+      const occurrence = (occurrences.get(key) ?? 0) + 1;
+      occurrences.set(key, occurrence);
+      weapons.push({
+        occurrence,
+        name: split.name,
+        profile: split.profile,
+        count:
+          Number.isSafeInteger(parsedCount) && parsedCount >= 0
+            ? parsedCount
+            : null,
+        visibleCharacteristics: surface.visibleCharacteristics.filter(
+          (entry) =>
+            !/^(?:weapon name|count)$/i.test(entry.name),
+        ),
+        effectToggles: surface.effectToggles,
+      });
+    }
+    const mainSurface = await semanticSurface(page.locator("main"));
+    return {
+      weapons: weapons.sort(
+        (left, right) =>
+          left.name.localeCompare(right.name) ||
+          (left.profile ?? "").localeCompare(right.profile ?? "") ||
+          left.occurrence - right.occurrence,
+      ),
+      visibleCharacteristics:
+        mainSurface.visibleCharacteristics.filter(
+          (entry) =>
+            !/^(?:weapon name|count)$/i.test(entry.name),
+        ),
+      effectToggles: mainSurface.effectToggles,
+    };
+  } finally {
+    await closeImportedUnitEditor(page);
+  }
+}
+
+function unavailableImportedArmySnapshot(
+  side: TesseraImportIssue["side"],
+  reason: string,
+): TesseraImportedArmySemanticSnapshot {
+  return {
+    schemaVersion: 1,
+    side,
+    armyName: null,
+    reportedUnitCount: null,
+    units: [],
+    warningCodes: [],
+    alternateProfileResolutions: [],
+    completeness: "unavailable",
+    incompleteReasons: [reason],
+  };
+}
+
+async function captureImportedArmySemanticSnapshot(
+  page: Page,
+  side: TesseraImportIssue["side"],
+  issues: TesseraImportIssue[],
+  reportedUnitCount: number,
+): Promise<TesseraImportedArmySemanticSnapshot> {
+  const listName = page.getByRole("textbox", {
+    name: "Save to list (army name)",
+    exact: true,
+  });
+  const armyName =
+    (await listName.count()) === 1
+      ? normalizedSemanticText(await listName.inputValue())
+      : null;
+  const rows = await allImportedUnitRows(page);
+  const units: TesseraImportedUnitSemantic[] = [];
+  const incompleteReasons: string[] = [];
+  let capturedEditors = 0;
+  for (const row of rows) {
+    const rowSurface = await semanticSurface(row.row);
+    let editor: Awaited<ReturnType<typeof captureImportedUnitEditor>> = null;
+    try {
+      editor = await captureImportedUnitEditor(page, row);
+    } catch (error) {
+      if (
+        (await page
+          .getByText("Review import", { exact: true })
+          .count()) === 0
+      ) {
+        throw error;
+      }
+      incompleteReasons.push(
+        `unit-editor-capture-failed:${normalizedSemanticText(row.name)}:${row.occurrence}`,
+      );
+    }
+    if (editor) capturedEditors += 1;
+    units.push({
+      occurrence: row.occurrence,
+      name: normalizedSemanticText(row.name),
+      modelCount: row.modelCount,
+      included: await row.checkbox.isChecked().catch(() => null),
+      weapons: editor?.weapons ?? [],
+      visibleCharacteristics: uniqueSemanticValues([
+        ...rowSurface.visibleCharacteristics,
+        ...(editor?.visibleCharacteristics ?? []),
+      ]),
+      effectToggles: uniqueSemanticToggles([
+        ...rowSurface.effectToggles,
+        ...(editor?.effectToggles ?? []),
+      ]),
+    });
+  }
+  if (rows.length !== reportedUnitCount) {
+    incompleteReasons.push(
+      `review-unit-row-count:${rows.length}/${reportedUnitCount}`,
+    );
+  }
+  if (rows.some((row) => row.modelCount === null)) {
+    incompleteReasons.push("model-count-not-visible-for-every-unit");
+  }
+  if (capturedEditors !== rows.length) {
+    incompleteReasons.push(
+      `unit-editor-coverage:${capturedEditors}/${rows.length}`,
+    );
+  }
+  const unresolvedIssues = issues.filter(
+    (issue) =>
+      !issue.resolvedByPolicy &&
+      (
+        issue.code === "alternate-profile" ||
+        issue.code === "unverified-import" ||
+        issue.code === "import-warning"
+      ),
+  );
+  if (unresolvedIssues.length > 0) {
+    incompleteReasons.push(
+      `unresolved-import-effects:${unresolvedIssues.length}`,
+    );
+  }
+  const snapshot: TesseraImportedArmySemanticSnapshot = {
+    schemaVersion: 1,
+    side,
+    armyName,
+    reportedUnitCount,
+    units: units.sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) ||
+        (left.modelCount ?? -1) - (right.modelCount ?? -1) ||
+        left.occurrence - right.occurrence,
+    ),
+    warningCodes: issues.map((issue) => issue.code).sort(),
+    alternateProfileResolutions: issues
+      .filter((issue) => issue.code === "alternate-profile")
+      .map((issue) => ({
+        unit: issue.unit
+          ? normalizedSemanticText(issue.unit)
+          : null,
+        weaponGroup: issue.weaponGroup
+          ? normalizedSemanticText(issue.weaponGroup)
+          : null,
+        availableProfiles: issue.availableProfiles
+          .map(normalizedSemanticText)
+          .sort(),
+        selectedProfile: issue.selectedProfile
+          ? normalizedSemanticText(issue.selectedProfile)
+          : null,
+        resolvedByPolicy: issue.resolvedByPolicy,
+      }))
+      .sort((left, right) =>
+        `${left.unit ?? ""}|${left.weaponGroup ?? ""}`.localeCompare(
+          `${right.unit ?? ""}|${right.weaponGroup ?? ""}`,
+        )
+      ),
+    completeness: "partial",
+    incompleteReasons: [],
+  };
+  incompleteReasons.push(
+    ...tesseraImportedArmySemanticSnapshotIncompleteReasons(snapshot),
+  );
+  snapshot.incompleteReasons = [...new Set(incompleteReasons)].sort();
+  snapshot.completeness =
+    snapshot.incompleteReasons.length === 0 ? "complete" : "partial";
+  return snapshot;
+}
+
+function unresolvedEffectCount(
+  snapshot: TesseraImportedArmySemanticSnapshot,
+): number {
+  const unresolvedIssues = snapshot.warningCodes.filter(
+    (code) => code !== "alternate-profile",
+  ).length + snapshot.alternateProfileResolutions.filter(
+    (resolution) => !resolution.resolvedByPolicy,
+  ).length;
+  const unresolvedToggles = snapshot.units.reduce(
+    (total, unit) =>
+      total +
+      unit.effectToggles.filter((toggle) => toggle.state === null).length +
+      unit.weapons.reduce(
+        (weaponTotal, weapon) =>
+          weaponTotal +
+          weapon.effectToggles.filter(
+            (toggle) => toggle.state === null,
+          ).length,
+        0,
+      ),
+    0,
+  );
+  return unresolvedIssues + unresolvedToggles;
+}
+
+export function tesseraImportSemanticEvidenceFromSnapshots(
+  playerSnapshot: TesseraImportedArmySemanticSnapshot | null,
+  opponentSnapshot: TesseraImportedArmySemanticSnapshot | null,
+  stateBindings?: {
+    player: TesseraImportedArmySimulationStateBinding | null;
+    opponent: TesseraImportedArmySimulationStateBinding | null;
+  },
+): TesseraWebsiteProviderEvidence["importSemantics"] {
+  const playerSha256 = playerSnapshot
+    ? canonicalSha256(playerSnapshot)
+    : null;
+  const opponentSha256 = opponentSnapshot
+    ? canonicalSha256(opponentSnapshot)
+    : null;
+  const combinedSha256 =
+    playerSha256 && opponentSha256
+      ? canonicalSha256({ playerSha256, opponentSha256 })
+      : null;
+  const unresolved =
+    (playerSnapshot ? unresolvedEffectCount(playerSnapshot) : 0) +
+    (opponentSnapshot ? unresolvedEffectCount(opponentSnapshot) : 0);
+  const playerEvidenceReasons = playerSnapshot
+    ? tesseraImportedArmySemanticEvidenceIncompleteReasons(
+        playerSnapshot,
+        stateBindings?.player,
+      )
+    : ["snapshot-unavailable"];
+  const opponentEvidenceReasons = opponentSnapshot
+    ? tesseraImportedArmySemanticEvidenceIncompleteReasons(
+        opponentSnapshot,
+        stateBindings?.opponent,
+      )
+    : ["snapshot-unavailable"];
+  const complete =
+    playerSnapshot?.completeness === "complete" &&
+    opponentSnapshot?.completeness === "complete" &&
+    unresolved === 0 &&
+    playerEvidenceReasons.length === 0 &&
+    opponentEvidenceReasons.length === 0;
+  const incompleteReasons = [
+    ...(playerSnapshot?.incompleteReasons ?? ["player-snapshot-unavailable"])
+      .map((reason) => `player:${reason}`),
+    ...(opponentSnapshot?.incompleteReasons ?? [
+      "opponent-snapshot-unavailable",
+    ]).map((reason) => `opponent:${reason}`),
+    ...playerEvidenceReasons.map((reason) => `player:${reason}`),
+    ...opponentEvidenceReasons.map((reason) => `opponent:${reason}`),
+  ];
+  return {
+    combinedSha256,
+    playerSha256,
+    opponentSha256,
+    complete,
+    completeness: complete
+      ? "complete"
+      : playerSnapshot || opponentSnapshot
+        ? "partial"
+        : "unavailable",
+    unresolvedEffectCount: unresolved,
+    playerSnapshot,
+    opponentSnapshot,
+    stateBindings: {
+      player: stateBindings?.player ?? null,
+      opponent: stateBindings?.opponent ?? null,
+    },
+    incompleteReasons: complete
+      ? []
+      : [...new Set(incompleteReasons)].sort(),
+  };
+}
+
 function savedListUnitCount(label: string): number | null {
   const units = label.match(/(?:^|\D)(\d+)\s*units?\b/i);
   const trailing = label.match(/\((\d+)\)\s*$/);
@@ -930,6 +1785,7 @@ async function importRosz(
   warnings: string[];
   issues: TesseraImportIssue[];
   unitCount: number;
+  semanticSnapshot: TesseraImportedArmySemanticSnapshot;
 }> {
   const importButton = page
     .getByRole("button", { name: /import \.rosz/i })
@@ -1011,29 +1867,6 @@ async function importRosz(
     }
     throw error;
   }
-  const currentListName = page.getByRole("textbox", {
-    name: "Save to list (army name)",
-    exact: true,
-  });
-  if ((await currentListName.count()) !== 1) {
-    throw new TesseraAutomationError(
-      "TESSERA_IMPORT_REVIEW_MISSING",
-      "Tessera did not retain the imported army name control after profile review.",
-    );
-  }
-  await currentListName.fill(browserListName);
-  if (
-    normalized(await currentListName.inputValue()) !==
-    normalized(browserListName)
-  ) {
-    throw new TesseraAutomationError(
-      "TESSERA_LIST_SELECTION_MISMATCH",
-      importSideMessage(
-        side,
-        "Tessera did not retain the exact run-scoped army name before saving the import.",
-      ),
-    );
-  }
   const add = page.getByRole("button", { name: /^add \d+$/i }).first();
   if (!(await add.isVisible().catch(() => false))) {
     throw new TesseraAutomationError(
@@ -1061,6 +1894,35 @@ async function importRosz(
       ),
     );
   }
+  const semanticSnapshot = await captureImportedArmySemanticSnapshot(
+    page,
+    side,
+    issues,
+    unitCount,
+  );
+  const currentListName = page.getByRole("textbox", {
+    name: "Save to list (army name)",
+    exact: true,
+  });
+  if ((await currentListName.count()) !== 1) {
+    throw new TesseraAutomationError(
+      "TESSERA_IMPORT_REVIEW_MISSING",
+      "Tessera did not retain the imported army name control after profile review.",
+    );
+  }
+  await currentListName.fill(browserListName);
+  if (
+    normalized(await currentListName.inputValue()) !==
+    normalized(browserListName)
+  ) {
+    throw new TesseraAutomationError(
+      "TESSERA_LIST_SELECTION_MISMATCH",
+      importSideMessage(
+        side,
+        "Tessera did not retain the exact run-scoped army name before saving the import.",
+      ),
+    );
+  }
   await add.click();
   try {
     await page
@@ -1072,7 +1934,7 @@ async function importRosz(
       `Tessera did not save imported list "${browserListName}".`,
     );
   }
-  return { warnings, issues, unitCount };
+  return { warnings, issues, unitCount, semanticSnapshot };
 }
 
 async function unlockPremium(
@@ -1252,6 +2114,14 @@ type SavedListOption = {
   value: string;
 };
 
+type SelectedArmySimulationState = {
+  side: TesseraImportIssue["side"];
+  savedListName: string;
+  selectedUnitCount: number;
+  selectorValue: string;
+  selectorLabel: string;
+};
+
 async function semanticArmySelectors(
   page: Page,
 ): Promise<SemanticArmySelectors> {
@@ -1415,7 +2285,10 @@ async function selectArmies(
   page: Page,
   player: { name: string; unitCount: number },
   opponent: { name: string; unitCount: number },
-): Promise<void> {
+): Promise<{
+  player: SelectedArmySimulationState;
+  opponent: SelectedArmySimulationState;
+}> {
   const selectors = await semanticArmySelectors(page);
   const playerSelect = selectors.player;
   const opponentSelect = selectors.opponent;
@@ -1424,7 +2297,7 @@ async function selectArmies(
     select: Locator,
     roster: { name: string; unitCount: number },
     side: TesseraImportIssue["side"],
-  ) => {
+  ): Promise<SelectedArmySimulationState> => {
     const expectedName = normalized(roster.name);
     const expectedValue = `list:${roster.name}`;
     let options: Array<{ label: string; value: string }> = [];
@@ -1498,10 +2371,25 @@ async function selectArmies(
         ),
       );
     }
+    return {
+      side,
+      savedListName: roster.name,
+      selectedUnitCount: roster.unitCount,
+      selectorValue: selectedValue,
+      selectorLabel: selectedLabel,
+    };
   };
 
-  await selectArmy(playerSelect, player, "player");
-  await selectArmy(opponentSelect, opponent, "opponent");
+  const selectedPlayer = await selectArmy(
+    playerSelect,
+    player,
+    "player",
+  );
+  const selectedOpponent = await selectArmy(
+    opponentSelect,
+    opponent,
+    "opponent",
+  );
 
   const run = page
     .getByRole("button", {
@@ -1539,6 +2427,10 @@ async function selectArmies(
     );
   }
   await run.click();
+  return {
+    player: selectedPlayer,
+    opponent: selectedOpponent,
+  };
 }
 
 const phaseControlNames: Record<TesseraPhase, RegExp> = {
@@ -2444,6 +3336,7 @@ function parseScenarioMatrix(
             ? value
             : (parsed?.expectedDamage ?? null),
         damagePer100Points: parsed?.damagePer100Points ?? null,
+        uncertainty: parseTesseraCellUncertainty(text),
         attackerIndex,
         targetIndex,
         attackerOccurrence: attackerOccurrences[attackerIndex],
@@ -2572,13 +3465,137 @@ export async function runTesseraBrowserMatchup(
     const opponentBrowserListName =
       preparedSavedListReuse?.opponent.name ??
       scopedListName("B", input.opponentName);
-    type ImportedRoster = Awaited<ReturnType<typeof importRosz>>;
-    const reusedImport = (
+    type SemanticSnapshotEvidence = {
+      source: "fresh-import" | "verified-cache" | "unavailable";
+      snapshotSha256?: string;
+      receiptSha256?: string;
+    };
+    type ImportedRoster = Awaited<ReturnType<typeof importRosz>> & {
+      semanticSnapshotEvidence?: SemanticSnapshotEvidence;
+    };
+    const semanticSnapshotCacheWarnings: string[] = [];
+    const cachedImport = async (
       unitCount: number,
-    ): ImportedRoster => ({
-      warnings: [],
-      issues: [],
-      unitCount,
+      side: TesseraImportIssue["side"],
+      key: TesseraImportSemanticSnapshotCacheKey,
+    ): Promise<ImportedRoster> => {
+      const cacheDirectory =
+        input.semanticSnapshotCacheDirectory?.trim();
+      if (!cacheDirectory) {
+        return {
+          warnings: [],
+          issues: [],
+          unitCount,
+          semanticSnapshot: unavailableImportedArmySnapshot(
+            side,
+            "saved-list-reused-without-import-review",
+          ),
+          semanticSnapshotEvidence: { source: "unavailable" },
+        };
+      }
+      let loaded: Awaited<
+        ReturnType<typeof loadTesseraImportSemanticSnapshot>
+      >;
+      try {
+        loaded = await loadTesseraImportSemanticSnapshot(
+          cacheDirectory,
+          key,
+        );
+      } catch {
+        loaded = {
+          status: "invalid",
+          reason: "receipt-malformed",
+          keySha256: "",
+        };
+      }
+      if (loaded.status === "hit") {
+        if (loaded.snapshot.completeness === "partial") {
+          semanticSnapshotCacheWarnings.push(
+            `[TESSERA_SEMANTIC_SNAPSHOT_CACHE_PARTIAL] The ${side} deterministic saved list reused a verified partial semantic snapshot receipt (${loaded.snapshot.incompleteReasons.join(", ") || "unspecified incomplete evidence"}).`,
+          );
+        }
+        return {
+          warnings: [],
+          issues: [],
+          unitCount,
+          semanticSnapshot: loaded.snapshot,
+          semanticSnapshotEvidence: {
+            source: "verified-cache",
+            snapshotSha256: loaded.snapshotSha256,
+            receiptSha256: loaded.receiptSha256,
+          },
+        };
+      }
+      semanticSnapshotCacheWarnings.push(
+        loaded.status === "invalid"
+          ? `[TESSERA_SEMANTIC_SNAPSHOT_CACHE_INVALID] The ${side} deterministic saved list's local semantic snapshot receipt failed validation (${loaded.reason}); it was not trusted.`
+          : `[TESSERA_SEMANTIC_SNAPSHOT_CACHE_MISS] The ${side} deterministic saved list has no local semantic snapshot receipt for this exact archive, list identity, roster fingerprint, profile policy, and side.`,
+      );
+      return {
+        warnings: [],
+        issues: [],
+        unitCount,
+        semanticSnapshot: unavailableImportedArmySnapshot(
+          side,
+          loaded.status === "invalid"
+            ? "saved-list-semantic-snapshot-receipt-invalid"
+            : "saved-list-semantic-snapshot-receipt-missing",
+        ),
+        semanticSnapshotEvidence: { source: "unavailable" },
+      };
+    };
+    const freshImport = async (
+      side: TesseraImportIssue["side"],
+      key: TesseraImportSemanticSnapshotCacheKey,
+      operation: () => Promise<Awaited<ReturnType<typeof importRosz>>>,
+    ): Promise<ImportedRoster> => {
+      const imported = await operation();
+      const snapshotSha256 = canonicalSha256(
+        imported.semanticSnapshot,
+      );
+      let receiptSha256: string | undefined;
+      const cacheDirectory =
+        input.semanticSnapshotCacheDirectory?.trim();
+      if (
+        cacheDirectory &&
+        imported.semanticSnapshot.completeness !== "unavailable"
+      ) {
+        try {
+          const stored = await storeTesseraImportSemanticSnapshot(
+            cacheDirectory,
+            key,
+            imported.semanticSnapshot,
+          );
+          receiptSha256 = stored.receiptSha256;
+        } catch {
+          semanticSnapshotCacheWarnings.push(
+            `[TESSERA_SEMANTIC_SNAPSHOT_CACHE_WRITE_FAILED] The fresh ${side} semantic snapshot could not be persisted locally; this run retains the live evidence, but a saved-list retry must recapture it.`,
+          );
+        }
+      }
+      return {
+        ...imported,
+        semanticSnapshotEvidence: {
+          source: "fresh-import",
+          snapshotSha256,
+          ...(receiptSha256 ? { receiptSha256 } : {}),
+        },
+      };
+    };
+    const semanticSnapshotActionFields = (
+      imported: ImportedRoster,
+    ): Pick<
+      TesseraSavedListReuseAction,
+      | "semanticSnapshotSource"
+      | "semanticSnapshotSha256"
+      | "semanticSnapshotReceiptSha256"
+    > => ({
+      semanticSnapshotSource:
+        imported.semanticSnapshotEvidence?.source ?? "unavailable",
+      semanticSnapshotSha256:
+        imported.semanticSnapshotEvidence?.snapshotSha256,
+      semanticSnapshotReceiptSha256:
+        imported.semanticSnapshotEvidence?.receiptSha256,
     });
     let playerImport: ImportedRoster;
     let opponentImport: ImportedRoster;
@@ -2641,29 +3658,43 @@ export async function runTesseraBrowserMatchup(
         await ensureRosterPage(page, timeout);
         playerImport =
           inspection.player.action === "reused"
-            ? reusedImport(
+            ? await cachedImport(
                 preparedSavedListReuse.player.expectedUnitCount,
-              )
-            : await importRosz(
-                page,
-                input.playerRoszPath,
                 "player",
-                input.profilePolicy,
-                playerBrowserListName,
-                preparedSavedListReuse.player.expectedUnitCount,
+                preparedSavedListReuse.player.semanticSnapshotCacheKey,
+              )
+            : await freshImport(
+                "player",
+                preparedSavedListReuse.player.semanticSnapshotCacheKey,
+                () =>
+                  importRosz(
+                    page,
+                    input.playerRoszPath,
+                    "player",
+                    input.profilePolicy,
+                    playerBrowserListName,
+                    preparedSavedListReuse.player.expectedUnitCount,
+                  ),
               );
         opponentImport =
           inspection.opponent.action === "reused"
-            ? reusedImport(
+            ? await cachedImport(
                 preparedSavedListReuse.opponent.expectedUnitCount,
-              )
-            : await importRosz(
-                page,
-                input.opponentRoszPath,
                 "opponent",
-                input.profilePolicy,
-                opponentBrowserListName,
-                preparedSavedListReuse.opponent.expectedUnitCount,
+                preparedSavedListReuse.opponent.semanticSnapshotCacheKey,
+              )
+            : await freshImport(
+                "opponent",
+                preparedSavedListReuse.opponent.semanticSnapshotCacheKey,
+                () =>
+                  importRosz(
+                    page,
+                    input.opponentRoszPath,
+                    "opponent",
+                    input.profilePolicy,
+                    opponentBrowserListName,
+                    preparedSavedListReuse.opponent.expectedUnitCount,
+                  ),
               );
         await openArmyMatrix(
           page,
@@ -2671,11 +3702,15 @@ export async function runTesseraBrowserMatchup(
           matrixOrigin,
         );
       } else {
-        playerImport = reusedImport(
+        playerImport = await cachedImport(
           preparedSavedListReuse.player.expectedUnitCount,
+          "player",
+          preparedSavedListReuse.player.semanticSnapshotCacheKey,
         );
-        opponentImport = reusedImport(
+        opponentImport = await cachedImport(
           preparedSavedListReuse.opponent.expectedUnitCount,
+          "opponent",
+          preparedSavedListReuse.opponent.semanticSnapshotCacheKey,
         );
       }
       savedListReuse = {
@@ -2690,6 +3725,7 @@ export async function runTesseraBrowserMatchup(
               : "imported",
           contentSha256:
             preparedSavedListReuse.player.contentSha256,
+          ...semanticSnapshotActionFields(playerImport),
         },
         opponent: {
           name: opponentBrowserListName,
@@ -2701,6 +3737,7 @@ export async function runTesseraBrowserMatchup(
               : "imported",
           contentSha256:
             preparedSavedListReuse.opponent.contentSha256,
+          ...semanticSnapshotActionFields(opponentImport),
         },
       };
     } else {
@@ -2732,8 +3769,10 @@ export async function runTesseraBrowserMatchup(
       name: opponentBrowserListName,
       unitCount: opponentImport.unitCount,
     };
+    let selectedArmyState: Awaited<ReturnType<typeof selectArmies>> | null =
+      null;
     try {
-      await selectArmies(
+      selectedArmyState = await selectArmies(
         page,
         playerSelection,
         opponentSelection,
@@ -2758,7 +3797,7 @@ export async function runTesseraBrowserMatchup(
       let recoveryError: unknown = error;
       for (let repair = 0; repair < 2; repair += 1) {
         try {
-          await selectArmies(
+          selectedArmyState = await selectArmies(
             page,
             playerSelection,
             opponentSelection,
@@ -2776,28 +3815,66 @@ export async function runTesseraBrowserMatchup(
           });
           await ensureRosterPage(page, timeout);
           if (missingSide === "player") {
-            playerImport = await importRosz(
-              page,
-              input.playerRoszPath,
-              "player",
-              input.profilePolicy,
-              playerBrowserListName,
-              playerSelection.unitCount,
-            );
+            playerImport = preparedSavedListReuse
+              ? await freshImport(
+                  "player",
+                  preparedSavedListReuse.player
+                    .semanticSnapshotCacheKey,
+                  () =>
+                    importRosz(
+                      page,
+                      input.playerRoszPath,
+                      "player",
+                      input.profilePolicy,
+                      playerBrowserListName,
+                      playerSelection.unitCount,
+                    ),
+                )
+              : await importRosz(
+                  page,
+                  input.playerRoszPath,
+                  "player",
+                  input.profilePolicy,
+                  playerBrowserListName,
+                  playerSelection.unitCount,
+                );
             if (savedListReuse) {
               savedListReuse.player.action = "imported";
+              Object.assign(
+                savedListReuse.player,
+                semanticSnapshotActionFields(playerImport),
+              );
             }
           } else {
-            opponentImport = await importRosz(
-              page,
-              input.opponentRoszPath,
-              "opponent",
-              input.profilePolicy,
-              opponentBrowserListName,
-              opponentSelection.unitCount,
-            );
+            opponentImport = preparedSavedListReuse
+              ? await freshImport(
+                  "opponent",
+                  preparedSavedListReuse.opponent
+                    .semanticSnapshotCacheKey,
+                  () =>
+                    importRosz(
+                      page,
+                      input.opponentRoszPath,
+                      "opponent",
+                      input.profilePolicy,
+                      opponentBrowserListName,
+                      opponentSelection.unitCount,
+                    ),
+                )
+              : await importRosz(
+                  page,
+                  input.opponentRoszPath,
+                  "opponent",
+                  input.profilePolicy,
+                  opponentBrowserListName,
+                  opponentSelection.unitCount,
+                );
             if (savedListReuse) {
               savedListReuse.opponent.action = "imported";
+              Object.assign(
+                savedListReuse.opponent,
+                semanticSnapshotActionFields(opponentImport),
+              );
             }
           }
           await openArmyMatrix(
@@ -2808,6 +3885,12 @@ export async function runTesseraBrowserMatchup(
         }
       }
       if (!recovered) throw recoveryError;
+    }
+    if (!selectedArmyState) {
+      throw new TesseraAutomationError(
+        "TESSERA_LIST_SELECTION_MISMATCH",
+        "Tessera did not retain a verifiable selected-army state for the matrix run.",
+      );
     }
     const reportedImportWarnings = (
       imported: Awaited<ReturnType<typeof importRosz>>,
@@ -2824,6 +3907,7 @@ export async function runTesseraBrowserMatchup(
     const warnings = [
       ...importWarnings.player,
       ...importWarnings.opponent,
+      ...semanticSnapshotCacheWarnings,
     ];
     await page
       .locator("table")
@@ -2984,6 +4068,7 @@ export async function runTesseraBrowserMatchup(
         killProbability: cell.metricValue,
         expectedDamage: cell.expectedDamage,
         damagePer100Points: cell.damagePer100Points,
+        uncertainty: cell.uncertainty,
       })),
     );
     const legacySettings =
@@ -2992,8 +4077,30 @@ export async function runTesseraBrowserMatchup(
       )?.settings ??
       legacyScenarios[0]?.settings ??
       scenarios[0].settings;
+    const deploymentEvidence = await tesseraDeploymentEvidence(page);
+    const importSemanticEvidence =
+      tesseraImportSemanticEvidenceFromSnapshots(
+        playerImport.semanticSnapshot,
+        opponentImport.semanticSnapshot,
+        {
+          player: createTesseraImportedArmySimulationStateBinding(
+            playerImport.semanticSnapshot,
+            selectedArmyState.player,
+          ),
+          opponent: createTesseraImportedArmySimulationStateBinding(
+            opponentImport.semanticSnapshot,
+            selectedArmyState.opponent,
+          ),
+        },
+      );
+    const providerEvidence: TesseraWebsiteProviderEvidence = {
+      schemaVersion: 1,
+      deployment: deploymentEvidence,
+      importSemantics: importSemanticEvidence,
+    };
     return {
-      uiIdentity: await tesseraUiIdentity(page),
+      uiIdentity: deploymentEvidence.identitySha256,
+      providerEvidence,
       legacyProjection:
         legacyScenarios.length > 0
           ? {

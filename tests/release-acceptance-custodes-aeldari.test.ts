@@ -720,9 +720,10 @@ test(
         resumed.data.stageProvenance.deepDive?.profilePolicyHash,
         resumed.data.profilePolicyHash,
       );
-      assert.deepEqual(
-        new Set(resumed.data.tesseraUiIdentity?.split("|")),
-        new Set(["fixture-tessera-ui-v1"]),
+      assert.equal(
+        resumed.data.tesseraUiIdentity,
+        "fixture-tessera-ui-v1",
+        "identical screening and deep-dive UI identities must be retained once",
       );
 
       const completedManifest = JSON.parse(

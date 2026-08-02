@@ -185,6 +185,21 @@ test("local runner emits deterministic browser-compatible full matrices", async 
       first.scenarios.map((scenario) => scenario.matrixSha256),
       second.scenarios.map((scenario) => scenario.matrixSha256),
     );
+    assert.equal(
+      first.scenarios.every((scenario) =>
+        scenario.cells.every(
+          (cell) =>
+            cell.uncertainty?.completeness === "complete" &&
+            cell.uncertainty.sampleCount === scenario.iterations &&
+            cell.uncertainty.standardDeviation !== null &&
+            cell.uncertainty.standardError ===
+              cell.uncertainty.standardDeviation /
+                Math.sqrt(scenario.iterations!),
+        ),
+      ),
+      true,
+      "local simulations must retain per-cell sample count, deviation, and standard error",
+    );
     assert.equal(first.uiIdentity, null);
   } finally {
     await rm(directory, { recursive: true, force: true });

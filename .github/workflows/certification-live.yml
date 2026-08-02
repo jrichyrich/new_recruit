@@ -28,6 +28,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  provider-compatibility-latch:
+    if: ${{ vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      active: ${{ steps.latch.outputs.active }}
+    steps:
+      - id: latch
+        name: Read the durable provider-compatibility latch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: "tags/rosterpilot-provider-compatibility-enforced-v1",
+              });
+              core.setOutput("active", "true");
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput("active", "false");
+            }
+
+  numerical-parity-latch:
+    if: ${{ vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      active: ${{ steps.latch.outputs.active }}
+    steps:
+      - id: latch
+        name: Read the durable live numerical-parity latch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: "tags/rosterpilot-live-numerical-parity-enforced-v1",
+              });
+              core.setOutput("active", "true");
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput("active", "false");
+            }
+
   post-activation-bundle:
     if: >-
       ${{
@@ -153,6 +203,8 @@ jobs:
     needs:
       - post-activation-bundle
       - live-release-prerequisites
+      - provider-compatibility-latch
+      - numerical-parity-latch
     if: >-
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
@@ -217,6 +269,8 @@ jobs:
       - name: Run live canary
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED: ${{ needs.provider-compatibility-latch.outputs.active }}
+          ROSTERPILOT_LIVE_NUMERICAL_PARITY_ENFORCED: ${{ needs.numerical-parity-latch.outputs.active }}
           ROSTERPILOT_DATA_CHANNEL_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles/channels/stable.json
           ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
           ROSTERPILOT_CANARY_MULTIPROFILE_ROSZ_PATH: ${{ vars.ROSTERPILOT_CANARY_MULTIPROFILE_ROSZ_PATH }}
@@ -310,7 +364,238 @@ jobs:
           git -C "$channel_root" commit -m "Quarantine failed roster data bundle"
           git -C "$channel_root" push origin HEAD:data-bundles
 
+  provider-compatibility-rollout:
+    needs:
+      - post-activation-bundle
+      - daily-canary
+      - provider-compatibility-latch
+    if: >-
+      ${{
+        always() &&
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        needs.provider-compatibility-latch.result == 'success' &&
+        needs.post-activation-bundle.result == 'success' &&
+        needs.daily-canary.result != 'skipped'
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Download this rotation's three live canaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: live-canary-*
+          path: .certification/provider-compatibility-input/current
+          merge-multiple: true
+
+      - name: Retain the latest verified rollout history
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          history_root=".certification/provider-compatibility-input/history"
+          mkdir -p "$history_root"
+          while IFS= read -r prior_run_id; do
+            prior_root="$history_root/$prior_run_id"
+            mkdir -p "$prior_root"
+            if gh run download "$prior_run_id" \
+              --pattern "provider-compatibility-rollout-*" \
+              --dir "$prior_root"; then
+              break
+            fi
+            rm -rf "$prior_root"
+          done < <(
+            gh run list \
+              --workflow certification-live.yml \
+              --status completed \
+              --limit 20 \
+              --json databaseId \
+              --jq '.[].databaseId'
+          )
+
+      - name: Evaluate observe-then-enforce provider compatibility
+        run: >-
+          npm run certify:provider-compatibility --
+          --reports-root .certification/provider-compatibility-input
+          --enforcement-latch ${{ needs.provider-compatibility-latch.outputs.active == 'true' && 'enforce' || 'observe' }}
+          --out .certification/provider-compatibility-output/provider-compatibility-rollout-${{ github.run_id }}.json
+
+      - name: Permanently activate provider-compatibility enforcement
+        if: ${{ needs.provider-compatibility-latch.outputs.active != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          report=".certification/provider-compatibility-output/provider-compatibility-rollout-${{ github.run_id }}.json"
+          if ! node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(value.evaluation.enforcementActive && value.evaluation.releaseGate === "pass" ? 0 : 1)' "$report"; then
+            echo "The observation streak has not activated enforcement yet."
+            exit 0
+          fi
+          gh api --method POST \
+            "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/rosterpilot-provider-compatibility-enforced-v1" \
+            -f sha="${{ github.sha }}"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-compatibility-rollout-${{ github.run_id }}
+          path: .certification/provider-compatibility-output/provider-compatibility-rollout-${{ github.run_id }}.json*
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+  live-numerical-parity:
+    needs:
+      - post-activation-bundle
+      - daily-canary
+      - numerical-parity-latch
+    if: >-
+      ${{
+        always() &&
+        vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
+        needs.numerical-parity-latch.result == 'success' &&
+        needs.post-activation-bundle.result == 'success' &&
+        needs.daily-canary.result != 'skipped'
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Download the paired exact-canary evidence bundle
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: live-canary-death-guard-vs-orks-exact-1000
+          path: .certification/live-numerical-parity/input
+
+      - name: Retain the latest verified numerical-parity rollout history
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          history_root=".certification/live-numerical-parity/history"
+          mkdir -p "$history_root"
+          while IFS= read -r prior_run_id; do
+            prior_root="$history_root/$prior_run_id"
+            mkdir -p "$prior_root"
+            if gh run download "$prior_run_id" \
+              --pattern "live-numerical-parity-rollout-*" \
+              --dir "$prior_root"; then
+              break
+            fi
+            rm -rf "$prior_root"
+          done < <(
+            gh run list \
+              --workflow certification-live.yml \
+              --status completed \
+              --limit 20 \
+              --json databaseId \
+              --jq '.[].databaseId'
+          )
+
+      - id: certify
+        name: Certify local-engine against Tessera Web numerical parity
+        shell: bash
+        env:
+          EXPECTED_BUNDLE_ID: ${{ needs.post-activation-bundle.outputs.bundle_id }}
+          EXPECTED_GIT_HEAD: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          input_root=".certification/live-numerical-parity/input"
+          comparison="$input_root/provider-parity/tessera-provider-parity.json"
+          output=".certification/live-numerical-parity/output/live-numerical-parity-${{ github.run_id }}.json"
+          set +e
+          npm run certify:provider-parity -- \
+            --comparison "$comparison" \
+            --reports-root "$input_root" \
+            --expected-bundle-id "$EXPECTED_BUNDLE_ID" \
+            --expected-git-head "$EXPECTED_GIT_HEAD" \
+            --rotation-id "${{ github.run_id }}" \
+            --out "$output"
+          gate_exit=$?
+          set -e
+          echo "exit_code=$gate_exit" >> "$GITHUB_OUTPUT"
+          if [[ "$gate_exit" -ne 0 ]]; then
+            echo "::warning title=Live numerical parity did not pass::The certificate and raw report bundle are retained. The rollout evaluator applies the independent observe/enforce latch."
+          fi
+          test -f "$output"
+          test -f "$output.sha256"
+
+      - id: rollout
+        name: Evaluate observe-then-enforce live numerical parity
+        run: >-
+          npm run certify:provider-parity-rollout --
+          --reports-root .certification/live-numerical-parity
+          --current-rotation-id ${{ github.run_id }}
+          --enforcement-latch ${{ needs.numerical-parity-latch.outputs.active == 'true' && 'enforce' || 'observe' }}
+          --out .certification/live-numerical-parity/rollout/live-numerical-parity-rollout-${{ github.run_id }}.json
+
+      - name: Permanently activate live numerical-parity enforcement
+        if: ${{ needs.numerical-parity-latch.outputs.active != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          report=".certification/live-numerical-parity/rollout/live-numerical-parity-rollout-${{ github.run_id }}.json"
+          if ! node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(value.evaluation.enforcementActive && value.evaluation.releaseGate === "pass" ? 0 : 1)' "$report"; then
+            echo "The live numerical-parity observation streak has not activated enforcement yet."
+            exit 0
+          fi
+          gh api --method POST \
+            "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/rosterpilot-live-numerical-parity-enforced-v1" \
+            -f sha="${{ github.sha }}"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-numerical-parity-evidence-${{ github.run_id }}
+          path: |
+            .certification/live-numerical-parity/input
+            .certification/live-numerical-parity/output
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-numerical-parity-rollout-${{ github.run_id }}
+          path: .certification/live-numerical-parity/rollout/live-numerical-parity-rollout-${{ github.run_id }}.json*
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
   weekly-rotation:
+    needs:
+      - provider-compatibility-latch
     if: >-
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
@@ -348,6 +633,7 @@ jobs:
       - name: Run faction rotation
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED: ${{ needs.provider-compatibility-latch.outputs.active }}
           PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
         run: |
           args=(--tier live --shard "${{ matrix.shard }}" --opponent-matrix --out-dir ".certification/live/${{ strategy.job-index }}")
@@ -431,6 +717,8 @@ jobs:
       - post-activation-bundle
       - live-release-prerequisites
       - release-quality
+      - provider-compatibility-latch
+      - numerical-parity-latch
     if: >-
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
@@ -485,6 +773,8 @@ jobs:
       - name: Run the release Tessera smoke canary
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED: ${{ needs.provider-compatibility-latch.outputs.active }}
+          ROSTERPILOT_LIVE_NUMERICAL_PARITY_ENFORCED: ${{ needs.numerical-parity-latch.outputs.active }}
           ROSTERPILOT_DATA_CHANNEL_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles/channels/stable.json
           ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
         run: >-
@@ -507,6 +797,7 @@ jobs:
   release-certification:
     needs:
       - release-tessera-smoke
+      - provider-compatibility-latch
     if: >-
       ${{
         vars.ROSTERPILOT_LIVE_RUNNER_ENABLED == 'true' &&
@@ -542,6 +833,7 @@ jobs:
       - name: Run release matrix and live certification
         env:
           ROSTERPILOT_CERTIFICATION_LIVE: "1"
+          ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED: ${{ needs.provider-compatibility-latch.outputs.active }}
           PROFILE_POLICY_PATH: ${{ vars.ROSTERPILOT_CERTIFICATION_PROFILE_POLICY_PATH }}
         run: |
           args=(--tier live --shard "${{ matrix.shard }}" --opponent-matrix --require-status pass --out-dir ".certification/release/${{ strategy.job-index }}")

@@ -25,6 +25,23 @@ the affected entity or faction is quarantined; the engine never silently
 chooses between community interpretations. BSData does not become the roster
 rules authority merely because New Recruit consumes it.
 
+The resulting signed `DataBundleProvider` snapshot is the canonical runtime
+rules source. New Recruit catalogue IDs and revisions observed after an import
+show whether the live service accepted the bundle's pinned BSData mapping;
+they are compatibility evidence only. They do not update points, profiles,
+abilities, legality, or any semantic hash in the leased bundle. The same rule
+applies to characteristics or effects rendered by Tessera Web: observations
+are retained beside the bundle, never merged back into it as rules data.
+
+Provider-compatibility certification binds those observations to more than the
+roster's source hashes. Its trust identity is derived from the activated
+signature-verified manifest and the current update-provider state: signing key,
+manifest and semantic hashes, active/latest/upstream/candidate bundle IDs,
+quarantines, rollback hold, official-authority identity, and durability. A
+compiled-unverified fallback or a source bundle that differs from the active
+verified manifest is retained as incomplete evidence and cannot pass the live
+compatibility gate.
+
 ## Release pipeline
 
 `npm run data:prepare-update` performs the routine update:
@@ -394,6 +411,51 @@ Every schema-v3 roster freezes the same safe official-authority status inside
 This warning does not block unrelated roster construction, but it prevents
 community-only or legacy data from being mistaken for reviewed official
 reconciliation after the roster leaves the originating machine.
+
+## External-provider compatibility evidence
+
+The immutable bundle answers “which rules and mappings did RosterPilot use?”
+It cannot, by itself, answer “what did a live external provider actually load?”
+Tessera reports therefore carry a separate, content-addressed compatibility
+envelope. It references the bundle instead of copying or overriding it and
+adds the canonical roster/input hashes, selected provider identity,
+profile-policy hash, and deterministic scenario-contract hash.
+
+For New Recruit, the envelope stores both the bundle-pinned game-system and
+faction-catalogue identity and the identity observed in the enriched ROSZ.
+Matching observations prove compatibility for that handoff; missing or
+different observations are `unverifiable` or `drift` and block the ordinary
+website route. A newer release label alone is neither proof of a gameplay-data
+change nor permission to replace the bundle. The narrowly scoped forward-only
+catalogue diagnostic remains diagnostic evidence and does not promote the
+observation into canonical data.
+
+For Tessera Web, there is no reliable public semantic-data version to pin.
+RosterPilot records any declared version as advisory, fetches and hashes the
+bytes of every required same-origin script asset, and hashes normalized
+player/opponent import snapshots containing the visible unit, weapon, profile,
+and effect state. The deployment identity and import-semantic identity are
+separate: new script bytes may leave the normalized import unchanged, while
+unchanged script URLs can still serve different bytes. Missing asset bytes,
+missing army snapshots, or unresolved effect toggles make the evidence
+incomplete rather than silently reusing a prior identity.
+
+These layers classify mismatches without inventing a universal upstream
+version number:
+
+- a changed bundle semantic, catalogue observation, roster/input snapshot,
+  imported semantic snapshot, profile policy, capability envelope, or scenario
+  contract is data/input incompatibility;
+- a changed website script-byte digest or pinned local-engine identity is
+  provider-deployment drift and requires fresh observation;
+- a numeric local-versus-website disagreement is model drift only after the
+  data/input identities match and the difference exceeds the retained
+  sampling uncertainty and parity tolerance.
+
+Version skew is therefore an issue when it changes or obscures one of these
+bound identities, not merely because two services display different release
+labels. Provider observations are append-only execution evidence; refresh and
+rollback continue to affect only future signed-bundle leases.
 
 ## Compatibility and certification
 

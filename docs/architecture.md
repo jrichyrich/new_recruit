@@ -104,6 +104,14 @@ snapshot; routine updates do not rewrite the tracked source files.
 `scripts/sync-bsdata.ts` remains the deterministic candidate/bootstrap
 extractor.
 
+The verified `DataBundleProvider` snapshot leased by the operation is the
+canonical rules-data identity for construction, validation, export, and
+simulation preparation. Live observations never rewrite that lease. In
+particular, a New Recruit-enriched archive's game-system and faction-catalogue
+IDs and revisions are compatibility evidence for the exported selection paths;
+they are not a second rules source and cannot replace the bundle's official,
+40kdc, BSData, or semantic identities.
+
 The authority order is scoped, not global. Machine-verifiable Games Workshop
 downloads are authoritative for published points, leader links, Detachment
 Points, Force Dispositions, errata, dataslates, and current Legends
@@ -209,6 +217,79 @@ as its generator, contain units and embedded profiles, and give every
 top-level unit at least one Unit profile and one Melee or Ranged weapon
 profile. This is a profile-readiness boundary, not a claim that embedded
 characteristic values equal another rules source.
+
+#### Provider compatibility and deterministic replay
+
+Every simulated matchup can retain a content-addressed provider-compatibility
+envelope. The envelope binds the activated signature-verified manifest,
+signing key, and normalized update-provider status—not merely the roster's
+syntax-valid source hashes—plus its semantic rules, faction, mapping, and
+entity identities; the canonical roster and prepared-input
+fingerprints; the frozen and observed New Recruit catalogue identities for a
+website run; the selected Tessera provider identity; the profile-policy hash;
+and the scenario-contract hash. Local-engine envelopes identify the pinned
+repository commit, tree, capability manifest, compiler, and adapter. Website
+envelopes identify what was actually served and imported rather than treating
+a product name as a version.
+
+The trust portion includes active/latest/upstream/candidate bundle identities,
+quarantine and rollback state, official-authority identity, and durability.
+Compiled-unverified fallback data or a manifest/source mismatch makes the
+envelope incomplete. Live rollout activation is durably latched by the
+repository tag `rosterpilot-provider-compatibility-enforced-v1`; subsequent
+runtime and release workflows cannot fall back to observation mode merely
+because Actions artifacts expire.
+
+Tessera Web does not expose a reliable public semantic-data version. Its
+declared version, when present, is retained only as diagnostic metadata.
+RosterPilot hashes the bytes and lengths of the same-origin script assets used
+by the page and separately hashes normalized snapshots of both imported
+armies. Those snapshots retain unit occurrences and model counts, visible unit
+and weapon characteristics, chosen alternate profiles, and visible effect
+toggles. Missing script bytes, a missing side, or an unresolved imported
+effect makes the website evidence incomplete. A URL, page title, or declared
+version alone never completes the envelope.
+
+A scenario contract is the canonical, ordered collection of every requested
+phase, direction, metric, simulator setting, and positive iteration count. Its
+SHA-256 is frozen in reports and durable jobs. `--scenario-contract <file>`
+replays an explicit contract; `--iterations <positive-int>` creates the local
+engine's baseline contract at that sampling depth. The flags are mutually
+exclusive, apply only to simulated execution, and the contract must exactly
+match the requested phase/metric scope and any explicitly selected provider.
+Stress runs project the same frozen contract across their child matchups, so a
+resume cannot change settings or sampling depth.
+
+Local-versus-website parity is eligible only after both runs have the same
+bundle semantics, normalized roster scope, profile policy, scenario contract,
+model-capability envelope, and provider-neutral combat snapshot. The combat
+snapshot compares stable unit instances, model counts, points, defensive
+profiles, attack profiles, modeled effects, omitted effects, and the
+completeness of their semantic evidence before comparing output values.
+Reports retain the actual sample count and, where available, sample variance
+and standard error for each cell. Probability standard errors may be derived
+from the retained binomial result; mean-kill and mean-damage cells must retain
+provider-supplied variance or standard error. The parity tolerance therefore
+accounts for sampling uncertainty without hiding a missing sample contract.
+Winner comparison uses the shared canonical probability-pressure adapter, not
+provider-specific summary labels.
+
+This creates a deliberate diagnostic split:
+
+- **data or input drift** means a bundle semantic hash, roster/input snapshot,
+  New Recruit catalogue observation, imported website semantic snapshot,
+  profile policy, model-capability declaration, or scenario contract differs
+  or is incomplete;
+- **provider deployment drift** means the Tessera Web script-byte identity or
+  the pinned local-engine identity changed, even if normalized semantics later
+  prove equivalent;
+- **model drift** means those eligibility identities match but corresponding
+  numeric cells exceed their uncertainty-aware tolerances or the canonical
+  winner differs outside its uncertainty boundary.
+
+A failed eligibility check is not reported as model drift. Conversely, a
+matching catalogue revision or website label cannot explain away a numeric
+model mismatch.
 
 Local preparation is content-addressed and bound to the roster execution
 fingerprint, exact `bundleId`, compiler version, and optional profile-policy
@@ -986,7 +1067,7 @@ Security invariants:
 | Tessera provider router | Freeze explicit/automatic provider selection, enforce promotion and preflight gates, and make any automatic website fallback atomic | `local/tessera/simulation-provider.ts` |
 | Local Tessera input compiler | Compile canonical rosters from the active immutable bundle into schema-, hash-, roster-, bundle-, compiler-, and policy-bound evaluation JSON without a remote mutation | `local/tessera/local-engine-input.ts`, `local/tessera/local-engine-preparation.ts` |
 | Local Tessera evaluation adapter | Verify bundle-native JSON, retain the legacy enriched-ROSZ reader for compatible persisted inputs, invoke the pinned public engine contract, and emit deterministic scenario evidence plus limitation warnings | `local/tessera/local-engine.ts`, `local/tessera/tessera-engine-provenance.json` |
-| Tessera provider parity | Compare identity-bound local and website evidence using completeness, metric tolerance, and winner-classification gates | `local/tessera/provider-parity.ts` |
+| Tessera provider parity | Revalidate receipt-bound local and website evidence, normalize only explicitly mapped provider settings, compare completeness/metric/winner gates, and emit portable checksummed parity artifacts | `local/tessera/provider-parity.ts`, `local/tessera/provider-parity-report-adapter.ts`, `local/tessera/provider-parity-workflow.ts` |
 | Exact-aware build loop | Validate an exact opponent, build and repair from its threat profile, enforce readiness, and invoke exact analysis | `local/tessera/exact-full-loop.ts`, `lib/rosterpilot/build-and-analyze.ts` |
 | Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
 | Durable Tessera jobs | Persist requests and results; ask the local agent to start workers; inspect, resume, resolve profiles, and cancel background runs | `local/tessera/jobs.ts`, `local/agent/server.ts` |

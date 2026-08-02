@@ -24,6 +24,7 @@ import {
   type RuntimeProvenance,
   type TesseraMatchupReport,
   type TesseraProfileRequirement,
+  type TesseraProviderCompatibilityEnvelope,
   type TesseraRevisionComparisonReport,
   type TesseraStressTestReport,
   type VerifiedDataBundleManifestV1,
@@ -38,6 +39,20 @@ import { getRuntimeProvenance } from "../runtime-provenance";
 import {
   compareRosterRevision,
 } from "../tessera/companion";
+import {
+  exactReportReceiptPath,
+} from "../tessera/exact-report-integrity";
+import {
+  captureProviderCompatibilityBundleTrustIdentity,
+  type ProviderCompatibilityBundleTrustIdentity,
+} from "../tessera/provider-compatibility";
+import {
+  rebindTesseraScenarioContractProvider,
+} from "../tessera/provider-parity-scenario-contract";
+import {
+  runTesseraProviderParityWorkflow,
+  type TesseraProviderParityWorkflowClassification,
+} from "../tessera/provider-parity-workflow";
 import {
   getTesseraRunStatus,
   resumeTesseraRun,
@@ -93,6 +108,37 @@ export type LiveCanaryRunReference = {
   manifestPath: string | null;
 };
 
+export type LiveCanaryProviderParityEvidence = {
+  policy: "live-numerical-parity-observe-then-enforce-v1";
+  mode: "observe" | "enforce";
+  status:
+    | "pass"
+    | "fail"
+    | "incomplete"
+    | "ineligible"
+    | "unavailable";
+  complete: boolean;
+  eligible: boolean;
+  websiteRun: LiveCanaryRunReference | null;
+  localRun: LiveCanaryRunReference | null;
+  sourceReports: Array<{
+    provider: "local-engine" | "website";
+    reportPath: string;
+    receiptPath: string;
+  }>;
+  comparison: {
+    outcome: "pass" | "fail" | "incomplete" | "ineligible";
+    classification: TesseraProviderParityWorkflowClassification;
+    jsonPath: string;
+    checksumPath: string;
+    htmlPath: string;
+  } | null;
+  failure: {
+    code: string;
+    message: string;
+  } | null;
+};
+
 export type RotatingLiveCanaryReport = {
   schemaVersion: 1;
   reportKind: "rosterpilot-rotating-live-canary";
@@ -110,7 +156,27 @@ export type RotatingLiveCanaryReport = {
     signingKeyId: string;
     manifestSha256: string;
     semanticIdentitySha256: string;
+    bundleTrustIdentitySha256: string | null;
   } | null;
+  providerCompatibility: {
+    policy: "observe-then-enforce-v1";
+    requiredConsecutivePasses: 3;
+    mode: "observe" | "enforce";
+    rotationId: string;
+    status: "pass" | "fail" | "unavailable";
+    complete: boolean;
+    envelopes: Array<{
+      provider: "local-engine" | "website";
+      envelopeSha256: string;
+      bundleId: string;
+      signingKeyId: string | null;
+      manifestSha256: string | null;
+      semanticIdentitySha256: string | null;
+      bundleTrustIdentitySha256: string;
+      complete: boolean;
+      issueCodes: string[];
+    }>;
+  };
   localAgent: {
     available: boolean;
     version: string | null;
@@ -133,6 +199,7 @@ export type RotatingLiveCanaryReport = {
   }>;
   assertions: LiveCanaryAssertionResult[];
   run: LiveCanaryRunReference | null;
+  providerParity: LiveCanaryProviderParityEvidence | null;
   revision: {
     baselineRunId: string;
     revisionRunId: string;
@@ -156,6 +223,8 @@ export type RunRotatingLiveCanaryInput = {
   forcedClientTimeoutMs?: number;
   expectedBundleId?: string;
   catalogueDriftMode?: LiveCanaryCatalogueDriftMode;
+  providerCompatibilityMode?: "observe" | "enforce";
+  numericalParityMode?: "observe" | "enforce";
 };
 
 type TerminalTesseraRun = {
@@ -173,9 +242,12 @@ export type LiveCanaryRunnerDependencies = {
   getRunStatus: typeof getTesseraRunStatus;
   resumeRun: typeof resumeTesseraRun;
   compareRevision: typeof compareRosterRevision;
+  compareProviders: typeof runTesseraProviderParityWorkflow;
   getActiveBundleManifest: () =>
     | VerifiedDataBundleManifestV1
     | null;
+  captureBundleTrust: () => Promise<ProviderCompatibilityBundleTrustIdentity>;
+  platform: NodeJS.Platform;
   wait: (milliseconds: number) => Promise<void>;
 };
 
@@ -189,7 +261,11 @@ const defaultDependencies: LiveCanaryRunnerDependencies = {
   getRunStatus: getTesseraRunStatus,
   resumeRun: resumeTesseraRun,
   compareRevision: compareRosterRevision,
+  compareProviders: runTesseraProviderParityWorkflow,
   getActiveBundleManifest: getActiveDataBundleManifest,
+  captureBundleTrust:
+    captureProviderCompatibilityBundleTrustIdentity,
+  platform: process.platform,
   wait: async (milliseconds) => {
     await new Promise<void>((resolve) =>
       setTimeout(resolve, milliseconds),
@@ -422,7 +498,7 @@ async function collectReadiness(input: {
       liveOptIn:
         input.environment.ROSTERPILOT_CERTIFICATION_LIVE ===
         "1",
-      platform: process.platform,
+      platform: input.dependencies.platform,
       expectedProjectDirectory: projectRoot,
       runtime,
       agentStatus,
@@ -827,8 +903,12 @@ function baseReport(input: {
   readiness: LiveCanaryReadiness;
   runtime: RuntimeProvenance;
   dataBundleManifest: VerifiedDataBundleManifestV1 | null;
+  bundleTrust: ProviderCompatibilityBundleTrustIdentity;
   agentStatus: LocalAgentStatus | null;
   resolvedPaths: Record<string, string | undefined>;
+  rotationId: string;
+  providerCompatibilityMode: "observe" | "enforce";
+  numericalParityMode: "observe" | "enforce";
 }): RotatingLiveCanaryReport {
   return {
     schemaVersion: 1,
@@ -853,8 +933,22 @@ function baseReport(input: {
           semanticIdentitySha256: canonicalSha256(
             input.dataBundleManifest.semanticHashes,
           ),
+          bundleTrustIdentitySha256:
+            input.bundleTrust.manifest?.bundleId ===
+            input.dataBundleManifest.bundleId
+              ? input.bundleTrust.identitySha256
+              : null,
         }
       : null,
+    providerCompatibility: {
+      policy: "observe-then-enforce-v1",
+      requiredConsecutivePasses: 3,
+      mode: input.providerCompatibilityMode,
+      rotationId: input.rotationId,
+      status: "unavailable",
+      complete: false,
+      envelopes: [],
+    },
     localAgent: safeAgentSummary(input.agentStatus),
     profilePolicy: {
       basename:
@@ -874,6 +968,23 @@ function baseReport(input: {
       })),
     assertions: assertionResults(input.definition),
     run: null,
+    providerParity:
+      input.definition.id ===
+      "death-guard-vs-orks-exact-1000"
+        ? {
+            policy:
+              "live-numerical-parity-observe-then-enforce-v1",
+            mode: input.numericalParityMode,
+            status: "unavailable",
+            complete: false,
+            eligible: false,
+            websiteRun: null,
+            localRun: null,
+            sourceReports: [],
+            comparison: null,
+            failure: null,
+          }
+        : null,
     revision: null,
     failure: null,
     limitations: [
@@ -882,6 +993,75 @@ function baseReport(input: {
       "RosterPilot never deletes the New Recruit lists created or reused by a canary.",
     ],
   };
+}
+
+function retainProviderCompatibility(
+  report: RotatingLiveCanaryReport,
+  source:
+    | TesseraMatchupReport
+    | TesseraStressTestReport,
+): void {
+  const envelopes: TesseraProviderCompatibilityEnvelope[] =
+    source.providerCompatibilityEnvelopes ??
+    (
+      "providerCompatibility" in source &&
+      source.providerCompatibility
+        ? [source.providerCompatibility]
+        : []
+    );
+  const bySha256 = new Map(
+    report.providerCompatibility.envelopes.map((envelope) => [
+      envelope.envelopeSha256,
+      envelope,
+    ]),
+  );
+  for (const envelope of envelopes) {
+    const trust = envelope.data.bundleTrust;
+    bySha256.set(envelope.envelopeSha256, {
+      provider: envelope.tessera.provider,
+      envelopeSha256: envelope.envelopeSha256,
+      bundleId: envelope.data.bundleId,
+      signingKeyId: trust.manifest?.signingKeyId ?? null,
+      manifestSha256: trust.manifest?.manifestSha256 ?? null,
+      semanticIdentitySha256:
+        trust.manifest?.semanticIdentitySha256 ?? null,
+      bundleTrustIdentitySha256: trust.identitySha256,
+      complete: envelope.complete,
+      issueCodes: envelope.issues.map((issue) => issue.code).sort(),
+    });
+  }
+  report.providerCompatibility.envelopes = [...bySha256.values()].sort(
+    (left, right) =>
+      left.provider.localeCompare(right.provider) ||
+      left.envelopeSha256.localeCompare(right.envelopeSha256),
+  );
+  const trustIdentities = new Set(
+    report.providerCompatibility.envelopes.map(
+      (envelope) => envelope.bundleTrustIdentitySha256,
+    ),
+  );
+  if (trustIdentities.size === 1 && report.dataBundle) {
+    report.dataBundle.bundleTrustIdentitySha256 =
+      [...trustIdentities][0];
+  }
+  report.providerCompatibility.complete =
+    report.providerCompatibility.envelopes.length > 0 &&
+    report.providerCompatibility.envelopes.every(
+      (envelope) =>
+        envelope.complete &&
+        report.dataBundle !== null &&
+        envelope.bundleId === report.dataBundle.bundleId &&
+        envelope.signingKeyId === report.dataBundle.signingKeyId &&
+        envelope.manifestSha256 === report.dataBundle.manifestSha256 &&
+        envelope.semanticIdentitySha256 ===
+          report.dataBundle.semanticIdentitySha256,
+    ) && trustIdentities.size === 1;
+  report.providerCompatibility.status =
+    report.providerCompatibility.envelopes.length === 0
+      ? "unavailable"
+      : report.providerCompatibility.complete
+        ? "pass"
+        : "fail";
 }
 
 function liveUnavailableReason(
@@ -909,17 +1089,45 @@ function finalizeReport(
     report.evidenceKind = "none";
     return report;
   }
+  const numericalParityPassed =
+    report.providerParity?.status === "pass" &&
+    report.providerParity.complete &&
+    report.providerParity.eligible &&
+    report.providerParity.comparison?.outcome === "pass" &&
+    report.providerParity.failure === null;
   const allPassed = report.assertions.every(
     (assertion) => assertion.status === "pass",
-  );
+  ) &&
+    (report.providerCompatibility.mode !== "enforce" ||
+      report.providerCompatibility.complete) &&
+    (
+      report.providerParity === null ||
+      report.providerParity.mode !== "enforce" ||
+      numericalParityPassed
+    );
   report.status = allPassed ? "pass" : "fail";
   report.livePass = allPassed;
   report.evidenceKind = "live";
   if (!allPassed && !report.failure) {
+    const compatibilityBlocked =
+      report.providerCompatibility.mode === "enforce" &&
+      !report.providerCompatibility.complete;
+    const parityBlocked =
+      report.providerParity?.mode === "enforce" &&
+      !numericalParityPassed;
     report.failure = {
-      code: "LIVE_CANARY_ASSERTION_FAILED",
+      code:
+        compatibilityBlocked
+          ? "LIVE_CANARY_PROVIDER_COMPATIBILITY_INCOMPLETE"
+          : parityBlocked
+            ? "LIVE_CANARY_NUMERICAL_PARITY_REQUIRED"
+          : "LIVE_CANARY_ASSERTION_FAILED",
       message:
-        "One or more required live canary assertions did not pass.",
+        compatibilityBlocked
+          ? "Provider compatibility enforcement is active, but this canary did not retain complete signed-bundle and provider evidence."
+          : parityBlocked
+            ? `Live numerical parity enforcement is active, but the paired local-engine/Tessera Web result is ${report.providerParity?.status ?? "unavailable"}.`
+          : "One or more required live canary assertions did not pass.",
     };
   }
   return report;
@@ -1024,6 +1232,8 @@ async function runAdaptiveNineCanary(input: {
     portfolioPreview: preview.data,
     profilePolicyPath: policy.path,
     catalogueDriftMode: input.catalogueDriftMode,
+    providerCompatibilityMode:
+      input.report.providerCompatibility.mode,
   });
   const job = await input.dependencies.startRun(request, {
     outputDirectory: path.join(
@@ -1125,6 +1335,7 @@ async function runAdaptiveNineCanary(input: {
   );
   const result = requireCompleteJob(terminal);
   const report = stressReport(result);
+  retainProviderCompatibility(input.report, report);
   const preparationEvents =
     report.preparation?.connectorEvents ?? [];
   const newRemoteEvents = preparationEvents.filter(
@@ -1210,6 +1421,240 @@ async function runAdaptiveNineCanary(input: {
       verifiedHashes: portable.verifiedHashes,
     },
   );
+}
+
+function liveCanaryRunReference(
+  outputDirectory: string,
+  job: TesseraRunJob,
+): LiveCanaryRunReference {
+  return {
+    runId: job.runId,
+    jobPath: portableRunPath(
+      outputDirectory,
+      job.requestPath,
+    )!,
+    initialAttempt: job.attempt,
+    finalAttempt: null,
+    finalStatus: null,
+    manifestPath: portableRunPath(
+      outputDirectory,
+      job.manifestPath,
+    ),
+  };
+}
+
+function completeLiveCanaryRunReference(
+  reference: LiveCanaryRunReference,
+  outputDirectory: string,
+  job: TesseraRunJob,
+): void {
+  reference.finalAttempt = job.attempt;
+  reference.finalStatus = job.status;
+  reference.manifestPath = portableRunPath(
+    outputDirectory,
+    job.manifestPath,
+  );
+}
+
+function providerParityArtifactPath(
+  outputDirectory: string,
+  parityDirectory: string,
+  written: string,
+): string {
+  return portableRunPath(
+    outputDirectory,
+    path.isAbsolute(written)
+      ? written
+      : path.resolve(parityDirectory, written),
+  )!;
+}
+
+async function runDistinctFactionProviderParity(input: {
+  report: RotatingLiveCanaryReport;
+  outputDirectory: string;
+  player: RosterDraftV1;
+  opponent: RosterDraftV1;
+  profilePolicyPath: string;
+  catalogueDriftMode: LiveCanaryCatalogueDriftMode;
+  websiteJob: TesseraRunJob;
+  websiteReport: TesseraMatchupReport;
+  maxWaitMs: number;
+  pollMs: number;
+  dependencies: LiveCanaryRunnerDependencies;
+}): Promise<void> {
+  const evidence = input.report.providerParity;
+  if (!evidence) {
+    throw codedError(
+      "LIVE_CANARY_NUMERICAL_PARITY_NOT_APPLICABLE",
+      "The distinct-faction exact canary did not initialize numerical-parity evidence.",
+    );
+  }
+  evidence.websiteRun = input.report.run
+    ? structuredClone(input.report.run)
+    : liveCanaryRunReference(
+        input.outputDirectory,
+        input.websiteJob,
+      );
+  try {
+    if (
+      !input.websiteReport.scenarioContract ||
+      input.websiteReport.scenarioContract.length === 0
+    ) {
+      throw codedError(
+        "LIVE_CANARY_NUMERICAL_PARITY_CONTRACT_MISSING",
+        "The completed Tessera Web report did not retain a frozen scenario contract for the local-engine twin.",
+      );
+    }
+    const localScenarioContract =
+      rebindTesseraScenarioContractProvider(
+        input.websiteReport.scenarioContract,
+        "website",
+        "local-engine",
+      );
+    const localRequest = createLiveCanaryRunRequest({
+      id: "death-guard-vs-orks-exact-1000",
+      playerRoster: input.player,
+      opponentRoster: input.opponent,
+      profilePolicyPath: input.profilePolicyPath,
+      catalogueDriftMode: input.catalogueDriftMode,
+      providerCompatibilityMode:
+        input.report.providerCompatibility.mode,
+      simulationBackend: "local-engine",
+      scenarioContract: localScenarioContract,
+    });
+    const localJob = await input.dependencies.startRun(
+      localRequest,
+      {
+        outputDirectory: path.join(
+          input.outputDirectory,
+          "runs",
+        ),
+        rootDir: input.outputDirectory,
+      },
+    );
+    evidence.localRun = liveCanaryRunReference(
+      input.outputDirectory,
+      localJob,
+    );
+    const localTerminal = await waitForTerminalRun(
+      localJob.requestPath,
+      {
+        maxWaitMs: input.maxWaitMs,
+        pollMs: input.pollMs,
+        dependencies: input.dependencies,
+      },
+    );
+    completeLiveCanaryRunReference(
+      evidence.localRun,
+      input.outputDirectory,
+      localTerminal.job,
+    );
+    const localReport = matchupReport(
+      requireCompleteJob(localTerminal),
+    );
+    retainProviderCompatibility(input.report, localReport);
+    const websiteReportPath = reportArtifactPath(
+      input.websiteJob,
+      input.websiteReport,
+      "matchup-json",
+    );
+    const localReportPath = reportArtifactPath(
+      localTerminal.job,
+      localReport,
+      "matchup-json",
+    );
+    evidence.sourceReports = [
+      {
+        provider: "local-engine",
+        reportPath: portableRunPath(
+          input.outputDirectory,
+          localReportPath,
+        )!,
+        receiptPath: portableRunPath(
+          input.outputDirectory,
+          exactReportReceiptPath(localReportPath),
+        )!,
+      },
+      {
+        provider: "website",
+        reportPath: portableRunPath(
+          input.outputDirectory,
+          websiteReportPath,
+        )!,
+        receiptPath: portableRunPath(
+          input.outputDirectory,
+          exactReportReceiptPath(websiteReportPath),
+        )!,
+      },
+    ];
+    const parityDirectory = path.join(
+      input.outputDirectory,
+      "provider-parity",
+    );
+    const comparison = await input.dependencies.compareProviders({
+      localReportPath,
+      websiteReportPath,
+      outputDirectory: parityDirectory,
+      rootDir: input.outputDirectory,
+    });
+    const artifact = (
+      format:
+        | "provider-parity-json"
+        | "provider-parity-html"
+        | "provider-parity-sha256",
+    ) => {
+      const found = comparison.data.artifacts.find(
+        (entry) => entry.format === format,
+      );
+      if (!found) {
+        throw codedError(
+          "LIVE_CANARY_NUMERICAL_PARITY_ARTIFACT_MISSING",
+          `The provider-parity workflow did not write ${format}.`,
+        );
+      }
+      return providerParityArtifactPath(
+        input.outputDirectory,
+        parityDirectory,
+        found.written,
+      );
+    };
+    evidence.status = comparison.data.outcome;
+    evidence.complete =
+      comparison.data.parity?.complete === true;
+    evidence.eligible =
+      comparison.data.parity?.eligible === true;
+    evidence.comparison = {
+      outcome: comparison.data.outcome,
+      classification: comparison.data.classification,
+      jsonPath: artifact("provider-parity-json"),
+      checksumPath: artifact("provider-parity-sha256"),
+      htmlPath: artifact("provider-parity-html"),
+    };
+    evidence.failure = comparison.ok
+      ? null
+      : {
+          code:
+            comparison.violations[0]?.code ??
+            "LIVE_CANARY_NUMERICAL_PARITY_FAILED",
+          message:
+            comparison.violations[0]?.message ??
+            "The paired local-engine/Tessera Web comparison did not pass.",
+        };
+  } catch (error) {
+    evidence.status = "unavailable";
+    evidence.complete = false;
+    evidence.eligible = false;
+    evidence.failure = {
+      code: errorCode(
+        error,
+        "LIVE_CANARY_NUMERICAL_PARITY_UNAVAILABLE",
+      ),
+      message: errorMessage(
+        error,
+        "The paired local-engine/Tessera Web comparison was unavailable.",
+      ),
+    };
+  }
 }
 
 async function runDistinctFactionCanary(input: {
@@ -1307,11 +1752,15 @@ async function runDistinctFactionCanary(input: {
     opponentRoster: opponent,
     profilePolicyPath: policy.path,
     catalogueDriftMode: input.catalogueDriftMode,
+    providerCompatibilityMode:
+      input.report.providerCompatibility.mode,
+    simulationBackend: "website",
   });
   const exactRoute =
     request.kind === "exact" &&
     request.opponent.kind === "roster" &&
-    request.opponent.roster.factionId === "orks";
+    request.opponent.roster.factionId === "orks" &&
+    request.options?.simulationBackend === "website";
   recordAssertion(
     input.report.assertions,
     "exact-route",
@@ -1321,6 +1770,10 @@ async function runDistinctFactionCanary(input: {
       opponentKind:
         request.kind === "exact"
           ? request.opponent.kind
+          : null,
+      simulationBackend:
+        request.kind === "exact"
+          ? request.options?.simulationBackend ?? null
           : null,
       renamedMirror: false,
     },
@@ -1338,32 +1791,22 @@ async function runDistinctFactionCanary(input: {
     ),
     rootDir: input.outputDirectory,
   });
-  input.report.run = {
-    runId: job.runId,
-    jobPath: portableRunPath(
-      input.outputDirectory,
-      job.requestPath,
-    )!,
-    initialAttempt: job.attempt,
-    finalAttempt: null,
-    finalStatus: null,
-    manifestPath: portableRunPath(
-      input.outputDirectory,
-      job.manifestPath,
-    ),
-  };
+  input.report.run = liveCanaryRunReference(
+    input.outputDirectory,
+    job,
+  );
   const terminal = await waitForTerminalRun(job.requestPath, {
     maxWaitMs: input.maxWaitMs,
     pollMs: input.pollMs,
     dependencies: input.dependencies,
   });
-  input.report.run.finalAttempt = terminal.job.attempt;
-  input.report.run.finalStatus = terminal.job.status;
-  input.report.run.manifestPath = portableRunPath(
+  completeLiveCanaryRunReference(
+    input.report.run,
     input.outputDirectory,
-    terminal.job.manifestPath,
+    terminal.job,
   );
   const report = matchupReport(requireCompleteJob(terminal));
+  retainProviderCompatibility(input.report, report);
   if (!report.configuration) {
     throw codedError(
       "LIVE_CANARY_CONFIGURATION_MISSING",
@@ -1424,6 +1867,19 @@ async function runDistinctFactionCanary(input: {
       connectorEventCount: connectorEvents.length,
     },
   );
+  await runDistinctFactionProviderParity({
+    report: input.report,
+    outputDirectory: input.outputDirectory,
+    player,
+    opponent,
+    profilePolicyPath: policy.path,
+    catalogueDriftMode: input.catalogueDriftMode,
+    websiteJob: terminal.job,
+    websiteReport: report,
+    maxWaitMs: input.maxWaitMs,
+    pollMs: input.pollMs,
+    dependencies: input.dependencies,
+  });
 }
 
 function uploadedUnitMultisetMatches(
@@ -1586,6 +2042,8 @@ async function runUploadedRevisionCanary(input: {
     opponentRoszPath: input.opponentRoszPath,
     profilePolicyPath: policy.path,
     catalogueDriftMode: input.catalogueDriftMode,
+    providerCompatibilityMode:
+      input.report.providerCompatibility.mode,
   });
   const job = await input.dependencies.startRun(request, {
     outputDirectory: path.join(
@@ -1620,6 +2078,7 @@ async function runUploadedRevisionCanary(input: {
     terminal.job.manifestPath,
   );
   const baseline = matchupReport(requireCompleteJob(terminal));
+  retainProviderCompatibility(input.report, baseline);
   const baselineComplete =
     baseline.status === "complete" &&
     baseline.source === "tessera-ui" &&
@@ -1670,6 +2129,8 @@ async function runUploadedRevisionCanary(input: {
       executionMode: "simulate",
       experimental: false,
       catalogueDriftMode: input.catalogueDriftMode,
+      providerCompatibilityMode:
+        input.report.providerCompatibility.mode,
       profilePolicyPath:
         terminal.job.profilePolicyPath ??
         policy.path,
@@ -1712,6 +2173,9 @@ async function runUploadedRevisionCanary(input: {
   }
   const revision: TesseraRevisionComparisonReport =
     compared.data;
+  for (const revisedReport of revision.revisedReports) {
+    retainProviderCompatibility(input.report, revisedReport);
+  }
   const frozenEvidence =
     revision.baselineRunId === baseline.runId &&
     revision.revisedRosterFingerprint ===
@@ -1779,6 +2243,19 @@ export async function runRotatingLiveCanary(
     profilePolicyPath: input.profilePolicyPath,
     dependencies,
   });
+  const bundleTrust = await dependencies.captureBundleTrust();
+  const providerCompatibilityMode =
+    input.providerCompatibilityMode ??
+    (environment.ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED ===
+    "true"
+      ? "enforce"
+      : "observe");
+  const numericalParityMode =
+    input.numericalParityMode ??
+    (environment.ROSTERPILOT_LIVE_NUMERICAL_PARITY_ENFORCED ===
+    "true"
+      ? "enforce"
+      : "observe");
   const report = baseReport({
     definition,
     startedAt,
@@ -1786,8 +2263,15 @@ export async function runRotatingLiveCanary(
     runtime: collected.runtime,
     dataBundleManifest:
       dependencies.getActiveBundleManifest(),
+    bundleTrust,
+    providerCompatibilityMode,
+    numericalParityMode,
     agentStatus: collected.agentStatus,
     resolvedPaths: collected.resolvedPaths,
+    rotationId:
+      environment.ROSTERPILOT_PROVIDER_COMPATIBILITY_ROTATION_ID ??
+      environment.GITHUB_RUN_ID ??
+      `local-${startedAt}`,
   });
   if (
     input.expectedBundleId &&

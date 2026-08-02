@@ -34,6 +34,7 @@ import {
   profilePolicyHash,
   profilePolicyIdentityMatches,
 } from "./profile-policy";
+import { localTesseraBaselineSettings } from "./scenario-contract";
 
 export { LOCAL_TESSERA_COMPILER_VERSION } from "./local-engine-input";
 
@@ -1016,19 +1017,6 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function standardSettings(phase: TesseraPhase): Record<string, string> {
-  return {
-    provider: "local-engine",
-    phase,
-    targetInCover: "false",
-    charging: phase === "fight" ? "true" : "false",
-    withinRapidFireRange: "false",
-    withinMeltaRange: "false",
-    remainedStationary: "false",
-    indirectFire: "false",
-  };
-}
-
 function engineOptions(
   phase: TesseraPhase,
   settings: Record<string, string>,
@@ -1108,6 +1096,25 @@ function metricValue(
   return result.woundsDealt.mean;
 }
 
+function metricUncertainty(
+  metric: TesseraMetric,
+  value: number,
+  result: EngineSimulationResult,
+): NonNullable<TesseraScenarioCell["uncertainty"]> {
+  const standardDeviation =
+    metric === "mean-kills"
+      ? result.kills.stdDev
+      : metric === "mean-damage"
+        ? result.woundsDealt.stdDev
+        : Math.sqrt(Math.max(0, value * (1 - value)));
+  return {
+    sampleCount: result.iterations,
+    standardDeviation,
+    standardError: standardDeviation / Math.sqrt(result.iterations),
+    completeness: "complete",
+  };
+}
+
 function scenarioCell(
   metric: TesseraMetric,
   value: number,
@@ -1134,6 +1141,7 @@ function scenarioCell(
     attackerOccurrence: attacker.occurrence,
     targetOccurrence: target.occurrence,
     metricValue: value,
+    uncertainty: metricUncertainty(metric, value, result),
     seed: result.seed,
     executionSha256: crypto
       .createHash("sha256")
@@ -1206,7 +1214,7 @@ export async function runLocalTesseraEngineMatchup(
         }
         const settings = frozen
           ? { ...frozen.settings }
-          : standardSettings(phase);
+          : localTesseraBaselineSettings(phase);
         const cells: TesseraScenarioCell[] = [];
         for (const [attackerIndex, attacker] of attackers.entries()) {
           for (const [targetIndex, target] of targets.entries()) {

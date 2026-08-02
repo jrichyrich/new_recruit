@@ -41,6 +41,9 @@ import {
   type TesseraSimulationBackend,
   type TesseraStressPortfolioPreview,
   type TesseraStressSuite,
+  type TesseraFrozenScenarioContract,
+  type TesseraMetric,
+  type TesseraPhase,
 } from "../lib/rosterpilot/index";
 import {
   readRosterDraft,
@@ -106,6 +109,17 @@ import {
 import {
   initializeLocalDataBundleProvider,
 } from "../local/data-bundles/configure";
+import {
+  assertTesseraScenarioContractProvider,
+  assertTesseraScenarioContractScope,
+  canonicalTesseraScenarioContract,
+  localTesseraScenarioContract,
+  TESSERA_SCENARIO_METRICS,
+  TESSERA_SCENARIO_PHASES,
+} from "../local/tessera/scenario-contract";
+import {
+  runTesseraProviderParityWorkflow,
+} from "../local/tessera/provider-parity-workflow";
 
 type Args = Record<string, string | boolean | string[]>;
 
@@ -150,6 +164,86 @@ function requiredInteger(
     throw new Error(`${label} requires a non-negative integer.`);
   }
   return parsed;
+}
+
+function requiredPositiveInteger(
+  args: Args,
+  key: string,
+  label = `--${key}`,
+): number {
+  const raw = value(args, key);
+  const parsed = raw === undefined ? Number.NaN : Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} requires a positive integer.`);
+  }
+  return parsed;
+}
+
+async function requestedScenarioContract(
+  args: Args,
+  input: {
+    executionMode: string | undefined;
+    phases?: readonly TesseraPhase[];
+    metrics?: readonly TesseraMetric[];
+  },
+): Promise<TesseraFrozenScenarioContract[] | undefined> {
+  const contractPath = value(args, "scenario-contract");
+  const hasContractFlag = args["scenario-contract"] !== undefined;
+  const hasIterationsFlag = args.iterations !== undefined;
+  if (!hasContractFlag && !hasIterationsFlag) return undefined;
+  if (hasContractFlag && !contractPath) {
+    throw new Error(
+      "--scenario-contract requires a JSON file path.",
+    );
+  }
+  if (hasContractFlag && hasIterationsFlag) {
+    throw new Error(
+      "Choose either --scenario-contract or --iterations, not both.",
+    );
+  }
+  if (
+    input.executionMode !== "simulate" &&
+    !flag(args, "experimental")
+  ) {
+    throw new Error(
+      "--scenario-contract and --iterations require --execution-mode simulate.",
+    );
+  }
+  const phases = input.phases ?? TESSERA_SCENARIO_PHASES;
+  const metrics = input.metrics ?? TESSERA_SCENARIO_METRICS;
+  const backend = requestedSimulationBackend(args) ?? "auto";
+  let contract: TesseraFrozenScenarioContract[];
+  if (hasIterationsFlag) {
+    if (backend !== "local-engine") {
+      throw new Error(
+        "--iterations requires --simulation-backend local-engine; use --scenario-contract to replay a provider-specific website contract.",
+      );
+    }
+    contract = localTesseraScenarioContract(
+      requiredPositiveInteger(args, "iterations"),
+      phases,
+      metrics,
+    );
+  } else {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(
+        await readFile(path.resolve(contractPath!), "utf8"),
+      );
+    } catch (error) {
+      throw new Error(
+        `The Tessera scenario contract could not be read: ${error instanceof Error ? error.message : "invalid JSON"}.`,
+      );
+    }
+    contract = canonicalTesseraScenarioContract(parsed);
+  }
+  contract = assertTesseraScenarioContractScope(
+    contract,
+    phases,
+    metrics,
+  );
+  assertTesseraScenarioContractProvider(contract, backend);
+  return contract;
 }
 
 function optimizerStatePath(args: Args): string {
@@ -238,6 +332,25 @@ function requestedCatalogueDriftMode(
     return "diagnostic";
   }
   return inheritFrozenPolicy ? undefined : "reject";
+}
+
+function requestedProviderCompatibilityMode(
+  args: Args,
+  inheritFrozenPolicy = false,
+): "observe" | "enforce" | undefined {
+  if (
+    process.env.ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED ===
+    "true"
+  ) {
+    return "enforce";
+  }
+  if (args["enforce-provider-compatibility"] === undefined) {
+    return inheritFrozenPolicy ? undefined : "observe";
+  }
+  if (flag(args, "enforce-provider-compatibility")) {
+    return "enforce";
+  }
+  return inheritFrozenPolicy ? undefined : "observe";
 }
 
 function list(args: Args, key: string): string[] {
@@ -676,18 +789,19 @@ Usage:
   rosterpilot tessera configure
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera] [--verified-catalogue-drift-diagnostic]
-  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
-  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--analysis staged|full-all] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
+  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
+  rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--analysis staged|full-all] [--profile-policy profiles.json] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
-  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--analysis staged] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--collection collection.json] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
-  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--simulation-backend auto|local-engine|website] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
+  rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--analysis staged] [--profile-policy profiles.json] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--collection collection.json] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--profile-policy profiles.json] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--simulation-backend auto|local-engine|website] [--scenario-contract contract.json | --iterations positive-int] [--enforce-provider-compatibility] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
   rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
   rosterpilot tessera run-resume --job exports/tessera/runs/run-.../tessera-run.json [--restart-from] [--out-dir exports/tessera]
   rosterpilot tessera resolve-profiles --job ... --profile-policy profiles.json
   rosterpilot tessera run-cancel --job exports/tessera/runs/run-.../tessera-run.json
   rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera]
   rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera] [--overwrite]
+  rosterpilot tessera compare-providers --local-report local-matchup.json --website-report website-matchup.json [--out-dir exports/tessera/parity] [--overwrite]
   rosterpilot tessera optimizer-start --baseline-report matchup.json --file roster.json [--mode guided|recommend-only] [--profile-policy profiles.json] [--out-dir exports/tessera/optimizers]
   rosterpilot tessera optimizer-status --optimizer exports/tessera/optimizers/optimizer-.../tessera-optimizer.json
   rosterpilot tessera optimizer-approve-candidates --optimizer ... --expected-revision 0 --candidate candidate-id [--candidate another-id] --approval-id approval-id --approved-by name
@@ -1433,6 +1547,26 @@ async function main(): Promise<void> {
       print(await cancelTesseraRun(path.resolve(jobPath)));
       return;
     }
+    if (action === "compare-providers") {
+      const localReportPath = value(args, "local-report");
+      const websiteReportPath = value(args, "website-report");
+      if (!localReportPath || !websiteReportPath) {
+        throw new Error(
+          "Tessera compare-providers requires --local-report and --website-report.",
+        );
+      }
+      const result = await runTesseraProviderParityWorkflow({
+        localReportPath: path.resolve(localReportPath),
+        websiteReportPath: path.resolve(websiteReportPath),
+        outputDirectory:
+          value(args, "out-dir") ?? "exports/tessera/parity",
+        overwrite: flag(args, "overwrite"),
+        allowOutsideRoot: flag(args, "allow-outside-root"),
+      });
+      print(result);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
     if (action === "resolve-profiles") {
       const jobPath = value(args, "job");
       const policyPath = value(args, "profile-policy");
@@ -1544,11 +1678,17 @@ async function main(): Promise<void> {
               | "simulate"
               | undefined,
             profilePolicyPath: value(args, "profile-policy"),
+            scenarioContract: await requestedScenarioContract(
+              args,
+              { executionMode },
+            ),
             opponentRosterContext: opponentContextFile
               ? await readRosterDraft(
                   path.resolve(opponentContextFile),
                 )
               : undefined,
+            providerCompatibilityMode:
+              requestedProviderCompatibilityMode(args),
             catalogueDriftMode: flag(
               args,
               "verified-catalogue-drift-diagnostic",
@@ -1586,11 +1726,17 @@ async function main(): Promise<void> {
               | "simulate"
               | undefined,
             profilePolicyPath: value(args, "profile-policy"),
+            scenarioContract: await requestedScenarioContract(
+              args,
+              { executionMode },
+            ),
             portfolioPreview: portfolioPreviewPath
               ? await readPortfolioPreview(
                   portfolioPreviewPath,
                 )
               : undefined,
+            providerCompatibilityMode:
+              requestedProviderCompatibilityMode(args),
             catalogueDriftMode: flag(
               args,
               "verified-catalogue-drift-diagnostic",
@@ -1639,6 +1785,12 @@ async function main(): Promise<void> {
             ),
           },
           options: {
+            scenarioContract: await requestedScenarioContract(
+              args,
+              { executionMode },
+            ),
+            providerCompatibilityMode:
+              requestedProviderCompatibilityMode(args),
             catalogueDriftMode: flag(
               args,
               "verified-catalogue-drift-diagnostic",
@@ -1698,6 +1850,12 @@ async function main(): Promise<void> {
             ),
           },
           options: {
+            scenarioContract: await requestedScenarioContract(
+              args,
+              { executionMode },
+            ),
+            providerCompatibilityMode:
+              requestedProviderCompatibilityMode(args),
             catalogueDriftMode: flag(
               args,
               "verified-catalogue-drift-diagnostic",
@@ -1796,6 +1954,10 @@ async function main(): Promise<void> {
           `Unknown Tessera execution mode "${executionMode}".`,
         );
       }
+      const scenarioContract = await requestedScenarioContract(
+        args,
+        { executionMode },
+      );
       const outputDirectory =
         value(args, "out-dir") ?? "exports/tessera";
       const resumeManifest = value(args, "resume");
@@ -1862,9 +2024,17 @@ async function main(): Promise<void> {
             },
             options: {
               outputDirectory,
+              scenarioContract,
               simulationBackend: requestedSimulationBackend(args),
               executionMode: "simulate",
               experimental: false,
+              providerCompatibilityMode:
+                requestedProviderCompatibilityMode(
+                  args,
+                  Boolean(
+                    resumeManifestPath || restartManifest,
+                  ),
+                ),
               catalogueDriftMode:
                 requestedCatalogueDriftMode(
                   args,
@@ -1931,8 +2101,16 @@ async function main(): Promise<void> {
         },
         {
           overwrite: flag(args, "overwrite"),
+          scenarioContract,
           simulationBackend: requestedSimulationBackend(args),
           allowOutsideRoot: flag(args, "allow-outside-root"),
+          providerCompatibilityMode:
+            requestedProviderCompatibilityMode(
+              args,
+              Boolean(
+                resumeManifestPath || restartManifest,
+              ),
+            ),
           catalogueDriftMode:
             requestedCatalogueDriftMode(
               args,
@@ -1975,6 +2153,10 @@ async function main(): Promise<void> {
           `Unknown Tessera execution mode "${executionMode}".`,
         );
       }
+      const scenarioContract = await requestedScenarioContract(
+        args,
+        { executionMode },
+      );
       const collectionPath = value(args, "collection");
       const outputDirectory =
         value(args, "out-dir") ?? "exports/tessera";
@@ -2037,9 +2219,12 @@ async function main(): Promise<void> {
             },
             options: {
               outputDirectory,
+              scenarioContract,
               simulationBackend: requestedSimulationBackend(args),
               executionMode: "simulate",
               experimental: false,
+              providerCompatibilityMode:
+                requestedProviderCompatibilityMode(args),
               catalogueDriftMode: flag(
                 args,
                 "verified-catalogue-drift-diagnostic",
@@ -2060,9 +2245,12 @@ async function main(): Promise<void> {
         buildInput,
         {
           outputDirectory,
+          scenarioContract,
           simulationBackend: requestedSimulationBackend(args),
           overwrite: flag(args, "overwrite"),
           allowOutsideRoot: flag(args, "allow-outside-root"),
+          providerCompatibilityMode:
+            requestedProviderCompatibilityMode(args),
           catalogueDriftMode: flag(
             args,
             "verified-catalogue-drift-diagnostic",
@@ -2223,6 +2411,10 @@ async function main(): Promise<void> {
           `Unknown Tessera execution mode "${executionMode}".`,
         );
       }
+      const scenarioContract = await requestedScenarioContract(
+        args,
+        { executionMode },
+      );
       const resumeManifest = value(args, "resume");
       const resumeManifestPath =
         args.resume === true
@@ -2261,11 +2453,19 @@ async function main(): Promise<void> {
                 ? path.resolve(restartManifest)
                 : undefined,
               profilePolicyPath: value(args, "profile-policy"),
+              scenarioContract,
               forceRetry: flag(args, "force-retry"),
               simulationBackend: requestedSimulationBackend(args),
               outputDirectory,
               executionMode: "simulate",
               experimental: false,
+              providerCompatibilityMode:
+                requestedProviderCompatibilityMode(
+                  args,
+                  Boolean(
+                    resumeManifestPath || restartManifest,
+                  ),
+                ),
               catalogueDriftMode:
                 requestedCatalogueDriftMode(
                   args,
@@ -2301,6 +2501,7 @@ async function main(): Promise<void> {
             ? path.resolve(restartManifest)
             : undefined,
           profilePolicyPath: value(args, "profile-policy"),
+          scenarioContract,
           forceRetry: flag(args, "force-retry"),
           simulationBackend: requestedSimulationBackend(args),
           outputDirectory,
@@ -2311,6 +2512,13 @@ async function main(): Promise<void> {
             | "simulate"
             | undefined,
           experimental: flag(args, "experimental"),
+          providerCompatibilityMode:
+            requestedProviderCompatibilityMode(
+              args,
+              Boolean(
+                resumeManifestPath || restartManifest,
+              ),
+            ),
           catalogueDriftMode:
             requestedCatalogueDriftMode(
               args,
@@ -2438,6 +2646,24 @@ async function main(): Promise<void> {
           `Unknown Tessera metric: ${invalidMetrics.join(", ")}.`,
         );
       }
+      const effectivePhases = phases.length
+        ? (phases as TesseraPhase[])
+        : analysisMode === "quick"
+          ? (["shooting"] as TesseraPhase[])
+          : [...TESSERA_SCENARIO_PHASES];
+      const effectiveMetrics = metrics.length
+        ? (metrics as TesseraMetric[])
+        : analysisMode === "quick"
+          ? (["wipe-probability"] as TesseraMetric[])
+          : [...TESSERA_SCENARIO_METRICS];
+      const scenarioContract = await requestedScenarioContract(
+        args,
+        {
+          executionMode,
+          phases: effectivePhases,
+          metrics: effectiveMetrics,
+        },
+      );
       const opponentRosterContext = opponentContextFile
         ? await readRosterDraft(path.resolve(opponentContextFile))
         : undefined;
@@ -2465,6 +2691,9 @@ async function main(): Promise<void> {
               | "mean-damage"
             >)
           : undefined,
+        scenarioContract,
+        providerCompatibilityMode:
+          requestedProviderCompatibilityMode(args),
         allowPointMismatch: flag(args, "allow-point-mismatch"),
         includeChangeCandidates: !flag(args, "no-change-candidates"),
         opponentRosterContext,

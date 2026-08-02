@@ -242,6 +242,84 @@ test("labels current exact reports as schema v3", () => {
   assert.doesNotMatch(html, /Legacy report/);
 });
 
+test("renders v4 compatibility identities in printable provenance", () => {
+  const report = v2Report();
+  report.schemaVersion = 4;
+  report.scenarioContractSha256 = "a".repeat(64);
+  const firstCell = report.simulation.scenarios?.[0]?.cells[0];
+  assert.ok(firstCell);
+  firstCell.uncertainty = {
+    "wipe-probability": {
+      sampleCount: 1000,
+      standardDeviation: 0.48,
+      standardError: 0.015,
+      completeness: "complete",
+    },
+  };
+  report.providerCompatibilityEnvelopes = [
+    {
+      complete: true,
+      issues: [],
+      envelopeSha256: "b".repeat(64),
+      data: {
+        bundleId: "signed-bundle-id",
+        semanticIdentitySha256: "c".repeat(64),
+        rules: {
+          package: "@alpaca-software/40kdc-data",
+          version: "1.2.1",
+          edition: "11th",
+          dataslate: "2026-Q3",
+        },
+        bsData: {
+          repository: "BSData/wh40k-11e",
+          commit: "1".repeat(40),
+        },
+        official: {
+          mfmVersion: "3.1",
+          authorityStatus: "verified",
+        },
+      },
+      rosters: [
+        {
+          side: "player",
+          newRecruit: {
+            status: "not-applicable",
+            pinned: null,
+            observed: null,
+          },
+        },
+      ],
+      tessera: {
+        providerIdentitySha256: "d".repeat(64),
+        website: {
+          deployment: {
+            identitySha256: "e".repeat(64),
+            completeness: "complete",
+            assets: [],
+          },
+          importSemantics: {
+            combinedSha256: "f".repeat(64),
+            completeness: "complete",
+            unresolvedEffectCount: 0,
+          },
+        },
+      },
+      profilePolicyHash: null,
+    } as unknown as NonNullable<
+      TesseraMatchupReport["providerCompatibilityEnvelopes"]
+    >[number],
+  ];
+
+  const html = renderTesseraMatchupReportHtml(report);
+  assert.match(html, /Tessera report v4/);
+  assert.match(html, /provider compatibility/);
+  assert.match(html, /signed-bundle-id/);
+  assert.match(html, new RegExp("e".repeat(64)));
+  assert.match(html, new RegExp("f".repeat(64)));
+  assert.match(html, /"sampleCount":1000/);
+  assert.match(html, /SE=/);
+});
+
 test("falls back to legacy matrices and findings", () => {
   const report = v2Report();
   report.schemaVersion = undefined;

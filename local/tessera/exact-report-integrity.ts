@@ -45,6 +45,9 @@ export function exactReportEvidenceSha256(
     status: report.status,
     source: report.source,
     configuration: report.configuration,
+    scenarioContract: report.scenarioContract ?? null,
+    scenarioContractSha256:
+      report.scenarioContractSha256 ?? null,
     profilePolicyHash: report.profilePolicyHash ?? null,
     tesseraUiIdentity: report.tesseraUiIdentity ?? null,
     pinnedData: report.pinnedData,
@@ -77,6 +80,9 @@ export function exactReportEvidenceSha256(
       requestedBackend: report.simulation.requestedBackend,
       selectedBackend: report.simulation.selectedBackend,
       providerIdentity: report.simulation.providerIdentity,
+      providerEvidence: report.simulation.providerEvidence ?? null,
+      providerEvidenceCaptures:
+        report.simulation.providerEvidenceCaptures ?? null,
       fallback: report.simulation.fallback,
       engine: report.simulation.engine,
       settings: report.simulation.settings,
@@ -84,6 +90,10 @@ export function exactReportEvidenceSha256(
       matrices: report.simulation.matrices,
       scenarios: report.simulation.scenarios,
     },
+    providerCompatibility:
+      report.providerCompatibility ?? null,
+    providerCompatibilityEnvelopes:
+      report.providerCompatibilityEnvelopes ?? [],
   };
   return digest(JSON.stringify(canonicalize(evidence)));
 }

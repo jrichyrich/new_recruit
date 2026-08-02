@@ -35,6 +35,7 @@ type WorkerRequest = {
   profilePolicy?: ProfilePolicyV1 | null;
   frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
   savedListReuse?: TesseraSavedListReuse | null;
+  semanticSnapshotCacheDirectory?: string | null;
 };
 
 type WorkerResult =
@@ -143,6 +144,8 @@ async function analyzeOnce(input: WorkerRequest): Promise<TesseraBrowserResult> 
     profilePolicy: input.profilePolicy,
     frozenScenarioContract: input.frozenScenarioContract,
     savedListReuse: input.savedListReuse,
+    semanticSnapshotCacheDirectory:
+      input.semanticSnapshotCacheDirectory,
   });
 }
 
@@ -173,6 +176,7 @@ async function runPersistentWorker(): Promise<void> {
   let licenseKey: string | undefined;
   let brokerPath: string | undefined;
   let profileDirectory: string | undefined;
+  let semanticSnapshotCacheDirectory: string | null | undefined;
   let closing = false;
 
   const closeContext = async () => {
@@ -218,7 +222,10 @@ async function runPersistentWorker(): Promise<void> {
         if (
           (brokerPath && brokerPath !== input.brokerPath) ||
           (profileDirectory &&
-            profileDirectory !== input.profileDirectory)
+            profileDirectory !== input.profileDirectory) ||
+          (semanticSnapshotCacheDirectory !== undefined &&
+            semanticSnapshotCacheDirectory !==
+              (input.semanticSnapshotCacheDirectory ?? null))
         ) {
           throw new TesseraAutomationError(
             "TESSERA_WORKER_SESSION_MISMATCH",
@@ -227,6 +234,8 @@ async function runPersistentWorker(): Promise<void> {
         }
         brokerPath = input.brokerPath;
         profileDirectory = input.profileDirectory;
+        semanticSnapshotCacheDirectory =
+          input.semanticSnapshotCacheDirectory ?? null;
         licenseKey ??= await retrieveLicenseKey(input.brokerPath);
         const data = await runTesseraBrowserMatchup(
           {
@@ -242,6 +251,8 @@ async function runPersistentWorker(): Promise<void> {
             profilePolicy: input.profilePolicy,
             frozenScenarioContract: input.frozenScenarioContract,
             savedListReuse: input.savedListReuse,
+            semanticSnapshotCacheDirectory:
+              input.semanticSnapshotCacheDirectory,
           },
           {
             context,

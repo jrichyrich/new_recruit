@@ -5,10 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { BrowserContext } from "playwright-core";
+import type {
+  TesseraImportedArmySemanticSnapshot,
+} from "../lib/rosterpilot";
 
 import {
   invalidatesCachedTesseraLicenseKey,
+  parseTesseraCellUncertainty,
   runTesseraBrowserMatchup,
+  tesseraDeploymentEvidenceFromObservations,
+  tesseraImportSemanticEvidenceFromSnapshots,
   TESSERA_DIRECTIONS,
   TESSERA_METRICS,
   TESSERA_PHASES,
@@ -18,6 +24,256 @@ import {
   scopedTesseraProfilePolicySha256,
   type TesseraSavedListReuse,
 } from "../local/tessera/saved-list-reuse";
+import {
+  createTesseraImportedArmySimulationStateBinding,
+} from "../local/tessera/website-semantic-evidence";
+
+test("website deployment evidence hashes same-origin script bytes and fails closed on fallbacks", () => {
+  const complete = tesseraDeploymentEvidenceFromObservations({
+    origin: "https://tessera.example",
+    declaredVersion: "2026.8.2",
+    declarations: ["/assets/b.js", "/assets/a.js"],
+    assets: [
+      {
+        url: "https://tessera.example/assets/b.js",
+        sameOrigin: true,
+        sha256: "b".repeat(64),
+        byteLength: 200,
+        failureCode: null,
+      },
+      {
+        url: "https://tessera.example/assets/a.js",
+        sameOrigin: true,
+        sha256: "a".repeat(64),
+        byteLength: 100,
+        failureCode: null,
+      },
+    ],
+  });
+  assert.equal(complete.complete, true);
+  assert.equal(complete.completeness, "complete");
+  assert.match(complete.identitySha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.notEqual(complete.identitySha256, complete.declarationSha256);
+  assert.deepEqual(
+    complete.assets.map((asset) => asset.url),
+    [
+      "https://tessera.example/assets/a.js",
+      "https://tessera.example/assets/b.js",
+    ],
+  );
+
+  const crossOriginBound = tesseraDeploymentEvidenceFromObservations({
+    origin: "https://tessera.example",
+    declaredVersion: null,
+    declarations: ["/assets/a.js", "https://cdn.example/b.js"],
+    assets: [
+      {
+        url: "https://tessera.example/assets/a.js",
+        sameOrigin: true,
+        sha256: "a".repeat(64),
+        byteLength: 100,
+        failureCode: null,
+      },
+      {
+        url: "https://cdn.example/b.js",
+        sameOrigin: false,
+        sha256: null,
+        byteLength: null,
+        failureCode: "cross-origin",
+      },
+    ],
+  });
+  assert.equal(crossOriginBound.complete, true);
+  assert.equal(crossOriginBound.completeness, "complete");
+  assert.deepEqual(
+    crossOriginBound.assets.map((asset) => ({
+      url: asset.url,
+      sameOrigin: asset.sameOrigin,
+      sha256: asset.sha256,
+    })),
+    [
+      {
+        url: "https://cdn.example/b.js",
+        sameOrigin: false,
+        sha256: null,
+      },
+      {
+        url: "https://tessera.example/assets/a.js",
+        sameOrigin: true,
+        sha256: "a".repeat(64),
+      },
+    ],
+  );
+
+  const partial = tesseraDeploymentEvidenceFromObservations({
+    origin: "https://tessera.example",
+    declaredVersion: null,
+    declarations: [
+      "/assets/a.js",
+      "/assets/missing.js",
+      "https://cdn.example/b.js",
+    ],
+    assets: [
+      ...crossOriginBound.assets.map((asset) => ({
+        ...asset,
+        byteLength: asset.byteLength ?? null,
+        failureCode: asset.sameOrigin ? null : "cross-origin",
+      })),
+      {
+        url: "https://tessera.example/assets/missing.js",
+        sameOrigin: true,
+        sha256: null,
+        byteLength: null,
+        failureCode: "fetch-failed",
+      },
+    ],
+  });
+  assert.equal(partial.complete, false);
+  assert.equal(partial.completeness, "partial");
+  assert.ok(
+    partial.incompleteReasons.includes(
+      "same-origin-script-bytes-unavailable",
+    ),
+  );
+
+  const fallback = tesseraDeploymentEvidenceFromObservations({
+    origin: "file://",
+    declaredVersion: null,
+    declarations: [],
+    assets: [],
+  });
+  assert.equal(fallback.complete, false);
+  assert.equal(fallback.completeness, "fallback");
+  assert.equal(fallback.identitySha256, fallback.declarationSha256);
+});
+
+test("website matrix uncertainty is preserved only when visibly reported", () => {
+  assert.deepEqual(
+    parseTesseraCellUncertainty(
+      "42% (n=2,000; SD=5%; standard error: 1.2%)",
+    ),
+    {
+      sampleCount: 2_000,
+      standardDeviation: 0.05,
+      standardError: 0.012,
+      completeness: "complete",
+    },
+  );
+  assert.deepEqual(parseTesseraCellUncertainty("n=1,000"), {
+    sampleCount: 1_000,
+    standardDeviation: null,
+    standardError: null,
+    completeness: "partial",
+  });
+  assert.deepEqual(parseTesseraCellUncertainty("42%"), {
+    sampleCount: null,
+    standardDeviation: null,
+    standardError: null,
+    completeness: "unavailable",
+  });
+});
+
+function importedSnapshot(
+  side: "player" | "opponent",
+  count = 2,
+): TesseraImportedArmySemanticSnapshot {
+  return {
+    schemaVersion: 1,
+    side,
+    armyName: side === "player" ? "Custodes" : "Aeldari",
+    reportedUnitCount: 1,
+    units: [{
+      occurrence: 1,
+      name: side === "player" ? "Custodian Guard" : "Windriders",
+      modelCount: count,
+      included: true,
+      weapons: [{
+        occurrence: 1,
+        name: side === "player" ? "Guardian spear" : "Shuriken cannon",
+        profile: null,
+        count,
+        visibleCharacteristics: [
+          { name: "phase", value: "shooting" },
+          { name: "attacks", value: "2" },
+          { name: "ballistic skill", value: "2+" },
+          { name: "strength", value: "6" },
+          { name: "AP", value: "-1" },
+          { name: "damage", value: "2" },
+          { name: "keywords", value: "none" },
+        ],
+        effectToggles: [{ name: "lethal hits", state: false }],
+      }],
+      visibleCharacteristics: [
+        { name: "toughness", value: "6" },
+        { name: "save", value: "2+" },
+        { name: "wounds", value: "3" },
+        { name: "invulnerable save", value: "4+" },
+      ],
+      effectToggles: [{ name: "cover", state: false }],
+    }],
+    warningCodes: [],
+    alternateProfileResolutions: [],
+    completeness: "complete",
+    incompleteReasons: [],
+  };
+}
+
+function semanticBindings(
+  player: TesseraImportedArmySemanticSnapshot,
+  opponent: TesseraImportedArmySemanticSnapshot,
+) {
+  const bind = (snapshot: TesseraImportedArmySemanticSnapshot) =>
+    createTesseraImportedArmySimulationStateBinding(snapshot, {
+      side: snapshot.side,
+      savedListName: `RP-${snapshot.side}`,
+      selectedUnitCount: snapshot.reportedUnitCount ?? 0,
+      selectorValue: `list:RP-${snapshot.side}`,
+      selectorLabel: `RP-${snapshot.side} · ${snapshot.reportedUnitCount} units`,
+    });
+  return { player: bind(player), opponent: bind(opponent) };
+}
+
+test("import semantic evidence changes with normalized army meaning and never verifies partial capture", () => {
+  const completePlayer = importedSnapshot("player");
+  const completeOpponent = importedSnapshot("opponent");
+  const complete = tesseraImportSemanticEvidenceFromSnapshots(
+    completePlayer,
+    completeOpponent,
+    semanticBindings(completePlayer, completeOpponent),
+  );
+  assert.equal(complete.complete, true);
+  assert.equal(complete.completeness, "complete");
+  assert.match(complete.combinedSha256 ?? "", /^[0-9a-f]{64}$/);
+
+  const changedPlayer = importedSnapshot("player", 3);
+  const changedOpponent = importedSnapshot("opponent");
+  const changed = tesseraImportSemanticEvidenceFromSnapshots(
+    changedPlayer,
+    changedOpponent,
+    semanticBindings(changedPlayer, changedOpponent),
+  );
+  assert.notEqual(changed.playerSha256, complete.playerSha256);
+  assert.notEqual(changed.combinedSha256, complete.combinedSha256);
+
+  const partialPlayer = importedSnapshot("player");
+  partialPlayer.completeness = "partial";
+  partialPlayer.incompleteReasons = ["unit-editor-coverage:0/1"];
+  partialPlayer.units[0].effectToggles[0].state = null;
+  const partialOpponent = importedSnapshot("opponent");
+  const partial = tesseraImportSemanticEvidenceFromSnapshots(
+    partialPlayer,
+    partialOpponent,
+    semanticBindings(partialPlayer, partialOpponent),
+  );
+  assert.equal(partial.complete, false);
+  assert.equal(partial.completeness, "partial");
+  assert.equal(partial.unresolvedEffectCount, 1);
+  assert.ok(
+    partial.incompleteReasons.includes(
+      "player:unit-editor-coverage:0/1",
+    ),
+  );
+});
 
 test("credential failures invalidate a persistent Tessera worker's cached key", () => {
   assert.equal(
@@ -499,6 +755,7 @@ async function runFixture(
   runtime: {
     directory?: string;
     preserveDirectory?: boolean;
+    semanticSnapshotCacheDirectory?: string;
   } = {},
 ) {
   const directory =
@@ -632,6 +889,8 @@ async function runFixture(
             }
           : undefined,
         savedListReuse,
+        semanticSnapshotCacheDirectory:
+          runtime.semanticSnapshotCacheDirectory,
         frozenScenarioContract:
           options.frozenIterations === undefined
             ? undefined
@@ -879,6 +1138,90 @@ test(
       assert.equal(
         resumed.savedListReuse?.opponent.action,
         "reused",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "reuses only fully verified local semantic snapshot receipts after saved-list identity validation",
+  { skip: !runBrowserTests },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "tessera-browser-semantic-receipt-v2-"),
+    );
+    const semanticSnapshotCacheDirectory = path.join(
+      directory,
+      "semantic-snapshots",
+    );
+    try {
+      const first = await runFixture(
+        {
+          savedListReuse: true,
+          savedNamesOnlyInMatrix: true,
+          requestedPhases: ["shooting"],
+          requestedMetrics: ["wipe-probability"],
+        },
+        {
+          directory,
+          preserveDirectory: true,
+          semanticSnapshotCacheDirectory,
+        },
+      );
+      assert.equal(first.savedListReuse?.player.action, "imported");
+      assert.equal(
+        first.savedListReuse?.player.semanticSnapshotSource,
+        "fresh-import",
+      );
+      assert.match(
+        first.savedListReuse?.player
+          .semanticSnapshotReceiptSha256 ?? "",
+        /^[0-9a-f]{64}$/,
+      );
+      assert.equal(first.providerEvidence?.importSemantics.completeness, "partial");
+
+      const resumed = await runFixture(
+        {
+          savedListReuse: true,
+          savedNamesOnlyInMatrix: true,
+          requestedPhases: ["shooting"],
+          requestedMetrics: ["wipe-probability"],
+        },
+        {
+          directory,
+          preserveDirectory: true,
+          semanticSnapshotCacheDirectory,
+        },
+      );
+      assert.equal(resumed.savedListReuse?.player.action, "reused");
+      assert.equal(resumed.savedListReuse?.opponent.action, "reused");
+      assert.equal(
+        resumed.savedListReuse?.player.semanticSnapshotSource,
+        "verified-cache",
+      );
+      assert.equal(
+        resumed.savedListReuse?.opponent.semanticSnapshotSource,
+        "verified-cache",
+      );
+      assert.equal(
+        resumed.providerEvidence?.importSemantics.playerSha256,
+        first.providerEvidence?.importSemantics.playerSha256,
+      );
+      assert.equal(
+        resumed.providerEvidence?.importSemantics.opponentSha256,
+        first.providerEvidence?.importSemantics.opponentSha256,
+      );
+      assert.equal(
+        resumed.providerEvidence?.importSemantics.completeness,
+        "partial",
+      );
+      assert.doesNotMatch(
+        JSON.stringify(
+          resumed.providerEvidence?.importSemantics.incompleteReasons,
+        ),
+        /saved-list-reused-without-import-review|snapshot-receipt-(?:missing|invalid)/,
       );
     } finally {
       await rm(directory, { recursive: true, force: true });

@@ -80,6 +80,13 @@ export type TesseraSavedListReuseAction = {
    * readable without inventing a content hash.
    */
   contentSha256?: string;
+  /** How semantic evidence for this exact saved entry was obtained. */
+  semanticSnapshotSource?:
+    | "fresh-import"
+    | "verified-cache"
+    | "unavailable";
+  semanticSnapshotSha256?: string;
+  semanticSnapshotReceiptSha256?: string;
 };
 
 const sha256Pattern = /^[0-9a-f]{64}$/i;

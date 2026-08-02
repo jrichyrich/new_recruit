@@ -33,6 +33,18 @@ const nullableFiniteNumber = z
   .number()
   .refine(Number.isFinite)
   .nullable();
+const TesseraCellUncertaintySchema = z
+  .object({
+    sampleCount: z.number().int().positive().nullable(),
+    standardDeviation: z.number().nonnegative().nullable(),
+    standardError: z.number().nonnegative().nullable(),
+    completeness: z.enum([
+      "complete",
+      "partial",
+      "unavailable",
+    ]),
+  })
+  .strict();
 const TesseraMatrixCellSchema = z
   .object({
     attacker: z.string().min(1),
@@ -41,6 +53,7 @@ const TesseraMatrixCellSchema = z
     killProbability: nullableFiniteNumber,
     expectedDamage: nullableFiniteNumber,
     damagePer100Points: nullableFiniteNumber,
+    uncertainty: TesseraCellUncertaintySchema.optional(),
   })
   .strict();
 const TesseraScenarioCellSchema = TesseraMatrixCellSchema.extend({
@@ -49,6 +62,8 @@ const TesseraScenarioCellSchema = TesseraMatrixCellSchema.extend({
   attackerOccurrence: z.number().int().positive(),
   targetOccurrence: z.number().int().positive(),
   metricValue: z.number().refine(Number.isFinite),
+  seed: z.number().int().optional(),
+  executionSha256: z.string().regex(/^[0-9a-f]{64}$/i).optional(),
 }).strict();
 const TesseraScenarioSchema = z
   .object({
@@ -58,6 +73,9 @@ const TesseraScenarioSchema = z
     metric: TesseraMetricSchema,
     settings: z.record(z.string()),
     iterations: z.number().nullable(),
+    seed: z.number().int().optional(),
+    executionSha256: z.string().regex(/^[0-9a-f]{64}$/i).optional(),
+    projectionSha256: z.string().regex(/^[0-9a-f]{64}$/i).optional(),
     cells: z.array(TesseraScenarioCellSchema),
     matrixSha256: z.string().optional(),
     integrity: z
@@ -75,6 +93,156 @@ const TesseraScenarioSchema = z
       .optional(),
   })
   .strict();
+const TesseraImportedSemanticValueSchema = z
+  .object({
+    name: z.string(),
+    value: z.string(),
+  })
+  .strict();
+const TesseraImportedSemanticToggleSchema = z
+  .object({
+    name: z.string(),
+    state: z.boolean().nullable(),
+  })
+  .strict();
+const TesseraImportedWeaponSemanticSchema = z
+  .object({
+    occurrence: z.number().int().positive(),
+    name: z.string(),
+    profile: z.string().nullable(),
+    count: z.number().int().nonnegative().nullable(),
+    visibleCharacteristics: z.array(
+      TesseraImportedSemanticValueSchema,
+    ),
+    effectToggles: z.array(TesseraImportedSemanticToggleSchema),
+  })
+  .strict();
+const TesseraImportedUnitSemanticSchema = z
+  .object({
+    occurrence: z.number().int().positive(),
+    name: z.string(),
+    modelCount: z.number().int().positive().nullable(),
+    included: z.boolean().nullable(),
+    weapons: z.array(TesseraImportedWeaponSemanticSchema),
+    visibleCharacteristics: z.array(
+      TesseraImportedSemanticValueSchema,
+    ),
+    effectToggles: z.array(TesseraImportedSemanticToggleSchema),
+  })
+  .strict();
+const TesseraImportedArmySemanticSnapshotSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    side: z.enum(["player", "opponent"]),
+    armyName: z.string().nullable(),
+    reportedUnitCount: z.number().int().nonnegative().nullable(),
+    units: z.array(TesseraImportedUnitSemanticSchema),
+    warningCodes: z.array(z.string()),
+    alternateProfileResolutions: z.array(
+      z
+        .object({
+          unit: z.string().nullable(),
+          weaponGroup: z.string().nullable(),
+          availableProfiles: z.array(z.string()),
+          selectedProfile: z.string().nullable(),
+          resolvedByPolicy: z.boolean(),
+        })
+        .strict(),
+    ),
+    completeness: z.enum(["complete", "partial", "unavailable"]),
+    incompleteReasons: z.array(z.string()),
+  })
+  .strict();
+const TesseraImportedArmySimulationStateBindingSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    side: z.enum(["player", "opponent"]),
+    snapshotSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+    savedListName: z.string().min(1),
+    selectedUnitCount: z.number().int().positive(),
+    selectorValueSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+    selectorLabel: z.string().min(1),
+    selectorLabelSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+    stateSha256: z.string().regex(/^[0-9a-f]{64}$/i),
+  })
+  .strict();
+const TesseraWebsiteProviderEvidenceSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    deployment: z
+      .object({
+        identitySha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/i)
+          .nullable(),
+        declaredVersion: z.string().nullable(),
+        assets: z.array(
+          z
+            .object({
+              url: z.string().min(1),
+              sameOrigin: z.boolean(),
+              sha256: z
+                .string()
+                .regex(/^[0-9a-f]{64}$/i)
+                .nullable(),
+              byteLength: z
+                .number()
+                .int()
+                .nonnegative()
+                .nullable()
+                .optional(),
+            })
+            .strict(),
+        ),
+        complete: z.boolean(),
+        completeness: z.enum([
+          "complete",
+          "partial",
+          "fallback",
+          "unavailable",
+        ]),
+        declarationSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/i)
+          .nullable(),
+        incompleteReasons: z.array(z.string()),
+      })
+      .strict(),
+    importSemantics: z
+      .object({
+        combinedSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/i)
+          .nullable(),
+        playerSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/i)
+          .nullable(),
+        opponentSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/i)
+          .nullable(),
+        complete: z.boolean(),
+        completeness: z.enum(["complete", "partial", "unavailable"]),
+        unresolvedEffectCount: z.number().int().nonnegative(),
+        playerSnapshot:
+          TesseraImportedArmySemanticSnapshotSchema.nullable(),
+        opponentSnapshot:
+          TesseraImportedArmySemanticSnapshotSchema.nullable(),
+        stateBindings: z
+          .object({
+            player:
+              TesseraImportedArmySimulationStateBindingSchema.nullable(),
+            opponent:
+              TesseraImportedArmySimulationStateBindingSchema.nullable(),
+          })
+          .strict()
+          .optional(),
+        incompleteReasons: z.array(z.string()),
+      })
+      .strict(),
+  })
+  .strict();
 const TesseraSavedListActionSchema = z
   .object({
     name: z.string().min(1),
@@ -84,11 +252,23 @@ const TesseraSavedListActionSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/i)
       .optional(),
+    semanticSnapshotSource: z
+      .enum(["fresh-import", "verified-cache", "unavailable"])
+      .optional(),
+    semanticSnapshotSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i)
+      .optional(),
+    semanticSnapshotReceiptSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i)
+      .optional(),
   })
   .strict();
 const CertificationTesseraBrowserResultSchema = z
   .object({
     uiIdentity: z.string().nullable().optional(),
+    providerEvidence: TesseraWebsiteProviderEvidenceSchema.optional(),
     legacyProjection: z.unknown().optional(),
     settings: z.record(z.string()),
     cells: z.array(TesseraMatrixCellSchema),
@@ -659,6 +839,7 @@ export async function captureLiveTesseraCertificationResult(input: {
         input.expectedPlayerUnitCount,
       expectedOpponentUnitCount:
         input.expectedOpponentUnitCount,
+      providerEvidence: result.providerEvidence ?? null,
       scenarios: result.scenarios
         .map((scenario) => ({
           id: scenario.id,
@@ -683,6 +864,7 @@ export async function captureLiveTesseraCertificationResult(input: {
         playerName: input.playerName,
         opponentName: input.opponentName,
         uiIdentity: result.uiIdentity ?? null,
+        providerEvidence: result.providerEvidence ?? null,
         settings: result.settings,
         profilePolicy: input.profilePolicyEvidence,
         coverage,
@@ -729,6 +911,7 @@ export async function captureLiveTesseraCertificationResult(input: {
     ...coverage,
     settings: result.settings,
     uiIdentity: result.uiIdentity ?? null,
+    providerEvidence: result.providerEvidence ?? null,
     profilePolicy: input.profilePolicyEvidence,
     importWarnings: result.importWarnings,
     importIssues: result.importIssues ?? [],

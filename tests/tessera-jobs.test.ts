@@ -18,6 +18,7 @@ import {
   buildRoster,
   type RuntimeProvenance,
   type TesseraMatchupReport,
+  type TesseraProviderCompatibilityEnvelope,
 } from "../lib/rosterpilot";
 import {
   createExactReportReceipt,
@@ -36,6 +37,9 @@ import {
   type TesseraRunRequest,
   type TesseraRunResult,
 } from "../local/tessera/jobs";
+import {
+  providerCompatibilityEnvelopeSha256,
+} from "../local/tessera/provider-compatibility";
 
 type JobDocumentFixture = TesseraRunJob & {
   request: TesseraRunRequest;
@@ -2530,6 +2534,110 @@ test("durable retries retain and enforce the selected local provider identity", 
   );
 });
 
+test("durable retries pin the first complete provider compatibility envelope set", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-job-compatibility-pin-"),
+  );
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.ok && built.data);
+  let job = await startTesseraRun(
+    {
+      kind: "stress",
+      playerRoster: built.data,
+      factionId: "aeldari",
+      options: {
+        executionMode: "simulate",
+        simulationBackend: "local-engine",
+      },
+    },
+    {
+      outputDirectory: path.join(root, "runs"),
+      rootDir: root,
+      launch: false,
+    },
+  );
+  const localIdentity = {
+    schemaVersion: 1 as const,
+    provider: "local-engine" as const,
+    engine: "tessera-engine" as const,
+    repository: "Tessera-cmd/tessera-engine" as const,
+    commit: "a".repeat(40),
+    tree: "b".repeat(40),
+    sourceSha256: "c".repeat(64),
+    adapterVersion: "fixture-adapter-v1",
+    compilerVersion: "fixture-compiler-v1",
+    inputSchemaVersion: 1 as const,
+    capabilityManifestSha256: "d".repeat(64),
+    promotion: "candidate" as const,
+    licenseState: "evaluation-only" as const,
+  };
+  const envelope = (
+    marker: string,
+  ): TesseraProviderCompatibilityEnvelope => {
+    const withoutDigest = {
+      schemaVersion: 1 as const,
+      kind: "rosterpilot-provider-compatibility" as const,
+      data: { marker },
+      rosters: [],
+      tessera: { provider: "local-engine" },
+      profilePolicyHash: null,
+      scenarioContractSha256: "e".repeat(64),
+      complete: true,
+      issues: [],
+    };
+    return {
+      ...withoutDigest,
+      envelopeSha256: providerCompatibilityEnvelopeSha256(
+        withoutDigest as never,
+      ),
+    } as unknown as TesseraProviderCompatibilityEnvelope;
+  };
+  const result = (
+    compatibility: TesseraProviderCompatibilityEnvelope,
+  ): TesseraRunResult => ({
+    ok: false,
+    data: {
+      reportKind: "tessera-stress-test",
+      source: "tessera-local-engine-failed",
+      status: "failed",
+      providerCompatibilityEnvelopes: [compatibility],
+      simulation: {
+        requested: true,
+        status: "failed",
+        selectedBackend: "local-engine",
+        providerIdentity: localIdentity,
+      },
+    },
+    violations: [
+      {
+        code: "TESSERA_BROWSER_TIMEOUT",
+        message: "Synthetic retryable compatibility fixture.",
+        severity: "error",
+      },
+    ],
+    warnings: [],
+  }) as unknown as TesseraRunResult;
+
+  await executeMockedAttempt(job.requestPath, result(envelope("first")));
+  job = (await getTesseraRunStatus(job.requestPath)).job;
+  assert.match(
+    job.simulationProviderPin?.providerCompatibilitySha256 ?? "",
+    /^[a-f0-9]{64}$/,
+  );
+
+  job = await resumeTesseraRun(job.requestPath, { launch: false });
+  await executeMockedAttempt(job.requestPath, result(envelope("changed")));
+  job = (await getTesseraRunStatus(job.requestPath)).job;
+  assert.equal(job.status, "failed");
+  assert.equal(
+    job.error?.code,
+    "TESSERA_SIMULATION_PROVIDER_CHANGED",
+  );
+});
+
 test("legacy website reports pin compatible retries to the website backend", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "rosterpilot-tessera-job-legacy-ui-pin-"),
@@ -2596,6 +2704,89 @@ test("legacy website reports pin compatible retries to the website backend", asy
   job = (await getTesseraRunStatus(job.requestPath)).job;
   assert.equal(job.error?.code, "TESSERA_BROWSER_TIMEOUT");
   assert.equal(job.attemptHistory[1]?.simulationBackend, "website");
+});
+
+test("durable jobs canonicalize duplicate legacy UI identities and reject mixed composites", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-job-legacy-ui-composite-"),
+  );
+  const built = buildRoster({
+    faction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.ok && built.data);
+  const uiIdentity = "fixture-ui-composite";
+  const providerIdentity = {
+    schemaVersion: 1 as const,
+    provider: "website" as const,
+    engine: "tessera-ui" as const,
+    uiIdentity,
+    adapterVersion: "website-browser-v1",
+  };
+  const result = (legacyUiIdentity: string): TesseraRunResult => ({
+    ok: true,
+    data: {
+      reportKind: "tessera-stress-test",
+      source: "tessera-ui",
+      status: "complete",
+      tesseraUiIdentity: legacyUiIdentity,
+      simulation: {
+        selectedBackend: "website",
+        providerIdentity,
+      },
+    },
+    violations: [],
+    warnings: [],
+  }) as unknown as TesseraRunResult;
+  const start = () =>
+    startTesseraRun(
+      {
+        kind: "stress",
+        playerRoster: built.data!,
+        factionId: "aeldari",
+        options: {
+          executionMode: "simulate",
+          simulationBackend: "website",
+        },
+      },
+      {
+        outputDirectory: path.join(root, "runs"),
+        rootDir: root,
+        launch: false,
+      },
+    );
+
+  let accepted = await start();
+  await executeMockedAttempt(
+    accepted.requestPath,
+    result(`${uiIdentity}|${uiIdentity}`),
+  );
+  accepted = (await getTesseraRunStatus(accepted.requestPath)).job;
+  assert.equal(accepted.status, "complete");
+  assert.equal(
+    accepted.attemptHistory[0]?.tesseraUiIdentity,
+    uiIdentity,
+  );
+  assert.equal(
+    accepted.simulationProviderPin?.tesseraUiIdentity,
+    uiIdentity,
+  );
+
+  let rejected = await start();
+  await executeMockedAttempt(
+    rejected.requestPath,
+    result(`${uiIdentity}|fixture-ui-different`),
+  );
+  rejected = (await getTesseraRunStatus(rejected.requestPath)).job;
+  assert.equal(rejected.status, "failed");
+  assert.equal(
+    rejected.error?.code,
+    "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+  );
+  assert.equal(
+    rejected.attemptHistory[0]?.errorCode,
+    "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+  );
 });
 
 test("cancel verifies the worker path, job path, and launch token before signaling", async () => {

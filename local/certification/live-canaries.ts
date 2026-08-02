@@ -1,6 +1,8 @@
 import type {
   RosterDraftV1,
   RuntimeProvenance,
+  TesseraFrozenScenarioContract,
+  TesseraSimulationProvider,
   TesseraStressPortfolioPreview,
 } from "../../lib/rosterpilot";
 import type { LocalAgentStatus } from "../agent/contracts";
@@ -424,6 +426,8 @@ type LiveCanaryRouteInput = (
       playerRoster: RosterDraftV1;
       opponentRoster: RosterDraftV1;
       profilePolicyPath: string;
+      simulationBackend?: TesseraSimulationProvider;
+      scenarioContract?: TesseraFrozenScenarioContract[];
     }
   | {
       id: "uploaded-multiprofile-exact-paired-revision";
@@ -434,6 +438,7 @@ type LiveCanaryRouteInput = (
     }
 ) & {
   catalogueDriftMode?: LiveCanaryCatalogueDriftMode;
+  providerCompatibilityMode?: "observe" | "enforce";
 };
 
 /**
@@ -446,6 +451,8 @@ export function createLiveCanaryRunRequest(
 ): TesseraRunRequest {
   const catalogueDriftMode =
     input.catalogueDriftMode ?? "reject";
+  const providerCompatibilityMode =
+    input.providerCompatibilityMode ?? "observe";
   if (
     input.id ===
     "custodes-vs-adaptive-nine-aeldari-2000"
@@ -460,6 +467,7 @@ export function createLiveCanaryRunRequest(
         executionMode: "simulate",
         experimental: false,
         catalogueDriftMode,
+        providerCompatibilityMode,
         profilePolicyPath: input.profilePolicyPath,
         portfolioPreview: input.portfolioPreview,
       },
@@ -478,7 +486,14 @@ export function createLiveCanaryRunRequest(
         experimental: false,
         analysisMode: "full",
         catalogueDriftMode,
+        providerCompatibilityMode,
         profilePolicyPath: input.profilePolicyPath,
+        ...(input.simulationBackend
+          ? { simulationBackend: input.simulationBackend }
+          : {}),
+        ...(input.scenarioContract
+          ? { scenarioContract: input.scenarioContract }
+          : {}),
       },
     };
   }
@@ -494,6 +509,7 @@ export function createLiveCanaryRunRequest(
       experimental: false,
       analysisMode: "full",
       catalogueDriftMode,
+      providerCompatibilityMode,
       profilePolicyPath: input.profilePolicyPath,
       opponentRosterContext: input.opponentRosterContext,
     },

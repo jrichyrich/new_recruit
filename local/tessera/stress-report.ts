@@ -329,6 +329,119 @@ function objectPairs(
   });
 }
 
+function providerCompatibilityPairs(report: UnknownRecord): DisplayPair[] {
+  const envelopes = records(report.providerCompatibilityEnvelopes);
+  const pairs: DisplayPair[] = [
+    {
+      label: "Provider compatibility mode",
+      value: textAt(
+        report,
+        ["configuration.providerCompatibilityMode"],
+        "observe",
+      ),
+    },
+    {
+      label: "Provider compatibility envelopes",
+      value: `${envelopes.filter((entry) => entry.complete === true).length}/${envelopes.length} complete`,
+    },
+  ];
+  envelopes.forEach((envelope, index) => {
+    const label = `Provider envelope ${index + 1}`;
+    pairs.push(
+      {
+        label: `${label} status`,
+        value: envelope.complete === true ? "Complete" : "Incomplete",
+      },
+      {
+        label: `${label} SHA-256`,
+        value: textAt(envelope, ["envelopeSha256"], "Not recorded"),
+      },
+      {
+        label: `${label} provider`,
+        value: textAt(envelope, ["tessera.provider"], "Not recorded"),
+      },
+      {
+        label: `${label} provider identity`,
+        value: textAt(
+          envelope,
+          ["tessera.providerIdentitySha256"],
+          "Not recorded",
+        ),
+      },
+      {
+        label: `${label} signed bundle`,
+        value: textAt(envelope, ["data.bundleId"], "Not recorded"),
+      },
+      {
+        label: `${label} semantic data identity`,
+        value: textAt(
+          envelope,
+          ["data.semanticIdentitySha256"],
+          "Not recorded",
+        ),
+      },
+      {
+        label: `${label} rules source`,
+        value: [
+          textAt(envelope, ["data.rules.version"]),
+          textAt(envelope, ["data.rules.dataslate"]),
+        ].filter(Boolean).join(" · ") || "Not recorded",
+      },
+      {
+        label: `${label} BSData commit`,
+        value: textAt(envelope, ["data.bsData.commit"], "Not recorded"),
+      },
+      {
+        label: `${label} scenario contract`,
+        value: textAt(
+          envelope,
+          ["scenarioContractSha256"],
+          "Not recorded",
+        ),
+      },
+      {
+        label: `${label} Tessera Web deployment`,
+        value: textAt(
+          envelope,
+          ["tessera.website.deployment.identitySha256"],
+          "Not applicable or incomplete",
+        ),
+      },
+      {
+        label: `${label} imported semantics`,
+        value: textAt(
+          envelope,
+          ["tessera.website.importSemantics.combinedSha256"],
+          "Not applicable or incomplete",
+        ),
+      },
+      {
+        label: `${label} unresolved imported effects`,
+        value: displayValue(
+          first(envelope, [
+            "tessera.website.importSemantics.unresolvedEffectCount",
+          ]),
+        ),
+      },
+    );
+  });
+  return pairs;
+}
+
+function providerCompatibilityIssues(report: UnknownRecord): string[] {
+  return records(report.providerCompatibilityEnvelopes).flatMap(
+    (envelope, index) =>
+      records(envelope.issues).map(
+        (entry) =>
+          `[${textAt(entry, ["code"], "PROVIDER_COMPATIBILITY_INCOMPLETE")}] Provider envelope ${index + 1}: ${textAt(
+            entry,
+            ["message"],
+            "Provider compatibility requires review.",
+          )}`,
+      ),
+  );
+}
+
 function settingValue(value: unknown): string {
   const clean = safeText(value, displayValue(value));
   if (/^(?:[A-Za-z]:[\\/]|\/)/.test(clean)) {
@@ -1009,14 +1122,17 @@ function normalizeStressTest(report: TesseraStressTestReport): StressTestView {
       first(root, ["integrity"]),
       new Set(["issues"]),
     ),
-    integrityIssues: records(first(root, ["integrity.issues"])).map(
-      (entry) =>
-        `[${textAt(entry, ["code"], "TESSERA_INTEGRITY")}] ${textAt(
-          entry,
-          ["message"],
-          "Simulation integrity requires review.",
-        )}`,
-    ),
+    integrityIssues: [
+      ...records(first(root, ["integrity.issues"])).map(
+        (entry) =>
+          `[${textAt(entry, ["code"], "TESSERA_INTEGRITY")}] ${textAt(
+            entry,
+            ["message"],
+            "Simulation integrity requires review.",
+          )}`,
+      ),
+      ...providerCompatibilityIssues(root),
+    ],
     recovery: objectPairs(
       first(root, ["recovery"]),
       new Set([
@@ -1107,6 +1223,7 @@ function normalizeStressTest(report: TesseraStressTestReport): StressTestView {
           numberAt(root, ["configuration.revisionMateriality"]) ?? 0.01,
         ),
       },
+      ...providerCompatibilityPairs(root),
       ...objectPairs(sourceData),
     ],
     stageProvenance: normalizeStageProvenance(root),

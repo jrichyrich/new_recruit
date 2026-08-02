@@ -999,11 +999,44 @@ function savedListReuseEvidence(
       typeof candidate.contentSha256 === "string"
         ? candidate.contentSha256
         : undefined;
+    const semanticSnapshotSource =
+      "semanticSnapshotSource" in candidate &&
+      ["fresh-import", "verified-cache", "unavailable"].includes(
+        String(candidate.semanticSnapshotSource),
+      )
+        ? candidate.semanticSnapshotSource as
+          | "fresh-import"
+          | "verified-cache"
+          | "unavailable"
+        : undefined;
+    const semanticSnapshotSha256 =
+      "semanticSnapshotSha256" in candidate &&
+      typeof candidate.semanticSnapshotSha256 === "string" &&
+      /^[0-9a-f]{64}$/i.test(candidate.semanticSnapshotSha256)
+        ? candidate.semanticSnapshotSha256
+        : undefined;
+    const semanticSnapshotReceiptSha256 =
+      "semanticSnapshotReceiptSha256" in candidate &&
+      typeof candidate.semanticSnapshotReceiptSha256 === "string" &&
+      /^[0-9a-f]{64}$/i.test(
+        candidate.semanticSnapshotReceiptSha256,
+      )
+        ? candidate.semanticSnapshotReceiptSha256
+        : undefined;
     return {
       name: candidate.name,
       expectedUnitCount: Number(candidate.expectedUnitCount),
       action: candidate.action as "imported" | "reused",
       ...(contentSha256 ? { contentSha256 } : {}),
+      ...(semanticSnapshotSource
+        ? { semanticSnapshotSource }
+        : {}),
+      ...(semanticSnapshotSha256
+        ? { semanticSnapshotSha256 }
+        : {}),
+      ...(semanticSnapshotReceiptSha256
+        ? { semanticSnapshotReceiptSha256 }
+        : {}),
     };
   };
   const player = side(value.player);

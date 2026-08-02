@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -14,10 +15,15 @@ import test from "node:test";
 
 import {
   buildRoster,
+  validateRoster,
   type RuntimeProvenance,
+  type RosterDraftV1,
+  type TesseraFrozenScenarioContract,
+  type TesseraMatchupReport,
   type TesseraStressPortfolioPreview,
 } from "../lib/rosterpilot";
 import type { LocalAgentStatus } from "../local/agent/contracts";
+import { projectRoot } from "../local/agent/paths";
 import {
   LIVE_CANARY_DEFINITIONS,
   LIVE_CANARY_FIXTURE_ENV,
@@ -32,6 +38,20 @@ import {
   sourcePinsCompatible,
   writeRotatingLiveCanaryReport,
 } from "../local/certification/live-canary-runner";
+import type {
+  TesseraRunJob,
+  TesseraRunRequest,
+  TesseraRunResult,
+} from "../local/tessera/jobs";
+import {
+  aggregateProfileRequirements,
+} from "../local/tessera/profile-policy";
+import type {
+  RunTesseraProviderParityWorkflowResult,
+} from "../local/tessera/provider-parity-workflow";
+import {
+  tesseraScenarioContractSha256,
+} from "../local/tessera/scenario-contract";
 
 const runtime: RuntimeProvenance = {
   rosterPilotVersion: "test",
@@ -130,6 +150,411 @@ function builtRoster(
   return result.data;
 }
 
+function distinctCanaryRosters(): {
+  player: RosterDraftV1;
+  opponent: RosterDraftV1;
+} {
+  const player = buildRoster({
+    faction: "death-guard",
+    pointsLimit: 1_000,
+    name: "Live Canary Death Guard 1000",
+    allowNamedCharacters: false,
+    collectionUnitIds: [
+      "daemon-prince-of-nurgle-with-wings",
+      "daemon-prince-of-nurgle",
+      "icon-bearer",
+      "plague-surgeon",
+      "biologus-putrifier",
+      "malignant-plaguecaster",
+      "noxious-blightbringer",
+      "tallyman",
+      "foul-blightspawn",
+      "lord-of-poxes",
+      "chaos-spawn",
+      "poxwalkers",
+      "lord-of-virulence",
+      "lord-of-contagion",
+    ],
+  });
+  const opponent = buildRoster({
+    faction: "orks",
+    pointsLimit: 1_000,
+    name: "Live Canary Orks 1000",
+  });
+  assert.equal(player.ok, true);
+  assert.equal(opponent.ok, true);
+  assert.ok(player.data);
+  assert.ok(opponent.data);
+  return {
+    player: player.data,
+    opponent: opponent.data,
+  };
+}
+
+async function writeDistinctCanaryPolicy(
+  root: string,
+  rosters: ReturnType<typeof distinctCanaryRosters>,
+): Promise<string> {
+  const policyPath = path.join(root, "profile-policy.json");
+  const entries = aggregateProfileRequirements([
+    rosters.player,
+    rosters.opponent,
+  ]).map((requirement) => ({
+    faction: requirement.faction,
+    unit: requirement.unit,
+    unitOccurrence: requirement.unitOccurrence,
+    modelCount: requirement.modelCount,
+    weaponGroup: requirement.weaponGroup,
+    phase: requirement.phase,
+    selectedProfile: requirement.availableProfiles[0],
+    activeCount: requirement.activeCount,
+  }));
+  assert.ok(
+    entries.every((entry) => entry.selectedProfile),
+  );
+  await writeFile(
+    policyPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      policyKind: "tessera-profile-policy",
+      entries,
+    })}\n`,
+  );
+  return policyPath;
+}
+
+function websiteScenarioContract(): TesseraFrozenScenarioContract[] {
+  return (["player-to-opponent", "opponent-to-player"] as const)
+    .flatMap((direction) =>
+      ([
+        "wipe-probability",
+        "half-wipe-probability",
+        "mean-kills",
+        "mean-damage",
+      ] as const).map((metric) => ({
+        phase: "shooting" as const,
+        direction,
+        metric,
+        settings: {
+          provider: "website",
+          "Target in cover": "No",
+          "Attacker charging": "Off",
+          "Rapid fire range": "false",
+          "Melta range": "0",
+          Stationary: "disabled",
+          "Indirect fire": "No",
+        },
+        iterations: 10_000,
+      })),
+    );
+}
+
+function exactCanaryReport(input: {
+  provider: "local-engine" | "website";
+  runId: string;
+  reportPath: string;
+  scenarioContract: TesseraFrozenScenarioContract[];
+}): TesseraMatchupReport {
+  const source = input.provider === "website"
+    ? "tessera-ui"
+    : "tessera-local-engine";
+  return {
+    schemaVersion: 3,
+    runId: input.runId,
+    status: "complete",
+    source,
+    comparisonClass: "matched",
+    configuration: {
+      analysisMode: "full",
+      phases: ["shooting"],
+      directions: [
+        "player-to-opponent",
+        "opponent-to-player",
+      ],
+      metrics: [
+        "wipe-probability",
+        "half-wipe-probability",
+        "mean-kills",
+        "mean-damage",
+      ],
+    },
+    opponents: [{ rosterName: "Live Canary Orks 1000" }],
+    simulation: {
+      requested: true,
+      executionMode: "simulate",
+      selectedBackend: input.provider,
+      status: "complete",
+      scenarios: ([
+        "player-to-opponent",
+        "opponent-to-player",
+      ] as const).map((direction) => ({
+        scenarioId: `shooting:${direction}`,
+        opponentName: "Live Canary Orks 1000",
+        phase: "shooting",
+        direction,
+        metrics: [
+          "wipe-probability",
+          "half-wipe-probability",
+          "mean-kills",
+          "mean-damage",
+        ],
+        metricRuns: [],
+        iterations: 10_000,
+        settings: {},
+        cells: [],
+        status: "complete",
+        warnings: [],
+      })),
+    },
+    scenarioContract: input.scenarioContract,
+    scenarioContractSha256: tesseraScenarioContractSha256(
+      input.scenarioContract,
+    ),
+    tesseraUiIdentity:
+      input.provider === "website"
+        ? "website-live-identity"
+        : null,
+    connectorEvents:
+      input.provider === "website"
+        ? [
+            {
+              provider: "new-recruit",
+              action: "prepare",
+              outcome: "verified",
+            },
+            {
+              provider: "tessera",
+              action: "simulate",
+              outcome: "verified",
+            },
+          ]
+        : [],
+    artifacts: [{
+      format: "matchup-json",
+      written: input.reportPath,
+    }],
+  } as unknown as TesseraMatchupReport;
+}
+
+function fakeExactJob(input: {
+  root: string;
+  provider: "local-engine" | "website";
+}): TesseraRunJob {
+  const jobDirectory = path.join(
+    input.root,
+    "runs",
+    input.provider,
+  );
+  return {
+    runId: `${input.provider}-run`,
+    status: "complete",
+    attempt: 1,
+    jobDirectory,
+    requestPath: path.join(jobDirectory, "tessera-run.json"),
+    manifestPath: path.join(jobDirectory, "tessera-manifest.json"),
+    error: null,
+  } as unknown as TesseraRunJob;
+}
+
+async function runPairedExactCanaryFixture(input: {
+  root: string;
+  numericalParityMode?: "observe" | "enforce";
+  environmentEnforced?: boolean;
+  comparison:
+    | "pass"
+    | "throw";
+}): Promise<{
+  report: Awaited<ReturnType<typeof runRotatingLiveCanary>>;
+  requests: TesseraRunRequest[];
+  comparisonOutputDirectory: string | null;
+}> {
+  const rosters = distinctCanaryRosters();
+  const policyPath = await writeDistinctCanaryPolicy(
+    input.root,
+    rosters,
+  );
+  const websiteJob = fakeExactJob({
+    root: input.root,
+    provider: "website",
+  });
+  const localJob = fakeExactJob({
+    root: input.root,
+    provider: "local-engine",
+  });
+  const websiteReportPath = path.join(
+    websiteJob.jobDirectory,
+    "website-matchup.json",
+  );
+  const localReportPath = path.join(
+    localJob.jobDirectory,
+    "local-matchup.json",
+  );
+  const websiteContract = websiteScenarioContract();
+  const websiteReport = exactCanaryReport({
+    provider: "website",
+    runId: websiteJob.runId,
+    reportPath: websiteReportPath,
+    scenarioContract: websiteContract,
+  });
+  const localReport = exactCanaryReport({
+    provider: "local-engine",
+    runId: localJob.runId,
+    reportPath: localReportPath,
+    scenarioContract: websiteContract.map((entry) => ({
+      ...entry,
+      settings: {
+        charging: "false",
+        indirectFire: "false",
+        provider: "local-engine",
+        remainedStationary: "false",
+        targetInCover: "false",
+        withinMeltaRange: "false",
+        withinRapidFireRange: "false",
+      },
+    })),
+  });
+  for (const filename of [
+    websiteJob.requestPath,
+    websiteJob.manifestPath,
+    localJob.requestPath,
+    localJob.manifestPath,
+    websiteReportPath,
+    localReportPath,
+  ].filter((filename): filename is string => filename !== null)) {
+    await mkdir(path.dirname(filename), { recursive: true });
+    await writeFile(filename, "{}\n");
+  }
+  const requests: TesseraRunRequest[] = [];
+  let comparisonOutputDirectory: string | null = null;
+  const report = await runRotatingLiveCanary(
+    {
+      canaryId: "death-guard-vs-orks-exact-1000",
+      outputDirectory: input.root,
+      profilePolicyPath: policyPath,
+      numericalParityMode: input.numericalParityMode,
+      providerCompatibilityMode: "observe",
+      environment: {
+        NODE_ENV: "test",
+        ROSTERPILOT_CERTIFICATION_LIVE: "1",
+        ...(input.environmentEnforced
+          ? {
+              ROSTERPILOT_LIVE_NUMERICAL_PARITY_ENFORCED:
+                "true",
+            }
+          : {}),
+      },
+      pollMs: 1,
+      maxWaitMs: 1_000,
+    },
+    {
+      platform: "darwin",
+      getRuntime: () => runtime,
+      getAgentStatus: async () => readyAgent(projectRoot),
+      getActiveBundleManifest: () => null,
+      captureBundleTrust: async () => ({}) as never,
+      build: (options) => options.faction === "death-guard"
+        ? {
+            ok: true,
+            data: rosters.player,
+            violations: [],
+            warnings: [],
+          }
+        : {
+            ok: true,
+            data: rosters.opponent,
+            violations: [],
+            warnings: [],
+          },
+      validate: validateRoster,
+      startRun: async (request) => {
+        requests.push(request);
+        return request.kind === "exact" &&
+          request.options?.simulationBackend === "local-engine"
+          ? localJob
+          : websiteJob;
+      },
+      getRunStatus: async (jobPath) =>
+        jobPath === localJob.requestPath
+          ? {
+              job: localJob,
+              result: {
+                ok: true,
+                data: localReport,
+                violations: [],
+                warnings: [],
+              } as TesseraRunResult,
+            }
+          : {
+              job: websiteJob,
+              result: {
+                ok: true,
+                data: websiteReport,
+                violations: [],
+                warnings: [],
+              } as TesseraRunResult,
+            },
+      compareProviders: async (options) => {
+        comparisonOutputDirectory =
+          options.outputDirectory ?? null;
+        assert.equal(options.websiteReportPath, websiteReportPath);
+        assert.equal(options.localReportPath, localReportPath);
+        if (input.comparison === "throw") {
+          throw Object.assign(
+            new Error("fixture parity unavailable"),
+            { code: "FIXTURE_PARITY_UNAVAILABLE" },
+          );
+        }
+        const outputDirectory = options.outputDirectory!;
+        await mkdir(outputDirectory, { recursive: true });
+        const artifacts = [
+          {
+            format: "provider-parity-json" as const,
+            written: path.join(
+              outputDirectory,
+              "tessera-provider-parity.json",
+            ),
+          },
+          {
+            format: "provider-parity-html" as const,
+            written: path.join(
+              outputDirectory,
+              "tessera-provider-parity.html",
+            ),
+          },
+          {
+            format: "provider-parity-sha256" as const,
+            written: path.join(
+              outputDirectory,
+              "tessera-provider-parity.json.sha256",
+            ),
+          },
+        ];
+        await Promise.all(
+          artifacts.map((artifact) =>
+            writeFile(artifact.written, "fixture\n"),
+          ),
+        );
+        return {
+          ok: true,
+          data: {
+            outcome: "pass",
+            classification: "parity-pass",
+            parity: {
+              eligible: true,
+              complete: true,
+            },
+            artifacts,
+          },
+          violations: [],
+          warnings: [],
+        } as unknown as RunTesseraProviderParityWorkflowResult;
+      },
+      wait: async () => {},
+    },
+  );
+  return { report, requests, comparisonOutputDirectory };
+}
+
 test("rotating live canaries define the three source-backed routes", () => {
   assert.deepEqual(Object.keys(LIVE_CANARY_DEFINITIONS), [
     ...LIVE_CANARY_IDS,
@@ -192,6 +617,46 @@ test("the daily workflow serially routes every named live canary", async () => {
   assert.match(workflow, /--require-live/);
   assert.match(workflow, /workflow_run:/);
   assert.match(workflow, /--expected-bundle-id/);
+  assert.match(
+    workflow,
+    /rosterpilot-provider-compatibility-enforced-v1/,
+  );
+  assert.match(
+    workflow,
+    /ROSTERPILOT_PROVIDER_COMPATIBILITY_ENFORCED:/,
+  );
+  assert.match(
+    workflow,
+    /rosterpilot-live-numerical-parity-enforced-v1/,
+  );
+  assert.match(
+    workflow,
+    /ROSTERPILOT_LIVE_NUMERICAL_PARITY_ENFORCED:/,
+  );
+  assert.match(
+    workflow,
+    /npm run certify:provider-parity --[\s\S]*--expected-bundle-id[\s\S]*--expected-git-head[\s\S]*--rotation-id/,
+  );
+  assert.match(
+    workflow,
+    /npm run certify:provider-parity-rollout --[\s\S]*--current-rotation-id \$\{\{ github\.run_id \}\}[\s\S]*--enforcement-latch/,
+  );
+  assert.match(
+    workflow,
+    /live-numerical-parity-evidence-\$\{\{ github\.run_id \}\}/,
+  );
+  assert.match(
+    workflow,
+    /Download the paired exact-canary evidence bundle\s+continue-on-error: true/,
+  );
+  assert.match(
+    workflow,
+    /live-numerical-parity-rollout-\$\{\{ github\.run_id \}\}/,
+  );
+  assert.match(
+    workflow,
+    /--enforcement-latch \$\{\{/,
+  );
   assert.doesNotMatch(workflow, /31 10 \* \* \*/);
   assert.match(workflow, /live-release-prerequisites:/);
   assert.match(workflow, /application-release\.yml/);
@@ -235,7 +700,7 @@ test("the daily workflow serially routes every named live canary", async () => {
   }
   const dailyWorkflow = workflow.slice(
     workflow.indexOf("daily-canary:"),
-    workflow.indexOf("weekly-rotation:"),
+    workflow.indexOf("quarantine-failed-bundle:"),
   );
   assert.doesNotMatch(dailyWorkflow, /continue-on-error/);
   assert.doesNotMatch(
@@ -278,6 +743,38 @@ test("the daily workflow serially routes every named live canary", async () => {
   assert.match(
     releaseCertification,
     /needs:\s+- release-tessera-smoke/,
+  );
+  const applicationRelease = await readFile(
+    path.resolve(
+      ".github",
+      "workflows",
+      "application-release.yml",
+    ),
+    "utf8",
+  );
+  assert.match(
+    applicationRelease,
+    /rosterpilot-provider-compatibility-enforced-v1/,
+  );
+  assert.match(
+    applicationRelease,
+    /--enforcement-latch \$\{\{ steps\.provider-compatibility-latch\.outputs\.mode \}\}/,
+  );
+  assert.match(
+    applicationRelease,
+    /live_numerical_parity_run_id:/,
+  );
+  assert.doesNotMatch(
+    applicationRelease,
+    /live_numerical_parity_(?:rollout_sha256|bundle_id):/,
+  );
+  assert.match(
+    applicationRelease,
+    /run\.path !== "\.github\/workflows\/certification-live\.yml"[\s\S]*run\.head_branch !== defaultBranch[\s\S]*run\.conclusion !== "success"[\s\S]*run\.head_sha !== context\.sha/,
+  );
+  assert.match(
+    applicationRelease,
+    /Re-certify exact live numerical parity for this release[\s\S]*--expected-bundle-id "\$bundle_id"[\s\S]*--expected-git-head "\$GITHUB_SHA"[\s\S]*--current-rotation-id "\$NUMERICAL_PARITY_RUN_ID"[\s\S]*--enforcement-latch enforce/,
   );
 });
 
@@ -453,6 +950,7 @@ test("live canary requests route through durable stress and exact modes", () => 
   assert.equal(stress.options?.executionMode, "simulate");
   assert.equal(stress.options?.experimental, false);
   assert.equal(stress.options?.catalogueDriftMode, "reject");
+  assert.equal(stress.options?.providerCompatibilityMode, "observe");
   assert.equal(stress.options?.portfolioPreview, preview);
 
   const exact = createLiveCanaryRunRequest({
@@ -473,6 +971,14 @@ test("live canary requests route through durable stress and exact modes", () => 
       : exact.playerRoster.factionId,
   );
   assert.equal(exact.options?.catalogueDriftMode, "reject");
+  assert.equal(
+    Object.hasOwn(exact.options ?? {}, "simulationBackend"),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(exact.options ?? {}, "scenarioContract"),
+    false,
+  );
 
   const diagnosticExact = createLiveCanaryRunRequest({
     id: "death-guard-vs-orks-exact-1000",
@@ -480,10 +986,15 @@ test("live canary requests route through durable stress and exact modes", () => 
     opponentRoster: orks,
     profilePolicyPath: "/fixtures/policy.json",
     catalogueDriftMode: "diagnostic",
+    providerCompatibilityMode: "enforce",
   });
   assert.equal(
     diagnosticExact.options?.catalogueDriftMode,
     "diagnostic",
+  );
+  assert.equal(
+    diagnosticExact.options?.providerCompatibilityMode,
+    "enforce",
   );
 
   const uploaded = createLiveCanaryRunRequest({
@@ -506,6 +1017,164 @@ test("live canary requests route through durable stress and exact modes", () => 
     uploaded.options?.catalogueDriftMode,
     "reject",
   );
+});
+
+test("the distinct-faction canary runs website first, replays locally, and records portable parity", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-live-provider-pair-"),
+  );
+  try {
+    const result = await runPairedExactCanaryFixture({
+      root,
+      numericalParityMode: "enforce",
+      comparison: "pass",
+    });
+    assert.equal(result.report.status, "pass");
+    assert.equal(result.requests.length, 2);
+    const [website, local] = result.requests;
+    assert.equal(website.kind, "exact");
+    assert.equal(local.kind, "exact");
+    if (website.kind !== "exact" || local.kind !== "exact") return;
+    assert.equal(
+      website.options?.simulationBackend,
+      "website",
+    );
+    assert.equal(
+      local.options?.simulationBackend,
+      "local-engine",
+    );
+    assert.strictEqual(
+      website.playerRoster,
+      local.playerRoster,
+    );
+    assert.equal(website.opponent.kind, "roster");
+    assert.equal(local.opponent.kind, "roster");
+    if (
+      website.opponent.kind !== "roster" ||
+      local.opponent.kind !== "roster"
+    ) return;
+    assert.strictEqual(
+      website.opponent.roster,
+      local.opponent.roster,
+    );
+    assert.equal(
+      website.options?.profilePolicyPath,
+      local.options?.profilePolicyPath,
+    );
+    assert.ok(local.options?.scenarioContract);
+    assert.ok(
+      local.options.scenarioContract.every(
+        (entry) =>
+          entry.settings.provider === "local-engine" &&
+          entry.settings.targetInCover === "false" &&
+          entry.settings.charging === "false",
+      ),
+    );
+    assert.equal(
+      result.comparisonOutputDirectory,
+      path.join(root, "provider-parity"),
+    );
+    assert.deepEqual(result.report.providerParity, {
+      policy:
+        "live-numerical-parity-observe-then-enforce-v1",
+      mode: "enforce",
+      status: "pass",
+      complete: true,
+      eligible: true,
+      websiteRun: {
+        runId: "website-run",
+        jobPath: "runs/website/tessera-run.json",
+        initialAttempt: 1,
+        finalAttempt: 1,
+        finalStatus: "complete",
+        manifestPath: "runs/website/tessera-manifest.json",
+      },
+      localRun: {
+        runId: "local-engine-run",
+        jobPath: "runs/local-engine/tessera-run.json",
+        initialAttempt: 1,
+        finalAttempt: 1,
+        finalStatus: "complete",
+        manifestPath:
+          "runs/local-engine/tessera-manifest.json",
+      },
+      sourceReports: [
+        {
+          provider: "local-engine",
+          reportPath:
+            "runs/local-engine/local-matchup.json",
+          receiptPath:
+            "runs/local-engine/local-matchup.receipt.json",
+        },
+        {
+          provider: "website",
+          reportPath: "runs/website/website-matchup.json",
+          receiptPath:
+            "runs/website/website-matchup.receipt.json",
+        },
+      ],
+      comparison: {
+        outcome: "pass",
+        classification: "parity-pass",
+        jsonPath:
+          "provider-parity/tessera-provider-parity.json",
+        checksumPath:
+          "provider-parity/tessera-provider-parity.json.sha256",
+        htmlPath:
+          "provider-parity/tessera-provider-parity.html",
+      },
+      failure: null,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("numerical parity is fail-open while observed and fail-closed when enforced", async () => {
+  const observeRoot = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-live-parity-observe-"),
+  );
+  const enforceRoot = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-live-parity-enforce-"),
+  );
+  try {
+    const observed = await runPairedExactCanaryFixture({
+      root: observeRoot,
+      numericalParityMode: "observe",
+      comparison: "throw",
+    });
+    assert.equal(observed.report.status, "pass");
+    assert.equal(observed.report.failure, null);
+    assert.equal(
+      observed.report.providerParity?.status,
+      "unavailable",
+    );
+    assert.equal(
+      observed.report.providerParity?.failure?.code,
+      "FIXTURE_PARITY_UNAVAILABLE",
+    );
+
+    const enforced = await runPairedExactCanaryFixture({
+      root: enforceRoot,
+      environmentEnforced: true,
+      comparison: "throw",
+    });
+    assert.equal(enforced.report.status, "fail");
+    assert.equal(enforced.report.livePass, false);
+    assert.equal(
+      enforced.report.failure?.code,
+      "LIVE_CANARY_NUMERICAL_PARITY_REQUIRED",
+    );
+    assert.equal(
+      enforced.report.providerParity?.failure?.code,
+      "FIXTURE_PARITY_UNAVAILABLE",
+    );
+  } finally {
+    await Promise.all([
+      rm(observeRoot, { recursive: true, force: true }),
+      rm(enforceRoot, { recursive: true, force: true }),
+    ]);
+  }
 });
 
 test("readiness is explicit about missing live authority, runtime, credentials, and fixtures", () => {

@@ -18,6 +18,17 @@ import type {
   StartTesseraGeneralOptimizerInput,
   TesseraGeneralOptimizerStoreResult,
 } from "../local/tessera/general-optimizer-store";
+import type {
+  RunTesseraProviderParityWorkflowOptions,
+  RunTesseraProviderParityWorkflowResult,
+} from "../local/tessera/provider-parity-workflow";
+import {
+  tesseraScenarioContractSha256,
+  TesseraScenarioContractSchema,
+} from "../local/tessera/scenario-contract";
+import {
+  rebindTesseraScenarioContractProvider,
+} from "../local/tessera/provider-parity-scenario-contract";
 
 import {
   buildRoster,
@@ -76,6 +87,7 @@ import {
   type RosterWorkflowResult,
   type RuntimeProvenance,
   type TesseraConnectionStatus,
+  type TesseraFrozenScenarioContract,
   type TesseraMatchupReport,
   type TesseraMetric,
   type TesseraPhase,
@@ -145,6 +157,7 @@ type ServerOptions = {
         metrics?: TesseraMetric[];
         allowPointMismatch: boolean;
         includeChangeCandidates: boolean;
+        scenarioContract?: TesseraFrozenScenarioContract[];
         opponentRosterContext?: RosterDraftV1;
         catalogueDriftMode?: "reject" | "diagnostic";
       },
@@ -218,6 +231,9 @@ type ServerOptions = {
         catalogueDriftMode?: "reject" | "diagnostic";
       },
     ) => Promise<ResultEnvelope<TesseraStressRevisionReport>>;
+    compareProviders?: (
+      options: RunTesseraProviderParityWorkflowOptions,
+    ) => Promise<RunTesseraProviderParityWorkflowResult>;
   };
   tesseraRunJobs?: {
     start: (
@@ -3028,6 +3044,7 @@ export function createRosterPilotMcpServer(
           metrics: z.array(tesseraMetricSchema).min(1).max(4).optional(),
           allowPointMismatch: z.boolean().default(false),
           includeChangeCandidates: z.boolean().default(true),
+          scenarioContract: TesseraScenarioContractSchema.optional(),
           verifiedCatalogueDriftDiagnostic: z
             .boolean()
             .default(false),
@@ -3054,6 +3071,7 @@ export function createRosterPilotMcpServer(
         metrics,
         allowPointMismatch,
         includeChangeCandidates,
+        scenarioContract,
         verifiedCatalogueDriftDiagnostic,
       }) => {
         if (!opponent) {
@@ -3102,6 +3120,9 @@ export function createRosterPilotMcpServer(
                 phases,
                 metrics,
                 allowPointMismatch,
+                ...(scenarioContract
+                  ? { scenarioContract }
+                  : {}),
                 catalogueDriftMode:
                   verifiedCatalogueDriftDiagnostic
                     ? "diagnostic"
@@ -3131,6 +3152,9 @@ export function createRosterPilotMcpServer(
               metrics,
               allowPointMismatch,
               includeChangeCandidates,
+              ...(scenarioContract
+                ? { scenarioContract }
+                : {}),
               catalogueDriftMode:
                 verifiedCatalogueDriftDiagnostic
                   ? "diagnostic"
@@ -3824,6 +3848,84 @@ export function createRosterPilotMcpServer(
         },
       );
     }
+
+    if (options.tesseraCompanion.compareProviders) {
+      server.registerTool(
+        "compare_tessera_providers",
+        {
+          title: "Compare local and website Tessera providers",
+          description:
+            "Verify and compare one completed local-engine report and one completed Tessera website report produced from the same frozen exact matchup. Writes canonical JSON, printable HTML, and a detached checksum; incomplete or mismatched evidence fails closed.",
+          inputSchema: {
+            localReportPath: z.string().min(1),
+            websiteReportPath: z.string().min(1),
+            outputDirectory: z
+              .string()
+              .default("exports/tessera/parity"),
+            overwrite: z.boolean().default(false),
+          },
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: false,
+          },
+        },
+        async ({
+          localReportPath,
+          websiteReportPath,
+          outputDirectory,
+          overwrite,
+        }) =>
+          resultContent(
+            await options.tesseraCompanion!.compareProviders!({
+              localReportPath,
+              websiteReportPath,
+              outputDirectory,
+              overwrite,
+            }),
+          ),
+      );
+    }
+
+    server.registerTool(
+      "rebind_tessera_scenario_contract_provider",
+      {
+        title: "Rebind a Tessera scenario contract",
+        description:
+          "Convert a provider-observed frozen scenario contract for replay by the other Tessera provider. Only reviewed provider-neutral gameplay settings are retained; unknown settings and source-provider conflicts fail closed.",
+        inputSchema: {
+          scenarioContract: TesseraScenarioContractSchema,
+          sourceProvider: z.enum(["local-engine", "website"]),
+          targetProvider: z.enum(["local-engine", "website"]),
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        scenarioContract,
+        sourceProvider,
+        targetProvider,
+      }) => {
+        const rebound = rebindTesseraScenarioContractProvider(
+          scenarioContract,
+          sourceProvider,
+          targetProvider,
+        );
+        return valueContent({
+          schemaVersion: 1,
+          sourceProvider,
+          targetProvider,
+          scenarioContract: rebound,
+          scenarioContractSha256:
+            tesseraScenarioContractSha256(rebound),
+        });
+      },
+    );
   }
 
   if (options.tesseraRunJobs) {
@@ -3874,6 +3976,7 @@ export function createRosterPilotMcpServer(
         profilePolicyPath: z.string().min(1).optional(),
         analysisMode: z.enum(["quick", "full"]).default("full"),
         allowPointMismatch: z.boolean().default(false),
+        scenarioContract: TesseraScenarioContractSchema.optional(),
         verifiedCatalogueDriftDiagnostic: z
           .boolean()
           .default(false),
@@ -3893,6 +3996,7 @@ export function createRosterPilotMcpServer(
         profilePolicyPath: z.string().min(1).optional(),
         resumeManifestPath: z.string().min(1).optional(),
         restartManifestPath: z.string().min(1).optional(),
+        scenarioContract: TesseraScenarioContractSchema.optional(),
         verifiedCatalogueDriftDiagnostic: z
           .boolean()
           .default(false),
@@ -3920,6 +4024,7 @@ export function createRosterPilotMcpServer(
         allowReadinessWarnings: z.boolean().default(false),
         resumeManifestPath: z.string().min(1).optional(),
         restartManifestPath: z.string().min(1).optional(),
+        scenarioContract: TesseraScenarioContractSchema.optional(),
         verifiedCatalogueDriftDiagnostic: z
           .boolean()
           .default(false),
@@ -3942,6 +4047,7 @@ export function createRosterPilotMcpServer(
           jobSimulationBackendSchema.optional(),
         profilePolicyPath: z.string().min(1).optional(),
         allowReadinessWarnings: z.boolean().default(false),
+        scenarioContract: TesseraScenarioContractSchema.optional(),
         verifiedCatalogueDriftDiagnostic: z
           .boolean()
           .default(false),
@@ -4005,6 +4111,9 @@ export function createRosterPilotMcpServer(
               profilePolicyPath: request.profilePolicyPath,
               analysisMode: request.analysisMode,
               allowPointMismatch: request.allowPointMismatch,
+              ...(request.scenarioContract
+                ? { scenarioContract: request.scenarioContract }
+                : {}),
               catalogueDriftMode:
                 request.verifiedCatalogueDriftDiagnostic
                   ? "diagnostic"
@@ -4036,6 +4145,9 @@ export function createRosterPilotMcpServer(
               resumeManifestPath: request.resumeManifestPath,
               restartManifestPath:
                 request.restartManifestPath,
+              ...(request.scenarioContract
+                ? { scenarioContract: request.scenarioContract }
+                : {}),
               catalogueDriftMode:
                 requestedCatalogueDriftMode(
                   request.verifiedCatalogueDriftDiagnostic,
@@ -4074,6 +4186,9 @@ export function createRosterPilotMcpServer(
             },
             options: {
               simulationBackend: request.simulationBackend,
+              ...(request.scenarioContract
+                ? { scenarioContract: request.scenarioContract }
+                : {}),
               catalogueDriftMode:
                 requestedCatalogueDriftMode(
                   request.verifiedCatalogueDriftDiagnostic,
@@ -4109,6 +4224,9 @@ export function createRosterPilotMcpServer(
             },
             options: {
               simulationBackend: request.simulationBackend,
+              ...(request.scenarioContract
+                ? { scenarioContract: request.scenarioContract }
+                : {}),
               catalogueDriftMode:
                 request.verifiedCatalogueDriftDiagnostic
                   ? "diagnostic"

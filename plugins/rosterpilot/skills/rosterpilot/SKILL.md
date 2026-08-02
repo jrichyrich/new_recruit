@@ -116,11 +116,40 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
     add it during resume or restart. If an earlier default job stopped on
     qualifying drift, start a new diagnostic job so it can reuse the
     provisional artifact without another New Recruit mutation.
-15. Explain that Tessera preparation may create verified New Recruit list
+15. For an explicit local-engine-versus-Tessera-Web parity request, use one
+    paired exact workflow rather than comparing unrelated result files:
+    - Start the website exact durable run first with the validated canonical
+      player and opponent rosters, an explicit `simulationBackend="website"`,
+      and one frozen profile policy. Wait for a terminal result and require a
+      complete report, exact-report receipt, signed-bundle compatibility
+      envelope, website deployment asset digest, imported-semantics digest,
+      and complete scenario-state bindings.
+    - Read that report's observed `scenarioContract`, call
+      `rebind_tessera_scenario_contract_provider` with source `website` and
+      target `local-engine`, then start a separate exact durable run with the
+      same canonical rosters and profile policy, explicit
+      `simulationBackend="local-engine"`, and the rebound contract. This
+      preserves the gameplay settings and iteration counts while changing
+      only reviewed provider metadata.
+    - After both jobs complete, call `compare_tessera_providers` with their
+      exact report paths. Report its canonical classification, per-metric
+      uncertainty, canonical winner, provider-specific strengths and
+      weaknesses, and JSON/HTML/checksum paths. A parity pass requires at
+      least 98% agreement for every required metric and zero cells beyond the
+      2x tolerance; missing, stale, mismatched, or unverified evidence is
+      ineligible or incomplete, never a numerical pass.
+    Never compare stress aggregates, screenshots, manually copied numbers, or
+    old reports lacking their receipts, frozen contracts, compatibility
+    envelopes, and uncertainty. Resolve data/input drift before interpreting
+    model drift. The daily live canary observes three distinct passing
+    rotations before the separate numerical-parity enforcement latch may be
+    enabled; a release must re-certify the exact retained run rather than
+    trusting a branch-local summary.
+16. Explain that Tessera preparation may create verified New Recruit list
     copies to obtain profile-rich `.rosz` files. Never describe a client or
     Codex timeout as a failed workflow; return the run ID and current durable
     status.
-16. Do not apply a Tessera change candidate automatically. Guided optimization
+17. Do not apply a Tessera change candidate automatically. Guided optimization
     requires two approvals: first the candidate batch (at most three), then the
     exact paired-test winner or the unchanged baseline. Recheck the frozen
     baseline, bundle, portfolio, profile-policy, heuristic, and runtime hashes
@@ -176,6 +205,18 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   identities, selection paths, constraints, and export structure. Unresolved
   official/community conflicts fail closed at the affected scope; remind users
   to confirm event-specific rulings.
+- Treat the verified signed RosterPilot bundle and its separate semantic
+  roster, faction, mapping, and portfolio hashes as the canonical rules/data
+  snapshot. New Recruit's observed game-system and faction-catalogue IDs and
+  revisions prove which catalogue produced an enriched `.rosz`; they are
+  compatibility evidence, not a second canonical points source. Tessera Web's
+  captured same-origin script-asset digest, imported-semantics digest, and
+  scenario-state bindings identify the deployed simulator behavior when the
+  site exposes no trustworthy semantic release identifier. Do not force these
+  independent systems into one global release string. A mismatch is a real
+  scoped compatibility issue, but it should block only the affected handoff or
+  parity comparison until the identities are reconciled or an explicit
+  diagnostic run is authorized.
 - Treat Games Workshop faction packs as the Legends-classification authority.
   The points manual and BSData labels do not prove membership. Check the
   `get_data_status.legends` coverage and authority counts, and use
@@ -243,6 +284,8 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 - “Prepare this roster for New Recruit and give me both files.”
 - “Upload this validated roster to New Recruit and download Pretty HTML.”
 - “Compare these two validated armies in Tessera and return the HTML report.”
+- “Run the same exact matchup in Tessera Web and the local engine, then produce
+  a receipt-bound provider-parity report.”
 - “Stress-test this list against nine frozen Aeldari proxies and let me resume
   it if the client disconnects.”
 - “Build a Custodes roster against this exact Aeldari roster, respecting my

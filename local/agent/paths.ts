@@ -57,6 +57,16 @@ export function newRecruitProfileDirectory(): string {
   );
 }
 
+export function tesseraSemanticSnapshotDirectory(): string {
+  return (
+    process.env.ROSTERPILOT_TESSERA_SEMANTIC_SNAPSHOT_DIRECTORY ??
+    path.join(
+      rosterPilotSupportDirectory(),
+      "TesseraSemanticSnapshots",
+    )
+  );
+}
+
 export function launchAgentPath(): string {
   return path.join(
     os.homedir(),

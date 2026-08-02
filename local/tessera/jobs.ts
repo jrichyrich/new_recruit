@@ -25,6 +25,7 @@ import type {
   RuntimeProvenance,
   TesseraMatchupReport,
   TesseraPreparedRoster,
+  TesseraProviderCompatibilityEnvelope,
   TesseraRevisionComparisonReport,
   TesseraSimulationProvider,
   TesseraSimulationProviderIdentity,
@@ -62,6 +63,16 @@ import {
   exactReportReceiptPath,
   verifyExactReportReceipt,
 } from "./exact-report-integrity";
+import {
+  assertTesseraScenarioContractProvider,
+  assertTesseraScenarioContractScope,
+  TESSERA_SCENARIO_METRICS,
+  TESSERA_SCENARIO_PHASES,
+  tesseraScenarioContractSha256,
+} from "./scenario-contract";
+import {
+  providerCompatibilityEnvelopeSha256,
+} from "./provider-compatibility";
 
 const execFileAsync = promisify(execFile);
 const sha256Pattern = /^[0-9a-f]{64}$/;
@@ -137,6 +148,8 @@ type TesseraRunAttemptProvenance = {
   manifestSha256: string | null;
   artifactSha256s: string[];
   connectorReceiptSha256: string | null;
+  /** Complete outer data/provider envelope set retained by this attempt. */
+  providerCompatibilitySha256: string | null;
   tesseraUiIdentity: string | null;
   /** Concrete provider actually selected for this attempt. */
   simulationBackend?: TesseraSimulationProvider | null;
@@ -150,6 +163,7 @@ type TesseraRunSimulationProviderPin = {
   providerIdentity: TesseraSimulationProviderIdentity | null;
   providerIdentitySha256: string | null;
   tesseraUiIdentity: string | null;
+  providerCompatibilitySha256: string | null;
   sourceAttempt: number;
 };
 
@@ -264,6 +278,7 @@ export type TesseraRunJob = {
   dataPins: TesseraDataPinReceipt[];
   dataPinSha256: string;
   profilePolicySha256: string | null;
+  scenarioContractSha256?: string | null;
   artifactReceipts: TesseraRunArtifactReceipt[];
   preparedCheckpoint: TesseraRunPreparedCheckpoint | null;
   runtimeProvenance: RuntimeProvenance;
@@ -548,6 +563,83 @@ function dataPinsForRequest(
   );
 }
 
+function requestScenarioContractSha256(
+  request: TesseraRunRequest,
+): string | null {
+  return request.options?.scenarioContract
+    ? tesseraScenarioContractSha256(
+        request.options.scenarioContract,
+      )
+    : null;
+}
+
+function normalizeRequestScenarioContract(
+  request: TesseraRunRequest,
+): TesseraRunRequest {
+  if (!request.options?.scenarioContract) return request;
+  if (
+    request.kind === "exact-revision" ||
+    request.kind === "stress-revision"
+  ) {
+    throw jobError(
+      "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+      "Paired revisions replay the baseline scenario contract and cannot accept a caller-supplied replacement.",
+    );
+  }
+  const normalized = structuredClone(request);
+  const options = normalized.options!;
+  const executionMode =
+    normalized.kind === "build-and-stress" ||
+    normalized.kind === "build-and-analyze"
+      ? normalized.input.executionMode ??
+        options.executionMode ??
+        (normalized.input.experimental || options.experimental
+          ? "simulate"
+          : "prepare-only")
+      : options.executionMode ??
+        (options.experimental ? "simulate" : "prepare-only");
+  if (executionMode !== "simulate") {
+    throw jobError(
+      "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+      "A Tessera scenario contract requires executionMode=simulate.",
+    );
+  }
+  const backend =
+    normalized.kind === "build-and-stress" ||
+    normalized.kind === "build-and-analyze"
+      ? normalized.input.simulationBackend ??
+        options.simulationBackend ??
+        "auto"
+      : options.simulationBackend ?? "auto";
+  const phases =
+    normalized.kind === "exact"
+      ? normalized.options?.phases?.length
+        ? normalized.options.phases
+        : normalized.options?.analysisMode === "quick"
+          ? (["shooting"] as const)
+          : TESSERA_SCENARIO_PHASES
+      : TESSERA_SCENARIO_PHASES;
+  const metrics =
+    normalized.kind === "exact"
+      ? normalized.options?.metrics?.length
+        ? normalized.options.metrics
+        : normalized.options?.analysisMode === "quick"
+          ? (["wipe-probability"] as const)
+          : TESSERA_SCENARIO_METRICS
+      : TESSERA_SCENARIO_METRICS;
+  options.scenarioContract =
+    assertTesseraScenarioContractScope(
+      options.scenarioContract!,
+      phases,
+      metrics,
+    );
+  assertTesseraScenarioContractProvider(
+    options.scenarioContract,
+    backend,
+  );
+  return normalized;
+}
+
 function retryBudgetFor(
   attempt: number,
   status: TesseraRunStatus,
@@ -607,6 +699,7 @@ function attemptProvenance(input: {
     manifestSha256: null,
     artifactSha256s: [],
     connectorReceiptSha256: null,
+    providerCompatibilitySha256: null,
     tesseraUiIdentity: null,
     simulationBackend: null,
     simulationProviderIdentity: null,
@@ -798,11 +891,72 @@ function connectorEventsFromReport(
   return [];
 }
 
+function reportProviderCompatibilitySha256(
+  report: Record<string, unknown>,
+): string | null {
+  const candidates = [
+    ...(Array.isArray(report.providerCompatibilityEnvelopes)
+      ? report.providerCompatibilityEnvelopes
+      : []),
+    ...(report.providerCompatibility &&
+    typeof report.providerCompatibility === "object"
+      ? [report.providerCompatibility]
+      : []),
+  ];
+  if (candidates.length === 0) return null;
+  const hashes = new Set<string>();
+  let complete = true;
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      throw jobError(
+        "TESSERA_PROVIDER_COMPATIBILITY_INVALID",
+        "The Tessera result contains a malformed provider-compatibility envelope.",
+      );
+    }
+    const envelope = candidate as TesseraProviderCompatibilityEnvelope;
+    const { envelopeSha256, ...withoutDigest } = envelope;
+    if (
+      !sha256Pattern.test(envelopeSha256) ||
+      providerCompatibilityEnvelopeSha256(withoutDigest) !==
+        envelopeSha256
+    ) {
+      throw jobError(
+        "TESSERA_PROVIDER_COMPATIBILITY_INVALID",
+        "The Tessera result's provider-compatibility envelope does not match its content digest.",
+      );
+    }
+    hashes.add(envelopeSha256);
+    complete &&= envelope.complete && envelope.issues.length === 0;
+  }
+  return complete
+    ? canonicalSha256([...hashes].sort())
+    : null;
+}
+
 type TesseraReportSimulationProvenance = {
   simulationBackend: TesseraSimulationProvider | null;
   simulationProviderIdentity: TesseraSimulationProviderIdentity | null;
   tesseraUiIdentity: string | null;
+  providerCompatibilitySha256: string | null;
 };
+
+function canonicalLegacyTesseraUiIdentity(
+  value: string | null,
+): string | null {
+  if (value === null || !value.includes("|")) return value;
+  const identities = value.split("|");
+  const canonical = identities[0];
+  if (
+    canonical &&
+    identities.every((identity) => identity === canonical)
+  ) {
+    return canonical;
+  }
+  throw jobError(
+    "TESSERA_PROVIDER_PROVENANCE_DRIFT",
+    "The legacy Tessera UI identity contains more than one distinct website identity.",
+  );
+}
 
 function parsedSimulationProviderIdentity(
   value: unknown,
@@ -918,10 +1072,11 @@ function reportSimulationProvenance(
       "The Tessera report source does not match its selected simulation backend.",
     );
   }
-  const legacyUiIdentity =
+  const legacyUiIdentity = canonicalLegacyTesseraUiIdentity(
     typeof report.tesseraUiIdentity === "string"
       ? report.tesseraUiIdentity
-      : null;
+      : null,
+  );
   const providerUiIdentity =
     providerIdentity?.provider === "website"
       ? providerIdentity.uiIdentity
@@ -941,6 +1096,8 @@ function reportSimulationProvenance(
     simulationProviderIdentity: providerIdentity,
     tesseraUiIdentity:
       providerUiIdentity ?? legacyUiIdentity,
+    providerCompatibilitySha256:
+      reportProviderCompatibilitySha256(report),
   };
 }
 
@@ -989,6 +1146,9 @@ function commonReportSimulationProvenance(
       "One durable result contains more than one Tessera UI identity.",
     );
   }
+  const providerCompatibilityHashes = provenances.map(
+    (provenance) => provenance.providerCompatibilitySha256,
+  );
   return {
     simulationBackend: withBackend[0]?.simulationBackend ?? null,
     simulationProviderIdentity:
@@ -999,11 +1159,19 @@ function commonReportSimulationProvenance(
       uiIdentities.length === withBackend.length
         ? uiIdentities[0] ?? null
         : null,
+    providerCompatibilitySha256:
+      providerCompatibilityHashes.length > 0 &&
+      providerCompatibilityHashes.every(
+        (value): value is string => value !== null,
+      )
+        ? canonicalSha256(providerCompatibilityHashes.sort())
+        : null,
   };
 }
 
 function reportProvenance(result: TesseraRunResult): {
   connectorReceiptSha256: string | null;
+  providerCompatibilitySha256: string | null;
   tesseraUiIdentity: string | null;
   simulationBackend: TesseraSimulationProvider | null;
   simulationProviderIdentity: TesseraSimulationProviderIdentity | null;
@@ -1082,6 +1250,7 @@ function reportProvenance(result: TesseraRunResult): {
         simulationBackend: null,
         simulationProviderIdentity: null,
         tesseraUiIdentity: null,
+        providerCompatibilitySha256: null,
       };
   return {
     connectorReceiptSha256: connectorEvents.length > 0
@@ -1089,6 +1258,64 @@ function reportProvenance(result: TesseraRunResult): {
       : null,
     ...simulationProvenance,
   };
+}
+
+function assertScenarioContractResultMatches(
+  expectedSha256: string | null | undefined,
+  result: TesseraRunResult,
+): void {
+  if (!expectedSha256) return;
+  const data =
+    result.data && typeof result.data === "object"
+      ? result.data as Record<string, unknown>
+      : null;
+  const nested =
+    data &&
+    (
+      data.matchupReport && typeof data.matchupReport === "object"
+        ? data.matchupReport
+        : data.stressReport && typeof data.stressReport === "object"
+          ? data.stressReport
+          : data
+    ) as Record<string, unknown> | null;
+  if (
+    nested?.status !== "complete" &&
+    nested?.status !== "degraded"
+  ) {
+    return;
+  }
+  const reportedSha256 = nested.scenarioContractSha256;
+  if (
+    typeof reportedSha256 !== "string" ||
+    !sha256Pattern.test(reportedSha256) ||
+    reportedSha256 !== expectedSha256
+  ) {
+    throw jobError(
+      "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+      "The completed Tessera report does not match the durable job's frozen scenario-contract SHA-256.",
+    );
+  }
+  if (nested.scenarioContract !== undefined) {
+    let observedSha256: string;
+    try {
+      observedSha256 = tesseraScenarioContractSha256(
+        nested.scenarioContract as Parameters<
+          typeof tesseraScenarioContractSha256
+        >[0],
+      );
+    } catch {
+      throw jobError(
+        "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+        "The completed Tessera report contains an invalid canonical scenario contract.",
+      );
+    }
+    if (observedSha256 !== expectedSha256) {
+      throw jobError(
+        "TESSERA_SCENARIO_CONTRACT_MISMATCH",
+        "The completed Tessera report's canonical scenario contract does not match its durable job binding.",
+      );
+    }
+  }
 }
 
 function simulationProviderPinFromProvenance(
@@ -1103,6 +1330,8 @@ function simulationProviderPinFromProvenance(
       ? canonicalSha256(provenance.simulationProviderIdentity)
       : null,
     tesseraUiIdentity: provenance.tesseraUiIdentity,
+    providerCompatibilitySha256:
+      provenance.providerCompatibilitySha256,
     sourceAttempt,
   };
 }
@@ -1143,6 +1372,19 @@ function assertSimulationProviderPinMatchesResult(
       "The Tessera website identity changed within a durable simulation stage. Use restart-from before accepting evidence from the new website identity.",
     );
   }
+  if (
+    pin.providerCompatibilitySha256 &&
+    (
+      !provenance.providerCompatibilitySha256 ||
+      pin.providerCompatibilitySha256 !==
+        provenance.providerCompatibilitySha256
+    )
+  ) {
+    throw jobError(
+      "TESSERA_SIMULATION_PROVIDER_CHANGED",
+      "The complete provider-compatibility envelope changed within a durable simulation stage. Use restart-from before accepting evidence from the new data/provider/import identity.",
+    );
+  }
 }
 
 function inferredSimulationProviderPin(
@@ -1165,6 +1407,8 @@ function inferredSimulationProviderPin(
       ? canonicalSha256(providerIdentity)
       : null,
     tesseraUiIdentity: source.tesseraUiIdentity,
+    providerCompatibilitySha256:
+      source.providerCompatibilitySha256 ?? null,
     sourceAttempt: source.attempt,
   };
 }
@@ -1901,6 +2145,8 @@ async function validateJobDocumentPaths(
         document.profilePolicyPath,
         document.inputArtifacts,
       ) ||
+    document.scenarioContractSha256 !==
+      requestScenarioContractSha256(document.request) ||
     document.runtimeIdentitySha256 !==
       runtimeIdentitySha256(document.runtimeProvenance) ||
     !Number.isInteger(document.simulationStage) ||
@@ -1908,7 +2154,7 @@ async function validateJobDocumentPaths(
   ) {
     throw jobError(
       "TESSERA_JOB_PROVENANCE_CHANGED",
-      "The Tessera request, data pin, profile policy, runtime, or simulation-stage provenance changed.",
+      "The Tessera request, data pin, profile policy, scenario contract, runtime, or simulation-stage provenance changed.",
     );
   }
   const expectedBudget = retryBudgetFor(
@@ -1979,6 +2225,12 @@ async function validateJobDocumentPaths(
         (
           entry.manifestSha256 !== null &&
           !sha256Pattern.test(entry.manifestSha256)
+        ) ||
+        (
+          entry.providerCompatibilitySha256 !== null &&
+          !sha256Pattern.test(
+            entry.providerCompatibilitySha256,
+          )
         ),
     ) ||
     currentAttempt.status !== document.status ||
@@ -2025,7 +2277,13 @@ async function validateJobDocumentPaths(
       canonicalSha256(
         sourceAttempt.simulationProviderIdentity ?? null,
       ) !== canonicalSha256(providerIdentity) ||
-      sourceAttempt.tesseraUiIdentity !== pin.tesseraUiIdentity
+      sourceAttempt.tesseraUiIdentity !== pin.tesseraUiIdentity ||
+      (
+        pin.providerCompatibilitySha256 !== null &&
+        !sha256Pattern.test(pin.providerCompatibilitySha256)
+      ) ||
+      sourceAttempt.providerCompatibilitySha256 !==
+        pin.providerCompatibilitySha256
     ) {
       throw jobError(
         "TESSERA_JOB_PROVIDER_PIN_CHANGED",
@@ -2284,6 +2542,8 @@ async function readJobDocument(
       parsed.profilePolicyPath,
       parsed.inputArtifacts,
     );
+  parsed.scenarioContractSha256 ??=
+    requestScenarioContractSha256(parsed.request);
   parsed.artifactReceipts ??= [];
   parsed.preparedCheckpoint ??= null;
   parsed.runtimeProvenance ??= getRuntimeProvenance();
@@ -2314,6 +2574,7 @@ async function readJobDocument(
     },
   ];
   for (const entry of parsed.attemptHistory) {
+    entry.providerCompatibilitySha256 ??= null;
     const providerIdentity = parsedSimulationProviderIdentity(
       entry.simulationProviderIdentity,
     );
@@ -2322,8 +2583,13 @@ async function readJobDocument(
       providerIdentity?.provider ??
       (entry.tesseraUiIdentity ? "website" : null);
   }
-  parsed.simulationProviderPin ??=
-    inferredSimulationProviderPin(parsed.attemptHistory);
+  if (parsed.simulationProviderPin) {
+    parsed.simulationProviderPin.providerCompatibilitySha256 ??= null;
+  } else {
+    parsed.simulationProviderPin = inferredSimulationProviderPin(
+      parsed.attemptHistory,
+    );
+  }
   if (
     parsed.profileResolution &&
     !Array.isArray(parsed.profileResolution.requirements)
@@ -3889,6 +4155,7 @@ export async function startTesseraRun(
       "Prepared exact-run checkpoints are created and verified by the durable coordinator; callers cannot inject them.",
     );
   }
+  request = normalizeRequestScenarioContract(request);
   const runId = randomUUID();
   const rootDir = path.resolve(options.rootDir ?? process.cwd());
   const requestedBase = path.resolve(
@@ -3949,6 +4216,8 @@ export async function startTesseraRun(
       frozenInputs.profilePolicyPath,
       frozenInputs.artifacts,
     );
+    const scenarioContractSha256 =
+      requestScenarioContractSha256(requestWithOutput);
     const runtimeProvenance = await jobRuntimeProvenance();
     if (options.launch !== false) {
       assertDurableRuntimeAdmission(runtimeProvenance);
@@ -3982,6 +4251,7 @@ export async function startTesseraRun(
       dataPins,
       dataPinSha256,
       profilePolicySha256,
+      scenarioContractSha256,
       artifactReceipts: [],
       preparedCheckpoint: null,
       runtimeProvenance,
@@ -4726,6 +4996,9 @@ export async function resumeTesseraRun(
             document.simulationProviderPin?.providerIdentity ?? null,
           tesseraUiIdentity:
             document.simulationProviderPin?.tesseraUiIdentity ?? null,
+          providerCompatibilitySha256:
+            document.simulationProviderPin
+              ?.providerCompatibilitySha256 ?? null,
         },
       ],
       error: null,
@@ -5476,16 +5749,27 @@ export async function executeTesseraRunJob(
         latest.attempt !== document.attempt
       ) return;
       const retainedProvenance = reportProvenance(result);
+      assertScenarioContractResultMatches(
+        latest.scenarioContractSha256,
+        result,
+      );
       assertSimulationProviderPinMatchesResult(
         latest.simulationProviderPin,
         retainedProvenance,
       );
       const simulationProviderPin =
-        latest.simulationProviderPin ??
-        simulationProviderPinFromProvenance(
-          retainedProvenance,
-          latest.attempt,
-        );
+        latest.simulationProviderPin &&
+        latest.simulationProviderPin.providerCompatibilitySha256 === null &&
+        retainedProvenance.providerCompatibilitySha256 !== null
+          ? simulationProviderPinFromProvenance(
+              retainedProvenance,
+              latest.attempt,
+            )
+          : latest.simulationProviderPin ??
+            simulationProviderPinFromProvenance(
+              retainedProvenance,
+              latest.attempt,
+            );
       await writeJsonAtomic(latest.resultPath, result);
       const status = finalStatus(result);
       const now = new Date().toISOString();
@@ -5540,6 +5824,10 @@ export async function executeTesseraRunJob(
               .sort(),
             connectorReceiptSha256:
               retainedProvenance.connectorReceiptSha256,
+            providerCompatibilitySha256:
+              retainedProvenance.providerCompatibilitySha256 ??
+              simulationProviderPin?.providerCompatibilitySha256 ??
+              null,
             tesseraUiIdentity:
               retainedProvenance.tesseraUiIdentity ??
               simulationProviderPin?.tesseraUiIdentity ??

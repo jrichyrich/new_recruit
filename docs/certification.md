@@ -215,6 +215,150 @@ the renamed-mirror faction certification tier:
 | `death-guard-vs-orks-exact-1000` | Two independently built, points-matched canonical rosters from different factions and a complete exact Tessera scenario contract; a renamed mirror cannot satisfy this canary |
 | `uploaded-multiprofile-exact-paired-revision` | A locally inspected uploaded ROSZ with at least one explicit alternate weapon-profile decision, matching canonical opponent context, a complete exact baseline, and a paired revision that preserves opponent, policy, scenario, source-pin, and Tessera UI evidence |
 
+### Provider-compatibility observe-then-enforce rollout
+
+The core live rotation is the three named canaries above. Each report retains
+`providerCompatibility` separately from its legacy live result: the fixed
+`observe-then-enforce-v1` policy, the required streak of three rotations, a
+pass/fail/unavailable status, and the content hash, provider, completeness,
+and issue codes for every compatibility envelope it observed. This keeps
+missing provider identity visible without retrospectively turning an otherwise
+honest pre-rollout simulation report into a claimed compatibility pass.
+
+A rotation qualifies only when all required canary IDs appear exactly once,
+each canary itself passes, every required provider-compatibility envelope is
+complete, and every envelope has a valid SHA-256. A complete envelope includes
+the verified signed-manifest hash and signing-key ID, the active/latest
+verified update-provider identities, the signed bundle semantics, canonical
+roster and prepared-input hashes,
+New Recruit pinned/observed catalogue evidence where applicable, exact
+provider identity, Tessera Web script-byte and import-semantic evidence,
+profile-policy identity, and deterministic scenario-contract identity.
+Unresolved website effect toggles, a missing semantic snapshot, or a declared
+version without the underlying asset bytes is incomplete evidence.
+
+Rollout begins in observation mode. A successful rotation advances the
+consecutive streak; a failed rotation resets it. An unavailable rotation does
+not pretend to be a pass and does not advance the streak, but before
+enforcement it also does not erase already observed passes. Duplicate rotation
+IDs are rejected. After three consecutive complete passing rotations, the
+workflow creates the one-way repository tag
+`rosterpilot-provider-compatibility-enforced-v1`. That tag is the durable latch;
+it does not depend on expiring Actions artifacts and no workflow removes it.
+Every subsequent canary freezes `providerCompatibilityMode=enforce`, and the
+application-release gate reads the tag independently. Once latched, missing
+history, a latest observation-mode rotation, a failure, or an unavailable
+rotation blocks a new release. The first enforced rotation is therefore
+required after activation before another release can pass. An outage does not
+silently disable enforcement and, by itself, cannot authorize rollback of the
+active bundle.
+
+The envelope's bundle-trust digest is computed from the activated
+`VerifiedDataBundleManifestV1` and current `DataBundleProvider` status. It
+includes the manifest/signature identity, active and latest verified bundle
+IDs, upstream/candidate/quarantine/rollback state, official-authority identity,
+and durability state. Roster source hashes without that verified runtime proof
+remain incomplete evidence; compiled-unverified data cannot satisfy this gate.
+
+Local-versus-website numerical parity is a second gate after compatibility.
+Both reports are adapted to one normalized combat contract and must agree on
+the bundle, roster input, profile policy, scenario contract, model-capability
+envelope, and provider-neutral unit/weapon/effect snapshot. Per-cell sample
+count, variance, and standard error are retained so tolerances include Monte
+Carlo uncertainty. Each metric still requires at least 98% of comparable cells
+within tolerance, no cell may exceed twice its tolerance, and the shared
+probability-pressure winner must agree outside its uncertainty boundary.
+Deterministic fixtures include effect- and profile-sensitive Witchseekers,
+Troupes, Farseers, and Shroud Runners, but fixture success is not live parity or
+promotion evidence.
+
+### Live numerical parity gate
+
+After producing the paired comparison, certify it with the original exact
+reports available under one portable reports root:
+
+```bash
+npm run certify:provider-parity -- \
+  --comparison paired/comparison/tessera-provider-parity.json \
+  --reports-root paired/reports \
+  --rotation-id <workflow-run-id> \
+  --expected-bundle-id <64-character-bundle-id> \
+  --expected-git-head <40-character-commit> \
+  --out paired/certification/live-numerical-parity.json
+```
+
+The comparison directory must contain
+`tessera-provider-parity.json.sha256`. The reports root may have nested
+directories, but it must contain exactly one copy of each bound exact report
+and that report's adjacent `*.receipt.json`. Discovery ignores the portable
+filename as authority: it selects by the comparison's report SHA-256, run ID,
+and provider, and rejects missing, duplicated, symlinked, oversized, or
+receipt-mismatched evidence. The gate then independently rebuilds both parity
+runs and the comparison result.
+
+The command writes a strict schema-v1 certification JSON and adjacent
+`.sha256`. Its result is one of `pass`, `fail`, `incomplete`, `ineligible`, or
+`unavailable`; eligible-but-incomplete sampling evidence is not collapsed into
+data/input drift. A pass requires real production runtime evidence from both
+providers, verified signed-bundle trust, complete Tessera Web deployment,
+import semantics and selected-state bindings, all four canonical metrics at
+98% or better, zero cells beyond twice tolerance, and canonical-winner
+agreement outside uncertainty. Recorded or fixture-shaped evidence is always
+ineligible.
+
+The distinct-faction `death-guard-vs-orks-exact-1000` live canary is the paired
+producer. It runs the frozen exact scenario once through each provider,
+preserves the comparison JSON/checksum and both exact reports/receipts, and
+binds the certificate to the workflow rotation, expected signed bundle, and
+checked-out git commit. A stale bundle or commit is `ineligible`, even when the
+numeric cells would otherwise pass.
+
+Numerical parity has its own observation history and one-way latch, separate
+from provider compatibility:
+
+```bash
+npm run certify:provider-parity-rollout -- \
+  --reports-root .certification/provider-parity-input \
+  --enforcement-latch observe \
+  --current-rotation-id <workflow-run-id> \
+  --out .certification/provider-parity-output/live-numerical-parity-rollout.json
+```
+
+Three consecutive checksum-verified live pass certificates activate the
+durable `rosterpilot-live-numerical-parity-enforced-v1` tag. Before activation,
+the rollout is observational. `unavailable` neither advances nor resets the
+streak; an available `fail`, `incomplete`, or `ineligible` certificate resets
+it. After activation, callers pass `--enforcement-latch enforce` (and live
+runtimes use `ROSTERPILOT_LIVE_NUMERICAL_PARITY_ENFORCED=true`); missing or
+current non-pass evidence blocks release. The workflow always supplies
+`--current-rotation-id` so a retained historical pass cannot stand in for the
+current certificate. A detached checksum establishes integrity but not live
+provenance, so every claimed passing certificate is also freshly rebuilt from
+the comparison, exact source reports, and receipts under `--reports-root`
+before it enters history. Duplicate rotation IDs and invalid certificate or
+rollout checksums fail closed.
+
+Every observed rotation uploads the raw paired bundle and certificate as
+`live-numerical-parity-evidence-<run-id>`, plus the independently checksummed
+history as `live-numerical-parity-rollout-<run-id>`. Observation-mode failures
+remain downloadable instead of failing the workflow solely because parity has
+not passed. Once the latch exists, application release accepts only the
+explicit `live_numerical_parity_run_id` dispatch input. It verifies that this
+is a successful `certification-live.yml` run on the default branch at the
+exact release commit, resolves exactly one unexpired evidence and rollout
+artifact from that run, derives the prepared release bundle ID itself, and
+reruns both the raw numerical gate and enforced rollout gate against that
+bundle and commit. Operators do not supply a checksum, bundle ID, or commit
+claim by hand.
+
+Use the classification in the compatibility report when triaging a failure.
+A changed or incomplete bundle/catalogue/import/profile/scenario identity is
+data or input drift. Changed website script bytes or a changed pinned local
+engine are provider-deployment drift. Only a tolerance or winner disagreement
+between otherwise compatible normalized runs is model drift. Do not repair
+model drift by adopting New Recruit or Tessera observations as canonical rules
+data; update the signed bundle only through the normal reviewed data pipeline.
+
 Run one canary directly with:
 
 ```bash

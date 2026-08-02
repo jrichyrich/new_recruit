@@ -23,8 +23,13 @@ on:
         description: Explicit degraded-release reason when no reviewed official evidence exists
         required: false
         type: string
+      live_numerical_parity_run_id:
+        description: Exact successful Live connector certification run ID supplying the numerical-parity rollout artifact once enforcement is active
+        required: false
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -46,6 +51,141 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - id: provider-compatibility-latch
+        name: Read the durable provider-compatibility latch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: "tags/rosterpilot-provider-compatibility-enforced-v1",
+              });
+              core.setOutput("mode", "enforce");
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput("mode", "observe");
+            }
+
+      - id: numerical-parity-latch
+        name: Read the durable live numerical-parity latch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: "tags/rosterpilot-live-numerical-parity-enforced-v1",
+              });
+              core.setOutput("mode", "enforce");
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput("mode", "observe");
+            }
+
+      - id: numerical-parity-release-evidence
+        name: Resolve exact live numerical-parity release evidence
+        if: ${{ steps.numerical-parity-latch.outputs.mode == 'enforce' }}
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_RUN_ID: ${{ inputs.live_numerical_parity_run_id }}
+        with:
+          script: |
+            const rawRunId = process.env.REQUESTED_RUN_ID ?? "";
+            if (!/^[1-9][0-9]*$/.test(rawRunId)) {
+              throw new Error("Numerical-parity enforcement requires the explicit live_numerical_parity_run_id workflow-dispatch input.");
+            }
+            const runId = Number(rawRunId);
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            const defaultBranch = context.payload.repository?.default_branch ?? "main";
+            if (
+              run.path !== ".github/workflows/certification-live.yml" ||
+              run.head_branch !== defaultBranch ||
+              run.conclusion !== "success" ||
+              run.head_sha !== context.sha
+            ) {
+              throw new Error(`Live numerical-parity run ${runId} must be a successful certification-live.yml run on ${defaultBranch} at exact release SHA ${context.sha}; observed path=${run.path}, branch=${run.head_branch}, conclusion=${run.conclusion}, sha=${run.head_sha}.`);
+            }
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+                per_page: 100,
+              },
+            );
+            const evidenceName = `live-numerical-parity-evidence-${runId}`;
+            const rolloutName = `live-numerical-parity-rollout-${runId}`;
+            for (const artifactName of [evidenceName, rolloutName]) {
+              const matches = artifacts.filter(
+                (artifact) => artifact.name === artifactName && !artifact.expired,
+              );
+              if (matches.length !== 1) {
+                throw new Error(`Live numerical-parity run ${runId} must retain exactly one unexpired ${artifactName} artifact.`);
+              }
+            }
+            core.setOutput("run_id", rawRunId);
+            core.setOutput("evidence_name", evidenceName);
+            core.setOutput("rollout_name", rolloutName);
+
+      - name: Download exact live numerical-parity raw evidence
+        if: ${{ steps.numerical-parity-latch.outputs.mode == 'enforce' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.numerical-parity-release-evidence.outputs.evidence_name }}
+          path: ${{ runner.temp }}/rosterpilot-live-numerical-parity/evidence
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.numerical-parity-release-evidence.outputs.run_id }}
+
+      - name: Download exact live numerical-parity rollout
+        if: ${{ steps.numerical-parity-latch.outputs.mode == 'enforce' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.numerical-parity-release-evidence.outputs.rollout_name }}
+          path: ${{ runner.temp }}/rosterpilot-live-numerical-parity/rollout
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.numerical-parity-release-evidence.outputs.run_id }}
+
+      - name: Download the latest provider-compatibility rollout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          history_root=".certification/provider-compatibility-gate/history"
+          mkdir -p "$history_root"
+          while IFS= read -r prior_run_id; do
+            prior_root="$history_root/$prior_run_id"
+            mkdir -p "$prior_root"
+            if gh run download "$prior_run_id" \
+              --pattern "provider-compatibility-rollout-*" \
+              --dir "$prior_root"; then
+              break
+            fi
+            rm -rf "$prior_root"
+          done < <(
+            gh run list \
+              --workflow certification-live.yml \
+              --status completed \
+              --limit 20 \
+              --json databaseId \
+              --jq '.[].databaseId'
+          )
+
+      - name: Apply the provider-compatibility release gate
+        run: >-
+          npm run certify:provider-compatibility --
+          --reports-root .certification/provider-compatibility-gate/history
+          --enforcement-latch ${{ steps.provider-compatibility-latch.outputs.mode }}
+          --out .certification/provider-compatibility-gate/provider-compatibility-rollout-release-check.json
 
       - name: Resolve and validate optional official evidence
         id: official
@@ -146,6 +286,67 @@ jobs:
             args+=(--official-authority-unavailable "$OFFICIAL_UNAVAILABLE_REASON")
           fi
           npm run data:bundle:prepare-release -- "${args[@]}"
+
+      - name: Re-certify exact live numerical parity for this release
+        if: ${{ steps.numerical-parity-latch.outputs.mode == 'enforce' }}
+        shell: bash
+        env:
+          NUMERICAL_PARITY_RUN_ID: ${{ steps.numerical-parity-release-evidence.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          parity_root="$RUNNER_TEMP/rosterpilot-live-numerical-parity"
+          evidence_root="$parity_root/evidence/input"
+          rollout="$parity_root/rollout/live-numerical-parity-rollout-$NUMERICAL_PARITY_RUN_ID.json"
+          rollout_checksum="$rollout.sha256"
+          test -f "$rollout" && test ! -L "$rollout"
+          test -f "$rollout_checksum" && test ! -L "$rollout_checksum"
+          rollout_sha256="$(sha256sum "$rollout" | cut -d ' ' -f 1)"
+          expected_checksum="$rollout_sha256  $(basename "$rollout")"
+          test "$(tr -d '\n' < "$rollout_checksum")" = "$expected_checksum"
+          node -e '
+            const fs = require("fs");
+            const [filename, runId] = process.argv.slice(1);
+            const value = JSON.parse(fs.readFileSync(filename, "utf8"));
+            if (
+              value.reportKind !== "rosterpilot-live-numerical-parity-rollout" ||
+              value.evaluation?.enforcementActive !== true ||
+              value.evaluation?.releaseGate !== "pass" ||
+              value.evaluation?.latestRotationId !== runId ||
+              value.evaluation?.latestStatus !== "pass"
+            ) process.exit(2);
+          ' "$rollout" "$NUMERICAL_PARITY_RUN_ID"
+          comparison="$evidence_root/provider-parity/tessera-provider-parity.json"
+          test -f "$comparison" && test ! -L "$comparison"
+          bundle_id="$(node -e '
+            const fs = require("fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!/^[a-f0-9]{64}$/.test(value.bundleId)) process.exit(2);
+            process.stdout.write(value.bundleId);
+          ' data/bootstrap-data-bundle/manifest.json)"
+          release_check_root="$RUNNER_TEMP/rosterpilot-live-numerical-parity/release-check"
+          mkdir -p "$release_check_root"
+          npm run certify:provider-parity -- \
+            --comparison "$comparison" \
+            --reports-root "$evidence_root" \
+            --expected-bundle-id "$bundle_id" \
+            --expected-git-head "$GITHUB_SHA" \
+            --rotation-id "$NUMERICAL_PARITY_RUN_ID" \
+            --out "$release_check_root/live-numerical-parity-release-check.json"
+          npm run certify:provider-parity-rollout -- \
+            --reports-root "$release_check_root" \
+            --current-rotation-id "$NUMERICAL_PARITY_RUN_ID" \
+            --enforcement-latch enforce \
+            --out "$release_check_root/live-numerical-parity-rollout-release-check.json"
+
+      - name: Preserve release-bound numerical-parity checks
+        if: ${{ always() && steps.numerical-parity-latch.outputs.mode == 'enforce' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-numerical-parity-release-check-${{ github.run_id }}
+          path: ${{ runner.temp }}/rosterpilot-live-numerical-parity/release-check
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 90
 
       - name: Require trusted local and hosted assets before build
         run: npm run build:release

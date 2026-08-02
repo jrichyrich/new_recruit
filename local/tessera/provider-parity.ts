@@ -5,6 +5,37 @@ import type {
   TesseraMetric,
   TesseraPhase,
 } from "../../lib/rosterpilot/types";
+import {
+  compareTesseraProviderParityCombatSnapshots,
+  compareTesseraProviderParityModelCapabilityEnvelopes,
+  tesseraProviderParityCombatSnapshotSha256,
+  tesseraProviderParityModelCapabilityEnvelopeSha256,
+  validateTesseraProviderParityCombatSnapshot,
+  validateTesseraProviderParityModelCapabilityEnvelope,
+} from "./provider-parity-evidence";
+import type {
+  TesseraProviderParityCombatSnapshotComparison,
+  TesseraProviderParityModelCapabilityEnvelope,
+  TesseraProviderParityNormalizedCombatSnapshot,
+} from "./provider-parity-evidence";
+
+export {
+  compareTesseraProviderParityCombatSnapshots,
+  compareTesseraProviderParityModelCapabilityEnvelopes,
+  tesseraProviderParityCombatSnapshotSha256,
+  tesseraProviderParityModelCapabilityEnvelopeSha256,
+} from "./provider-parity-evidence";
+export type {
+  TesseraProviderParityCombatAttackProfile,
+  TesseraProviderParityCombatDefense,
+  TesseraProviderParityCombatDiff,
+  TesseraProviderParityCombatDiffClassification,
+  TesseraProviderParityCombatSnapshotComparison,
+  TesseraProviderParityCombatUnitSnapshot,
+  TesseraProviderParityModelCapabilityEnvelope,
+  TesseraProviderParityNormalizedCombatSnapshot,
+  TesseraProviderParitySemanticEvidence,
+} from "./provider-parity-evidence";
 
 export const TESSERA_PROVIDER_PARITY_POLICY = {
   minimumMetricPassRate: 0.98,
@@ -28,6 +59,9 @@ export const TESSERA_PROVIDER_PARITY_POLICY = {
   },
 } as const;
 
+export const TESSERA_PROVIDER_PARITY_CANONICAL_WINNER_ID =
+  "canonical-probability-pressure-v1";
+
 export type TesseraParityProvider = "local-engine" | "website";
 
 export type TesseraProviderParityIdentity = {
@@ -41,6 +75,10 @@ export type TesseraProviderParityIdentity = {
   normalizedInputSha256: string;
   scenarioContractSha256: string;
   profilePolicyHash: string | null;
+  /** Optional only so legacy diagnostic JSON can still be parsed fail-closed. */
+  modelCapabilityEnvelopeSha256?: string;
+  /** Optional only so legacy diagnostic JSON can still be parsed fail-closed. */
+  combatSnapshotSha256?: string;
 };
 
 export type TesseraProviderParityScenarioContract = {
@@ -59,6 +97,10 @@ export type TesseraProviderParityCell = {
   metric: TesseraMetric;
   value: number | null;
   iterations: number;
+  /** Actual retained samples. Defaults to iterations for legacy diagnostics. */
+  sampleCount?: number;
+  /** Sample variance, when the provider can retain it. */
+  sampleVariance?: number | null;
   /**
    * Required for mean metrics. It is the standard error of that provider's
    * estimated mean, not the sample standard deviation.
@@ -73,10 +115,23 @@ export type TesseraProviderParityWinnerClassification = {
   winner: TesseraProviderParityWinner;
   /** A winner mismatch is diagnostic while either result is on its boundary. */
   withinUncertainty: boolean;
+  adapter?: "canonical-probability-pressure-v1";
+  evidence?: {
+    metric: "wipe-probability" | "half-wipe-probability";
+    playerPressure: number;
+    opponentPressure: number;
+    difference: number;
+    standardError: number;
+    sampleCount: number;
+  };
 };
 
 export type TesseraProviderParityRun = {
   identity: TesseraProviderParityIdentity;
+  /** Optional only so legacy diagnostic JSON can still be parsed fail-closed. */
+  modelCapabilityEnvelope?: TesseraProviderParityModelCapabilityEnvelope;
+  /** Optional only so legacy diagnostic JSON can still be parsed fail-closed. */
+  combatSnapshot?: TesseraProviderParityNormalizedCombatSnapshot;
   scenarioContract: TesseraProviderParityScenarioContract[];
   cells: TesseraProviderParityCell[];
   winnerClassifications: TesseraProviderParityWinnerClassification[];
@@ -90,6 +145,15 @@ export type TesseraProviderParityIssueCategory =
 export type TesseraProviderParityIssueCode =
   | "PROVIDER_PAIR_INVALID"
   | "PROVIDER_IDENTITY_INCOMPLETE"
+  | "MODEL_CAPABILITY_ENVELOPE_MISSING"
+  | "MODEL_CAPABILITY_ENVELOPE_INVALID"
+  | "MODEL_CAPABILITY_ENVELOPE_DIGEST_INVALID"
+  | "MODEL_CAPABILITY_ENVELOPE_MISMATCH"
+  | "COMBAT_SNAPSHOT_MISSING"
+  | "COMBAT_SNAPSHOT_INVALID"
+  | "COMBAT_SNAPSHOT_DIGEST_INVALID"
+  | "COMBAT_SNAPSHOT_MISMATCH"
+  | "SEMANTIC_EVIDENCE_INCOMPLETE"
   | "DATA_BUNDLE_MISMATCH"
   | "NORMALIZED_INPUT_MISMATCH"
   | "PROFILE_POLICY_MISMATCH"
@@ -103,6 +167,10 @@ export type TesseraProviderParityIssueCode =
   | "CELL_ITERATIONS_MISMATCH"
   | "CELL_MISSING"
   | "CELL_VALUE_INVALID"
+  | "CELL_SAMPLE_COUNT_INVALID"
+  | "CELL_SAMPLE_COUNT_MISMATCH"
+  | "CELL_SAMPLE_VARIANCE_INVALID"
+  | "CELL_SAMPLING_EVIDENCE_INCONSISTENT"
   | "CELL_STANDARD_ERROR_MISSING"
   | "WINNER_CLASSIFICATION_DUPLICATE"
   | "WINNER_CLASSIFICATION_MISSING"
@@ -128,6 +196,17 @@ export type TesseraProviderParityTolerance = {
   pooledStandardError: number;
 };
 
+export type TesseraProviderParitySamplingEvidence = {
+  sampleCount: number | null;
+  sampleVariance: number | null;
+  standardError: number | null;
+  standardErrorSource:
+    | "reported"
+    | "derived-from-variance"
+    | "derived-binomial"
+    | "unavailable";
+};
+
 export type TesseraProviderParityCellComparison = {
   key: string;
   scenarioId: string;
@@ -136,6 +215,8 @@ export type TesseraProviderParityCellComparison = {
   metric: TesseraMetric;
   localValue: number | null;
   websiteValue: number | null;
+  localSamplingEvidence: TesseraProviderParitySamplingEvidence | null;
+  websiteSamplingEvidence: TesseraProviderParitySamplingEvidence | null;
   difference: number | null;
   tolerance: TesseraProviderParityTolerance | null;
   toleranceMultiple: number | null;
@@ -168,6 +249,12 @@ export type TesseraProviderParityResult = {
   complete: boolean;
   localIdentity: TesseraProviderParityIdentity | null;
   websiteIdentity: TesseraProviderParityIdentity | null;
+  modelCapabilityEnvelope: {
+    status: "match" | "mismatch" | "incomplete";
+    localSha256: string | null;
+    websiteSha256: string | null;
+  };
+  combatSnapshot: TesseraProviderParityCombatSnapshotComparison;
   policy: typeof TESSERA_PROVIDER_PARITY_POLICY;
   metricSummaries: TesseraProviderParityMetricSummary[];
   cells: TesseraProviderParityCellComparison[];
@@ -364,6 +451,100 @@ export function tesseraProviderParityTolerance(
   };
 }
 
+export function adaptCanonicalTesseraProviderParityWinner(
+  run: TesseraProviderParityRun,
+): TesseraProviderParityWinnerClassification | null {
+  const contracts = new Map(
+    run.scenarioContract.map((contract) => [contractKey(contract), contract]),
+  );
+  const usableMetrics: Array<
+    "half-wipe-probability" | "wipe-probability"
+  > = ["half-wipe-probability", "wipe-probability"];
+
+  for (const metric of usableMetrics) {
+    const directionalCells = {
+      "player-to-opponent": [] as TesseraProviderParityCell[],
+      "opponent-to-player": [] as TesseraProviderParityCell[],
+    };
+    for (const cell of run.cells) {
+      if (
+        cell.metric !== metric ||
+        typeof cell.value !== "number" ||
+        !Number.isFinite(cell.value) ||
+        cell.value < 0 ||
+        cell.value > 1
+      ) {
+        continue;
+      }
+      const contract = contracts.get(contractKey(cell));
+      if (contract) directionalCells[contract.direction].push(cell);
+    }
+
+    const playerCells = directionalCells["player-to-opponent"];
+    const opponentCells = directionalCells["opponent-to-player"];
+    if (playerCells.length === 0 || opponentCells.length === 0) continue;
+    const allCells = [...playerCells, ...opponentCells];
+    const allEvidence = allCells.map(resolvedSamplingEvidence);
+    if (
+      allEvidence.some(
+        (evidence) =>
+          evidence.sampleCount === null || evidence.standardError === null,
+      )
+    ) {
+      continue;
+    }
+
+    const mean = (cells: TesseraProviderParityCell[]) =>
+      cells.reduce((sum, cell) => sum + (cell.value as number), 0) /
+      cells.length;
+    const aggregateStandardError = (cells: TesseraProviderParityCell[]) =>
+      Math.sqrt(
+        cells.reduce((sum, cell) => {
+          const standardError = resolvedSamplingEvidence(cell).standardError;
+          return sum + (standardError ?? 0) ** 2;
+        }, 0),
+      ) / cells.length;
+
+    const playerPressure = mean(playerCells);
+    const opponentPressure = mean(opponentCells);
+    const difference = playerPressure - opponentPressure;
+    const standardError = Math.sqrt(
+      aggregateStandardError(playerCells) ** 2 +
+        aggregateStandardError(opponentCells) ** 2,
+    );
+    const uncertainty =
+      TESSERA_PROVIDER_PARITY_POLICY.probability.monteCarloMultiplier *
+        standardError +
+      TESSERA_PROVIDER_PARITY_POLICY.probability.roundingAllowance;
+    const withinUncertainty = approximatelyLessThanOrEqual(
+      Math.abs(difference),
+      uncertainty,
+    );
+    return {
+      classificationId: TESSERA_PROVIDER_PARITY_CANONICAL_WINNER_ID,
+      winner: withinUncertainty
+        ? "tie"
+        : difference > 0
+          ? "player"
+          : "opponent",
+      withinUncertainty,
+      adapter: "canonical-probability-pressure-v1",
+      evidence: {
+        metric,
+        playerPressure,
+        opponentPressure,
+        difference,
+        standardError,
+        sampleCount: allEvidence.reduce(
+          (sum, evidence) => sum + (evidence.sampleCount ?? 0),
+          0,
+        ),
+      },
+    };
+  }
+  return null;
+}
+
 function issue(
   category: TesseraProviderParityIssueCategory,
   code: TesseraProviderParityIssueCode,
@@ -426,6 +607,124 @@ function validateIdentity(
         { provider: identity.provider },
       ),
     );
+  }
+}
+
+function validateModelCapabilityEnvelope(
+  run: TesseraProviderParityRun,
+  issues: TesseraProviderParityIssue[],
+): void {
+  const provider = run.identity.provider;
+  if (!run.modelCapabilityEnvelope) {
+    issues.push(
+      issue(
+        "eligibility",
+        "MODEL_CAPABILITY_ENVELOPE_MISSING",
+        `${provider} did not retain a model-capability envelope; legacy diagnostics remain readable but cannot establish parity eligibility.`,
+        { provider },
+      ),
+    );
+    return;
+  }
+  const problems = validateTesseraProviderParityModelCapabilityEnvelope(
+    run.modelCapabilityEnvelope,
+  );
+  for (const problem of problems) {
+    issues.push(
+      issue(
+        "eligibility",
+        "MODEL_CAPABILITY_ENVELOPE_INVALID",
+        `${provider} model-capability envelope is invalid at ${problem.path}: ${problem.message}`,
+        { key: problem.path, provider },
+      ),
+    );
+  }
+  const observedDigest =
+    tesseraProviderParityModelCapabilityEnvelopeSha256(
+      run.modelCapabilityEnvelope,
+    );
+  if (
+    !SHA256_PATTERN.test(
+      run.identity.modelCapabilityEnvelopeSha256 ?? "",
+    ) ||
+    run.identity.modelCapabilityEnvelopeSha256 !== observedDigest
+  ) {
+    issues.push(
+      issue(
+        "eligibility",
+        "MODEL_CAPABILITY_ENVELOPE_DIGEST_INVALID",
+        `${provider} model-capability envelope does not match its recorded SHA-256.`,
+        { provider },
+      ),
+    );
+  }
+}
+
+function validateCombatSnapshot(
+  run: TesseraProviderParityRun,
+  issues: TesseraProviderParityIssue[],
+): void {
+  const provider = run.identity.provider;
+  if (!run.combatSnapshot) {
+    issues.push(
+      issue(
+        "eligibility",
+        "COMBAT_SNAPSHOT_MISSING",
+        `${provider} did not retain a provider-neutral combat snapshot; legacy diagnostics remain readable but cannot establish parity eligibility.`,
+        { provider },
+      ),
+    );
+    return;
+  }
+  const problems = validateTesseraProviderParityCombatSnapshot(
+    run.combatSnapshot,
+  );
+  for (const problem of problems) {
+    const semanticEvidence = problem.path.endsWith(".evidence");
+    issues.push(
+      issue(
+        "eligibility",
+        semanticEvidence
+          ? "SEMANTIC_EVIDENCE_INCOMPLETE"
+          : "COMBAT_SNAPSHOT_INVALID",
+        `${provider} combat snapshot is invalid at ${problem.path}: ${problem.message}`,
+        { key: problem.path, provider },
+      ),
+    );
+  }
+  const observedDigest = tesseraProviderParityCombatSnapshotSha256(
+    run.combatSnapshot,
+  );
+  if (
+    !SHA256_PATTERN.test(run.identity.combatSnapshotSha256 ?? "") ||
+    run.identity.combatSnapshotSha256 !== observedDigest
+  ) {
+    issues.push(
+      issue(
+        "eligibility",
+        "COMBAT_SNAPSHOT_DIGEST_INVALID",
+        `${provider} combat snapshot does not match its recorded SHA-256.`,
+        { provider },
+      ),
+    );
+  }
+
+  const instanceIds = new Set(
+    run.combatSnapshot.units.map((unit) => unit.instanceId),
+  );
+  for (const cell of Array.isArray(run.cells) ? run.cells : []) {
+    for (const instanceId of [cell.attackerInstanceId, cell.targetInstanceId]) {
+      if (!instanceIds.has(instanceId)) {
+        issues.push(
+          issue(
+            "eligibility",
+            "SEMANTIC_EVIDENCE_INCOMPLETE",
+            `${provider} combat snapshot does not retain semantic evidence for ${instanceId}.`,
+            { key: instanceId, provider, metric: cell.metric },
+          ),
+        );
+      }
+    }
   }
 }
 
@@ -513,8 +812,79 @@ function validateContract(
   return result;
 }
 
+function resolvedSamplingEvidence(
+  cell: TesseraProviderParityCell,
+): TesseraProviderParitySamplingEvidence {
+  const sampleCount = isPositiveInteger(cell.sampleCount)
+    ? cell.sampleCount
+    : cell.sampleCount === undefined && isPositiveInteger(cell.iterations)
+      ? cell.iterations
+      : null;
+  const reportedSampleVariance = isFiniteNonNegative(cell.sampleVariance)
+    ? cell.sampleVariance
+    : null;
+  const hasReportedVariance = reportedSampleVariance !== null;
+  let sampleVariance: number | null = reportedSampleVariance;
+  if (
+    sampleVariance === null &&
+    isProbabilityMetric(cell.metric) &&
+    typeof cell.value === "number" &&
+    Number.isFinite(cell.value) &&
+    cell.value >= 0 &&
+    cell.value <= 1
+  ) {
+    sampleVariance = cell.value * (1 - cell.value);
+  }
+
+  if (isFiniteNonNegative(cell.standardError)) {
+    return {
+      sampleCount,
+      sampleVariance,
+      standardError: cell.standardError,
+      standardErrorSource: "reported",
+    };
+  }
+  if (sampleCount !== null && sampleVariance !== null) {
+    return {
+      sampleCount,
+      sampleVariance,
+      standardError: Math.sqrt(sampleVariance / sampleCount),
+      standardErrorSource: hasReportedVariance
+        ? "derived-from-variance"
+        : "derived-binomial",
+    };
+  }
+  return {
+    sampleCount,
+    sampleVariance,
+    standardError: null,
+    standardErrorSource: "unavailable",
+  };
+}
+
+function samplingEvidenceConsistent(
+  cell: TesseraProviderParityCell,
+  evidence: TesseraProviderParitySamplingEvidence,
+): boolean {
+  if (
+    !isFiniteNonNegative(cell.sampleVariance) ||
+    evidence.sampleCount === null ||
+    evidence.sampleVariance === null ||
+    evidence.standardError === null ||
+    evidence.standardErrorSource !== "reported"
+  ) {
+    return true;
+  }
+  const expected = Math.sqrt(
+    evidence.sampleVariance / evidence.sampleCount,
+  );
+  const allowance = Math.max(1e-12, expected * 1e-6);
+  return Math.abs(evidence.standardError - expected) <= allowance;
+}
+
 type ValidatedCells = {
   byKey: Map<string, TesseraProviderParityCell>;
+  evidenceByKey: Map<string, TesseraProviderParitySamplingEvidence>;
   invalidKeys: Set<string>;
   coveredContracts: Set<string>;
 };
@@ -525,6 +895,10 @@ function validateCells(
   issues: TesseraProviderParityIssue[],
 ): ValidatedCells {
   const byKey = new Map<string, TesseraProviderParityCell>();
+  const evidenceByKey = new Map<
+    string,
+    TesseraProviderParitySamplingEvidence
+  >();
   const invalidKeys = new Set<string>();
   const coveredContracts = new Set<string>();
   if (!Array.isArray(run.cells)) {
@@ -536,7 +910,7 @@ function validateCells(
         { provider: run.identity.provider },
       ),
     );
-    return { byKey, invalidKeys, coveredContracts };
+    return { byKey, evidenceByKey, invalidKeys, coveredContracts };
   }
   for (const cell of run.cells) {
     const metric = isMetric(cell.metric) ? cell.metric : null;
@@ -575,6 +949,8 @@ function validateCells(
       continue;
     }
     byKey.set(internalKey, cell);
+    const samplingEvidence = resolvedSamplingEvidence(cell);
+    evidenceByKey.set(internalKey, samplingEvidence);
 
     const expected = contract.get(contractKey(cell));
     if (!expected) {
@@ -602,6 +978,59 @@ function validateCells(
       );
     }
     if (
+      cell.sampleCount !== undefined &&
+      !isPositiveInteger(cell.sampleCount)
+    ) {
+      invalidKeys.add(internalKey);
+      issues.push(
+        issue(
+          "incomplete",
+          "CELL_SAMPLE_COUNT_INVALID",
+          `${run.identity.provider} returned an invalid sample count for ${displayKey}.`,
+          { key: displayKey, provider: run.identity.provider, metric },
+        ),
+      );
+    } else if (
+      samplingEvidence.sampleCount !== null &&
+      samplingEvidence.sampleCount !== cell.iterations
+    ) {
+      invalidKeys.add(internalKey);
+      issues.push(
+        issue(
+          "incomplete",
+          "CELL_SAMPLE_COUNT_MISMATCH",
+          `${run.identity.provider} retained ${samplingEvidence.sampleCount} samples for ${displayKey}, but reported ${cell.iterations} iterations.`,
+          { key: displayKey, provider: run.identity.provider, metric },
+        ),
+      );
+    }
+    if (
+      cell.sampleVariance !== undefined &&
+      cell.sampleVariance !== null &&
+      !isFiniteNonNegative(cell.sampleVariance)
+    ) {
+      invalidKeys.add(internalKey);
+      issues.push(
+        issue(
+          "incomplete",
+          "CELL_SAMPLE_VARIANCE_INVALID",
+          `${run.identity.provider} returned an invalid sample variance for ${displayKey}.`,
+          { key: displayKey, provider: run.identity.provider, metric },
+        ),
+      );
+    }
+    if (!samplingEvidenceConsistent(cell, samplingEvidence)) {
+      invalidKeys.add(internalKey);
+      issues.push(
+        issue(
+          "incomplete",
+          "CELL_SAMPLING_EVIDENCE_INCONSISTENT",
+          `${run.identity.provider} reported variance and standard error that disagree for ${displayKey}.`,
+          { key: displayKey, provider: run.identity.provider, metric },
+        ),
+      );
+    }
+    if (
       typeof cell.value !== "number" ||
       !Number.isFinite(cell.value) ||
       (isProbabilityMetric(metric) && (cell.value < 0 || cell.value > 1))
@@ -618,7 +1047,7 @@ function validateCells(
     }
     if (
       !isProbabilityMetric(metric) &&
-      !isFiniteNonNegative(cell.standardError)
+      samplingEvidence.standardError === null
     ) {
       invalidKeys.add(internalKey);
       issues.push(
@@ -648,7 +1077,7 @@ function validateCells(
       );
     }
   }
-  return { byKey, invalidKeys, coveredContracts };
+  return { byKey, evidenceByKey, invalidKeys, coveredContracts };
 }
 
 function validateWinnerClassifications(
@@ -665,45 +1094,67 @@ function validateWinnerClassifications(
         { provider: run.identity.provider },
       ),
     );
-    return result;
+  } else {
+    for (const classification of run.winnerClassifications) {
+      const valid =
+        typeof classification.classificationId === "string" &&
+        classification.classificationId.trim().length > 0 &&
+        (classification.winner === "player" ||
+          classification.winner === "opponent" ||
+          classification.winner === "tie") &&
+        typeof classification.withinUncertainty === "boolean";
+      if (!valid) {
+        issues.push(
+          issue(
+            "incomplete",
+            "WINNER_CLASSIFICATION_INVALID",
+            `${run.identity.provider} supplied an invalid winner classification.`,
+            {
+              key: classification.classificationId || null,
+              provider: run.identity.provider,
+            },
+          ),
+        );
+        continue;
+      }
+      if (result.has(classification.classificationId)) {
+        issues.push(
+          issue(
+            "incomplete",
+            "WINNER_CLASSIFICATION_DUPLICATE",
+            `${run.identity.provider} repeated winner classification ${classification.classificationId}.`,
+            {
+              key: classification.classificationId,
+              provider: run.identity.provider,
+            },
+          ),
+        );
+        continue;
+      }
+      result.set(classification.classificationId, classification);
+    }
   }
-  for (const classification of run.winnerClassifications) {
-    const valid =
-      typeof classification.classificationId === "string" &&
-      classification.classificationId.trim().length > 0 &&
-      (classification.winner === "player" ||
-        classification.winner === "opponent" ||
-        classification.winner === "tie") &&
-      typeof classification.withinUncertainty === "boolean";
-    if (!valid) {
+  const canonical = adaptCanonicalTesseraProviderParityWinner(run);
+  if (canonical) {
+    const supplied = result.get(canonical.classificationId);
+    if (
+      supplied &&
+      (supplied.winner !== canonical.winner ||
+        supplied.withinUncertainty !== canonical.withinUncertainty)
+    ) {
       issues.push(
         issue(
           "incomplete",
           "WINNER_CLASSIFICATION_INVALID",
-          `${run.identity.provider} supplied an invalid winner classification.`,
+          `${run.identity.provider} supplied a canonical winner classification that does not match the canonical adapter.`,
           {
-            key: classification.classificationId || null,
+            key: canonical.classificationId,
             provider: run.identity.provider,
           },
         ),
       );
-      continue;
     }
-    if (result.has(classification.classificationId)) {
-      issues.push(
-        issue(
-          "incomplete",
-          "WINNER_CLASSIFICATION_DUPLICATE",
-          `${run.identity.provider} repeated winner classification ${classification.classificationId}.`,
-          {
-            key: classification.classificationId,
-            provider: run.identity.provider,
-          },
-        ),
-      );
-      continue;
-    }
-    result.set(classification.classificationId, classification);
+    result.set(canonical.classificationId, canonical);
   }
   return result;
 }
@@ -746,6 +1197,25 @@ function emptyResult(
     complete: false,
     localIdentity,
     websiteIdentity,
+    modelCapabilityEnvelope: {
+      status: "incomplete",
+      localSha256:
+        localIdentity?.modelCapabilityEnvelopeSha256 ?? null,
+      websiteSha256:
+        websiteIdentity?.modelCapabilityEnvelopeSha256 ?? null,
+    },
+    combatSnapshot: {
+      status: "incomplete",
+      diffs: [
+        {
+          classification: "snapshot-missing",
+          unitInstanceId: null,
+          paths: ["snapshot"],
+          localValue: null,
+          websiteValue: null,
+        },
+      ],
+    },
     policy: TESSERA_PROVIDER_PARITY_POLICY,
     metricSummaries: [],
     cells: [],
@@ -791,6 +1261,42 @@ export function compareTesseraProviderParity(
 
   validateIdentity(local.identity, issues);
   validateIdentity(website.identity, issues);
+  validateModelCapabilityEnvelope(local, issues);
+  validateModelCapabilityEnvelope(website, issues);
+  const modelCapabilityEnvelopeStatus: TesseraProviderParityResult["modelCapabilityEnvelope"]["status"] =
+    !local.modelCapabilityEnvelope || !website.modelCapabilityEnvelope
+      ? "incomplete"
+      : compareTesseraProviderParityModelCapabilityEnvelopes(
+            local.modelCapabilityEnvelope,
+            website.modelCapabilityEnvelope,
+          )
+        ? "match"
+        : "mismatch";
+  if (modelCapabilityEnvelopeStatus === "mismatch") {
+    issues.push(
+      issue(
+        "eligibility",
+        "MODEL_CAPABILITY_ENVELOPE_MISMATCH",
+        "Local and website parity runs do not declare the same combat-model capabilities.",
+      ),
+    );
+  }
+
+  validateCombatSnapshot(local, issues);
+  validateCombatSnapshot(website, issues);
+  const combatSnapshot = compareTesseraProviderParityCombatSnapshots(
+    local.combatSnapshot,
+    website.combatSnapshot,
+  );
+  if (combatSnapshot.status === "mismatch") {
+    issues.push(
+      issue(
+        "eligibility",
+        "COMBAT_SNAPSHOT_MISMATCH",
+        "Local and website runs do not use the same provider-neutral combat snapshot.",
+      ),
+    );
+  }
   if (local.identity.dataBundleId !== website.identity.dataBundleId) {
     issues.push(
       issue(
@@ -857,6 +1363,8 @@ export function compareTesseraProviderParity(
   for (const key of allCellKeys) {
     const localCell = localCells.byKey.get(key);
     const websiteCell = websiteCells.byKey.get(key);
+    const localSamplingEvidence = localCells.evidenceByKey.get(key) ?? null;
+    const websiteSamplingEvidence = websiteCells.evidenceByKey.get(key) ?? null;
     const exemplar = localCell ?? websiteCell;
     if (!exemplar) continue;
     const displayKey = displayCellKey(exemplar);
@@ -884,6 +1392,8 @@ export function compareTesseraProviderParity(
         metric: exemplar.metric,
         localValue: localCell?.value ?? null,
         websiteValue: websiteCell?.value ?? null,
+        localSamplingEvidence,
+        websiteSamplingEvidence,
         difference: null,
         tolerance: null,
         toleranceMultiple: null,
@@ -900,10 +1410,10 @@ export function compareTesseraProviderParity(
           localCell.metric,
           localCell.value as number,
           websiteCell.value as number,
-          localCell.iterations,
-          websiteCell.iterations,
-          localCell.standardError,
-          websiteCell.standardError,
+          localSamplingEvidence?.sampleCount ?? localCell.iterations,
+          websiteSamplingEvidence?.sampleCount ?? websiteCell.iterations,
+          localSamplingEvidence?.standardError,
+          websiteSamplingEvidence?.standardError,
         );
     if (!tolerance) {
       cellComparisons.push({
@@ -914,6 +1424,8 @@ export function compareTesseraProviderParity(
         metric: exemplar.metric,
         localValue: localCell.value,
         websiteValue: websiteCell.value,
+        localSamplingEvidence,
+        websiteSamplingEvidence,
         difference: null,
         tolerance: null,
         toleranceMultiple: null,
@@ -951,6 +1463,8 @@ export function compareTesseraProviderParity(
       metric: exemplar.metric,
       localValue: localCell.value,
       websiteValue: websiteCell.value,
+      localSamplingEvidence,
+      websiteSamplingEvidence,
       difference,
       tolerance,
       toleranceMultiple:
@@ -1104,6 +1618,14 @@ export function compareTesseraProviderParity(
     complete,
     localIdentity: local.identity,
     websiteIdentity: website.identity,
+    modelCapabilityEnvelope: {
+      status: modelCapabilityEnvelopeStatus,
+      localSha256:
+        local.identity.modelCapabilityEnvelopeSha256 ?? null,
+      websiteSha256:
+        website.identity.modelCapabilityEnvelopeSha256 ?? null,
+    },
+    combatSnapshot,
     policy: TESSERA_PROVIDER_PARITY_POLICY,
     metricSummaries,
     cells: cellComparisons,

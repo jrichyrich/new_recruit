@@ -3,16 +3,27 @@ import test from "node:test";
 
 import type { TesseraMetric } from "../lib/rosterpilot/types";
 import {
+  adaptCanonicalTesseraProviderParityWinner,
+  compareTesseraProviderParityCombatSnapshots,
   compareTesseraProviderParity,
+  TESSERA_PROVIDER_PARITY_CANONICAL_WINNER_ID,
   TESSERA_PROVIDER_PARITY_POLICY,
+  tesseraProviderParityCombatSnapshotSha256,
   tesseraProviderParityContractSha256,
+  tesseraProviderParityModelCapabilityEnvelopeSha256,
   tesseraProviderParityTolerance,
   type TesseraParityProvider,
   type TesseraProviderParityCell,
+  type TesseraProviderParityModelCapabilityEnvelope,
+  type TesseraProviderParityNormalizedCombatSnapshot,
   type TesseraProviderParityRun,
   type TesseraProviderParityScenarioContract,
   type TesseraProviderParityWinnerClassification,
 } from "../local/tessera/provider-parity";
+import {
+  providerParityModelCapabilityFixture,
+  providerParityNamedCombatSnapshotFixture,
+} from "./fixtures/tessera-provider-parity-combat";
 
 const NORMALIZED_INPUT_SHA256 = "a".repeat(64);
 const PROFILE_POLICY_HASH = "profile-policy-v1";
@@ -53,6 +64,65 @@ function cell(
   };
 }
 
+function genericCombatSnapshot(
+  contract: TesseraProviderParityScenarioContract[],
+  cells: TesseraProviderParityCell[],
+): TesseraProviderParityNormalizedCombatSnapshot {
+  const contracts = new Map(
+    contract.map((entry) => [
+      `${entry.scenarioId}\u0000${entry.metric}`,
+      entry,
+    ]),
+  );
+  const sides = new Map<string, "player" | "opponent">();
+  for (const entry of cells) {
+    const scenario = contracts.get(`${entry.scenarioId}\u0000${entry.metric}`);
+    const attackerSide =
+      scenario?.direction === "opponent-to-player" ? "opponent" : "player";
+    const targetSide = attackerSide === "player" ? "opponent" : "player";
+    sides.set(entry.attackerInstanceId, attackerSide);
+    sides.set(entry.targetInstanceId, targetSide);
+  }
+  return {
+    schemaVersion: 1,
+    kind: "tessera-provider-neutral-combat-snapshot",
+    units: Array.from(sides, ([instanceId, side]) => ({
+      instanceId,
+      side,
+      normalizedName: instanceId,
+      modelCount: 1,
+      points: 100,
+      defense: {
+        toughness: 4,
+        save: 3,
+        woundsPerModel: 2,
+        invulnerableSave: { shooting: null, fight: null },
+      },
+      attackProfiles: [
+        {
+          profileId: `${instanceId}-profile`,
+          name: "Fixture weapon",
+          phase: "shooting" as const,
+          equippedModelCount: 1,
+          attacks: "1",
+          skill: 3,
+          strength: 4,
+          armorPenetration: 0,
+          damage: "1",
+          keywords: [],
+        },
+      ],
+      modeledEffects: [],
+      omittedEffects: [],
+      evidence: {
+        status: "complete" as const,
+        sourceRefs: [`fixture:${instanceId}`],
+        warningCodes: [],
+      },
+    })).sort((left, right) => left.instanceId.localeCompare(right.instanceId)),
+  };
+}
+
 function parityRun(options: {
   provider: TesseraParityProvider;
   contract: TesseraProviderParityScenarioContract[];
@@ -62,7 +132,15 @@ function parityRun(options: {
   inputSha256?: string;
   profilePolicyHash?: string | null;
   contractSha256?: string;
+  modelCapabilityEnvelope?: TesseraProviderParityModelCapabilityEnvelope;
+  combatSnapshot?: TesseraProviderParityNormalizedCombatSnapshot;
+  includeSemanticEvidence?: boolean;
 }): TesseraProviderParityRun {
+  const includeSemanticEvidence = options.includeSemanticEvidence ?? true;
+  const modelCapabilityEnvelope =
+    options.modelCapabilityEnvelope ?? providerParityModelCapabilityFixture();
+  const combatSnapshot =
+    options.combatSnapshot ?? genericCombatSnapshot(options.contract, options.cells);
   return {
     identity: {
       provider: options.provider,
@@ -77,7 +155,20 @@ function parityRun(options: {
         options.contractSha256 ??
         tesseraProviderParityContractSha256(options.contract),
       profilePolicyHash: options.profilePolicyHash ?? PROFILE_POLICY_HASH,
+      ...(includeSemanticEvidence
+        ? {
+            modelCapabilityEnvelopeSha256:
+              tesseraProviderParityModelCapabilityEnvelopeSha256(
+                modelCapabilityEnvelope,
+              ),
+            combatSnapshotSha256:
+              tesseraProviderParityCombatSnapshotSha256(combatSnapshot),
+          }
+        : {}),
     },
+    ...(includeSemanticEvidence
+      ? { modelCapabilityEnvelope, combatSnapshot }
+      : {}),
     scenarioContract: options.contract,
     cells: options.cells,
     winnerClassifications: options.winners ?? [],
@@ -91,18 +182,24 @@ function pair(options: {
   localWinners?: TesseraProviderParityWinnerClassification[];
   websiteWinners?: TesseraProviderParityWinnerClassification[];
 }): [TesseraProviderParityRun, TesseraProviderParityRun] {
+  const sharedSnapshot = genericCombatSnapshot(options.contract, [
+    ...options.localCells,
+    ...options.websiteCells,
+  ]);
   return [
     parityRun({
       provider: "local-engine",
       contract: options.contract,
       cells: options.localCells,
       winners: options.localWinners,
+      combatSnapshot: sharedSnapshot,
     }),
     parityRun({
       provider: "website",
       contract: options.contract,
       cells: options.websiteCells,
       winners: options.websiteWinners,
+      combatSnapshot: sharedSnapshot,
     }),
   ];
 }
@@ -515,6 +612,290 @@ test("provider ordering, contract ordering, and cell ordering do not affect outp
     },
   );
   assert.deepEqual(reordered, normal);
+});
+
+test("legacy diagnostics remain readable but fail closed without semantic envelopes", () => {
+  const contract = scenarioContract("wipe-probability");
+  const local = parityRun({
+    provider: "local-engine",
+    contract: [contract],
+    cells: [cell(contract, 0, 0.5)],
+    includeSemanticEvidence: false,
+  });
+  const website = parityRun({
+    provider: "website",
+    contract: [contract],
+    cells: [cell(contract, 0, 0.5)],
+    includeSemanticEvidence: false,
+  });
+
+  const result = compareTesseraProviderParity(local, website);
+
+  assert.equal(result.outcome, "ineligible");
+  assert.equal(result.cells[0].status, "pass");
+  assert.equal(result.modelCapabilityEnvelope.status, "incomplete");
+  assert.equal(result.combatSnapshot.status, "incomplete");
+  assert.equal(
+    result.issues.filter(
+      (entry) => entry.code === "MODEL_CAPABILITY_ENVELOPE_MISSING",
+    ).length,
+    2,
+  );
+  assert.equal(
+    result.issues.filter((entry) => entry.code === "COMBAT_SNAPSHOT_MISSING")
+      .length,
+    2,
+  );
+});
+
+test("model-capability mismatch is an ineligible semantic comparison", () => {
+  const contract = scenarioContract("wipe-probability");
+  const [local, website] = pair({
+    contract: [contract],
+    localCells: [cell(contract, 0, 0.5)],
+    websiteCells: [cell(contract, 0, 0.5)],
+  });
+  assert.ok(website.modelCapabilityEnvelope);
+  website.modelCapabilityEnvelope = {
+    ...website.modelCapabilityEnvelope,
+    combatModelVersion: "base-profile-monte-carlo-v2",
+  };
+  website.identity.modelCapabilityEnvelopeSha256 =
+    tesseraProviderParityModelCapabilityEnvelopeSha256(
+      website.modelCapabilityEnvelope,
+    );
+
+  const result = compareTesseraProviderParity(local, website);
+
+  assert.equal(result.outcome, "ineligible");
+  assert.equal(result.modelCapabilityEnvelope.status, "mismatch");
+  assert.ok(
+    result.issues.some(
+      (entry) => entry.code === "MODEL_CAPABILITY_ENVELOPE_MISMATCH",
+    ),
+  );
+});
+
+test("combat snapshot diffs classify named unit-profile regressions", () => {
+  const local = providerParityNamedCombatSnapshotFixture();
+
+  const witchseekers = structuredClone(local);
+  witchseekers.units.find(
+    (unit) => unit.instanceId === "custodes-witchseekers-1",
+  )!.defense.toughness = 4;
+  assert.equal(
+    compareTesseraProviderParityCombatSnapshots(local, witchseekers).diffs[0]
+      .classification,
+    "defense-profile-mismatch",
+  );
+
+  const troupe = structuredClone(local);
+  troupe.units.find(
+    (unit) => unit.instanceId === "aeldari-troupe-1",
+  )!.attackProfiles[0].damage = "2";
+  assert.equal(
+    compareTesseraProviderParityCombatSnapshots(local, troupe).diffs[0]
+      .classification,
+    "attack-profile-mismatch",
+  );
+
+  const farseer = structuredClone(local);
+  farseer.units.find(
+    (unit) => unit.instanceId === "aeldari-farseer-1",
+  )!.modeledEffects.push("fate-dice");
+  assert.equal(
+    compareTesseraProviderParityCombatSnapshots(local, farseer).diffs[0]
+      .classification,
+    "modeled-effects-mismatch",
+  );
+
+  const shroudRunners = structuredClone(local);
+  shroudRunners.units.find(
+    (unit) => unit.instanceId === "aeldari-shroud-runners-1",
+  )!.evidence.status = "incomplete";
+  const shroudComparison = compareTesseraProviderParityCombatSnapshots(
+    local,
+    shroudRunners,
+  );
+  assert.equal(shroudComparison.status, "incomplete");
+  assert.equal(
+    shroudComparison.diffs[0].classification,
+    "semantic-evidence-incomplete",
+  );
+});
+
+test("incomplete combat semantics fail closed even when compared cells match", () => {
+  const contract = scenarioContract("wipe-probability");
+  const localSnapshot = providerParityNamedCombatSnapshotFixture();
+  const websiteSnapshot = structuredClone(localSnapshot);
+  websiteSnapshot.units.find(
+    (unit) => unit.instanceId === "aeldari-shroud-runners-1",
+  )!.evidence.status = "incomplete";
+  const comparedCell: TesseraProviderParityCell = {
+    scenarioId: contract.scenarioId,
+    attackerInstanceId: "custodes-witchseekers-1",
+    targetInstanceId: "aeldari-troupe-1",
+    metric: contract.metric,
+    value: 0.5,
+    iterations: contract.iterations,
+  };
+  const result = compareTesseraProviderParity(
+    parityRun({
+      provider: "local-engine",
+      contract: [contract],
+      cells: [comparedCell],
+      combatSnapshot: localSnapshot,
+    }),
+    parityRun({
+      provider: "website",
+      contract: [contract],
+      cells: [comparedCell],
+      combatSnapshot: websiteSnapshot,
+    }),
+  );
+
+  assert.equal(result.outcome, "ineligible");
+  assert.equal(result.cells[0].status, "pass");
+  assert.ok(
+    result.issues.some(
+      (entry) => entry.code === "SEMANTIC_EVIDENCE_INCOMPLETE",
+    ),
+  );
+});
+
+test("per-cell sample variance and standard error are retained and normalized", () => {
+  const contract = scenarioContract("mean-damage");
+  const localCell = {
+    ...cell(contract, 0, 5, null),
+    sampleCount: 10_000,
+    sampleVariance: 4,
+  };
+  delete localCell.standardError;
+  const websiteCell = {
+    ...cell(contract, 0, 5.01, 0.02),
+    sampleCount: 10_000,
+  };
+  const result = compareTesseraProviderParity(
+    ...pair({
+      contract: [contract],
+      localCells: [localCell],
+      websiteCells: [websiteCell],
+    }),
+  );
+
+  assert.equal(result.outcome, "pass");
+  assert.deepEqual(result.cells[0].localSamplingEvidence, {
+    sampleCount: 10_000,
+    sampleVariance: 4,
+    standardError: 0.02,
+    standardErrorSource: "derived-from-variance",
+  });
+  assert.deepEqual(result.cells[0].websiteSamplingEvidence, {
+    sampleCount: 10_000,
+    sampleVariance: null,
+    standardError: 0.02,
+    standardErrorSource: "reported",
+  });
+
+  const inconsistent = {
+    ...websiteCell,
+    sampleVariance: 4,
+    standardError: 0.03,
+  };
+  const rejected = compareTesseraProviderParity(
+    ...pair({
+      contract: [contract],
+      localCells: [localCell],
+      websiteCells: [inconsistent],
+    }),
+  );
+  assert.equal(rejected.outcome, "incomplete");
+  assert.ok(
+    rejected.issues.some(
+      (entry) => entry.code === "CELL_SAMPLING_EVIDENCE_INCONSISTENT",
+    ),
+  );
+});
+
+test("sample counts must bind the reported iteration evidence", () => {
+  const contract = scenarioContract("wipe-probability");
+  const mismatched = {
+    ...cell(contract, 0, 0.5),
+    sampleCount: contract.iterations - 1,
+  };
+  const result = compareTesseraProviderParity(
+    ...pair({
+      contract: [contract],
+      localCells: [cell(contract, 0, 0.5)],
+      websiteCells: [mismatched],
+    }),
+  );
+
+  assert.equal(result.outcome, "incomplete");
+  assert.equal(result.cells[0].websiteSamplingEvidence?.sampleCount, 9_999);
+  assert.ok(
+    result.issues.some(
+      (entry) => entry.code === "CELL_SAMPLE_COUNT_MISMATCH",
+    ),
+  );
+});
+
+test("canonical winner adapter uses bidirectional probability pressure", () => {
+  const playerContract = scenarioContract(
+    "half-wipe-probability",
+    "shooting:player-to-opponent:half-wipe-probability",
+  );
+  const opponentContract = {
+    ...scenarioContract(
+      "half-wipe-probability",
+      "shooting:opponent-to-player:half-wipe-probability",
+    ),
+    direction: "opponent-to-player" as const,
+  };
+  const cells = [
+    {
+      ...cell(playerContract, 0, 0.75),
+      attackerInstanceId: "player-unit",
+      targetInstanceId: "opponent-unit",
+    },
+    {
+      ...cell(opponentContract, 0, 0.3),
+      attackerInstanceId: "opponent-unit",
+      targetInstanceId: "player-unit",
+    },
+  ];
+  const run = parityRun({
+    provider: "local-engine",
+    contract: [playerContract, opponentContract],
+    cells,
+  });
+  const classification = adaptCanonicalTesseraProviderParityWinner(run);
+
+  assert.equal(
+    classification?.classificationId,
+    TESSERA_PROVIDER_PARITY_CANONICAL_WINNER_ID,
+  );
+  assert.equal(classification?.winner, "player");
+  assert.equal(classification?.withinUncertainty, false);
+  assert.equal(classification?.evidence?.sampleCount, 20_000);
+
+  const result = compareTesseraProviderParity(
+    ...pair({
+      contract: [playerContract, opponentContract],
+      localCells: cells,
+      websiteCells: cells,
+    }),
+  );
+  assert.equal(result.outcome, "pass");
+  assert.deepEqual(result.winnerClassifications, [
+    {
+      classificationId: TESSERA_PROVIDER_PARITY_CANONICAL_WINNER_ID,
+      localWinner: "player",
+      websiteWinner: "player",
+      uncertaintyBoundary: false,
+      status: "pass",
+    },
+  ]);
 });
 
 test("the policy constants encode the agreed promotion thresholds", () => {

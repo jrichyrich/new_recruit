@@ -54,6 +54,7 @@ import {
   type TesseraSimulationProviderIdentity,
   type TesseraStressPortfolioItem,
   type TesseraUnitInstance,
+  type TesseraWebsiteProviderEvidence,
 } from "../../lib/rosterpilot";
 import {
   resolveExportArtifactTargets,
@@ -89,6 +90,7 @@ import { projectRoot } from "../agent/paths";
 import {
   runTesseraBrowserMatchup,
   TESSERA_URL,
+  TESSERA_WEBSITE_ADAPTER_VERSION,
   type TesseraBrowserResult,
 } from "./browser";
 import {
@@ -140,6 +142,18 @@ import {
   createWebsiteTesseraProvider,
   routeTesseraSimulation,
 } from "./simulation-provider";
+import {
+  assertTesseraScenarioContractProvider,
+  assertTesseraScenarioContractScope,
+  canonicalTesseraScenarioContract,
+  observedTesseraScenarioContract,
+  tesseraScenarioContractSha256,
+} from "./scenario-contract";
+import {
+  buildMatchupProviderCompatibilityEnvelopes,
+  captureProviderCompatibilityBundleTrustIdentity,
+  effectiveProviderCompatibilityMode,
+} from "./provider-compatibility";
 
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -231,10 +245,15 @@ export type TesseraAnalysisOptions = WriteOptions & {
    * already been prepared.
    */
   frozenOpponentReuse?: TesseraPreparedRoster;
+  /** Caller-supplied deterministic simulation contract for a fresh run. */
+  scenarioContract?: TesseraFrozenScenarioContract[];
+  /** Internal replay contract frozen by stress/revision coordinators. */
   frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
   sessionId?: string;
   allowPointMismatch?: boolean;
   includeChangeCandidates?: boolean;
+  /** Freeze whether incomplete website compatibility evidence blocks the run. */
+  providerCompatibilityMode?: "observe" | "enforce";
   /** Proceed with visibly provisional results after verified catalogue drift. */
   catalogueDriftMode?: "reject" | "diagnostic";
 };
@@ -332,7 +351,7 @@ export async function getTesseraConnectionStatus(): Promise<
             provider: "website",
             engine: "tessera-ui",
             uiIdentity: null,
-            adapterVersion: "website-browser-v1",
+            adapterVersion: TESSERA_WEBSITE_ADAPTER_VERSION,
           },
           reason: available
             ? null
@@ -849,6 +868,9 @@ function analysisConfiguration(
     pointsTolerancePercent: 5,
     allowPointMismatch: options.allowPointMismatch ?? false,
     includeChangeCandidates: options.includeChangeCandidates ?? true,
+    providerCompatibilityMode: effectiveProviderCompatibilityMode(
+      options.providerCompatibilityMode,
+    ),
   };
 }
 
@@ -2578,6 +2600,171 @@ function warningConfidence(
   return warnings.length > 0 ? "review" : "high";
 }
 
+function combinedEvidenceSha256(values: Array<string | null>): string | null {
+  const retained = values.filter(
+    (value): value is string => value !== null,
+  );
+  if (retained.length !== values.length || retained.length === 0) {
+    return null;
+  }
+  const unique = [...new Set(retained)].sort();
+  return unique.length === 1
+    ? unique[0]
+    : crypto
+        .createHash("sha256")
+        .update(JSON.stringify(unique))
+        .digest("hex");
+}
+
+export function aggregateWebsiteProviderEvidence(
+  captures: Array<{
+    opponentName: string;
+    evidence: TesseraWebsiteProviderEvidence;
+  }>,
+): TesseraWebsiteProviderEvidence | undefined {
+  if (captures.length === 0) return undefined;
+  if (captures.length === 1) {
+    return structuredClone(captures[0].evidence);
+  }
+  const evidences = captures.map((capture) => capture.evidence);
+  const assetsByUrl = new Map<
+    string,
+    TesseraWebsiteProviderEvidence["deployment"]["assets"][number]
+  >();
+  let assetConflict = false;
+  for (const asset of evidences.flatMap(
+    (evidence) => evidence.deployment.assets,
+  )) {
+    const existing = assetsByUrl.get(asset.url);
+    if (
+      existing &&
+      (
+        existing.sha256 !== asset.sha256 ||
+        existing.sameOrigin !== asset.sameOrigin ||
+        existing.byteLength !== asset.byteLength
+      )
+    ) {
+      assetConflict = true;
+    } else {
+      assetsByUrl.set(asset.url, asset);
+    }
+  }
+  const deploymentComplete =
+    !assetConflict &&
+    evidences.every((evidence) => evidence.deployment.complete) &&
+    new Set(
+      evidences.map((evidence) => evidence.deployment.identitySha256),
+    ).size === 1;
+  // This branch aggregates multiple opponents, so one opponentSnapshot field
+  // cannot represent the complete scope. Exact snapshots remain in captures.
+  const importComplete = false;
+  const playerSha256 = combinedEvidenceSha256(
+    evidences.map(
+      (evidence) => evidence.importSemantics.playerSha256,
+    ),
+  );
+  const playerSnapshot = playerSha256
+    ? evidences.find(
+        (evidence) =>
+          evidence.importSemantics.playerSha256 === playerSha256,
+      )?.importSemantics.playerSnapshot ?? null
+    : null;
+  return {
+    schemaVersion: 1,
+    deployment: {
+      identitySha256: combinedEvidenceSha256(
+        evidences.map(
+          (evidence) => evidence.deployment.identitySha256,
+        ),
+      ),
+      declaredVersion:
+        new Set(
+          evidences.map(
+            (evidence) => evidence.deployment.declaredVersion,
+          ),
+        ).size === 1
+          ? evidences[0].deployment.declaredVersion
+          : null,
+      assets: [...assetsByUrl.values()].sort((left, right) =>
+        left.url.localeCompare(right.url)
+      ),
+      complete: deploymentComplete,
+      completeness: deploymentComplete
+        ? "complete"
+        : evidences.some(
+              (evidence) =>
+                evidence.deployment.completeness === "partial" ||
+                evidence.deployment.completeness === "complete",
+            )
+          ? "partial"
+          : evidences.some(
+                (evidence) =>
+                  evidence.deployment.completeness === "fallback",
+              )
+            ? "fallback"
+            : "unavailable",
+      declarationSha256: combinedEvidenceSha256(
+        evidences.map(
+          (evidence) => evidence.deployment.declarationSha256,
+        ),
+      ),
+      incompleteReasons: deploymentComplete
+        ? []
+        : [
+            ...new Set([
+              ...(assetConflict ? ["asset-fingerprint-conflict"] : []),
+              ...evidences.flatMap((evidence) =>
+                evidence.deployment.incompleteReasons,
+              ),
+            ]),
+          ].sort(),
+    },
+    importSemantics: {
+      combinedSha256: combinedEvidenceSha256(
+        evidences.map(
+          (evidence) => evidence.importSemantics.combinedSha256,
+        ),
+      ),
+      playerSha256,
+      opponentSha256: combinedEvidenceSha256(
+        evidences.map(
+          (evidence) => evidence.importSemantics.opponentSha256,
+        ),
+      ),
+      complete: importComplete,
+      completeness: importComplete
+        ? "complete"
+        : evidences.some(
+              (evidence) =>
+                evidence.importSemantics.completeness !== "unavailable",
+            )
+          ? "partial"
+          : "unavailable",
+      unresolvedEffectCount: evidences.reduce(
+        (total, evidence) =>
+          total + evidence.importSemantics.unresolvedEffectCount,
+        0,
+      ),
+      playerSnapshot,
+      opponentSnapshot: null,
+      incompleteReasons: importComplete
+        ? []
+        : [
+            ...new Set(
+              [
+                "multi-opponent-semantic-snapshots-retained-in-provider-evidence-captures",
+                ...captures.flatMap((capture) =>
+                  capture.evidence.importSemantics.incompleteReasons.map(
+                    (reason) => `${capture.opponentName}:${reason}`,
+                  ),
+                ),
+              ],
+            ),
+          ].sort(),
+    },
+  };
+}
+
 function consolidateBrowserScenarios(
   result: TesseraBrowserResult,
   playerUnits: TesseraUnitInstance[],
@@ -2714,10 +2901,20 @@ function consolidateBrowserScenarios(
           attacker,
           target,
           values: emptyMetricValues(),
+          uncertainty: {},
           confidence,
           warningRefs,
         };
       cell.values[metricField(metric)] = rawCell.metricValue;
+      cell.uncertainty = {
+        ...(cell.uncertainty ?? {}),
+        [metric]: rawCell.uncertainty ?? {
+          sampleCount: null,
+          standardDeviation: null,
+          standardError: null,
+          completeness: "unavailable",
+        },
+      };
       if (metric === "mean-damage" && attacker.points && attacker.points > 0) {
         cell.values.damagePer100Points =
           (rawCell.metricValue / attacker.points) * 100;
@@ -3475,6 +3672,72 @@ export async function analyzeRosterMatchup(
         : localTesseraEngineIsAutoSelectable()
           ? "local-engine"
           : "website";
+  let scenarioContract: TesseraFrozenScenarioContract[] | null = null;
+  try {
+    const requestedContract = options.scenarioContract
+      ? canonicalTesseraScenarioContract(options.scenarioContract)
+      : null;
+    const frozenContract = options.frozenScenarioContract
+      ? canonicalTesseraScenarioContract(
+          options.frozenScenarioContract,
+        )
+      : null;
+    if (
+      requestedContract &&
+      frozenContract &&
+      tesseraScenarioContractSha256(requestedContract) !==
+        tesseraScenarioContractSha256(frozenContract)
+    ) {
+      throw Object.assign(
+        new Error(
+          "The caller-supplied and coordinator-frozen Tessera scenario contracts differ.",
+        ),
+        { code: "TESSERA_SCENARIO_CONTRACT_MISMATCH" },
+      );
+    }
+    scenarioContract = requestedContract ?? frozenContract;
+    if (scenarioContract) {
+      if (!simulationRequested) {
+        throw Object.assign(
+          new Error(
+            "A Tessera scenario contract requires executionMode=simulate.",
+          ),
+          { code: "TESSERA_SCENARIO_CONTRACT_MISMATCH" },
+        );
+      }
+      scenarioContract = assertTesseraScenarioContractScope(
+        scenarioContract,
+        configuration.phases,
+        configuration.metrics,
+      );
+      assertTesseraScenarioContractProvider(
+        scenarioContract,
+        plannedSimulationBackend,
+      );
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code:
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string"
+              ? error.code
+              : "TESSERA_SCENARIO_CONTRACT_INVALID",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The Tessera scenario contract is invalid.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
   let profilePolicy: ProfilePolicyV1 | null;
   try {
     profilePolicy = await requestedAnalysisProfilePolicy(options);
@@ -4643,6 +4906,11 @@ export async function analyzeRosterMatchup(
   const simulationConnectorEvents: ConnectorEvent[] = [];
   const tesseraUiIdentities = new Set<string>();
   let tesseraUiIdentityComplete = true;
+  const websiteProviderEvidenceCaptures: Array<{
+    opponentName: string;
+    evidence: TesseraWebsiteProviderEvidence;
+  }> = [];
+  let websiteProviderEvidenceComplete = true;
   let selectedSimulationBackend: TesseraSimulationProvider =
     plannedSimulationBackend;
   let simulationProviderIdentity: TesseraSimulationProviderIdentity | null =
@@ -4710,7 +4978,7 @@ export async function analyzeRosterMatchup(
           phases: configuration.phases,
           metrics: configuration.metrics,
           profilePolicy,
-          frozenScenarioContract: options.frozenScenarioContract,
+          frozenScenarioContract: scenarioContract,
           savedListReuse,
           sessionId: options.sessionId,
         };
@@ -4790,6 +5058,26 @@ export async function analyzeRosterMatchup(
             tesseraUiIdentities.add(result.uiIdentity);
           } else {
             tesseraUiIdentityComplete = false;
+          }
+          if (result.providerEvidence) {
+            websiteProviderEvidenceCaptures.push({
+              opponentName: prepared.rosterName,
+              evidence: structuredClone(result.providerEvidence),
+            });
+            if (
+              !result.providerEvidence.deployment.complete ||
+              !result.providerEvidence.importSemantics.complete
+            ) {
+              websiteProviderEvidenceComplete = false;
+              warnings.push(
+                `[TESSERA_PROVIDER_EVIDENCE_INCOMPLETE] Website provenance for ${prepared.rosterName} is incomplete (deployment=${result.providerEvidence.deployment.completeness}, importSemantics=${result.providerEvidence.importSemantics.completeness}, unresolvedEffects=${result.providerEvidence.importSemantics.unresolvedEffectCount}).`,
+              );
+            }
+          } else {
+            websiteProviderEvidenceComplete = false;
+            warnings.push(
+              `[TESSERA_PROVIDER_EVIDENCE_INCOMPLETE] Website provenance for ${prepared.rosterName} did not include deployment and imported-army semantic evidence.`,
+            );
           }
         }
         warnings.push(...result.warnings);
@@ -4921,10 +5209,13 @@ export async function analyzeRosterMatchup(
           provider: "website",
           engine: "tessera-ui",
           uiIdentity: combinedTesseraUiIdentity,
-          adapterVersion: "website-browser-v1",
+          adapterVersion: TESSERA_WEBSITE_ADAPTER_VERSION,
         }
       : null;
   }
+  const providerEvidence = aggregateWebsiteProviderEvidence(
+    websiteProviderEvidenceCaptures,
+  );
   const allMatched = pointsComparisons.every((comparison) => comparison.matched);
   const expectedScenarioCount =
     opponents.length *
@@ -4933,6 +5224,57 @@ export async function analyzeRosterMatchup(
   const scenariosComplete =
     scenarios.length === expectedScenarioCount &&
     scenarios.every((scenario) => scenario.status === "complete");
+  let observedScenarioContract: TesseraFrozenScenarioContract[] | null = null;
+  try {
+    if (simulationRequested && scenariosComplete) {
+      observedScenarioContract = observedTesseraScenarioContract(
+        scenarios,
+        configuration.phases,
+        configuration.metrics,
+      );
+    }
+  } catch (error) {
+    warnings.push(
+      `[TESSERA_SCENARIO_CONTRACT_MISMATCH] ${error instanceof Error ? error.message : "The observed scenario contract is invalid."}`,
+    );
+  }
+  const scenarioContractMatches =
+    scenarioContract === null ||
+    (
+      observedScenarioContract !== null &&
+      tesseraScenarioContractSha256(scenarioContract) ===
+        tesseraScenarioContractSha256(observedScenarioContract)
+    );
+  if (
+    scenarioContract !== null &&
+    observedScenarioContract !== null &&
+    !scenarioContractMatches
+  ) {
+    warnings.push(
+      "[TESSERA_SETTINGS_CHANGED] Tessera did not reproduce the exact frozen scenario settings and iteration counts.",
+    );
+  }
+  const reportScenarioContract =
+    scenarioContract ?? observedScenarioContract;
+  const reportScenarioContractSha256 = reportScenarioContract
+    ? tesseraScenarioContractSha256(reportScenarioContract)
+    : null;
+  const bundleTrust =
+    await captureProviderCompatibilityBundleTrustIdentity();
+  const providerCompatibilityEnvelopes =
+    buildMatchupProviderCompatibilityEnvelopes({
+      sourceData: playerRoster.sourceData,
+      bundleTrust,
+      player: preparedPlayer,
+      opponents,
+      providerIdentity: simulationProviderIdentity,
+      websiteEvidenceCaptures: websiteProviderEvidenceCaptures,
+      profilePolicyHash: profilePolicy
+        ? profilePolicyHash(profilePolicy)
+        : null,
+      scenarios,
+      scenarioContractSha256: reportScenarioContractSha256,
+    });
   const simulationEvidenceComplete =
     simulationRequested &&
     matrices.length === opponents.length &&
@@ -4941,8 +5283,19 @@ export async function analyzeRosterMatchup(
     simulationProviderIdentityComplete &&
     simulationProviderIdentity !== null &&
     (selectedSimulationBackend !== "website" ||
-      tesseraUiIdentityComplete) &&
-    scenariosComplete;
+      (
+        tesseraUiIdentityComplete &&
+        (
+          configuration.providerCompatibilityMode !== "enforce" ||
+          (
+            websiteProviderEvidenceComplete &&
+            websiteProviderEvidenceCaptures.length === opponents.length
+          )
+        )
+      )) &&
+    scenariosComplete &&
+    observedScenarioContract !== null &&
+    scenarioContractMatches;
   const providerEligibleForCoaching =
     simulationProviderIdentity?.provider === "website" ||
     (simulationProviderIdentity?.provider === "local-engine" &&
@@ -5087,7 +5440,11 @@ export async function analyzeRosterMatchup(
       .find(
         (code): code is string =>
           code !== null &&
-          code !== "TESSERA_PROFILE_POLICY_APPLIED",
+          code !== "TESSERA_PROFILE_POLICY_APPLIED" &&
+          !(
+            code === "TESSERA_PROVIDER_EVIDENCE_INCOMPLETE" &&
+            configuration.providerCompatibilityMode !== "enforce"
+          ),
       );
     failures.push({
       stage: "simulation",
@@ -5147,11 +5504,18 @@ export async function analyzeRosterMatchup(
     profilePolicyHash: profilePolicy
       ? profilePolicyHash(profilePolicy)
       : null,
+    scenarioContract: reportScenarioContract,
+    scenarioContractSha256: reportScenarioContractSha256,
     frozenProfileRequirements: structuredClone(
       enrichedProfileRequirements,
     ),
     runtime: getRuntimeProvenance(),
     tesseraUiIdentity: combinedTesseraUiIdentity,
+    providerCompatibility:
+      providerCompatibilityEnvelopes.length === 1
+        ? providerCompatibilityEnvelopes[0]
+        : undefined,
+    providerCompatibilityEnvelopes,
     connectorEvents: [
       ...preparationConnectorEvents,
       ...simulationConnectorEvents,
@@ -5172,6 +5536,11 @@ export async function analyzeRosterMatchup(
       requestedBackend: requestedSimulationBackend,
       selectedBackend: selectedSimulationBackend,
       providerIdentity: simulationProviderIdentity ?? undefined,
+      providerEvidence,
+      providerEvidenceCaptures:
+        websiteProviderEvidenceCaptures.length > 0
+          ? websiteProviderEvidenceCaptures
+          : undefined,
       fallback: simulationFallback,
       engine:
         selectedSimulationBackend === "local-engine"

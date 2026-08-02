@@ -234,6 +234,12 @@ test("parses directional Tessera matrix metrics without inventing missing values
         killProbability: 0.65,
         expectedDamage: 8.5,
         damagePer100Points: 4.2,
+        uncertainty: {
+          completeness: "unavailable",
+          sampleCount: null,
+          standardDeviation: null,
+          standardError: null,
+        },
       },
       {
         attacker: "Unit One",
@@ -241,6 +247,12 @@ test("parses directional Tessera matrix metrics without inventing missing values
         killProbability: null,
         expectedDamage: 3.1,
         damagePer100Points: null,
+        uncertainty: {
+          completeness: "unavailable",
+          sampleCount: null,
+          standardDeviation: null,
+          standardError: null,
+        },
       },
     ],
   );

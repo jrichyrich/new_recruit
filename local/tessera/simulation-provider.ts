@@ -8,6 +8,7 @@ import type {
   TesseraBrowserInput,
   TesseraBrowserResult,
 } from "./browser";
+import { TESSERA_WEBSITE_ADAPTER_VERSION } from "./browser";
 
 export type {
   TesseraSimulationBackend,
@@ -403,7 +404,7 @@ export function createWebsiteTesseraProvider(
     provider: "website",
     engine: "tessera-ui",
     uiIdentity: null,
-    adapterVersion: "website-browser-v1",
+    adapterVersion: TESSERA_WEBSITE_ADAPTER_VERSION,
   };
   const status: TesseraSimulationProviderStatus = {
     backend: "website",

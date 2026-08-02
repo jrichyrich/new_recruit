@@ -22,6 +22,36 @@ function stressReport(): TesseraStressTestReport {
     status: "degraded",
     statusExplanation:
       "Six unique proxies are confident with verified integrity.",
+    providerCompatibilityEnvelopes: [
+      {
+        complete: false,
+        envelopeSha256: "e".repeat(64),
+        scenarioContractSha256: "f".repeat(64),
+        data: {
+          bundleId: "a".repeat(64),
+          semanticIdentitySha256: "b".repeat(64),
+          rules: { version: "1.2.1", dataslate: "2026-Q3" },
+          bsData: { commit: "c".repeat(40) },
+        },
+        tessera: {
+          provider: "website",
+          providerIdentitySha256: "d".repeat(64),
+          website: {
+            deployment: { identitySha256: "1".repeat(64) },
+            importSemantics: {
+              combinedSha256: "2".repeat(64),
+              unresolvedEffectCount: 1,
+            },
+          },
+        },
+        issues: [
+          {
+            code: "TESSERA_IMPORT_EFFECTS_UNRESOLVED",
+            message: "One imported effect needs review.",
+          },
+        ],
+      },
+    ],
     integrity: {
       status: "verified",
       issues: [],
@@ -452,6 +482,10 @@ test("renders a complete, safe faction stress-test report", () => {
   assert.match(html, /Cross-proxy findings/);
   assert.match(html, /Candidate roster changes/);
   assert.match(html, /Provenance/);
+  assert.match(html, /Provider compatibility mode/);
+  assert.match(html, /Provider envelope 1 SHA-256/);
+  assert.match(html, /TESSERA_IMPORT_EFFECTS_UNRESOLVED/);
+  assert.match(html, /unresolved imported effects/i);
   assert.match(html, /Simulation stage provenance/);
   assert.match(html, /Scenario pairing/);
   assert.match(

@@ -24,6 +24,15 @@ type DisplayCell = {
   targetId: string;
   targetLabel: string;
   values: Record<DisplayMetric, number | null>;
+  uncertainty: Record<
+    DisplayMetric,
+    {
+      sampleCount: number | null;
+      standardDeviation: number | null;
+      standardError: number | null;
+      completeness: string;
+    } | null
+  >;
   warnings: string[];
 };
 
@@ -193,6 +202,31 @@ function metricValues(values: Partial<TesseraMetricValues>): DisplayCell["values
   };
 }
 
+function metricUncertainty(
+  cell: TesseraScenarioCell,
+): DisplayCell["uncertainty"] {
+  const normalized = (
+    metric: "wipe-probability" | "half-wipe-probability" | "mean-kills" | "mean-damage",
+  ) => {
+    const value = cell.uncertainty?.[metric];
+    return value
+      ? {
+          sampleCount: safeNumber(value.sampleCount),
+          standardDeviation: safeNumber(value.standardDeviation),
+          standardError: safeNumber(value.standardError),
+          completeness: safeText(value.completeness, "unavailable"),
+        }
+      : null;
+  };
+  return {
+    "wipe-probability": normalized("wipe-probability"),
+    "half-wipe-probability": normalized("half-wipe-probability"),
+    "mean-kills": normalized("mean-kills"),
+    "mean-damage": normalized("mean-damage"),
+    "damage-per-100-points": null,
+  };
+}
+
 function scenarioCell(
   cell: TesseraScenarioCell,
   opponent: string,
@@ -209,6 +243,7 @@ function scenarioCell(
     targetId: safeText(cell.target.instanceId, cell.target.label),
     targetLabel: safeText(cell.target.label, cell.target.name),
     values: metricValues(cell.values),
+    uncertainty: metricUncertainty(cell),
     warnings: cell.warningRefs.map((warning) => safeText(warning)),
   };
 }
@@ -230,6 +265,13 @@ function legacyCells(report: TesseraMatchupReport): DisplayCell[] {
         "mean-kills": null,
         "mean-damage": safeNumber(cell.expectedDamage),
         "damage-per-100-points": safeNumber(cell.damagePer100Points),
+      },
+      uncertainty: {
+        "wipe-probability": null,
+        "half-wipe-probability": null,
+        "mean-kills": null,
+        "mean-damage": null,
+        "damage-per-100-points": null,
       },
       warnings: ["Legacy matrix data does not include stable unit identities."],
     })),
@@ -378,6 +420,8 @@ function reportSettings(report: TesseraMatchupReport): DisplayPair[] {
         pointsTolerancePercent: report.configuration.pointsTolerancePercent,
         allowPointMismatch: report.configuration.allowPointMismatch,
         includeChangeCandidates: report.configuration.includeChangeCandidates,
+        providerCompatibilityMode:
+          report.configuration.providerCompatibilityMode ?? "observe",
       })
     : [];
   const simulator = safePairs(report.simulation.settings, "Tessera");
@@ -405,6 +449,8 @@ function reportSettings(report: TesseraMatchupReport): DisplayPair[] {
 
 function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
   const providerIdentity = report.simulation.providerIdentity;
+  const compatibilityEnvelopes = report.providerCompatibilityEnvelopes ??
+    (report.providerCompatibility ? [report.providerCompatibility] : []);
   const pairs: DisplayPair[] = [
     { label: "Run ID", value: safeText(report.runId) },
     { label: "Generated", value: safeText(report.generatedAt) },
@@ -412,7 +458,9 @@ function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
     {
       label: "Schema",
       value:
-        report.schemaVersion === 3
+        report.schemaVersion === 4
+          ? "Tessera report v4"
+          : report.schemaVersion === 3
           ? "Tessera report v3"
           : report.schemaVersion === 2
             ? "Tessera report v2"
@@ -454,6 +502,135 @@ function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
       { label: "Usage state", value: providerIdentity.licenseState },
     );
   }
+  if (report.scenarioContractSha256) {
+    pairs.push({
+      label: "Scenario contract SHA-256",
+      value: safeText(report.scenarioContractSha256),
+    });
+  }
+  compatibilityEnvelopes.forEach((envelope, index) => {
+    const opponent = opponentNameAt(report, index);
+    const website = envelope.tessera.website;
+    pairs.push(
+      {
+        label: `${opponent} provider compatibility`,
+        value: envelope.complete
+          ? "Complete"
+          : `Incomplete (${envelope.issues.length} issue${
+              envelope.issues.length === 1 ? "" : "s"
+            })`,
+      },
+      {
+        label: `${opponent} compatibility envelope SHA-256`,
+        value: safeText(envelope.envelopeSha256),
+      },
+      {
+        label: `${opponent} signed data bundle`,
+        value: safeText(envelope.data.bundleId),
+      },
+      {
+        label: `${opponent} rules data`,
+        value: `${safeText(envelope.data.rules.package)} ${safeText(
+          envelope.data.rules.version,
+        )} · ${safeText(envelope.data.rules.edition)} · ${safeText(
+          envelope.data.rules.dataslate,
+        )}`,
+      },
+      {
+        label: `${opponent} BSData source`,
+        value: `${safeText(envelope.data.bsData.repository)}@${safeText(
+          envelope.data.bsData.commit,
+        )}`,
+      },
+      {
+        label: `${opponent} official points source`,
+        value: `${safeText(envelope.data.official.mfmVersion)} · ${safeText(
+          envelope.data.official.authorityStatus,
+          "authority unavailable",
+        )}`,
+      },
+      {
+        label: `${opponent} semantic data identity`,
+        value: safeText(envelope.data.semanticIdentitySha256),
+      },
+      {
+        label: `${opponent} Tessera provider identity`,
+        value: safeText(envelope.tessera.providerIdentitySha256),
+      },
+      {
+        label: `${opponent} profile policy SHA-256`,
+        value: safeText(envelope.profilePolicyHash, "Not available"),
+      },
+      {
+        label: `${opponent} compatibility issue codes`,
+        value:
+          envelope.issues.map((entry) => safeText(entry.code)).join(", ") ||
+          "None",
+      },
+    );
+    envelope.rosters.forEach((roster) => {
+      const sideLabel = roster.side === "player" ? "player" : opponent;
+      const pinned = roster.newRecruit.pinned;
+      const observed = roster.newRecruit.observed;
+      pairs.push({
+        label: `${sideLabel} New Recruit compatibility`,
+        value: roster.newRecruit.status,
+      });
+      if (pinned) {
+        pairs.push({
+          label: `${sideLabel} pinned New Recruit catalogue`,
+          value: `${safeText(pinned.gameSystem.name)} r${pinned.gameSystem.revision} · ${safeText(
+            pinned.catalogue.name,
+          )} r${pinned.catalogue.revision ?? "unknown"}`,
+        });
+      }
+      if (observed) {
+        pairs.push({
+          label: `${sideLabel} observed New Recruit catalogue`,
+          value: `${safeText(observed.gameSystem.name, "unknown game system")} r${
+            observed.gameSystem.revision ?? "unknown"
+          } · ${
+            observed.catalogues
+              .map(
+                (catalogue) =>
+                  `${safeText(catalogue.name, "unknown catalogue")} r${
+                    catalogue.revision ?? "unknown"
+                  }`,
+              )
+              .join(", ") || "no catalogue identity"
+          }`,
+        });
+      }
+    });
+    if (website) {
+      pairs.push(
+        {
+          label: `${opponent} Tessera Web deployment`,
+          value: safeText(
+            website.deployment.identitySha256,
+            website.deployment.completeness,
+          ),
+        },
+        {
+          label: `${opponent} imported semantics`,
+          value: safeText(
+            website.importSemantics.combinedSha256,
+            website.importSemantics.completeness,
+          ),
+        },
+        {
+          label: `${opponent} unresolved imported effects`,
+          value: String(website.importSemantics.unresolvedEffectCount),
+        },
+        {
+          label: `${opponent} Tessera Web same-origin assets`,
+          value: `${website.deployment.assets.filter((asset) => asset.sameOrigin && asset.sha256).length}/${
+            website.deployment.assets.filter((asset) => asset.sameOrigin).length
+          } byte-hashed`,
+        },
+      );
+    }
+  });
   if (report.simulation.fallback) {
     pairs.push({
       label: "Provider fallback",
@@ -680,6 +857,19 @@ function commonScript(): string {
     }
     return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
   };
+  const formatUncertainty = (value) => {
+    if (!value || typeof value !== "object") return "uncertainty unavailable";
+    const parts = [];
+    if (Number.isInteger(value.sampleCount)) parts.push("n=" + value.sampleCount);
+    if (typeof value.standardDeviation === "number") {
+      parts.push("SD=" + formatValue("mean-damage", value.standardDeviation));
+    }
+    if (typeof value.standardError === "number") {
+      parts.push("SE=" + formatValue("mean-damage", value.standardError));
+    }
+    parts.push(value.completeness || "unavailable");
+    return parts.join(" · ");
+  };
   const heat = (metric, value) => {
     if (value === null || typeof value !== "number") return "";
     const ratio = metric.includes("probability")
@@ -733,9 +923,10 @@ function commonScript(): string {
         td.textContent = formatValue(metric, value);
         td.style.background = heat(metric, value);
         if (cell) {
-          const detail = make("small", cell.confidence);
+          const uncertainty = cell.uncertainty ? cell.uncertainty[metric] : null;
+          const detail = make("small", cell.confidence + " · " + formatUncertainty(uncertainty));
           td.append(detail);
-          td.title = [cell.phase, cell.direction, ...cell.warnings].filter(Boolean).join(" · ");
+          td.title = [cell.phase, cell.direction, formatUncertainty(uncertainty), ...cell.warnings].filter(Boolean).join(" · ");
         }
         row.append(td);
       }

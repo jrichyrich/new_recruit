@@ -265,6 +265,17 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
             roster: opponent.data,
           },
           executionMode: "simulate",
+          simulationBackend: "website",
+          scenarioContract: [{
+            phase: "shooting",
+            direction: "player-to-opponent",
+            metric: "mean-damage",
+            settings: {
+              provider: "website",
+              targetInCover: "false",
+            },
+            iterations: 10_000,
+          }],
         },
       }),
       await client.callTool({
@@ -320,6 +331,12 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
       }
       assert.equal(request.opponent.roster.id, opponent.data.id);
       assert.equal(request.options?.executionMode, "simulate");
+      if (index === 0) {
+        assert.equal(
+          request.options?.scenarioContract?.[0]?.iterations,
+          10_000,
+        );
+      }
       assert.equal(
         request.options?.catalogueDriftMode,
         index === 0 ? "reject" : "diagnostic",

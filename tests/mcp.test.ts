@@ -190,6 +190,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "prepare_new_recruit_handoff",
         "prepare_roster_for_tessera",
         "rebase_roster",
+        "rebind_tessera_scenario_contract_provider",
         "refresh_data_now",
         "rollback_data_bundle",
         "run_roster_workflow",

@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +16,10 @@ import {
 import { runLocalTesseraEngineMatchup } from "../local/tessera/local-engine";
 import { verifyLocalTesseraEngineInput } from "../local/tessera/local-engine-input";
 import { runRosterStressTest } from "../local/tessera/stress";
+import {
+  localTesseraScenarioContract,
+  tesseraScenarioContractSha256,
+} from "../local/tessera/scenario-contract";
 import {
   buildCustodesVsAeldariSmokeRoster,
   resolvedProfilePolicy,
@@ -34,6 +44,21 @@ type StoredLocalStressManifest = {
   schemaVersion: number;
   simulationBackend: string;
   selectedSimulationBackend: string;
+  requestedScenarioContract: ReturnType<
+    typeof localTesseraScenarioContract
+  > | null;
+  requestedScenarioContractSha256: string | null;
+  stageContracts: {
+    screening: Record<
+      string,
+      ReturnType<typeof localTesseraScenarioContract>
+    >;
+    deepDive: Record<
+      string,
+      ReturnType<typeof localTesseraScenarioContract>
+    >;
+  };
+  stageContractsSha256: string;
   preparedPlayer: StoredLocalPreparedRoster;
   preparedOpponents: Record<
     string,
@@ -42,9 +67,17 @@ type StoredLocalStressManifest = {
   finalArtifacts: unknown;
 };
 
-test("local-engine stress runs retain deterministic evidence, resume safely, and reject prepared-input tampering", { timeout: 180_000 }, async () => {
+test("local-engine stress runs avoid the New Recruit cache, retain deterministic evidence, resume safely, and reject prepared-input tampering", { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "rosterpilot-local-engine-stress-"),
+  );
+  const previousSupport = process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+  const previousSocket = process.env.ROSTERPILOT_LOCAL_AGENT_SOCKET;
+  const supportDirectory = path.join(directory, "support");
+  process.env.ROSTERPILOT_SUPPORT_DIRECTORY = supportDirectory;
+  process.env.ROSTERPILOT_LOCAL_AGENT_SOCKET = path.join(
+    directory,
+    "unreachable-agent.sock",
   );
   try {
     const player = buildCustodesVsAeldariSmokeRoster();
@@ -80,16 +113,12 @@ test("local-engine stress runs retain deterministic evidence, resume safely, and
       `${JSON.stringify(policy, null, 2)}\n`,
     );
     const calls = {
-      delivery: 0,
       enrichment: 0,
       website: 0,
     };
     let simulationCalls = 0;
     const dependencies = {
-      deliver: async () => {
-        calls.delivery += 1;
-        throw new Error("New Recruit delivery must not run");
-      },
+      runtimeIssue: () => null,
       enrich: async () => {
         calls.enrichment += 1;
         throw new Error("New Recruit enrichment must not run");
@@ -105,6 +134,7 @@ test("local-engine stress runs retain deterministic evidence, resume safely, and
         return runLocalTesseraEngineMatchup(...args);
       },
     };
+    const scenarioContract = localTesseraScenarioContract(64);
     const result = await runRosterStressTest(
       player,
       { kind: "faction", factionId: "aeldari" },
@@ -114,6 +144,7 @@ test("local-engine stress runs retain deterministic evidence, resume safely, and
         simulationBackend: "local-engine",
         executionMode: "simulate",
         profilePolicyPath: policyPath,
+        scenarioContract,
         outputDirectory: "stress",
         rootDir: directory,
       },
@@ -127,11 +158,39 @@ test("local-engine stress runs retain deterministic evidence, resume safely, and
     );
     assert.ok(result.data);
     assert.deepEqual(calls, {
-      delivery: 0,
       enrichment: 0,
       website: 0,
     });
+    await assert.rejects(
+      access(
+        path.join(
+          supportDirectory,
+          "cache",
+          "new-recruit",
+          "v1",
+        ),
+      ),
+      { code: "ENOENT" },
+      "local-engine JSON must remain run-local instead of entering the New Recruit ROSZ cache",
+    );
     assert.equal(result.data.source, "tessera-local-engine");
+    assert.deepEqual(result.data.scenarioContract, scenarioContract);
+    assert.equal(
+      result.data.scenarioContractSha256,
+      tesseraScenarioContractSha256(scenarioContract),
+    );
+    assert.match(
+      result.data.stageScenarioContractsSha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.deepEqual(
+      result.data.screeningReport?.scenarioContract,
+      scenarioContract,
+    );
+    assert.equal(
+      result.data.screeningReport?.scenarioContractSha256,
+      tesseraScenarioContractSha256(scenarioContract),
+    );
     assert.equal(result.data.simulation?.selectedBackend, "local-engine");
     assert.equal(
       result.data.simulation?.providerIdentity?.provider,
@@ -221,9 +280,31 @@ test("local-engine stress runs retain deterministic evidence, resume safely, and
     const manifest = JSON.parse(
       await readFile(manifestPath, "utf8"),
     ) as StoredLocalStressManifest;
-    assert.equal(manifest.schemaVersion, 5);
+    assert.equal(manifest.schemaVersion, 6);
     assert.equal(manifest.simulationBackend, "local-engine");
     assert.equal(manifest.selectedSimulationBackend, "local-engine");
+    assert.deepEqual(
+      manifest.requestedScenarioContract,
+      scenarioContract,
+    );
+    assert.equal(
+      manifest.requestedScenarioContractSha256,
+      tesseraScenarioContractSha256(scenarioContract),
+    );
+    assert.match(manifest.stageContractsSha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(
+      Object.keys(manifest.stageContracts.screening).sort(),
+      portfolio.data.items.map((item) => item.templateId).sort(),
+    );
+    assert.equal(
+      Object.values(manifest.stageContracts.screening).every(
+        (contract) =>
+          contract.length === 16 &&
+          contract.every((entry) => entry.iterations === 64),
+      ),
+      true,
+    );
+    assert.deepEqual(manifest.stageContracts.deepDive, {});
     const resolveManifestPath = (filename: string): string =>
       path.isAbsolute(filename)
         ? filename
@@ -298,7 +379,6 @@ test("local-engine stress runs retain deterministic evidence, resume safely, and
     assert.equal(resumed.data?.findings.length, 0);
     assert.equal(resumed.data?.changeCandidates.length, 0);
     assert.deepEqual(calls, {
-      delivery: 0,
       enrichment: 0,
       website: 0,
     });
@@ -357,11 +437,20 @@ test("local-engine stress runs retain deterministic evidence, resume safely, and
       "prepared-input drift must stop before local simulation",
     );
     assert.deepEqual(calls, {
-      delivery: 0,
       enrichment: 0,
       website: 0,
     });
   } finally {
+    if (previousSupport === undefined) {
+      delete process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+    } else {
+      process.env.ROSTERPILOT_SUPPORT_DIRECTORY = previousSupport;
+    }
+    if (previousSocket === undefined) {
+      delete process.env.ROSTERPILOT_LOCAL_AGENT_SOCKET;
+    } else {
+      process.env.ROSTERPILOT_LOCAL_AGENT_SOCKET = previousSocket;
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });
