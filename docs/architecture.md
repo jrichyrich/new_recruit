@@ -739,14 +739,14 @@ sequenceDiagram
 
         alt Verification fails
             Worker-->>Companion: Mismatch plus preserved list URL
-            Companion-->>Client: Fail closed; do not delete or modify the list
+            Companion-->>Client: Fail closed and preserve the list unchanged
         else Verification succeeds
             Worker->>NR: Download profile-rich ROSZ
             NR-->>Worker: Enriched archive
             Worker->>Worker: Verify generator, roster/model/profile inventory, and catalogue identity
             alt Archive or catalogue verification fails
                 Worker-->>Companion: Scoped provenance failure plus preserved list URL and evidence
-                Companion-->>Client: Fail closed; inventory outcome; do not redeliver
+                Companion-->>Client: Fail closed, inventory the outcome, and do not redeliver
             else Enriched archive verifies
                 opt Pretty HTML requested
                     Worker->>NR: Export, Pretty, Save as HTML
