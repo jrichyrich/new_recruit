@@ -10,6 +10,7 @@ import type {
 } from "../lib/rosterpilot";
 
 import {
+  collectImportedSemanticSurfaceInBrowser,
   invalidatesCachedTesseraLicenseKey,
   parseTesseraCellUncertainty,
   runTesseraBrowserMatchup,
@@ -290,6 +291,14 @@ test("credential failures invalidate a persistent Tessera worker's cached key", 
   );
 });
 
+test("imported semantic surface callback has no Node-only build helpers", () => {
+  const source = Function.prototype.toString.call(
+    collectImportedSemanticSurfaceInBrowser,
+  );
+  assert.doesNotMatch(source, /\b__name\b/);
+  assert.doesNotMatch(source, /\b__defProp\b/);
+});
+
 const chrome =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const runBrowserTests =
@@ -510,7 +519,9 @@ function showProfileEditor(models) {
       '<h2>Edit imported unit</h2>' +
       '<div class="weapon-row"><input placeholder="Weapon name" value="Gork’s klaw - Strike"><input type="number" aria-label="Count" value="' + models + '"></div>' +
       '<div class="weapon-row"><input placeholder="Weapon name" value="Gork’s klaw - Sweep"><input type="number" aria-label="Count" value="0"></div>' +
+      '<button id="cancel-unit">Cancel</button>' +
       '<button id="save-unit">Save</button>';
+    document.querySelector("#cancel-unit").onclick = showReview;
     document.querySelector("#save-unit").onclick = () => {
       const rows = [...document.querySelectorAll(".weapon-row")];
       const counts = Object.fromEntries(rows.map((row) => [
@@ -537,7 +548,9 @@ function showProfileEditor(models) {
       '<div class="weapon-row"><input placeholder="Weapon name" value="Manreaper - Sweep"><input type="number" aria-label="Count" value="0"></div>' +
       '<div class="weapon-row"><input placeholder="Weapon name" value="Manreaper - Strike"><input type="number" aria-label="Count" value="5"></div>' +
       '<div class="weapon-row"><input placeholder="Weapon name" value="Manreaper - Sweep"><input type="number" aria-label="Count" value="0"></div>' +
+      '<button id="cancel-unit">Cancel</button>' +
       '<button id="save-unit">Save</button>';
+    document.querySelector("#cancel-unit").onclick = showReview;
     document.querySelector("#save-unit").onclick = () => {
       const rows = [...document.querySelectorAll(".weapon-row")];
       const values = rows.map((row) => ({
@@ -562,7 +575,9 @@ function showProfileEditor(models) {
     '<h2>Edit imported unit</h2>' +
     '<div class="weapon-row"><input placeholder="Weapon name" value="Prism cannon - Dispersed pulse"><input type="number" aria-label="Count" value="1"></div>' +
     (profileEditorMismatch ? '' : '<div class="weapon-row"><input placeholder="Weapon name" value="Prism cannon - Focused lances"><input type="number" aria-label="Count" value="0"></div>') +
+    '<button id="cancel-unit">Cancel</button>' +
     '<button id="save-unit">Save</button>';
+  document.querySelector("#cancel-unit").onclick = showReview;
   document.querySelector("#save-unit").onclick = () => {
     const rows = [...document.querySelectorAll(".weapon-row")];
     const counts = Object.fromEntries(rows.map((row) => [
@@ -1416,7 +1431,11 @@ test(
   "applies an appended weapon profile through imported-unit count rows",
   { skip: !runBrowserTests },
   async () => {
-    const result = await runFixture({ alternateProfile: "editor" });
+    const result = await runFixture({
+      alternateProfile: "editor",
+      requestedPhases: ["shooting"],
+      requestedMetrics: ["wipe-probability"],
+    });
     const playerIssue = result.importIssues?.find(
       (issue) => issue.side === "player",
     );

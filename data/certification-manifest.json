@@ -81,6 +81,7 @@
     "tessera-authoritative-selector-identities",
     "tessera-saved-list-reuse",
     "tessera-saved-list-import-once",
+    "tessera-import-semantic-surface",
     "tessera-saved-list-duplicate-fail-closed",
     "tessera-saved-list-unit-count-fail-closed",
     "tessera-duplicate-glyph-names",

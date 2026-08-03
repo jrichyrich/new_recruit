@@ -1252,12 +1252,19 @@ function uniqueSemanticToggles(
   ].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-async function semanticSurface(locator: Locator): Promise<{
-  visibleCharacteristics: TesseraImportedSemanticValue[];
-  effectToggles: TesseraImportedSemanticToggle[];
-}> {
-  const observed = await locator.evaluate((root) => {
-    const visible = (element: Element): boolean => {
+/**
+ * Runs inside the browser page. Keep this function self-contained: TSX enables
+ * esbuild's `keepNames`, which injects module-scoped helpers for locally named
+ * functions that Playwright cannot serialize into the page context.
+ */
+export function collectImportedSemanticSurfaceInBrowser(root: Element): {
+  values: Array<{ name: string; value: string }>;
+  toggles: Array<{ name: string; state: boolean | null }>;
+} {
+  // Object methods retain useful local structure without esbuild emitting the
+  // Node-only `__name` helper inside the serialized Playwright callback.
+  const helpers = {
+    visible(element: Element): boolean {
       const html = element as HTMLElement;
       const style = window.getComputedStyle(html);
       return (
@@ -1266,8 +1273,8 @@ async function semanticSurface(locator: Locator): Promise<{
         !html.hidden &&
         html.getClientRects().length > 0
       );
-    };
-    const labelFor = (element: Element): string => {
+    },
+    labelFor(element: Element): string {
       const control = element as HTMLInputElement;
       return (
         element.getAttribute("aria-label") ??
@@ -1278,67 +1285,76 @@ async function semanticSurface(locator: Locator): Promise<{
       )
         .replace(/\s+/g, " ")
         .trim();
-    };
-    const values: Array<{ name: string; value: string }> = [];
-    const toggles: Array<{
-      name: string;
-      state: boolean | null;
-    }> = [];
-    for (const element of root.querySelectorAll(
-      "input, select, textarea, output",
-    )) {
-      if (!visible(element)) continue;
-      const input = element as HTMLInputElement;
-      const type = (input.type ?? "").toLocaleLowerCase();
-      const name = labelFor(element);
-      if (!name || type === "hidden" || type === "file") continue;
-      if (type === "checkbox" || type === "radio") {
-        if (!/^include\s+/i.test(name)) {
-          toggles.push({ name, state: input.checked });
-        }
-        continue;
+    },
+  };
+  const values: Array<{ name: string; value: string }> = [];
+  const toggles: Array<{
+    name: string;
+    state: boolean | null;
+  }> = [];
+  for (const element of root.querySelectorAll(
+    "input, select, textarea, output",
+  )) {
+    if (!helpers.visible(element)) continue;
+    const input = element as HTMLInputElement;
+    const type = (input.type ?? "").toLocaleLowerCase();
+    const name = helpers.labelFor(element);
+    if (!name || type === "hidden" || type === "file") continue;
+    if (type === "checkbox" || type === "radio") {
+      if (!/^include\s+/i.test(name)) {
+        toggles.push({ name, state: input.checked });
       }
-      const value =
-        element instanceof HTMLSelectElement
-          ? element.selectedOptions[0]?.textContent ?? element.value
-          : input.value ?? element.textContent ?? "";
-      values.push({ name, value: value.trim() });
+      continue;
     }
-    for (const element of root.querySelectorAll(
-      '[role="switch"], [aria-checked], button[aria-pressed]',
-    )) {
-      if (!visible(element)) continue;
-      const raw =
-        element.getAttribute("aria-checked") ??
-        element.getAttribute("aria-pressed");
-      toggles.push({
-        name:
-          labelFor(element) ||
-          (element.textContent ?? "").replace(/\s+/g, " ").trim(),
-        state: raw === "true" ? true : raw === "false" ? false : null,
-      });
+    const value =
+      element instanceof HTMLSelectElement
+        ? element.selectedOptions[0]?.textContent ?? element.value
+        : input.value ?? element.textContent ?? "";
+    values.push({ name, value: value.trim() });
+  }
+  for (const element of root.querySelectorAll(
+    '[role="switch"], [aria-checked], button[aria-pressed]',
+  )) {
+    if (!helpers.visible(element)) continue;
+    const raw =
+      element.getAttribute("aria-checked") ??
+      element.getAttribute("aria-pressed");
+    toggles.push({
+      name:
+        helpers.labelFor(element) ||
+        (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+      state: raw === "true" ? true : raw === "false" ? false : null,
+    });
+  }
+  for (const row of root.querySelectorAll("tr")) {
+    if (!helpers.visible(row)) continue;
+    const cells = [...row.querySelectorAll("th, td")]
+      .map((cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    if (cells.length === 2) {
+      values.push({ name: cells[0], value: cells[1] });
     }
-    for (const row of root.querySelectorAll("tr")) {
-      if (!visible(row)) continue;
-      const cells = [...row.querySelectorAll("th, td")]
-        .map((cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-      if (cells.length === 2) {
-        values.push({ name: cells[0], value: cells[1] });
-      }
-    }
-    const terms = [...root.querySelectorAll("dt")];
-    for (const term of terms) {
-      if (!visible(term)) continue;
-      const description = term.nextElementSibling;
-      if (!description || description.tagName !== "DD") continue;
-      values.push({
-        name: (term.textContent ?? "").trim(),
-        value: (description.textContent ?? "").trim(),
-      });
-    }
-    return { values, toggles };
-  });
+  }
+  const terms = [...root.querySelectorAll("dt")];
+  for (const term of terms) {
+    if (!helpers.visible(term)) continue;
+    const description = term.nextElementSibling;
+    if (!description || description.tagName !== "DD") continue;
+    values.push({
+      name: (term.textContent ?? "").trim(),
+      value: (description.textContent ?? "").trim(),
+    });
+  }
+  return { values, toggles };
+}
+
+async function semanticSurface(locator: Locator): Promise<{
+  visibleCharacteristics: TesseraImportedSemanticValue[];
+  effectToggles: TesseraImportedSemanticToggle[];
+}> {
+  const observed = await locator.evaluate(
+    collectImportedSemanticSurfaceInBrowser,
+  );
   return {
     visibleCharacteristics: uniqueSemanticValues(
       observed.values.map((entry) => ({

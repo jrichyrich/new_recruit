@@ -83,6 +83,11 @@
       "testName": "imports one missing deterministic certification list exactly once"
     },
     {
+      "id": "tessera-import-semantic-surface",
+      "automatedBy": "tests/tessera-browser-v2.test.ts",
+      "testName": "applies an appended weapon profile through imported-unit count rows"
+    },
+    {
       "id": "tessera-saved-list-duplicate-fail-closed",
       "automatedBy": "tests/tessera-browser-v2.test.ts",
       "testName": "fails closed before import when a deterministic saved identity is duplicated"
