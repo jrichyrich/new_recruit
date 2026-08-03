@@ -74,13 +74,14 @@ npm run certify -- --tier deterministic
 Use `--faction aeldari` for one faction or `--shard 1/4` through `4/4` for
 parallel coverage. `--changed-only` emits an explicit skipped result when no
 roster, data, connector, transport, workflow, or test surface changed.
-`--portfolio` adds the selected factions' browser-free `core-3` preparation
-contracts without expanding to every ordered matchup.
+`--portfolio` adds the selected factions' browser-free `core-3` plus
+1,000/2,000-point `diverse-9` preparation contracts without expanding to
+every ordered matchup.
 `--opponent-matrix` adds every ordered selected-player/opponent faction
 combination using local `core-3` portfolio previews.
-`--portfolio` runs the same core and named-specialist gates once per selected
-faction without expanding to the ordered opponent matrix; data-update staging
-uses this deterministic, browser-free gate.
+`--portfolio` runs the core, `diverse-9`, and named-specialist gates once per
+selected faction without expanding to the ordered opponent matrix;
+data-update staging uses this deterministic, browser-free gate.
 
 `core-3` always means three unique, exportable payloads representing balanced,
 ranged, and assault postures. The `mixed`, `mass`, and `elite-heavy` wire

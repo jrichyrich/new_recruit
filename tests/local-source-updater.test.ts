@@ -20,6 +20,9 @@ import {
 } from "../lib/rosterpilot/semantic-hash";
 import {
   LOCAL_SOURCE_CHECK_INTERVAL_MS,
+  LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS,
+  LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS,
+  LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS,
   LOCAL_SOURCE_INITIAL_RETRY_MS,
   LOCAL_SOURCE_MAX_RETRY_MS,
   LocalSourcePipelineError,
@@ -57,6 +60,12 @@ const LATEST_BSDATA_COMMIT =
   "21b4efa69d7212cb206fdcbf98aa606ee49f78a2";
 const HISTORICAL_BSDATA_COMMIT =
   "419a80d35346cd9bf26d32f69b4a5df404beb95d";
+
+test("full local certification is bounded and split across isolated shards", () => {
+  assert.equal(LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS, 60 * 60_000);
+  assert.equal(LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS, 4);
+  assert.equal(LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS, "degraded");
+});
 
 function observation(checkedAt: string): LocalSourceObservationV1 {
   return {
@@ -613,6 +622,59 @@ test("an installed stage without completion is recovered to the same queued job"
   }
 });
 
+test("legacy sealed jobs without a BSData override recover after upgrade", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "local-source-legacy-job-"));
+  const clock = new Date("2026-08-02T12:00:00.000Z");
+  const pipeline: LocalSourceUpdatePipeline = {
+    async run() {
+      throw new Error("not reached");
+    },
+  };
+  try {
+    const coordinator = createLocalSourceUpdateCoordinator({
+      rootDirectory: root,
+      projectRoot: process.cwd(),
+      pipeline,
+      now: () => new Date(clock),
+      isProcessAlive: () => false,
+    });
+    const queued = await coordinator.enqueue({ trigger: "startup" });
+    const jobId = queued.job!.jobId;
+    const durableRoot = path.join(root, "v1");
+    const jobPath = path.join(durableRoot, "jobs", jobId, "job.json");
+    const job = JSON.parse(
+      await readFile(jobPath, "utf8"),
+    ) as Record<string, unknown>;
+    delete job.integritySha256;
+    delete job.bsDataCommitOverride;
+    job.status = "certifying";
+    job.revision = Number(job.revision) + 1;
+    job.progress = "Interrupted legacy certification";
+    job.integritySha256 = await sha256Hex(canonicalJson(job));
+    await writeFile(jobPath, `${JSON.stringify(job, null, 2)}\n`);
+    const workerLock = path.join(durableRoot, "worker.lock");
+    await mkdir(workerLock, { recursive: true });
+    await writeFile(
+      path.join(workerLock, "owner.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        pid: 12345,
+        token: "7b13cc47-a2d4-40ea-866b-2572daea94d1",
+        acquiredAt: clock.toISOString(),
+      })}\n`,
+    );
+
+    const recovered = await coordinator.recoverInterrupted();
+    assert.equal(recovered?.jobId, jobId);
+    assert.equal(recovered?.status, "queued");
+    assert.equal(recovered?.bsDataCommitOverride, null);
+    assert.equal(recovered?.recoveryCount, 1);
+    assert.equal((await coordinator.getJob(jobId))?.bsDataCommitOverride, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("completed terminal work is reconciled into durable coordinator state after a crash", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "local-source-terminal-recovery-"));
   const clock = new Date("2026-08-02T12:00:00.000Z");
@@ -679,6 +741,11 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
   await createMinimalPipelineProject(projectRoot);
   const before = await treeInventory(projectRoot);
   const seenEnvironments: NodeJS.ProcessEnv[] = [];
+  const seenCommands: Array<{
+    command: string;
+    args: string[];
+    timeoutMs: number;
+  }> = [];
   let checkedOutCommit: string | undefined;
   const runner: BoundedCommandRunner = async (
     command,
@@ -687,6 +754,11 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
   ) => {
     seenEnvironments.push(options.env);
     const values = [...args];
+    seenCommands.push({
+      command,
+      args: values,
+      timeoutMs: options.timeoutMs,
+    });
     let output = Buffer.from("ok\n");
     if (command === "git" && values.includes("--mirror")) {
       await mkdir(values.at(-1)!, { recursive: true });
@@ -819,7 +891,46 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
     assert.equal(result.observation.newRecruit.commit, HISTORICAL_BSDATA_COMMIT);
     assert.equal(result.observation.newRecruit.latestCommit, LATEST_BSDATA_COMMIT);
     assert.equal(checkedOutCommit, HISTORICAL_BSDATA_COMMIT);
-    assert.deepEqual(stages, ["checking", "fetching", "building", "certifying"]);
+    assert.deepEqual(stages, [
+      "checking",
+      "fetching",
+      "building",
+      "certifying",
+      "certifying",
+    ]);
+    const certificationCommands = seenCommands.filter(
+      ({ command, args }) =>
+        command === "npm" &&
+        args[0] === "run" &&
+        args[1] === "certify",
+    );
+    assert.equal(
+      certificationCommands.length,
+      LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS,
+    );
+    assert.deepEqual(
+      certificationCommands
+        .map(({ args }) => args[args.indexOf("--shard") + 1])
+        .sort(),
+      ["1/4", "2/4", "3/4", "4/4"],
+    );
+    assert.ok(
+      certificationCommands.every(
+        ({ args, timeoutMs }) =>
+          args.includes("--portfolio") &&
+          args[args.indexOf("--require-status") + 1] ===
+            LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS &&
+          timeoutMs === LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS,
+      ),
+    );
+    assert.equal(
+      new Set(
+        certificationCommands.map(
+          ({ args }) => args[args.indexOf("--out-dir") + 1],
+        ),
+      ).size,
+      LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS,
+    );
     assert.ok(result.candidate);
     const verified = await verifyLocalSourceCandidate(result.candidate!.directory, {
       expectedBuilderRoot: projectRoot,

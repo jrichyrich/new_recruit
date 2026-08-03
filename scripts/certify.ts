@@ -155,7 +155,7 @@ Options:
   --faction <id>             Certify one faction.
   --shard <index/total>      Certify one deterministic faction shard.
   --changed-only             Skip when no certification surface changed.
-  --portfolio                Add browser-free core-3 portfolio checks.
+  --portfolio                Add core-3 and 1,000/2,000-point diverse-9 checks.
   --opponent-matrix          Add the ordered local opponent matrix.
   --resume <report.json>     Reuse completed verified stages.
   --profile-policy <path>    Live tier only: canonical v1 Tessera profile policy.

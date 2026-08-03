@@ -53,6 +53,13 @@ export const LOCAL_SOURCE_INITIAL_RETRY_MS = 60 * 60 * 1_000;
 export const LOCAL_SOURCE_MAX_RETRY_MS = 6 * 60 * 60 * 1_000;
 export const LOCAL_SOURCE_CANDIDATE_RETENTION_MS =
   30 * 24 * 60 * 60 * 1_000;
+export const LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS = 60 * 60_000;
+export const LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS = 4;
+// Local certification must reject every failed case, while allowing explicit
+// human-review limitations to remain visible as degraded evidence. Hosted
+// release promotion keeps its separate signed, pass-only canary policy.
+export const LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS =
+  "degraded" as const;
 const STATE_LOCK_STALE_MS = 60_000;
 const WORKER_LOCK_STALE_GRACE_MS = 60_000;
 const MAX_COMMAND_OUTPUT_BYTES = 4 * 1_024 * 1_024;
@@ -173,6 +180,15 @@ export const LocalSourceUpdateJobV1Schema =
   localSourceUpdateJobDraftSchema.extend(
     { integritySha256: sha256Schema },
   );
+
+// Early local-source builds wrote schema-v1 jobs before compatibility builds
+// gained an optional BSData commit override. Preserve those sealed records so
+// interrupted work can be recovered after upgrading instead of forcing the
+// operator to discard durable update evidence.
+const LegacyLocalSourceUpdateJobV1Schema =
+  localSourceUpdateJobDraftSchema
+    .omit({ bsDataCommitOverride: true })
+    .extend({ integritySha256: sha256Schema });
 
 const localSourceUpdateStateDraftSchema = z
   .object({
@@ -1109,7 +1125,8 @@ export function createDefaultLocalSourceUpdatePipeline(
     build: options.commandTimeoutMs?.build ?? 5 * 60_000,
     validation: options.commandTimeoutMs?.validation ?? 10 * 60_000,
     certification:
-      options.commandTimeoutMs?.certification ?? 30 * 60_000,
+      options.commandTimeoutMs?.certification ??
+      LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS,
   };
 
   return {
@@ -1130,22 +1147,20 @@ export function createDefaultLocalSourceUpdatePipeline(
           timeoutMs: number;
         },
       ): Promise<BoundedCommandResult> => {
-        evidenceSequence += 1;
+        const sequence = ++evidenceSequence;
         try {
           const result = await commandRunner(command, args, {
             ...commandOptions,
             maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
           });
-          evidence.push(
-            await writeCommandEvidence({
-              jobDirectory: input.jobDirectory,
-              sequence: evidenceSequence,
-              stage,
-              name,
-              status: "passed",
-              result,
-            }),
-          );
+          evidence[sequence - 1] = await writeCommandEvidence({
+            jobDirectory: input.jobDirectory,
+            sequence,
+            stage,
+            name,
+            status: "passed",
+            result,
+          });
           return result;
         } catch (error) {
           const result =
@@ -1158,16 +1173,14 @@ export function createDefaultLocalSourceUpdatePipeline(
                   output: Buffer.from(String(error)),
                   durationMs: 0,
                 };
-          evidence.push(
-            await writeCommandEvidence({
-              jobDirectory: input.jobDirectory,
-              sequence: evidenceSequence,
-              stage,
-              name,
-              status: "failed",
-              result,
-            }),
-          );
+          evidence[sequence - 1] = await writeCommandEvidence({
+            jobDirectory: input.jobDirectory,
+            sequence,
+            stage,
+            name,
+            status: "failed",
+            result,
+          });
           throw error;
         }
       };
@@ -1177,17 +1190,15 @@ export function createDefaultLocalSourceUpdatePipeline(
         status: "passed" | "failed",
         value: unknown,
       ): Promise<void> => {
-        evidenceSequence += 1;
-        evidence.push(
-          await writeJsonEvidence({
-            jobDirectory: input.jobDirectory,
-            sequence: evidenceSequence,
-            stage,
-            name,
-            status,
-            value,
-          }),
-        );
+        const sequence = ++evidenceSequence;
+        evidence[sequence - 1] = await writeJsonEvidence({
+          jobDirectory: input.jobDirectory,
+          sequence,
+          stage,
+          name,
+          status,
+          value,
+        });
       };
       try {
         await input.onProgress(
@@ -1703,28 +1714,56 @@ export function createDefaultLocalSourceUpdatePipeline(
           "certification",
         );
         if (finalPlan.fullCertification) {
-          await runEvidence(
-            "certification",
-            "full-deterministic-certification",
-            "npm",
-            [
-              "run",
-              "certify",
-              "--",
-              "--tier",
-              "deterministic",
-              "--portfolio",
-              "--require-status",
-              "pass",
-              "--out-dir",
-              certificationOutput,
-            ],
-            {
-              cwd: stagingRoot,
-              env: buildEnvironment,
-              timeoutMs: timeouts.certification,
-            },
+          await input.onProgress(
+            "certifying",
+            `Running ${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS} isolated deterministic certification shards. Every shard must pass before activation.`,
           );
+          const shardResults = await Promise.allSettled(
+            Array.from(
+              { length: LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS },
+              (_, index) => {
+                const shard = index + 1;
+                return runEvidence(
+                  "certification",
+                  `full-deterministic-certification-shard-${shard}-of-${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS}`,
+                  "npm",
+                  [
+                    "run",
+                    "certify",
+                    "--",
+                    "--tier",
+                    "deterministic",
+                    "--portfolio",
+                    "--require-status",
+                    LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS,
+                    "--shard",
+                    `${shard}/${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS}`,
+                    "--out-dir",
+                    path.join(
+                      certificationOutput,
+                      `shard-${shard}-of-${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS}`,
+                    ),
+                  ],
+                  {
+                    cwd: stagingRoot,
+                    env: buildEnvironment,
+                    timeoutMs: timeouts.certification,
+                  },
+                );
+              },
+            ),
+          );
+          const rejectedShards = shardResults.filter(
+            (result): result is PromiseRejectedResult =>
+              result.status === "rejected",
+          );
+          const failedShard =
+            rejectedShards.find(
+              ({ reason }) =>
+                reason instanceof BoundedCommandError &&
+                reason.code === "COMMAND_FAILED",
+            ) ?? rejectedShards[0];
+          if (failedShard) throw failedShard.reason;
         } else if (finalPlan.certificationFactions.length > 0) {
           for (const factionId of finalPlan.certificationFactions) {
             await runEvidence(
@@ -1739,7 +1778,7 @@ export function createDefaultLocalSourceUpdatePipeline(
                 "deterministic",
                 ...(finalPlan.includePortfolio ? ["--portfolio"] : []),
                 "--require-status",
-                "pass",
+                LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS,
                 "--faction",
                 factionId,
                 "--out-dir",
@@ -1821,7 +1860,12 @@ export function createDefaultLocalSourceUpdatePipeline(
             cause: error,
           });
         }
-        const certificationFailure = evidence.some(
+        const boundedInfrastructureFailure =
+          error instanceof BoundedCommandError &&
+          ["COMMAND_TIMED_OUT", "OUTPUT_LIMIT"].includes(error.code);
+        const certificationFailure =
+          !boundedInfrastructureFailure &&
+          evidence.some(
           (entry) =>
             entry.jobEvidence.status === "failed" &&
             [
@@ -1833,7 +1877,7 @@ export function createDefaultLocalSourceUpdatePipeline(
             ].includes(
               entry.jobEvidence.stage,
             ),
-        );
+          );
         throw new LocalSourcePipelineError(
           certificationFailure
             ? "LOCAL_SOURCE_CERTIFICATION_FAILED"
@@ -2049,11 +2093,20 @@ export function createLocalSourceUpdateCoordinator(
   };
 
   const readJob = async (jobId: string): Promise<LocalSourceUpdateJobV1> => {
-    const job = LocalSourceUpdateJobV1Schema.parse(
-      await readJson(jobPath(jobId)),
+    const raw = await readJson(jobPath(jobId));
+    const current = LocalSourceUpdateJobV1Schema.safeParse(raw);
+    if (current.success) {
+      await verifySeal(current.data);
+      return current.data;
+    }
+    const legacy = LegacyLocalSourceUpdateJobV1Schema.parse(raw);
+    await verifySeal(legacy);
+    return LocalSourceUpdateJobV1Schema.parse(
+      await seal({
+        ...withoutIntegrity(legacy),
+        bsDataCommitOverride: null,
+      }),
     );
-    await verifySeal(job);
-    return job;
   };
 
   const writeJob = async (

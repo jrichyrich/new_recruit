@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { afterEach, test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 
 import {
   GET,
@@ -8,11 +8,55 @@ import {
 } from "../app/api/browser-engine/route";
 import {
   activateLegendsInventory,
+  configureDataBundleProvider,
   resetActiveLegendsInventoryForTests,
   resetHostedDataBundleProviderInitializationForTests,
+  type DataBundleProvider,
   type RosterDraftV1,
   type UnitSummary,
 } from "../lib/rosterpilot";
+
+function isolatedBrowserProvider(): DataBundleProvider {
+  const bundleId = "f".repeat(64);
+  return {
+    async acquireSnapshot() {
+      return {
+        leaseId: "browser-legends-policy-test",
+        snapshot: null as never,
+        released: false,
+        async release() {},
+      };
+    },
+    async getStatus() {
+      return {
+        state: "ready",
+        activeBundleId: bundleId,
+        latestVerifiedBundleId: bundleId,
+        latestUpstreamBundleId: bundleId,
+        candidate: null,
+        quarantinedScopes: [],
+        lastCheckedAt: null,
+      };
+    },
+    async refresh() {
+      return {
+        status: await this.getStatus(),
+        activatedBundleId: null,
+        classification: null,
+      };
+    },
+    async rollback() {
+      return this.getStatus();
+    },
+  };
+}
+
+beforeEach(() => {
+  // Browser-route tests must not adopt snapshots from a developer's
+  // application-support directory. The fixture controls the active Legends
+  // inventory while this provider supplies only the request lease boundary.
+  configureDataBundleProvider(isolatedBrowserProvider());
+});
 
 afterEach(() => {
   resetActiveLegendsInventoryForTests();
