@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import path from "node:path";
 
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 
@@ -7,6 +8,7 @@ import {
   NEW_RECRUIT_ORIGIN,
   type BrokerCredentials,
   type WorkerDeliveryRequest,
+  type WorkerProbeResult,
   type WorkerResult,
 } from "./contracts";
 import {
@@ -27,12 +29,19 @@ export class NewRecruitAutomationError extends Error {
   }
 }
 
-type BrowserDependencies = {
+export type BrowserDependencies = {
   getCredentials: () => Promise<BrokerCredentials>;
   prepareContext?: (context: BrowserContext) => Promise<void>;
   baseUrl?: string;
   headless?: boolean;
   timeoutMs?: number;
+};
+
+export type NewRecruitBrowserSession = {
+  deliver: (input: WorkerDeliveryRequest) => Promise<WorkerResult>;
+  probe: () => Promise<WorkerProbeResult>;
+  reset: () => Promise<void>;
+  close: () => Promise<void>;
 };
 
 type ImportRosterResult = {
@@ -42,6 +51,7 @@ type ImportRosterResult = {
 };
 
 const listUrlPattern = /\/app\/Lists\//i;
+export { stopsNewRecruitBrowserSession } from "./contracts";
 
 async function captureNewRecruitUiIdentity(
   page: Page,
@@ -229,24 +239,20 @@ async function ensureAuthenticated(
   return false;
 }
 
-export async function runNewRecruitAuthenticationCheck(
-  profileDirectory: string,
-  dependencies: Pick<BrowserDependencies, "getCredentials" | "headless">,
-): Promise<{
-  ok: boolean;
-  sessionReused: boolean;
-  uiIdentity: string | null;
-  importControlVisible: boolean;
-  code?: string;
-  message?: string;
-}> {
-  const context = await chromium.launchPersistentContext(profileDirectory, {
-    channel: "chrome",
-    headless: dependencies.headless ?? false,
-  });
+async function runNewRecruitAuthenticationCheckInContext(
+  context: BrowserContext,
+  dependencies: Pick<
+    BrowserDependencies,
+    "getCredentials" | "baseUrl"
+  >,
+): Promise<WorkerProbeResult> {
+  const baseUrl = dependencies.baseUrl ?? NEW_RECRUIT_MY_LISTS;
+  const allowedOrigin = dependencies.baseUrl
+    ? new URL(dependencies.baseUrl).origin
+    : NEW_RECRUIT_ORIGIN;
   try {
     const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto(NEW_RECRUIT_MY_LISTS, {
+    await page.goto(baseUrl, {
       waitUntil: "domcontentloaded",
     });
     await page
@@ -257,9 +263,9 @@ export async function runNewRecruitAuthenticationCheck(
     const sessionReused = await ensureAuthenticated(
       page,
       dependencies.getCredentials,
-      NEW_RECRUIT_ORIGIN,
+      allowedOrigin,
     );
-    if (new URL(page.url()).origin !== NEW_RECRUIT_ORIGIN) {
+    if (new URL(page.url()).origin !== allowedOrigin) {
       throw new NewRecruitAutomationError(
         "LOGIN_ORIGIN_REJECTED",
         `New Recruit authentication completed at an unexpected origin: ${new URL(page.url()).origin}.`,
@@ -305,6 +311,22 @@ export async function runNewRecruitAuthenticationCheck(
       message:
         error instanceof Error ? error.message : "Authentication check failed.",
     };
+  }
+}
+
+export async function runNewRecruitAuthenticationCheck(
+  profileDirectory: string,
+  dependencies: Pick<BrowserDependencies, "getCredentials" | "headless">,
+): Promise<WorkerProbeResult> {
+  const context = await chromium.launchPersistentContext(profileDirectory, {
+    channel: "chrome",
+    headless: dependencies.headless ?? false,
+  });
+  try {
+    return await runNewRecruitAuthenticationCheckInContext(
+      context,
+      dependencies,
+    );
   } finally {
     await context.close();
   }
@@ -520,6 +542,9 @@ async function downloadPrettyHtml(
       "The downloaded New Recruit HTML file was empty.",
     );
   }
+  if (prettyPage !== page) {
+    await prettyPage.close().catch(() => undefined);
+  }
 }
 
 async function downloadEnrichedRosz(
@@ -567,27 +592,24 @@ async function downloadEnrichedRosz(
   }
 }
 
-export async function runNewRecruitBrowserDelivery(
+async function runNewRecruitBrowserDeliveryInContext(
   input: WorkerDeliveryRequest,
   dependencies: BrowserDependencies,
+  context: BrowserContext,
 ): Promise<WorkerResult> {
   const baseUrl = dependencies.baseUrl ?? NEW_RECRUIT_MY_LISTS;
   const allowedOrigin = dependencies.baseUrl
     ? new URL(dependencies.baseUrl).origin
     : NEW_RECRUIT_ORIGIN;
-  const context = await chromium.launchPersistentContext(input.profileDirectory, {
-    channel: "chrome",
-    headless: dependencies.headless ?? false,
-    acceptDownloads: true,
-  });
-  await dependencies.prepareContext?.(context);
   let imported = false;
   let sessionReused = true;
   let listUrl: string | null = null;
   let uiIdentity: string | null = null;
   let verification: WorkerResult["verification"] = null;
   try {
-    const page = context.pages()[0] ?? (await context.newPage());
+    const page =
+      context.pages().find((candidate) => !candidate.isClosed()) ??
+      (await context.newPage());
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
     sessionReused = await ensureAuthenticated(
@@ -694,7 +716,122 @@ export async function runNewRecruitBrowserDelivery(
       prettyHtmlPath: null,
       verification,
     };
+  }
+}
+
+export function createNewRecruitBrowserSession(
+  profileDirectory: string,
+  dependencies: BrowserDependencies,
+): NewRecruitBrowserSession {
+  const normalizedProfileDirectory = path.resolve(profileDirectory);
+  let context: BrowserContext | null = null;
+  let contextPromise: Promise<BrowserContext> | null = null;
+  let closed = false;
+  let active = false;
+
+  const browserContext = async (): Promise<BrowserContext> => {
+    if (closed) {
+      throw new NewRecruitAutomationError(
+        "NEW_RECRUIT_BROWSER_SESSION_CLOSED",
+        "The New Recruit browser session is closed.",
+      );
+    }
+    if (context) return context;
+    contextPromise ??= chromium
+      .launchPersistentContext(normalizedProfileDirectory, {
+        channel: "chrome",
+        headless: dependencies.headless ?? false,
+        acceptDownloads: true,
+      })
+      .then(async (created) => {
+        try {
+          await dependencies.prepareContext?.(created);
+          context = created;
+          return created;
+        } catch (error) {
+          await created.close().catch(() => undefined);
+          throw error;
+        }
+      })
+      .finally(() => {
+        contextPromise = null;
+      });
+    return contextPromise;
+  };
+
+  const exclusively = async <T>(operation: () => Promise<T>): Promise<T> => {
+    if (active) {
+      throw new NewRecruitAutomationError(
+        "BROWSER_PROFILE_BUSY",
+        "The New Recruit browser session already has an active operation.",
+      );
+    }
+    active = true;
+    try {
+      return await operation();
+    } finally {
+      active = false;
+    }
+  };
+
+  const resetContext = async (): Promise<void> => {
+    const pending = contextPromise;
+    const current = context;
+    context = null;
+    contextPromise = null;
+    const created = current ?? (await pending?.catch(() => null));
+    context = null;
+    await created?.close().catch(() => undefined);
+  };
+
+  return {
+    deliver: (input) =>
+      exclusively(async () => {
+        if (path.resolve(input.profileDirectory) !== normalizedProfileDirectory) {
+          throw new NewRecruitAutomationError(
+            "NEW_RECRUIT_WORKER_SESSION_MISMATCH",
+            "The persistent New Recruit browser refused a delivery for another profile.",
+          );
+        }
+        return runNewRecruitBrowserDeliveryInContext(
+          input,
+          dependencies,
+          await browserContext(),
+        );
+      }),
+    probe: () =>
+      exclusively(async () =>
+        runNewRecruitAuthenticationCheckInContext(
+          await browserContext(),
+          dependencies,
+        ),
+      ),
+    reset: () => exclusively(resetContext),
+    close: async () => {
+      if (closed) return;
+      if (active) {
+        throw new NewRecruitAutomationError(
+          "BROWSER_PROFILE_BUSY",
+          "The New Recruit browser session cannot close during an active operation.",
+        );
+      }
+      closed = true;
+      await resetContext();
+    },
+  };
+}
+
+export async function runNewRecruitBrowserDelivery(
+  input: WorkerDeliveryRequest,
+  dependencies: BrowserDependencies,
+): Promise<WorkerResult> {
+  const session = createNewRecruitBrowserSession(
+    input.profileDirectory,
+    dependencies,
+  );
+  try {
+    return await session.deliver(input);
   } finally {
-    await context.close();
+    await session.close();
   }
 }

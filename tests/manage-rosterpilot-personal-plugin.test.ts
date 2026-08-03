@@ -58,6 +58,9 @@ async function fixture(options: {
     { recursive: true },
   );
   await mkdir(path.join(projectRoot, "mcp"), { recursive: true });
+  await mkdir(path.join(projectRoot, "dist", "workers"), {
+    recursive: true,
+  });
   await mkdir(
     path.join(projectRoot, "local", "data-bundles"),
     { recursive: true },
@@ -108,6 +111,24 @@ async function fixture(options: {
     "",
   );
   await writeFile(path.join(projectRoot, "mcp", "stdio.ts"), "");
+  await writeFile(
+    path.join(
+      projectRoot,
+      "dist",
+      "workers",
+      "tessera-job-worker.mjs",
+    ),
+    "export {}\n",
+  );
+  await writeFile(
+    path.join(
+      projectRoot,
+      "dist",
+      "workers",
+      "tessera-job-worker.receipt.json",
+    ),
+    `${JSON.stringify({ schemaVersion: 1, fixture: true })}\n`,
+  );
   await writeFile(
     path.join(
       projectRoot,

@@ -365,15 +365,27 @@ function resolveCoherentEquipmentSet(
       const unscoped = matches.filter(
         (reference) => reference.loadoutChoiceId === undefined,
       );
-      const match =
-        inChoice.length === 1
-          ? inChoice[0]
-          : inChoice.length === 0 && unscoped.length === 1
-            ? unscoped[0]
-            : undefined;
-      if (!match) return [];
-      if (inChoice.length === 1) scopedMatches += 1;
-      selected.push({ ...item, reference: match });
+      if (inChoice.length === 1) {
+        scopedMatches += 1;
+        selected.push({ ...item, reference: inChoice[0] });
+        continue;
+      }
+      if (item.count > 1 && inChoice.length === item.count) {
+        scopedMatches += 1;
+        selected.push(
+          ...inChoice.map((reference) => ({
+            ...item,
+            count: 1,
+            reference,
+          })),
+        );
+        continue;
+      }
+      if (inChoice.length === 0 && unscoped.length === 1) {
+        selected.push({ ...item, reference: unscoped[0] });
+        continue;
+      }
+      return [];
     }
     return [{ choiceId, selected, scopedMatches }];
   });
@@ -410,7 +422,9 @@ function modelNameRank(
   if (actual === expected) return 0;
   if (
     actual.startsWith(`${expected} `) ||
-    expected.startsWith(`${actual} `)
+    expected.startsWith(`${actual} `) ||
+    actual.endsWith(` ${expected}`) ||
+    expected.endsWith(` ${actual}`)
   ) {
     return 1;
   }
@@ -522,29 +536,26 @@ function candidateForGroup(
   model: CatalogueModelReference,
   group: EquipmentGroup,
 ): ModelCandidate | null {
-  const modelEquipment: ResolvedEquipmentReference[] = [];
-  const directEquipment: ResolvedEquipmentReference[] = [];
-
-  for (const equipment of group.equipment) {
-    const modelMatches = referencesByName(model.equipment, equipment.name);
-    if (modelMatches.length > 1) return null;
-    if (modelMatches.length === 1) {
-      modelEquipment.push({
-        ...equipment,
-        reference: modelMatches[0],
-      });
-      continue;
-    }
-    const directMatches = referencesByName(
-      mapping.directEquipment,
-      equipment.name,
-    );
-    if (directMatches.length !== 1) return null;
-    directEquipment.push({
-      ...equipment,
-      reference: directMatches[0],
-    });
-  }
+  const modelItems = group.equipment.filter(
+    (equipment) =>
+      referencesByName(model.equipment, equipment.name).length > 0,
+  );
+  const directItems = group.equipment.filter(
+    (equipment) =>
+      referencesByName(model.equipment, equipment.name).length === 0,
+  );
+  const resolvedModelEquipment = resolveCoherentEquipmentSet(
+    model.equipment,
+    modelItems,
+  );
+  if (!resolvedModelEquipment.ok) return null;
+  const resolvedDirectEquipment = resolveCoherentEquipmentSet(
+    mapping.directEquipment,
+    directItems,
+  );
+  if (!resolvedDirectEquipment.ok) return null;
+  const modelEquipment = resolvedModelEquipment.equipment;
+  const directEquipment = resolvedDirectEquipment.equipment;
 
   const mappedNames = new Set(
     modelEquipment.map((equipment) =>

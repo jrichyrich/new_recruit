@@ -93,6 +93,13 @@ import {
   type TesseraRunRequest,
 } from "../local/tessera/jobs";
 import {
+  advanceTesseraValidationRuntime,
+  confirmTesseraValidationRemainingSixRuntime,
+  confirmTesseraValidationSuccessorRuntime,
+  readTesseraValidationRuntime,
+  startTesseraValidationRuntime,
+} from "../local/tessera/validation-runtime";
+import {
   approveRosterJourneyDataMigration,
   chooseRosterJourneyAction,
   continueRosterJourneySafely,
@@ -134,6 +141,16 @@ import {
 import {
   runTesseraProviderParityWorkflow,
 } from "../local/tessera/provider-parity-workflow";
+import {
+  associatePendingRepairVerificationCommits,
+  associateRepairVerificationCommit,
+  getReliabilitySummary,
+  getWorkflowRepairHistory,
+  getWorkflowReliabilityEventStore,
+  listRepairVerificationPlans,
+  runRepairVerificationPlan,
+  verifyRepairVerificationRecord,
+} from "../local/reliability";
 
 type Args = Record<string, string | boolean | string[]>;
 
@@ -784,6 +801,11 @@ Usage:
   rosterpilot data start-local-update [--force]
   rosterpilot data update-job --job <job-id>
   rosterpilot data rollback --bundle <bundle-id>
+  rosterpilot reliability history --workflow <workflow-id> [--kind tessera-run]
+  rosterpilot reliability summary [--workflow <workflow-id>] [--kind tessera-run]
+  rosterpilot reliability plans
+  rosterpilot reliability verify --plan <allowlisted-plan> [--workflow <workflow-id>] [--kind tessera-run]
+  rosterpilot reliability associate-commit --record <verification.json> [--workflow <workflow-id>] [--kind tessera-run]
   rosterpilot rebase --file roster.json [--out rebased.json]
   rosterpilot conflicts [--faction adeptus-custodes] [--blocking true]
   rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective] [--include-legends]
@@ -816,6 +838,11 @@ Usage:
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
   rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--analysis staged] [--profile-policy profiles.json] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
   rosterpilot tessera build-and-analyze --prompt "Build a counter-roster" --player-faction adeptus-custodes --opponent-roster enemy.json [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--collection collection.json] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--profile-policy profiles.json] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--allow-readiness-warnings] [--full-json]
+  rosterpilot tessera validation-start --file roster.json --against-faction aeldari [--profile-policy profiles.json] [--depth standard|exhaustive --confirm-exhaustive] [--workflow-id id]
+  rosterpilot tessera validation-status --workflow <workflow-id>
+  rosterpilot tessera validation-advance --workflow <workflow-id>
+  rosterpilot tessera validation-confirm-remaining-six --workflow <workflow-id> --expected-sequence <n>
+  rosterpilot tessera validation-confirm-successor --workflow <workflow-id> --failed-job <job-id> --expected-sequence <n>
   rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--simulation-backend auto|local-engine|website] [--scenario-contract contract.json | --iterations positive-int] [--enforce-provider-compatibility] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
   rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
   rosterpilot tessera run-resume --job exports/tessera/runs/run-.../tessera-run.json [--restart-from] [--out-dir exports/tessera]
@@ -1047,6 +1074,138 @@ async function main(): Promise<void> {
     if (!result.ok) process.exitCode = 2;
     return;
   }
+  if (command === "reliability") {
+    await associatePendingRepairVerificationCommits({
+      store: getWorkflowReliabilityEventStore(),
+      repositoryRoot: process.cwd(),
+    }).catch(() => undefined);
+    const action = positionals[0] ?? "summary";
+    const workflowId =
+      value(args, "workflow") ?? value(args, "workflow-id");
+    const requestedWorkflowKind = value(args, "kind");
+    const workflowKind = requestedWorkflowKind ?? "tessera-run";
+    if (action === "plans") {
+      print({
+        ok: true,
+        data: listRepairVerificationPlans(),
+        violations: [],
+        warnings: [],
+      });
+      return;
+    }
+    if (action === "verify") {
+      const planName = value(args, "plan");
+      if (!planName) {
+        throw new Error(
+          "The reliability verify command requires --plan <allowlisted-plan>.",
+        );
+      }
+      const result = await runRepairVerificationPlan({
+        planName: planName as Parameters<
+          typeof runRepairVerificationPlan
+        >[0]["planName"],
+        repositoryRoot: process.cwd(),
+        ...(workflowId
+          ? {
+              journal: {
+                store: getWorkflowReliabilityEventStore(),
+                workflow: { workflowId, workflowKind },
+              },
+            }
+          : {}),
+      });
+      print({
+        ok: result.record.passed,
+        data: result,
+        violations: result.record.passed
+          ? []
+          : [
+              {
+                code: "REPAIR_VERIFICATION_FAILED",
+                message:
+                  "The allowlisted repair-verification plan did not pass.",
+                severity: "error" as const,
+              },
+            ],
+        warnings: result.journal.warning
+          ? [
+              {
+                code: "RELIABILITY_JOURNAL_WARNING",
+                message: result.journal.warning,
+                severity: "warn" as const,
+              },
+            ]
+          : [],
+      });
+      if (!result.record.passed) process.exitCode = 2;
+      return;
+    }
+    if (action === "associate-commit") {
+      const recordPath = value(args, "record");
+      if (!recordPath) {
+        throw new Error(
+          "The reliability associate-commit command requires --record <verification.json>.",
+        );
+      }
+      const record = verifyRepairVerificationRecord(
+        JSON.parse(await readFile(path.resolve(recordPath), "utf8")),
+      );
+      const result = await associateRepairVerificationCommit({
+        record,
+        repositoryRoot: process.cwd(),
+        ...(workflowId
+          ? {
+              journal: {
+                store: getWorkflowReliabilityEventStore(),
+                workflow: { workflowId, workflowKind },
+              },
+            }
+          : {}),
+      });
+      print({
+        ok: result.matched,
+        data: result,
+        violations: result.matched
+          ? []
+          : [
+              {
+                code: "REPAIR_COMMIT_NOT_ASSOCIATED",
+                message: `The repaired source could not be associated with a clean commit (${result.reason}).`,
+                severity: "error" as const,
+              },
+            ],
+        warnings: [],
+      });
+      if (!result.matched) process.exitCode = 2;
+      return;
+    }
+    if (!workflowId && action !== "summary") {
+      throw new Error(
+        "The reliability command requires --workflow <workflow-id>.",
+      );
+    }
+    const result =
+      action === "history"
+        ? await getWorkflowRepairHistory({
+            workflowId: workflowId as string,
+            workflowKind,
+          })
+        : action === "summary"
+          ? workflowId
+            ? await getReliabilitySummary({ workflowId, workflowKind })
+            : await getReliabilitySummary(
+                requestedWorkflowKind
+                  ? { workflowKind: requestedWorkflowKind }
+                  : undefined,
+              )
+          : null;
+    if (!result) {
+      throw new Error(`Unknown reliability command "${action}".`);
+    }
+    print(result);
+    if (!result.ok) process.exitCode = 2;
+    return;
+  }
   if (command === "agent") {
     const action = positionals[0] ?? "status";
     const result =
@@ -1150,6 +1309,130 @@ async function main(): Promise<void> {
       const result = await forgetTesseraCredentials();
       print(result);
       if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "validation-start") {
+      const rosterPath = value(args, "file");
+      const opponentFaction =
+        value(args, "against-faction") ??
+        value(args, "opponent-faction");
+      if (!rosterPath || !opponentFaction) {
+        throw new Error(
+          "Tessera validation-start requires --file and --against-faction.",
+        );
+      }
+      const validationDepth = value(args, "depth") ?? "standard";
+      if (
+        validationDepth !== "standard" &&
+        validationDepth !== "exhaustive"
+      ) {
+        throw new Error(
+          "Tessera validation-start --depth requires standard or exhaustive.",
+        );
+      }
+      const exhaustiveConfirmation = flag(args, "confirm-exhaustive");
+      if (
+        validationDepth === "exhaustive" &&
+        !exhaustiveConfirmation
+      ) {
+        throw new Error(
+          "Exhaustive Web-nine validation requires --confirm-exhaustive. Standard local-nine plus representative Web-three validation is the default.",
+        );
+      }
+      const playerRoster = await readRosterDraft(path.resolve(rosterPath));
+      const profilePolicyPath = value(args, "profile-policy");
+      const profilePolicy = profilePolicyPath
+        ? ProfilePolicySchema.parse(
+            JSON.parse(
+              await readFile(path.resolve(profilePolicyPath), "utf8"),
+            ),
+          )
+        : null;
+      progress("Freezing the diverse-nine opponent portfolio.");
+      const preview = await previewFactionStressPortfolio({
+        faction: opponentFaction,
+        pointsLimit: playerRoster.pointsLimit,
+        suite: "diverse-9",
+        pointsTolerancePercent: 5,
+        allowLegends: false,
+      });
+      if (!preview.ok || !preview.data) {
+        print(preview);
+        process.exitCode = 2;
+        return;
+      }
+      progress("Starting the local nine-scenario validation stage.");
+      const result = await startTesseraValidationRuntime({
+        ...(value(args, "workflow-id")
+          ? { workflowId: value(args, "workflow-id") }
+          : {}),
+        playerRoster,
+        profilePolicy,
+        portfolio: preview.data.portfolio,
+        portfolioPreview: preview.data,
+        validationDepth,
+        exhaustiveConfirmation,
+      });
+      print({
+        ...result,
+        portfolioWarnings: preview.warnings,
+      });
+      return;
+    }
+    if (action === "validation-status") {
+      const workflowId =
+        value(args, "workflow") ?? value(args, "workflow-id");
+      if (!workflowId) {
+        throw new Error(
+          "Tessera validation-status requires --workflow <workflow-id>.",
+        );
+      }
+      print(await readTesseraValidationRuntime(workflowId));
+      return;
+    }
+    if (action === "validation-advance") {
+      const workflowId =
+        value(args, "workflow") ?? value(args, "workflow-id");
+      if (!workflowId) {
+        throw new Error(
+          "Tessera validation-advance requires --workflow <workflow-id>.",
+        );
+      }
+      print(await advanceTesseraValidationRuntime(workflowId));
+      return;
+    }
+    if (action === "validation-confirm-remaining-six") {
+      const workflowId =
+        value(args, "workflow") ?? value(args, "workflow-id");
+      if (!workflowId) {
+        throw new Error(
+          "Tessera validation-confirm-remaining-six requires --workflow <workflow-id>.",
+        );
+      }
+      print(
+        await confirmTesseraValidationRemainingSixRuntime(
+          workflowId,
+          requiredInteger(args, "expected-sequence"),
+        ),
+      );
+      return;
+    }
+    if (action === "validation-confirm-successor") {
+      const workflowId =
+        value(args, "workflow") ?? value(args, "workflow-id");
+      const failedJobId = value(args, "failed-job");
+      if (!workflowId || !failedJobId) {
+        throw new Error(
+          "Tessera validation-confirm-successor requires --workflow <workflow-id> and --failed-job <job-id>.",
+        );
+      }
+      print(
+        await confirmTesseraValidationSuccessorRuntime(
+          workflowId,
+          failedJobId,
+          requiredInteger(args, "expected-sequence"),
+        ),
+      );
       return;
     }
     if (action === "general-optimizer-start") {

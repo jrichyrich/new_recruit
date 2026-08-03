@@ -203,7 +203,7 @@ async function withTimeout(promise, timeoutMs, description) {
   }
 }
 
-async function probeMcpDefault(server, timeoutMs = 15_000) {
+async function probeMcpDefault(server, timeoutMs = 5 * 60_000) {
   const transport = new StdioClientTransport({
     command: server.command,
     args: server.args,
@@ -234,6 +234,11 @@ async function probeMcpDefault(server, timeoutMs = 15_000) {
       "build_roster",
       "get_data_status",
       "repair_tessera_web_compatibility",
+      "get_workflow_repair_history",
+      "get_reliability_summary",
+      "start_tessera_validation",
+      "get_tessera_validation_status",
+      "advance_tessera_validation",
     ]) {
       if (!names.includes(required)) {
         throw new Error(
@@ -248,6 +253,11 @@ async function probeMcpDefault(server, timeoutMs = 15_000) {
         "build_roster",
         "get_data_status",
         "repair_tessera_web_compatibility",
+        "get_workflow_repair_history",
+        "get_reliability_summary",
+        "start_tessera_validation",
+        "get_tessera_validation_status",
+        "advance_tessera_validation",
       ],
     };
   } finally {
@@ -848,6 +858,18 @@ export async function installPersonalRosterPilotPlugin(options = {}) {
       "loader.mjs",
     ),
     path.join(paths.projectRoot, "mcp", "stdio.ts"),
+    path.join(
+      paths.projectRoot,
+      "dist",
+      "workers",
+      "tessera-job-worker.mjs",
+    ),
+    path.join(
+      paths.projectRoot,
+      "dist",
+      "workers",
+      "tessera-job-worker.receipt.json",
+    ),
   ]) {
     if (!(await exists(required))) {
       throw new Error(`Required local plugin runtime path is missing: ${required}`);

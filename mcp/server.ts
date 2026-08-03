@@ -86,6 +86,7 @@ import {
   type NewRecruitDelivery,
   type NewRecruitHandoff,
   type PreferenceTag,
+  type ProfilePolicyV1,
   type ResultEnvelope,
   type RosterDraftV1,
   type RosterWorkflowResult,
@@ -123,6 +124,16 @@ type ServerOptions = {
   /** Exposes durable machine-local update job controls; omit on hosted MCP. */
   localDataUpdates?: boolean;
   runtimeProvenance?: () => RuntimeProvenance;
+  reliability?: {
+    history: (input: {
+      workflowId: string;
+      workflowKind?: string;
+    }) => Promise<unknown>;
+    summary: (input: {
+      workflowId?: string;
+      workflowKind?: string;
+    }) => Promise<unknown>;
+  };
   artifactWriter?: ArtifactWriter;
   handoffWriter?: HandoffWriter;
   workflowJourneys?: {
@@ -322,6 +333,27 @@ type ServerOptions = {
       jobPath: string,
     ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
     cancel: (jobPath: string) => Promise<TesseraRunJob>;
+  };
+  tesseraValidationWorkflows?: {
+    start: (input: {
+      playerRoster: RosterDraftV1;
+      opponentFaction: string;
+      validationDepth: "standard" | "exhaustive";
+      exhaustiveConfirmation: boolean;
+      profilePolicy?: ProfilePolicyV1;
+      workflowId?: string;
+    }) => Promise<unknown>;
+    status: (workflowId: string) => Promise<unknown>;
+    advance: (workflowId: string) => Promise<unknown>;
+    confirmRemainingSix: (
+      workflowId: string,
+      expectedOfferSequence: number,
+    ) => Promise<unknown>;
+    confirmSuccessor: (
+      workflowId: string,
+      failedJobId: string,
+      expectedOfferSequence: number,
+    ) => Promise<unknown>;
   };
   tesseraOptimizerStore?: {
     start: (
@@ -918,7 +950,12 @@ export function createRosterPilotMcpServer(
       toolName === "get_local_data_update_job" ||
       toolName === "start_local_data_update" ||
       toolName === "refresh_data_now" ||
-      toolName === "rollback_data_bundle";
+      toolName === "rollback_data_bundle" ||
+      toolName === "get_workflow_repair_history" ||
+      toolName === "get_reliability_summary" ||
+      toolName === "get_tessera_validation_status" ||
+      toolName === "confirm_tessera_validation_remaining_six" ||
+      toolName === "confirm_tessera_validation_successor";
     const handlerIndex = args.length - 1;
     const handler = args[handlerIndex];
     if (typeof handler === "function" && !controlPlaneTool) {
@@ -4406,6 +4443,177 @@ export function createRosterPilotMcpServer(
     );
   }
 
+  if (options.tesseraValidationWorkflows) {
+    const validationProfilePolicySchema = z.object({
+      schemaVersion: z.literal(1),
+      policyKind: z.literal("tessera-profile-policy"),
+      entries: z.array(
+        z.object({
+          faction: z.string().min(1),
+          unit: z.string().min(1),
+          unitOccurrence: z.number().int().positive().optional(),
+          modelCount: z.number().int().positive().optional(),
+          weaponGroup: z.string().min(1),
+          phase: z.enum(["shooting", "fight"]),
+          selectedProfile: z.string().min(1),
+          activeCount: z.number().int().positive(),
+        }),
+      ),
+    });
+
+    server.registerTool(
+      "start_tessera_validation",
+      {
+        title: "Start standard Tessera validation",
+        description:
+          "Freeze a diverse-nine opponent portfolio and start the local nine-scenario stage. Standard validation later uses three representative opponents on Tessera Web; exhaustive Web-nine must be explicitly requested and confirmed.",
+        inputSchema: {
+          playerRoster: RosterDraftSchema,
+          opponentFaction: z.string().min(1),
+          validationDepth: z
+            .enum(["standard", "exhaustive"])
+            .default("standard"),
+          exhaustiveConfirmation: z.boolean().default(false),
+          profilePolicy: validationProfilePolicySchema.optional(),
+          workflowId: z.string().min(1).max(128).optional(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({
+        playerRoster,
+        opponentFaction,
+        validationDepth,
+        exhaustiveConfirmation,
+        profilePolicy,
+        workflowId,
+      }) => {
+        if (
+          validationDepth === "exhaustive" &&
+          exhaustiveConfirmation !== true
+        ) {
+          throw new Error(
+            "Exhaustive Tessera Web validation requires explicit confirmation. Standard validation is the default.",
+          );
+        }
+        return valueContent(
+          await options.tesseraValidationWorkflows!.start({
+            playerRoster: playerRoster as RosterDraftV1,
+            opponentFaction,
+            validationDepth,
+            exhaustiveConfirmation,
+            ...(profilePolicy
+              ? { profilePolicy: profilePolicy as ProfilePolicyV1 }
+              : {}),
+            ...(workflowId ? { workflowId } : {}),
+          }),
+        );
+      },
+    );
+
+    server.registerTool(
+      "get_tessera_validation_status",
+      {
+        title: "Get Tessera validation status",
+        description:
+          "Read the durable combined local-and-Web validation state, including completed work, trusted evidence, representatives, reports, and any confirmation that is needed.",
+        inputSchema: {
+          workflowId: z.string().min(1).max(128),
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ workflowId }) =>
+        valueContent(
+          await options.tesseraValidationWorkflows!.status(workflowId),
+        ),
+    );
+
+    server.registerTool(
+      "advance_tessera_validation",
+      {
+        title: "Continue Tessera validation",
+        description:
+          "Advance one durable validation step. After trusted local-nine evidence is complete, this may prepare New Recruit artifacts and start the confirmed Tessera Web batch; it never starts an offered remaining-six batch or repair successor without separate confirmation.",
+        inputSchema: {
+          workflowId: z.string().min(1).max(128),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      async ({ workflowId }) =>
+        valueContent(
+          await options.tesseraValidationWorkflows!.advance(workflowId),
+        ),
+    );
+
+    server.registerTool(
+      "confirm_tessera_validation_remaining_six",
+      {
+        title: "Confirm the remaining six Web opponents",
+        description:
+          "Record explicit approval to run the six Web opponents omitted by standard representative-three validation. This confirmation does not itself open a website; continue the workflow afterward.",
+        inputSchema: {
+          workflowId: z.string().min(1).max(128),
+          expectedOfferSequence: z.number().int().positive(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ workflowId, expectedOfferSequence }) =>
+        valueContent(
+          await options.tesseraValidationWorkflows!.confirmRemainingSix(
+            workflowId,
+            expectedOfferSequence,
+          ),
+        ),
+    );
+
+    server.registerTool(
+      "confirm_tessera_validation_successor",
+      {
+        title: "Confirm a successor Web run",
+        description:
+          "Record explicit approval for a new successor Web job after a failed or uncertain predecessor. It preserves lineage and does not reuse an uncertain remote mutation.",
+        inputSchema: {
+          workflowId: z.string().min(1).max(128),
+          failedJobId: z.string().min(1).max(512),
+          expectedOfferSequence: z.number().int().positive(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ workflowId, failedJobId, expectedOfferSequence }) =>
+        valueContent(
+          await options.tesseraValidationWorkflows!.confirmSuccessor(
+            workflowId,
+            failedJobId,
+            expectedOfferSequence,
+          ),
+        ),
+    );
+  }
+
   if (options.tesseraRunJobs) {
     const jobSimulationBackendSchema = z.enum([
       "auto",
@@ -4901,6 +5109,60 @@ export function createRosterPilotMcpServer(
       async ({ jobPath }) =>
         valueContent(
           await options.tesseraRunJobs!.cancel(jobPath),
+        ),
+    );
+  }
+
+  if (options.reliability) {
+    server.registerTool(
+      "get_workflow_repair_history",
+      {
+        title: "Get workflow repair history",
+        description:
+          "Read and verify the append-only local history linking workflow failures, diagnoses, repairs, receipts, retries, and successor results.",
+        inputSchema: {
+          workflowId: z.string().min(1).max(256),
+          workflowKind: z.string().min(1).max(128).optional(),
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ workflowId, workflowKind }) =>
+        valueContent(
+          await options.reliability!.history({
+            workflowId,
+            workflowKind,
+          }),
+        ),
+    );
+
+    server.registerTool(
+      "get_reliability_summary",
+      {
+        title: "Get workflow reliability summary",
+        description:
+          "Summarize execution success, trusted-evidence success, recovery, repair duration, recurrence, cache reuse, mutations, receipts, and timing for one local workflow, or aggregate all recorded workflows when workflowId is omitted.",
+        inputSchema: {
+          workflowId: z.string().min(1).max(256).optional(),
+          workflowKind: z.string().min(1).max(128).optional(),
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ workflowId, workflowKind }) =>
+        valueContent(
+          await options.reliability!.summary({
+            workflowId,
+            workflowKind,
+          }),
         ),
     );
   }

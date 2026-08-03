@@ -12,6 +12,8 @@ import {
   LOCAL_AGENT_VERSION,
 } from "./agent/contracts";
 import {
+  compiledTesseraJobWorkerPath,
+  compiledTesseraJobWorkerReceiptPath,
   installedBrokerPath,
   projectRoot,
 } from "./agent/paths";
@@ -200,6 +202,43 @@ const playwrightVersion =
   dependencyVersion("playwright") ??
   dependencyVersion("playwright-core");
 const brokerBuildId = fileBuildId(installedBrokerPath());
+function tesseraJobWorkerEvidence(): {
+  workerSha256: string | null;
+  sourceSha256: string | null;
+} {
+  try {
+    const receipt = JSON.parse(
+      readFileSync(
+        compiledTesseraJobWorkerReceiptPath(),
+        "utf8",
+      ),
+    ) as {
+      schemaVersion?: number;
+      receiptKind?: string;
+      workerSha256?: string;
+      sourceSha256?: string;
+    };
+    const actual = crypto
+      .createHash("sha256")
+      .update(readFileSync(compiledTesseraJobWorkerPath()))
+      .digest("hex");
+    if (
+      receipt.schemaVersion !== 1 ||
+      receipt.receiptKind !== "tessera-job-worker-build" ||
+      receipt.workerSha256 !== actual ||
+      !/^[0-9a-f]{64}$/.test(receipt.sourceSha256 ?? "")
+    ) {
+      return { workerSha256: null, sourceSha256: null };
+    }
+    return {
+      workerSha256: actual,
+      sourceSha256: receipt.sourceSha256!,
+    };
+  } catch {
+    return { workerSha256: null, sourceSha256: null };
+  }
+}
+const tesseraJobWorker = tesseraJobWorkerEvidence();
 const macOsVersion =
   process.platform === "darwin"
     ? executableVersion("/usr/bin/sw_vers", ["-productVersion"])
@@ -227,6 +266,9 @@ export function getRuntimeProvenance(): RuntimeProvenance {
     chromeVersion,
     playwrightVersion,
     brokerBuildId,
+    tesseraJobWorkerSha256: tesseraJobWorker.workerSha256,
+    tesseraJobWorkerSourceSha256:
+      tesseraJobWorker.sourceSha256,
     macOsVersion,
     localAgentExpectedProtocolVersion:
       LOCAL_AGENT_PROTOCOL_VERSION,

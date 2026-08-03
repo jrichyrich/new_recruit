@@ -9,6 +9,7 @@ import {
   type LocalAgentDeliveryPayload,
   type LocalAgentDeliveryResult,
   type LocalAgentNewRecruitProbeResult,
+  type LocalAgentNewRecruitSessionControlResult,
   type LocalAgentTesseraPayload,
   type LocalAgentTesseraResult,
   type LocalAgentTesseraRunStartResult,
@@ -258,6 +259,36 @@ export function probeNewRecruitThroughLocalAgent(
       operation: "new-recruit.probe",
     },
     options,
+  );
+}
+
+export function resetNewRecruitLocalAgentSession(
+  sessionId: string,
+  options?: LocalAgentClientOptions,
+): Promise<LocalAgentNewRecruitSessionControlResult> {
+  return request<LocalAgentNewRecruitSessionControlResult>(
+    {
+      id: randomUUID(),
+      protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
+      operation: "new-recruit.session.reset",
+      payload: { sessionId },
+    },
+    { ...options, timeoutMs: options?.timeoutMs ?? 30_000 },
+  );
+}
+
+export function closeNewRecruitLocalAgentSession(
+  sessionId: string,
+  options?: LocalAgentClientOptions,
+): Promise<LocalAgentNewRecruitSessionControlResult> {
+  return request<LocalAgentNewRecruitSessionControlResult>(
+    {
+      id: randomUUID(),
+      protocolVersion: LOCAL_AGENT_PROTOCOL_VERSION,
+      operation: "new-recruit.session.close",
+      payload: { sessionId },
+    },
+    { ...options, timeoutMs: options?.timeoutMs ?? 10_000 },
   );
 }
 

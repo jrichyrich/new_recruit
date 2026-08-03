@@ -832,8 +832,9 @@ suite, strategy, and simulation setting must match; the report also records
 settings and iteration counts
 against each exact phase/metric/direction scenario. The frozen profile-policy
 hash and the manifest's SHA-256 over the complete frozen portfolio must also
-match. Schema-v1 and schema-v2 manifests are upgraded to schema v3 when
-resumed. Stages preserve attempts, timestamps, structured error codes,
+match. Schema-v1 through schema-v6 manifests are verified and upgraded to
+schema v7 when resumed; completed predecessor jobs are never rewritten.
+Stages preserve attempts, timestamps, structured error codes,
 retryability, and next action. Transient work gets three automatic
 attempts and up to five lifetime attempts through explicit resume; terminal
 failures need `--force-retry`. Otherwise resume fails closed. If a website run
@@ -932,6 +933,84 @@ screening half-wipe robustness deltas; deep-dive metrics remain supporting
 evidence. If mission readiness regresses, RosterPilot preserves the combat
 deltas but suppresses that conclusion.
 
+## Workflow 6: broad local evidence with Web validation
+
+Use the durable combined workflow when the goal is to understand an unknown
+opposing faction broadly and then check a representative subset against
+Tessera Web. This is distinct from the single-provider commands above and from
+the strict exact provider-parity workflow.
+
+The default validation depth is `standard`:
+
+1. Freeze one complete `diverse-9` portfolio and one profile policy under the
+   player's immutable bundle lease.
+2. Complete batch preflight for the player and all nine opponents before any
+   New Recruit activity.
+3. Run all nine locally with `full-all` and every supported metric through the
+   bounded process pool.
+4. From complete trusted local evidence, freeze one stress, one central, and
+   one contrast representative with adequate posture and composition coverage.
+5. Prepare only the player and those three opponents for New Recruit, reusing
+   verified artifacts first.
+6. Run the exact three representatives on Tessera Web with all 16 scenarios
+   each, for 48 website captures.
+7. Publish separate local and Web reports and a diagnostic comparison. Do not
+   label the comparison strict provider parity.
+
+The `exhaustive` depth still runs the local nine first, then runs all nine on
+Tessera Web. Because that means 144 website captures and up to ten New Recruit
+preparations on a cold cache, it requires explicit confirmation when the
+workflow is created. Changing an existing standard workflow into exhaustive
+is not a resume operation.
+
+### Batch preflight and mutation boundary
+
+The batch-preflight manifest is written before the first external mutation. It
+binds every canonical roster fingerprint and source identity, points and
+legality result, exact mapping/export result, service-compatible snapshot,
+ROSZ gameplay round trip, model counts, loadout-parent and leader-allocation
+checks, catalogue identity, complete profile requirements, and the canonical
+profile-policy hash. It also inventories the verified New Recruit cache and
+mutation receipts.
+
+Cache and receipt verification runs concurrently because it is read-only.
+Verified hits are partitioned from misses and materialized before browser
+delivery begins. If a profile decision is missing, the workflow records
+`needs-input` and returns the scaffold without starting a worker or opening a
+website. Mapping, catalogue, enrichment, nested-loadout, leader-allocation, or
+receipt-integrity failures stop with zero new mutations.
+
+Actual New Recruit misses are processed serially in deterministic order. Each
+mutation receipt is opened before browser activity and finalized immediately
+afterward. An uncertain remote outcome stops the whole batch; RosterPilot does
+not switch delivery paths, delete the receipt, or create a replacement list to
+probe the outcome.
+
+### Representative and successor decisions
+
+Web validation cannot start until all nine local results are trusted and the
+three analytical roles are distinct and adequately cover the frozen
+portfolio. If representative selection cannot be justified, the workflow
+retains the local result and enters review instead of choosing convenient
+opponents.
+
+If the representative Web pass is incomplete, inconclusive, or materially
+crosses the local result bands, the completed reports remain valid and the
+workflow offers the six untested opponents. **Run remaining six** is a new
+confirmed Web batch, never an automatic continuation. Likewise, a browser or
+runtime repair that requires a successor job records the failed predecessor
+and waits for **Confirm successor**. Neither confirmation changes the roster,
+applies an optimization candidate, or rewrites the predecessor.
+
+### Expected duration
+
+For a heavy 2,000-point standard run, the current operational targets are
+approximately 6–7 minutes for the local diverse-nine, under 10 minutes for the
+representative Web three, and roughly 15 minutes for the normal combined path.
+Warm queue-to-running should be under 15 seconds and cold startup under 30
+seconds. These are observable targets from the reliability timing spans, not
+gating CI timeouts. An exhaustive Web-nine run is intentionally slower.
+
 ## Durable background execution
 
 Use a background job when a Tessera operation may outlive one CLI or MCP
@@ -975,7 +1054,10 @@ npm run rosterpilot -- tessera run-cancel --job <job-path>
 
 Statuses are `queued`, `running`, `needs-input`, `complete`, `degraded`,
 `inconclusive`, `failed`, or `cancelled`. `--full-json` includes the retained
-result when available. Profile choices cannot change while a worker is active;
+result when available. Status also reports the current phase, completed and
+total work, elapsed time, and a timing-derived remaining estimate when enough
+evidence has accumulated. Profile choices cannot change while a worker is
+active;
 `resolve-profiles` validates and freezes a structured policy into a stopped
 job, then `run-resume` applies it. Stress jobs additionally inherit the
 hash-verified stress manifest. Before a worker performs any data-consuming
@@ -990,6 +1072,29 @@ canonical local artifacts are source/local-input JSON pairs. Their simulation
 remains one analytical stage rather than the stress workflow's per-opponent
 screening/deep-dive stages. Cancellation retains the job, artifacts, website
 prepared-list inventory, and any remote lists.
+
+The durable job worker is precompiled by the normal application build and by
+personal-plugin installation. Its compiled and source hashes are part of the
+runtime identity checked by the MCP process and local agent. A missing or
+mismatched worker fails before New Recruit, browser, or simulation activity;
+rebuild the worker, restart the agent and MCP process, and start a new job only
+after status agrees.
+
+New Recruit and Tessera Web each have a persistent, provider-specific serial
+queue and authenticated browser context. At most one operation per provider
+and two browser operations globally may be active. Safe transient failures can
+reset the affected context. Uncertain New Recruit outcomes, authentication
+changes, or semantic drift stop the session and retain receipts for guided
+recovery. Tessera scenario controls stay serial even within a batch because
+freshness proof depends on the ordered control and DOM-mutation sequence.
+
+Local diverse-nine execution uses a coordinator-owned pool of at most three
+child processes by default. Children receive sealed immutable inputs, write
+isolated results, and never mutate the stress manifest. The coordinator alone
+owns canonical ordering, retry, cancellation, receipts, and atomic
+checkpoints. Before dispatch it verifies the content-addressed local result
+cache; any changed key component or incomplete or tampered receipt is a miss
+or a failure, never silent reuse.
 
 The matching local MCP tools are `start_tessera_run`,
 `get_tessera_run_status`, `resume_tessera_run`,
@@ -1028,6 +1133,64 @@ them as `tessera analyze`, `tessera build-and-analyze`, `tessera stress-test`,
 `build_and_stress_roster_against_faction`, and
 `compare_stress_test_revision`, plus the six job tools above. Hosted MCP,
 REST, OpenAPI, and the public website do not expose these operations.
+
+## Repair traceability
+
+The reliability journal is a projection over authoritative journey, Tessera,
+data-update, and New Recruit records. It does not replace them. Events are
+appended only after the authoritative transition, are chained by SHA-256, and
+carry references to the exact receipts, reports, jobs, bundles, and source
+state involved. If journal projection fails, the operation still succeeds and
+returns a reliability warning. Reconciliation repairs missing head and registry
+projections without replaying an external action; safely requeued interrupted
+jobs record `recovered-after-crash` through their authoritative recovery path.
+
+Read a workflow's event chain or aggregate timing and recovery summary:
+
+```bash
+npm run rosterpilot -- reliability history \
+  --workflow <workflow-id> \
+  --kind tessera-run
+npm run rosterpilot -- reliability summary \
+  --workflow <workflow-id> \
+  --kind tessera-run
+```
+
+The corresponding read-only local MCP tools are
+`get_workflow_repair_history` and `get_reliability_summary`. History verifies
+sequence, previous-event hashes, the journal head, and registry binding before
+returning events. Summary reports execution and evidence outcomes separately,
+plus first-attempt and recovery behavior, repeated errors, repair duration,
+user actions, cache or artifact reuse, external mutation and duplicate counts,
+receipt integrity, and timing distributions.
+
+Maintainer repair verification accepts only named plans:
+
+```bash
+npm run rosterpilot -- reliability plans
+npm run rosterpilot -- reliability verify \
+  --plan tessera-workers \
+  --workflow <workflow-id> \
+  --kind tessera-run
+```
+
+The allowlist is `reliability-journal`, `batch-preflight`, `tessera-workers`,
+`tessera-browser`, `standard-cross-provider`, `lint`, `plugin-parity`,
+`application-build`, and `complete-suite`. A plan freezes its executable and
+arguments in source; there is no arbitrary-command field. The result records
+timestamps, exit status, test counts, bounded-output hashes, toolchain identity,
+repository head, source and dirty-diff fingerprints, and changed-file hashes.
+It does not persist raw logs. After committing the exact verified files, use:
+
+```bash
+npm run rosterpilot -- reliability associate-commit \
+  --record <verification.json> \
+  --workflow <workflow-id> \
+  --kind tessera-run
+```
+
+Association succeeds only for a clean commit whose file hashes match the
+recorded repaired source state.
 
 ## Safe recovery
 

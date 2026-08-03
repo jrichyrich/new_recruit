@@ -52,7 +52,9 @@ import {
   type TesseraOpponentInput,
 } from "./companion";
 import {
+  aggregateProfileRequirements,
   ProfilePolicySchema,
+  profilePolicyScaffold,
   validateProfilePolicy,
 } from "./profile-policy";
 import {
@@ -76,6 +78,14 @@ import {
 import {
   providerCompatibilityEnvelopeSha256,
 } from "./provider-compatibility";
+import {
+  associateWorkflowReliabilityIdentities,
+  createTimingSpanV1,
+  createWorkflowReliabilityRecorder,
+  getWorkflowReliabilityEventStore,
+  type TimingSpanV1,
+  type WorkflowReliabilityOutcomeV1,
+} from "../reliability";
 
 const execFileAsync = promisify(execFile);
 const sha256Pattern = /^[0-9a-f]{64}$/;
@@ -292,6 +302,13 @@ export type TesseraRunJob = {
   restartFrom: TesseraRunRestartReceipt | null;
   retryBudget: TesseraRunRetryBudget;
   attemptHistory: TesseraRunAttemptProvenance[];
+  timingSpans?: TimingSpanV1[];
+  journalReference?: {
+    workflowId: string;
+    workflowKind: "tessera-run";
+    lastEventSha256: string | null;
+  } | null;
+  reliabilityWarnings?: string[];
   /**
    * First concrete provider selected in this simulation stage. Retries are
    * forced through this provider and must reproduce its exact identity.
@@ -304,6 +321,25 @@ export type TesseraRunJob = {
     retryable: boolean;
   } | null;
   nextAction: string | null;
+};
+
+export type TesseraRunProgress = {
+  phase:
+    | "queued"
+    | "preflight"
+    | "preparation"
+    | "simulation"
+    | "screening"
+    | "deep-dive"
+    | "validation"
+    | "persistence"
+    | "complete"
+    | "stopped";
+  completedWork: number;
+  totalWork: number;
+  elapsedMs: number;
+  estimatedRemainingMs: number | null;
+  estimateSource: "timing-derived" | "insufficient-evidence" | "terminal";
 };
 
 type TesseraRunJobDocument = TesseraRunJob & {
@@ -334,6 +370,186 @@ function publicJob(document: TesseraRunJobDocument): TesseraRunJob {
   const job = { ...document } as Record<string, unknown>;
   delete job.request;
   return job as TesseraRunJob;
+}
+
+function reliabilityOutcomeForStatus(
+  status: TesseraRunStatus,
+): WorkflowReliabilityOutcomeV1 {
+  switch (status) {
+    case "queued":
+      return "started";
+    case "running":
+      return "in-progress";
+    case "complete":
+      return "succeeded";
+    case "degraded":
+      return "degraded";
+    case "inconclusive":
+      return "inconclusive";
+    case "needs-input":
+      return "needs-input";
+    case "cancelled":
+      return "cancelled";
+    case "failed":
+      return "failed";
+  }
+}
+
+function reliabilityExecutionStatus(
+  status: TesseraRunStatus,
+) {
+  return status === "queued"
+    ? "not-started" as const
+    : status === "running"
+      ? "running" as const
+      : status === "complete"
+        ? "succeeded" as const
+        : status;
+}
+
+function closeTimingSpan(
+  spans: TimingSpanV1[],
+  name: TimingSpanV1["name"],
+  endedAt: string,
+): TimingSpanV1[] {
+  return spans.map((span) =>
+    span.name === name && span.endedAt === null
+      ? createTimingSpanV1({
+          spanKind: span.spanKind,
+          name: span.name,
+          startedAt: span.startedAt,
+          endedAt,
+          clock: span.clock,
+        })
+      : span,
+  );
+}
+
+async function projectTesseraReliabilityEvent(
+  jobPath: string,
+  document: TesseraRunJobDocument,
+  eventKind: string,
+  stage: string,
+): Promise<TesseraRunJobDocument> {
+  const workflow = {
+    workflowId: document.runId,
+    workflowKind: "tessera-run" as const,
+  };
+  const association = await associateWorkflowReliabilityIdentities({
+    workflow,
+    identities: [
+      { kind: "tessera-run-id", value: document.runId },
+      ...(document.supersedesRunId
+        ? [
+            {
+              kind: "successor-run-id" as const,
+              value: document.runId,
+            },
+          ]
+        : []),
+    ],
+    predecessorWorkflowId: document.supersedesRunId ?? null,
+  });
+  const recorder = createWorkflowReliabilityRecorder(
+    getWorkflowReliabilityEventStore(),
+    {
+      workflow,
+      provider:
+        document.simulationProviderPin?.selectedBackend ?? null,
+      attributes: {
+        runKind: document.runKind,
+        runId: document.runId,
+      },
+    },
+  );
+  const result = await recorder.record({
+    idempotencyKey: [
+      document.runId,
+      document.simulationStage,
+      document.attempt,
+      eventKind,
+      document.updatedAt,
+    ].join(":"),
+    eventKind,
+    stage,
+    outcome: reliabilityOutcomeForStatus(document.status),
+    occurredAt: document.updatedAt,
+    timings: document.timingSpans ?? [],
+    execution: {
+      status: reliabilityExecutionStatus(document.status),
+      attempt: document.attempt,
+    },
+    evidence: {
+      status:
+        document.status === "complete" ||
+        document.status === "degraded" ||
+        document.status === "inconclusive"
+          ? document.artifactReceipts.length > 0
+            ? "verified"
+            : "partial"
+          : document.artifactReceipts.length > 0
+            ? "partial"
+            : "none",
+      artifactCount: document.artifactReceipts.length,
+      evidenceSha256:
+        document.artifactReceipts.length > 0
+          ? canonicalSha256(
+              document.artifactReceipts.map((receipt) => ({
+                kind: receipt.kind,
+                attempt: receipt.attempt,
+                sha256: receipt.sha256,
+              })),
+            )
+          : null,
+    },
+    error: document.error,
+    attributes: {
+      journeyId: null,
+      attempt: document.attempt,
+      simulationStage: document.simulationStage,
+      supersedesRunId: document.supersedesRunId ?? null,
+      requestSha256: document.requestSha256,
+      dataPinSha256: document.dataPinSha256,
+      profilePolicySha256: document.profilePolicySha256,
+      runtime: {
+        buildId: document.runtimeProvenance.buildId,
+        gitHead: document.runtimeProvenance.gitHead,
+        sourceFingerprint:
+          document.runtimeProvenance.sourceFingerprintNow,
+        tesseraJobWorkerSha256:
+          document.runtimeProvenance.tesseraJobWorkerSha256 ?? null,
+      },
+      receipts: document.artifactReceipts.map((receipt) => ({
+        kind: receipt.kind,
+        attempt: receipt.attempt,
+        filename: path.basename(receipt.path),
+        sha256: receipt.sha256,
+      })),
+    },
+  });
+  const warnings = [
+    ...(document.reliabilityWarnings ?? []),
+    ...(!association.ok && association.warning
+      ? [association.warning]
+      : []),
+    ...(!result.ok
+      ? [
+          `Reliability journal warning: ${result.error.code}: ${result.error.message}`,
+        ]
+      : []),
+  ];
+  const projected: TesseraRunJobDocument = {
+    ...document,
+    journalReference: result.ok
+      ? {
+          ...workflow,
+          lastEventSha256: result.data.event.eventSha256,
+        }
+      : document.journalReference ?? null,
+    reliabilityWarnings: [...new Set(warnings)].slice(-20),
+  };
+  await writeJsonAtomic(jobPath, projected);
+  return projected;
 }
 
 function jobError(code: string, message: string): Error & { code: string } {
@@ -390,6 +606,10 @@ function runtimeIdentitySha256(
     chromeVersion: runtime.chromeVersion ?? null,
     playwrightVersion: runtime.playwrightVersion ?? null,
     brokerBuildId: runtime.brokerBuildId ?? null,
+    tesseraJobWorkerSha256:
+      runtime.tesseraJobWorkerSha256 ?? null,
+    tesseraJobWorkerSourceSha256:
+      runtime.tesseraJobWorkerSourceSha256 ?? null,
     macOsVersion: runtime.macOsVersion ?? null,
     localAgentExpectedProtocolVersion:
       runtime.localAgentExpectedProtocolVersion ?? null,
@@ -409,12 +629,22 @@ function runtimeIdentitySha256(
 
 export function durableTesseraRuntimeAdmissionIssue(
   runtime: RuntimeProvenance,
-): { code: "RUNTIME_RESTART_REQUIRED"; message: string } | null {
+): { code: string; message: string } | null {
   if (runtime.stale) {
     return {
       code: "RUNTIME_RESTART_REQUIRED",
       message:
         "RosterPilot source changed after this MCP or CLI process started. Restart the MCP process and run `rosterpilot agent ensure-current` before starting Tessera; no job or external mutation was launched.",
+    };
+  }
+  if (
+    !runtime.tesseraJobWorkerSha256 ||
+    !runtime.tesseraJobWorkerSourceSha256
+  ) {
+    return {
+      code: "TESSERA_WORKER_BUILD_MISSING",
+      message:
+        "The precompiled Tessera job worker is missing or failed its build receipt. Run `npm run tessera:worker:build`, restart the local agent and MCP process, then start the run again; no external activity was launched.",
     };
   }
   const agent = runtime.localAgentObservedStatus;
@@ -426,9 +656,31 @@ export function durableTesseraRuntimeAdmissionIssue(
     agent.runtimeSourceFingerprint !== null &&
     agent.runtimeSourceFingerprint !==
       runtime.sourceFingerprintNow;
-  if (buildChanged || sourceChanged) {
+  const workerMissing =
+    !agent.tesseraJobWorkerSha256 ||
+    !agent.tesseraJobWorkerSourceSha256;
+  const workerChanged =
+    agent.tesseraJobWorkerSha256 !== null &&
+    agent.tesseraJobWorkerSha256 !== undefined &&
+    agent.tesseraJobWorkerSha256 !==
+      runtime.tesseraJobWorkerSha256;
+  const workerSourceChanged =
+    agent.tesseraJobWorkerSourceSha256 !== null &&
+    agent.tesseraJobWorkerSourceSha256 !== undefined &&
+    agent.tesseraJobWorkerSourceSha256 !==
+      runtime.tesseraJobWorkerSourceSha256;
+  if (
+    buildChanged ||
+    sourceChanged ||
+    workerMissing ||
+    workerChanged ||
+    workerSourceChanged
+  ) {
     return {
-      code: "RUNTIME_RESTART_REQUIRED",
+      code:
+        workerMissing || workerChanged || workerSourceChanged
+          ? "TESSERA_WORKER_BUILD_MISMATCH"
+          : "RUNTIME_RESTART_REQUIRED",
       message:
         "The local agent and this MCP or CLI process were built from different RosterPilot source. Run `rosterpilot agent ensure-current`, restart the MCP process, and start the Tessera run again; no job or external mutation was launched.",
     };
@@ -463,6 +715,10 @@ async function jobRuntimeProvenance(): Promise<RuntimeProvenance> {
         runtimeBuildId: status.runtime?.buildId ?? null,
         runtimeSourceFingerprint:
           status.runtime?.sourceFingerprintNow ?? null,
+        tesseraJobWorkerSha256:
+          status.runtime?.tesseraJobWorkerSha256 ?? null,
+        tesseraJobWorkerSourceSha256:
+          status.runtime?.tesseraJobWorkerSourceSha256 ?? null,
         statusErrorCode: null,
       },
     };
@@ -480,6 +736,8 @@ async function jobRuntimeProvenance(): Promise<RuntimeProvenance> {
         brokerAvailable: null,
         runtimeBuildId: null,
         runtimeSourceFingerprint: null,
+        tesseraJobWorkerSha256: null,
+        tesseraJobWorkerSourceSha256: null,
         statusErrorCode:
           error instanceof LocalAgentError
             ? error.code
@@ -2539,6 +2797,9 @@ async function readJobDocument(
   parsed.rootDirectory ??= parsed.jobDirectory;
   parsed.workerTokenSha256 ??= null;
   parsed.inputArtifacts ??= [];
+  parsed.timingSpans ??= [];
+  parsed.journalReference ??= null;
+  parsed.reliabilityWarnings ??= [];
   parsed.profileResolution ??= null;
   parsed.requestSha256 ??= canonicalSha256(parsed.request);
   parsed.dataPins ??= dataPinsForRequest(parsed.request);
@@ -2607,6 +2868,8 @@ async function readJobDocument(
     !Array.isArray(parsed.dataPins) ||
     !Array.isArray(parsed.artifactReceipts) ||
     !Array.isArray(parsed.attemptHistory) ||
+    !Array.isArray(parsed.timingSpans) ||
+    !Array.isArray(parsed.reliabilityWarnings) ||
     typeof parsed.rootDirectory !== "string" ||
     !parsed.runtimeProvenance ||
     typeof parsed.runtimeProvenance !== "object"
@@ -3127,7 +3390,12 @@ async function launchWorker(
         "The durable run is retained. Repair or restart the local agent, then resume this same queued attempt.",
     };
     await writeJsonAtomic(jobPathFor(reset), reset);
-    return reset;
+    return projectTesseraReliabilityEvent(
+      jobPathFor(reset),
+      reset,
+      "failure",
+      "worker-launch",
+    );
   }
 }
 
@@ -4155,6 +4423,85 @@ async function bindFrozenStressPortfolio(
   };
 }
 
+function knownPrequeueRosters(
+  request: TesseraRunRequest,
+): RosterDraftV1[] | null {
+  if (request.kind === "exact") {
+    const opponent =
+      request.opponent.kind === "roster"
+        ? request.opponent.roster
+        : request.options?.opponentRosterContext;
+    return opponent
+      ? [request.playerRoster, opponent]
+      : null;
+  }
+  if (request.kind === "stress") {
+    const portfolio = request.options?.portfolioPreview?.portfolio;
+    if (!portfolio) return null;
+    const opponents = portfolio.items.flatMap((item) =>
+      item.status === "ready" && item.roster ? [item.roster] : [],
+    );
+    return opponents.length > 0
+      ? [request.playerRoster, ...opponents]
+      : null;
+  }
+  return null;
+}
+
+async function prequeueProfileResolution(
+  request: TesseraRunRequest,
+  profilePolicyPath: string | null,
+  jobDirectory: string,
+): Promise<TesseraProfileResolutionState | null> {
+  if (
+    (request.kind !== "exact" && request.kind !== "stress") ||
+    request.options?.executionMode !== "simulate"
+  ) {
+    return null;
+  }
+  const rosters = knownPrequeueRosters(request);
+  if (!rosters) return null;
+  const requirements = aggregateProfileRequirements(rosters);
+  if (requirements.length === 0) return null;
+  const policy = profilePolicyPath
+    ? ProfilePolicySchema.parse(
+        JSON.parse(await readFile(profilePolicyPath, "utf8")),
+      )
+    : null;
+  const validation = validateProfilePolicy(requirements, policy);
+  if (validation.valid) return null;
+  const scaffold = profilePolicyScaffold(requirements);
+  const scaffoldPath = path.join(
+    jobDirectory,
+    "profile-policy.scaffold.json",
+  );
+  const scaffoldContent = `${JSON.stringify(scaffold, null, 2)}\n`;
+  await writeFile(scaffoldPath, scaffoldContent, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return {
+    violationCode: "TESSERA_PROFILE_POLICY_REQUIRED",
+    scaffoldPath,
+    scaffoldSha256: contentSha256(scaffoldContent),
+    scaffold,
+    requirements: requirements.map((requirement) => ({
+      faction: requirement.faction,
+      unit: requirement.unit,
+      ...(requirement.unitOccurrence === undefined
+        ? {}
+        : { unitOccurrence: requirement.unitOccurrence }),
+      ...(requirement.modelCount === undefined
+        ? {}
+        : { modelCount: requirement.modelCount }),
+      weaponGroup: requirement.weaponGroup,
+      phase: requirement.phase,
+      availableProfiles: [...requirement.availableProfiles],
+      activeCount: requirement.activeCount,
+    })),
+  };
+}
+
 export async function startTesseraRun(
   request: TesseraRunRequest,
   options: StartTesseraRunOptions = {},
@@ -4228,6 +4575,14 @@ export async function startTesseraRun(
       1,
     );
     const now = new Date().toISOString();
+    const profileResolution = await prequeueProfileResolution(
+      requestWithOutput,
+      frozenInputs.profilePolicyPath,
+      jobDirectory,
+    );
+    const initialStatus: TesseraRunStatus = profileResolution
+      ? "needs-input"
+      : "queued";
     const requestSha256 = canonicalSha256(requestWithOutput);
     const dataPins = dataPinsForRequest(requestWithOutput);
     const dataPinSha256 = canonicalSha256(dataPins);
@@ -4238,20 +4593,20 @@ export async function startTesseraRun(
     const scenarioContractSha256 =
       requestScenarioContractSha256(requestWithOutput);
     const runtimeProvenance = await jobRuntimeProvenance();
-    if (options.launch !== false) {
+    if (options.launch !== false && initialStatus === "queued") {
       assertDurableRuntimeAdmission(runtimeProvenance);
     }
     const jobPath = path.join(jobDirectory, "tessera-run.json");
-    const document: TesseraRunJobDocument = {
+    let document: TesseraRunJobDocument = {
       schemaVersion: 1,
       jobKind: "rosterpilot-tessera-run",
       runId,
       runKind: request.kind,
       supersedesRunId: options.supersedesRunId ?? null,
-      status: "queued",
+      status: initialStatus,
       createdAt: now,
       startedAt: null,
-      completedAt: null,
+      completedAt: profileResolution ? now : null,
       updatedAt: now,
       attempt: 1,
       workerPid: null,
@@ -4272,20 +4627,32 @@ export async function startTesseraRun(
       dataPinSha256,
       profilePolicySha256,
       scenarioContractSha256,
-      artifactReceipts: [],
+      artifactReceipts: profileResolution?.scaffoldPath
+        ? [
+            {
+              kind: "profile-scaffold",
+              attempt: 1,
+              path: path.relative(
+                jobDirectory,
+                profileResolution.scaffoldPath,
+              ),
+              sha256: profileResolution.scaffoldSha256!,
+            },
+          ]
+        : [],
       preparedCheckpoint: null,
       runtimeProvenance,
       runtimeIdentitySha256:
         runtimeIdentitySha256(runtimeProvenance),
       simulationStage: 1,
       restartFrom: null,
-      retryBudget: retryBudgetFor(1, "queued"),
+      retryBudget: retryBudgetFor(1, initialStatus),
       attemptHistory: [
         attemptProvenance({
           attempt: 1,
           simulationStage: 1,
           trigger: "start",
-          status: "queued",
+          status: initialStatus,
           at: now,
           requestSha256,
           dataPinSha256,
@@ -4293,11 +4660,30 @@ export async function startTesseraRun(
           runtime: runtimeProvenance,
         }),
       ],
+      timingSpans: [
+        createTimingSpanV1({
+          spanKind: "queue",
+          name: "queue-wait",
+          startedAt: now,
+          ...(profileResolution ? { endedAt: now } : {}),
+        }),
+      ],
+      journalReference: null,
+      reliabilityWarnings: [],
       simulationProviderPin: null,
-      profileResolution: null,
-      error: null,
+      profileResolution,
+      error: profileResolution
+        ? {
+            code: profileResolution.violationCode,
+            message:
+              "Explicit weapon-profile choices are required before this durable run can start.",
+            retryable: false,
+          }
+        : null,
       nextAction:
-        "Wait for the background run or inspect its status.",
+        profileResolution
+          ? `Complete ${profileResolution.scaffoldPath}, resolve the retained profile choices, then resume this same run.`
+          : "Wait for the background run or inspect its status.",
       request: requestWithOutput,
     };
     if (
@@ -4327,6 +4713,12 @@ export async function startTesseraRun(
       { flag: "wx", mode: 0o600 },
     );
     await validateJobDocumentPaths(document, jobPath, true);
+    document = await projectTesseraReliabilityEvent(
+      jobPath,
+      document,
+      "transition",
+      initialStatus,
+    );
     for (const bundleId of new Set(
       dataPins.map((entry) => entry.sourceData.bundleId),
     )) {
@@ -4336,7 +4728,9 @@ export async function startTesseraRun(
       );
     }
     manifestPublished = true;
-    if (options.launch === false) return publicJob(document);
+    if (options.launch === false || initialStatus === "needs-input") {
+      return publicJob(document);
+    }
     return publicJob(await launchWorker(document));
   } catch (error) {
     if (!manifestPublished) {
@@ -4436,10 +4830,172 @@ async function refreshDeadWorkerStatus(
           : "Resume this run to retry the interrupted attempt without trusting partial simulation evidence.",
     };
     await writeJsonAtomic(resolvedJobPath, failed);
-    return failed;
+    return projectTesseraReliabilityEvent(
+      resolvedJobPath,
+      failed,
+      "failure",
+      "worker-exit",
+    );
   } finally {
     await release();
   }
+}
+
+function terminalRunStatus(status: TesseraRunStatus): boolean {
+  return [
+    "complete",
+    "degraded",
+    "inconclusive",
+    "failed",
+    "cancelled",
+    "needs-input",
+  ].includes(status);
+}
+
+async function tesseraRunProgress(
+  document: TesseraRunJobDocument,
+): Promise<TesseraRunProgress> {
+  const now = document.completedAt
+    ? Date.parse(document.completedAt)
+    : Date.now();
+  const elapsedMs = Math.max(0, now - Date.parse(document.createdAt));
+  const terminal = terminalRunStatus(document.status);
+  let phase: TesseraRunProgress["phase"] =
+    document.status === "queued"
+      ? "queued"
+      : terminal
+        ? document.status === "complete" ||
+          document.status === "degraded" ||
+          document.status === "inconclusive"
+          ? "complete"
+          : "stopped"
+        : "simulation";
+  let completedWork = terminal ? 1 : 0;
+  let totalWork = 1;
+  if (
+    document.runKind === "stress" ||
+    document.runKind === "build-and-stress" ||
+    document.runKind === "stress-revision"
+  ) {
+    try {
+      const manifest = JSON.parse(
+        await readFile(document.manifestPath ?? "", "utf8"),
+      ) as {
+        batchPreflight?: unknown;
+        preparedPlayer?: unknown;
+        preparedOpponents?: Record<string, unknown>;
+        portfolio?: {
+          items?: Array<{
+            templateId?: string;
+            status?: string;
+            roster?: unknown;
+          }>;
+        };
+        configuration?: { analysisStrategy?: string };
+        representatives?: Array<{ templateId?: string }>;
+        screening?: Record<string, { status?: string }>;
+        deepDive?: Record<string, { status?: string }>;
+        finalArtifacts?: unknown;
+      };
+      const readyIds = (manifest.portfolio?.items ?? [])
+        .filter(
+          (item) => item.status === "ready" && item.roster !== null,
+        )
+        .flatMap((item) =>
+          typeof item.templateId === "string"
+            ? [item.templateId]
+            : [],
+        );
+      const fullAll =
+        manifest.configuration?.analysisStrategy === "full-all";
+      const representativeIds = (manifest.representatives ?? [])
+        .flatMap((entry) =>
+          typeof entry.templateId === "string"
+            ? [entry.templateId]
+            : [],
+        );
+      const expectedDeepDive = fullAll
+        ? []
+        : representativeIds.length > 0
+          ? representativeIds
+          : readyIds.slice(0, Math.min(3, readyIds.length));
+      const preparationTotal = 1 + readyIds.length;
+      const preparationCompleted =
+        (manifest.preparedPlayer ? 1 : 0) +
+        Object.keys(manifest.preparedOpponents ?? {}).length;
+      const screeningCompleted = readyIds.filter(
+        (templateId) =>
+          manifest.screening?.[templateId]?.status === "complete",
+      ).length;
+      const deepDiveCompleted = expectedDeepDive.filter(
+        (templateId) =>
+          manifest.deepDive?.[templateId]?.status === "complete",
+      ).length;
+      totalWork =
+        1 +
+        preparationTotal +
+        readyIds.length +
+        expectedDeepDive.length +
+        1;
+      completedWork =
+        (manifest.batchPreflight ? 1 : 0) +
+        preparationCompleted +
+        screeningCompleted +
+        deepDiveCompleted +
+        (manifest.finalArtifacts ? 1 : 0);
+      phase = !manifest.batchPreflight
+        ? "preflight"
+        : preparationCompleted < preparationTotal
+          ? "preparation"
+          : screeningCompleted < readyIds.length
+            ? "screening"
+            : deepDiveCompleted < expectedDeepDive.length
+              ? "deep-dive"
+              : manifest.finalArtifacts
+                ? terminal
+                  ? "complete"
+                  : "persistence"
+                : "validation";
+    } catch {
+      // A not-yet-created or legacy manifest falls back to job-level progress.
+    }
+  }
+  if (terminal) {
+    if (
+      document.status === "complete" ||
+      document.status === "degraded" ||
+      document.status === "inconclusive"
+    ) {
+      completedWork = totalWork;
+      phase = "complete";
+    } else {
+      phase = "stopped";
+    }
+  }
+  const estimatedRemainingMs =
+    terminal
+      ? 0
+      : completedWork > 0 && completedWork < totalWork
+        ? Math.max(
+            0,
+            Math.round(
+              (elapsedMs / completedWork) *
+                (totalWork - completedWork),
+            ),
+          )
+        : null;
+  return {
+    phase,
+    completedWork,
+    totalWork,
+    elapsedMs,
+    estimatedRemainingMs,
+    estimateSource: terminal
+      ? "terminal"
+      : estimatedRemainingMs === null
+        ? "insufficient-evidence"
+        : "timing-derived",
+  };
 }
 
 export async function getTesseraRunStatus(
@@ -4448,6 +5004,7 @@ export async function getTesseraRunStatus(
 ): Promise<{
   job: TesseraRunJob;
   result: TesseraRunResult | null;
+  progress: TesseraRunProgress;
 }> {
   const resolved = path.resolve(jobPath);
   const document = await refreshDeadWorkerStatus(
@@ -4487,7 +5044,11 @@ export async function getTesseraRunStatus(
       }
     }
   }
-  return { job: publicJob(document), result };
+  return {
+    job: publicJob(document),
+    result,
+    progress: await tesseraRunProgress(document),
+  };
 }
 
 function withResumePolicy(
@@ -4974,7 +5535,7 @@ export async function resumeTesseraRun(
       document.profilePolicyPath,
       document.inputArtifacts,
     );
-    const resumed: TesseraRunJobDocument = {
+    let resumed: TesseraRunJobDocument = {
       ...document,
       request: resumedRequest,
       status: "queued",
@@ -5030,6 +5591,12 @@ export async function resumeTesseraRun(
     };
     await validateJobDocumentPaths(resumed, resolved, true);
     await writeJsonAtomic(resolved, resumed);
+    resumed = await projectTesseraReliabilityEvent(
+      resolved,
+      resumed,
+      "transition",
+      "queued",
+    );
     if (options.launch === false) return publicJob(resumed);
     return publicJob(await launchWorker(resumed));
   } finally {
@@ -5108,7 +5675,7 @@ export async function resolveTesseraRunProfiles(
     const requestSha256 = canonicalSha256(updatedRequest);
     const dataPins = dataPinsForRequest(updatedRequest);
     const dataPinSha256 = canonicalSha256(dataPins);
-    const updated: TesseraRunJobDocument = {
+    let updated: TesseraRunJobDocument = {
       ...document,
       profilePolicyPath: artifact.path,
       inputArtifacts,
@@ -5136,6 +5703,12 @@ export async function resolveTesseraRunProfiles(
     };
     await validateJobDocumentPaths(updated, resolved, true);
     await writeJsonAtomic(resolved, updated);
+    updated = await projectTesseraReliabilityEvent(
+      resolved,
+      updated,
+      "approval",
+      "profile-resolution",
+    );
     return publicJob(updated);
   } finally {
     await release();
@@ -5217,6 +5790,15 @@ export async function cancelTesseraRun(
           errorCode: null,
         },
       ),
+      timingSpans: closeTimingSpan(
+        closeTimingSpan(
+          document.timingSpans ?? [],
+          "queue-wait",
+          now,
+        ),
+        "workflow-total",
+        now,
+      ),
       error: null,
       nextAction:
         "Prepared remote lists are retained in the New Recruit run inventory; cancellation never deletes them.",
@@ -5253,6 +5835,12 @@ export async function cancelTesseraRun(
       updatedAt: new Date().toISOString(),
     };
     await writeJsonAtomic(resolved, cancelled);
+    cancelled = await projectTesseraReliabilityEvent(
+      resolved,
+      cancelled,
+      "transition",
+      "cancelled",
+    );
     return publicJob(cancelled);
   } finally {
     await release();
@@ -5533,7 +6121,7 @@ function requestForDurableExecution(
       ...request,
       options: {
         ...request.options,
-        sessionId: runId,
+        sessionId: request.options?.sessionId ?? runId,
         simulationBackend:
           simulationBackend ?? request.options?.simulationBackend,
       },
@@ -5578,7 +6166,7 @@ function requestForDurableExecution(
       },
       options: {
         ...request.options,
-        sessionId: runId,
+        sessionId: request.options?.sessionId ?? runId,
         simulationBackend:
           simulationBackend ?? request.options?.simulationBackend,
       },
@@ -5591,7 +6179,7 @@ function requestForDurableExecution(
         ...request.options,
         executionMode: "simulate",
         experimental: false,
-        sessionId: runId,
+        sessionId: request.options?.sessionId ?? runId,
         simulationBackend:
           simulationBackend ?? request.options?.simulationBackend,
       },
@@ -5720,6 +6308,11 @@ export async function executeTesseraRunJob(
             errorCode: "TESSERA_RUN_RUNTIME_CHANGED",
           },
         ),
+        timingSpans: closeTimingSpan(
+          latest.timingSpans ?? [],
+          "queue-wait",
+          failedAt,
+        ),
         error: {
           code: "TESSERA_RUN_RUNTIME_CHANGED",
           message:
@@ -5730,6 +6323,12 @@ export async function executeTesseraRunJob(
           "Use restart-from to create a fresh simulation stage with the currently observed runtime identity.",
       };
       await writeJsonAtomic(resolved, document);
+      document = await projectTesseraReliabilityEvent(
+        resolved,
+        document,
+        "failure",
+        "runtime-admission",
+      );
       await removeWorkerReservation(
         document,
         workerTokenSha256,
@@ -5757,9 +6356,33 @@ export async function executeTesseraRunJob(
           runtimeIdentitySha256: runtimeIdentity,
         },
       ),
+      timingSpans: [
+        ...closeTimingSpan(
+          latest.timingSpans ?? [],
+          "queue-wait",
+          startedAt,
+        ),
+        createTimingSpanV1({
+          spanKind: "execution",
+          name: "worker-startup",
+          startedAt: latest.createdAt,
+          endedAt: startedAt,
+        }),
+        createTimingSpanV1({
+          spanKind: "execution",
+          name: "workflow-total",
+          startedAt,
+        }),
+      ],
       nextAction: null,
     };
     await writeJsonAtomic(resolved, document);
+    document = await projectTesseraReliabilityEvent(
+      resolved,
+      document,
+      "transition",
+      "running",
+    );
   } finally {
     await releaseStart();
   }
@@ -5882,6 +6505,11 @@ export async function executeTesseraRunJob(
                 : null,
           },
         ),
+        timingSpans: closeTimingSpan(
+          latest.timingSpans ?? [],
+          "workflow-total",
+          now,
+        ),
         error:
           status === "failed" && first
             ? {
@@ -5904,6 +6532,12 @@ export async function executeTesseraRunJob(
               : "Open the retained result and artifact bundle.",
       };
       await writeJsonAtomic(resolved, document);
+      document = await projectTesseraReliabilityEvent(
+        resolved,
+        document,
+        status === "failed" ? "failure" : "finalization",
+        status,
+      );
     } finally {
       await releaseFinish();
     }
@@ -5952,6 +6586,11 @@ export async function executeTesseraRunJob(
             errorCode: workerErrorCode,
           },
         ),
+        timingSpans: closeTimingSpan(
+          latest.timingSpans ?? [],
+          "workflow-total",
+          now,
+        ),
         error: {
           code: workerErrorCode,
           message:
@@ -5968,6 +6607,12 @@ export async function executeTesseraRunJob(
             : "Inspect the worker failure and resume after correcting the cause.",
       };
       await writeJsonAtomic(resolved, document);
+      document = await projectTesseraReliabilityEvent(
+        resolved,
+        document,
+        "failure",
+        "worker",
+      );
     } finally {
       await releaseFailure();
     }

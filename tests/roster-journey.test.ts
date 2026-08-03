@@ -16,6 +16,10 @@ import {
 import { buildRoster } from "../lib/rosterpilot/engine";
 import { exportRoster } from "../lib/rosterpilot/engine";
 import { prepareNewRecruitHandoff } from "../lib/rosterpilot/handoff";
+import {
+  createWorkflowReliabilityEventStore,
+  resolveWorkflowReliabilityIdentity,
+} from "../local/reliability";
 
 test("New Recruit handoff preserves universal exports when ROSZ is blocked", async () => {
   const roster = buildRoster({
@@ -108,6 +112,66 @@ test("durable journey preserves a legal roster and enforces revision-bound recov
     { rootDir },
   );
   assert.equal(parked.status, "parked");
+  const reliabilityRoot = path.join(rootDir, "reliability");
+  const history = await createWorkflowReliabilityEventStore({
+    rootDirectory: reliabilityRoot,
+  }).history({
+    workflowId: started.journeyId,
+    workflowKind: "roster-journey",
+  });
+  assert.equal(history.verification.ok, true);
+  assert.deepEqual(
+    history.events.map((event) => event.attributes.stateRevision),
+    [1, 2, 3],
+  );
+  assert.equal(history.events.at(-1)?.outcome, "cancelled");
+  assert.deepEqual(
+    await resolveWorkflowReliabilityIdentity(
+      { kind: "journey-id", value: started.journeyId },
+      { rootDirectory: reliabilityRoot },
+    ),
+    {
+      workflowId: started.journeyId,
+      workflowKind: "roster-journey",
+    },
+  );
+});
+
+test("journey transitions remain authoritative when reliability append fails", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "roster-journey-warning-"));
+  const reliabilityRoot = path.join(rootDir, "reliability");
+  const failingStore = createWorkflowReliabilityEventStore({
+    rootDirectory: reliabilityRoot,
+    dependencies: {
+      onEventPersisted: () => {
+        throw new Error("simulated reliability interruption");
+      },
+    },
+  });
+  const started = await startRosterJourney(
+    {
+      intent: "build",
+      playerFaction: "adeptus-custodes",
+      pointsLimit: 1000,
+    },
+    {
+      rootDir,
+      reliability: {
+        store: failingStore,
+        rootDirectory: reliabilityRoot,
+      },
+    },
+  );
+
+  assert.equal(started.stateRevision, 1);
+  assert.equal(started.reliabilityWarnings?.length, 1);
+  assert.equal(
+    started.reliabilityWarnings?.[0]?.code,
+    "RELIABILITY_ADAPTER_FAILED",
+  );
+  const retained = await getRosterJourney(started.journeyId, { rootDir });
+  assert.equal(retained.stateSha256, started.stateSha256);
+  assert.equal(retained.reliabilityWarnings?.length, 1);
 });
 
 test("Web compatibility repair revalidates first and never starts Tessera implicitly", async () => {

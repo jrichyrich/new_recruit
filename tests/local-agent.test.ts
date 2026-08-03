@@ -23,11 +23,13 @@ import {
   type LocalAgentResponse,
 } from "../local/agent/contracts";
 import {
+  closeNewRecruitLocalAgentSession,
   closeTesseraLocalAgentSession,
   deliverThroughLocalAgent,
   getLocalAgentStatus,
   LocalAgentError,
   probeNewRecruitThroughLocalAgent,
+  resetNewRecruitLocalAgentSession,
   runTesseraThroughLocalAgent,
   startTesseraRunThroughLocalAgent,
 } from "../local/agent/client";
@@ -130,6 +132,116 @@ for await (const line of lines) {
   } else if (envelope.action === "close") {
     contextActive = false;
     log({ action: "close", profileDirectory });
+    process.stdout.write(JSON.stringify({ ok: true, action: "close" }) + "\\n");
+    break;
+  }
+}
+`,
+  );
+}
+
+async function writePersistentNewRecruitWorkerFixture(
+  filename: string,
+  logPath: string,
+): Promise<void> {
+  await writeFile(
+    filename,
+    `import { appendFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+let contextGeneration = 0;
+let contextActive = false;
+const log = (value) => appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({
+  pid: process.pid,
+  contextGeneration,
+  ...value
+}) + "\\n");
+const verification = {
+  name: true,
+  faction: true,
+  points: true,
+  units: [],
+  mismatches: []
+};
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+for await (const line of lines) {
+  const envelope = JSON.parse(line);
+  if (envelope.action === "deliver") {
+    if (!contextActive) {
+      contextActive = true;
+      contextGeneration += 1;
+    }
+    const input = envelope.request;
+    log({ action: "deliver", name: input.expected.name });
+    if (input.expected.name === "Uncertain") {
+      process.stdout.write(JSON.stringify({
+        ok: false,
+        code: "IMPORT_OUTCOME_UNCERTAIN",
+        message: "fixture outcome uncertain",
+        remoteOutcomeUnknown: true,
+        imported: false,
+        sessionReused: true,
+        listUrl: null,
+        enrichedRoszPath: null,
+        prettyHtmlPath: null,
+        verification: null
+      }) + "\\n");
+    } else if (input.expected.name === "Auth failure") {
+      process.stdout.write(JSON.stringify({
+        ok: false,
+        code: "LOGIN_FAILED",
+        message: "fixture authentication failed",
+        imported: false,
+        sessionReused: true,
+        listUrl: null,
+        enrichedRoszPath: null,
+        prettyHtmlPath: null,
+        verification: null
+      }) + "\\n");
+    } else if (input.expected.name === "Semantic drift") {
+      process.stdout.write(JSON.stringify({
+        ok: false,
+        code: "VERIFICATION_FAILED",
+        message: "fixture semantic verification drifted",
+        imported: true,
+        sessionReused: true,
+        listUrl: "https://www.newrecruit.eu/app/Lists/drift",
+        enrichedRoszPath: null,
+        prettyHtmlPath: null,
+        verification: { ...verification, name: false, mismatches: ["name"] }
+      }) + "\\n");
+    } else {
+      if (input.enrichedRoszPath && input.expected.name !== "Missing artifact") {
+        writeFileSync(input.enrichedRoszPath, "enriched:" + input.expected.name);
+      }
+      if (input.prettyHtmlPath && input.expected.name !== "Missing artifact") {
+        writeFileSync(input.prettyHtmlPath, "<h1>" + input.expected.name + "</h1>");
+      }
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        uiIdentity: "${"e".repeat(64)}",
+        imported: true,
+        sessionReused: contextGeneration === 1,
+        listUrl: "https://www.newrecruit.eu/app/Lists/" + encodeURIComponent(input.expected.name),
+        enrichedRoszPath: input.enrichedRoszPath,
+        prettyHtmlPath: input.prettyHtmlPath,
+        verification
+      }) + "\\n");
+    }
+  } else if (envelope.action === "probe") {
+    log({ action: "probe" });
+    process.stdout.write(JSON.stringify({
+      ok: true,
+      uiIdentity: "${"f".repeat(64)}",
+      sessionReused: true,
+      importControlVisible: true
+    }) + "\\n");
+  } else if (envelope.action === "reset") {
+    contextActive = false;
+    log({ action: "reset" });
+    process.stdout.write(JSON.stringify({ ok: true, action: "reset" }) + "\\n");
+  } else if (envelope.action === "close") {
+    contextActive = false;
+    log({ action: "close" });
     process.stdout.write(JSON.stringify({ ok: true, action: "close" }) + "\\n");
     break;
   }
@@ -244,9 +356,9 @@ test("local agent reports providers through a user-only transport", async () => 
     assert.equal(spoolStat.mode & 0o777, 0o700);
     const status = await getLocalAgentStatus({ spoolDirectory });
     assert.equal(status.available, true);
-    assert.equal(LOCAL_AGENT_PROTOCOL_VERSION, 10);
+    assert.equal(LOCAL_AGENT_PROTOCOL_VERSION, 11);
     assert.equal(status.protocolVersion, LOCAL_AGENT_PROTOCOL_VERSION);
-    assert.equal(LOCAL_AGENT_VERSION, "1.9.0");
+    assert.equal(LOCAL_AGENT_VERSION, "1.10.0");
     assert.equal(status.version, LOCAL_AGENT_VERSION);
     assert.match(status.runtime?.buildId ?? "", /^[0-9a-f]{20}$/);
     assert.equal(status.runtime?.stale, false);
@@ -585,6 +697,314 @@ process.stdout.write(JSON.stringify({
       sessionReused: true,
       importControlVisible: true,
     });
+  } finally {
+    await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("persistent New Recruit sessions reuse one worker and stop after unsafe outcomes", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-agent-new-recruit-session-"),
+  );
+  const workerPath = path.join(directory, "new-recruit-worker.mjs");
+  const workerLog = path.join(directory, "new-recruit-worker.log");
+  await writePersistentNewRecruitWorkerFixture(workerPath, workerLog);
+  const spoolDirectory = path.join(directory, "spool");
+  const running = await startLocalAgent({
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath: path.join(directory, "unused-broker"),
+    newRecruitPersistentWorkerPath: workerPath,
+  });
+  const sessionId = "new-recruit-batch-fixture";
+  const payload = (name: string) => ({
+    sourceFilename: `${name}.rosz`,
+    sourceRoszBase64: Buffer.from(`source:${name}`).toString("base64"),
+    downloadEnrichedRosz: true,
+    downloadPrettyHtml: true,
+    sessionId,
+    expected: {
+      name,
+      factionName: "Faction",
+      totalPoints: 1_000,
+      units: [],
+    },
+  });
+  type WorkerLog = {
+    pid: number;
+    contextGeneration: number;
+    action: string;
+    name?: string;
+  };
+  const records = async (): Promise<WorkerLog[]> =>
+    (await readFile(workerLog, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as WorkerLog);
+  try {
+    const [first, second] = await Promise.all([
+      deliverThroughLocalAgent(payload("First"), {
+        spoolDirectory,
+      }),
+      deliverThroughLocalAgent(payload("Second"), {
+        spoolDirectory,
+      }),
+    ]);
+    assert.equal(first.worker.ok, true);
+    assert.equal(second.worker.ok, true);
+    assert.equal(
+      Buffer.from(first.enrichedRoszBase64 ?? "", "base64").toString(),
+      "enriched:First",
+    );
+    let log = await records();
+    const initialDeliveries = log.filter(
+      (entry) => entry.action === "deliver",
+    );
+    assert.deepEqual(
+      initialDeliveries.map((entry) => entry.name).sort(),
+      ["First", "Second"],
+    );
+    assert.equal(new Set(initialDeliveries.map((entry) => entry.pid)).size, 1);
+    assert.deepEqual(
+      initialDeliveries.map((entry) => entry.contextGeneration),
+      [1, 1],
+    );
+
+    await assert.rejects(
+      deliverThroughLocalAgent(payload("Missing artifact"), {
+        spoolDirectory,
+      }),
+      (error: unknown) => error instanceof LocalAgentError,
+    );
+    assert.equal(
+      (
+        await deliverThroughLocalAgent(payload("Boundary blocked"), {
+          spoolDirectory,
+        })
+      ).worker.code,
+      "NEW_RECRUIT_SESSION_STOPPED",
+    );
+    await resetNewRecruitLocalAgentSession(sessionId, {
+      spoolDirectory,
+    });
+
+    const uncertain = await deliverThroughLocalAgent(
+      payload("Uncertain"),
+      { spoolDirectory },
+    );
+    assert.equal(uncertain.worker.ok, false);
+    assert.equal(uncertain.worker.remoteOutcomeUnknown, true);
+    const deliveriesAfterUncertain = (await records()).filter(
+      (entry) => entry.action === "deliver",
+    ).length;
+    const blockedAfterUncertain = await deliverThroughLocalAgent(
+      payload("Must not run"),
+      { spoolDirectory },
+    );
+    assert.equal(
+      blockedAfterUncertain.worker.code,
+      "NEW_RECRUIT_SESSION_STOPPED",
+    );
+    assert.equal(
+      (await records()).filter((entry) => entry.action === "deliver").length,
+      deliveriesAfterUncertain,
+    );
+
+    assert.deepEqual(
+      await resetNewRecruitLocalAgentSession(sessionId, {
+        spoolDirectory,
+      }),
+      { action: "reset", applied: true },
+    );
+    const semantic = await deliverThroughLocalAgent(
+      payload("Semantic drift"),
+      { spoolDirectory },
+    );
+    assert.equal(semantic.worker.code, "VERIFICATION_FAILED");
+    assert.equal(
+      (
+        await deliverThroughLocalAgent(payload("Still blocked"), {
+          spoolDirectory,
+        })
+      ).worker.code,
+      "NEW_RECRUIT_SESSION_STOPPED",
+    );
+
+    await resetNewRecruitLocalAgentSession(sessionId, {
+      spoolDirectory,
+    });
+    const auth = await deliverThroughLocalAgent(
+      payload("Auth failure"),
+      { spoolDirectory },
+    );
+    assert.equal(auth.worker.code, "LOGIN_FAILED");
+    assert.equal(
+      (
+        await deliverThroughLocalAgent(payload("Auth blocked"), {
+          spoolDirectory,
+        })
+      ).worker.code,
+      "NEW_RECRUIT_SESSION_STOPPED",
+    );
+
+    assert.deepEqual(
+      await closeNewRecruitLocalAgentSession(sessionId, {
+        spoolDirectory,
+      }),
+      { action: "close", applied: true },
+    );
+    assert.deepEqual(
+      await closeNewRecruitLocalAgentSession(sessionId, {
+        spoolDirectory,
+      }),
+      { action: "close", applied: false },
+    );
+    log = await records();
+    assert.equal(log.at(-1)?.action, "close");
+    assert.equal(new Set(log.map((entry) => entry.pid)).size, 1);
+
+    await assert.rejects(
+      resetNewRecruitLocalAgentSession("..", {
+        spoolDirectory,
+      }),
+      (error: unknown) =>
+        error instanceof LocalAgentError &&
+        error.code === "LOCAL_AGENT_PROTOCOL_ERROR",
+    );
+  } finally {
+    await running.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("New Recruit and Tessera use separate serial browser queues", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-agent-provider-queues-"),
+  );
+  const newRecruitWorkerPath = path.join(
+    directory,
+    "new-recruit-worker.mjs",
+  );
+  const tesseraWorkerPath = path.join(directory, "tessera-worker.mjs");
+  const newRecruitStarted = path.join(directory, "new-recruit.started");
+  const tesseraStarted = path.join(directory, "tessera.started");
+  await writeFile(
+    newRecruitWorkerPath,
+    `import { existsSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+for await (const line of lines) {
+  const envelope = JSON.parse(line);
+  if (envelope.action === "deliver") {
+    writeFileSync(${JSON.stringify(newRecruitStarted)}, "started");
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(${JSON.stringify(tesseraStarted)}) && Date.now() < deadline) {
+      await sleep(10);
+    }
+    const overlapped = existsSync(${JSON.stringify(tesseraStarted)});
+    const input = envelope.request;
+    if (input.enrichedRoszPath) writeFileSync(input.enrichedRoszPath, "enriched");
+    process.stdout.write(JSON.stringify({
+      ok: true,
+      uiIdentity: "${"a".repeat(64)}",
+      imported: true,
+      sessionReused: true,
+      listUrl: "https://www.newrecruit.eu/app/Lists/" + (overlapped ? "overlap" : "serial"),
+      enrichedRoszPath: input.enrichedRoszPath,
+      prettyHtmlPath: null,
+      verification: { name: true, faction: true, points: true, units: [], mismatches: [] }
+    }) + "\\n");
+  } else if (envelope.action === "reset") {
+    process.stdout.write(JSON.stringify({ ok: true, action: "reset" }) + "\\n");
+  } else if (envelope.action === "close") {
+    process.stdout.write(JSON.stringify({ ok: true, action: "close" }) + "\\n");
+    break;
+  }
+}
+`,
+  );
+  await writeFile(
+    tesseraWorkerPath,
+    `import { existsSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+for await (const line of lines) {
+  const envelope = JSON.parse(line);
+  if (envelope.action === "analyze") {
+    writeFileSync(${JSON.stringify(tesseraStarted)}, "started");
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(${JSON.stringify(newRecruitStarted)}) && Date.now() < deadline) {
+      await sleep(10);
+    }
+    const overlapped = existsSync(${JSON.stringify(newRecruitStarted)});
+    process.stdout.write(JSON.stringify({
+      ok: true,
+      data: {
+        settings: {},
+        warnings: overlapped ? ["provider queues overlapped"] : ["provider queues serialized"],
+        cells: [],
+        scenarios: [],
+        importWarnings: { player: [], opponent: [] },
+        importIssues: [],
+        integrityIssues: []
+      }
+    }) + "\\n");
+  } else if (envelope.action === "reset") {
+    process.stdout.write(JSON.stringify({ ok: true, action: "reset" }) + "\\n");
+  } else if (envelope.action === "close") {
+    process.stdout.write(JSON.stringify({ ok: true, action: "close" }) + "\\n");
+    break;
+  }
+}
+`,
+  );
+  const spoolDirectory = path.join(directory, "spool");
+  const running = await startLocalAgent({
+    socketEnabled: false,
+    socketPath: path.join(directory, "agent.sock"),
+    spoolDirectory,
+    brokerPath: path.join(directory, "unused-broker"),
+    newRecruitPersistentWorkerPath: newRecruitWorkerPath,
+    tesseraPersistentWorkerPath: tesseraWorkerPath,
+  });
+  try {
+    const [newRecruit, tessera] = await Promise.all([
+      deliverThroughLocalAgent(
+        {
+          sourceFilename: "fixture.rosz",
+          sourceRoszBase64: Buffer.from("source").toString("base64"),
+          downloadEnrichedRosz: true,
+          downloadPrettyHtml: false,
+          sessionId: "queue-overlap-fixture",
+          expected: {
+            name: "Fixture",
+            factionName: "Faction",
+            totalPoints: 1_000,
+            units: [],
+          },
+        },
+        { spoolDirectory },
+      ),
+      runTesseraThroughLocalAgent(
+        {
+          playerFilename: "player.rosz",
+          playerRoszBase64: tesseraReadyRoszBase64("Player"),
+          playerName: "Player",
+          opponentFilename: "opponent.rosz",
+          opponentRoszBase64: tesseraReadyRoszBase64("Opponent"),
+          opponentName: "Opponent",
+          sessionId: "queue-overlap-fixture",
+        },
+        { spoolDirectory },
+      ),
+    ]);
+    assert.equal(newRecruit.worker.listUrl?.endsWith("/overlap"), true);
+    assert.deepEqual(tessera.warnings, ["provider queues overlapped"]);
   } finally {
     await running.close();
     await rm(directory, { recursive: true, force: true });

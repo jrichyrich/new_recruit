@@ -500,6 +500,44 @@ and mean damage), and both attack directions. RosterPilot consolidates those
 matrices by phase and direction, calculates mean damage per 100 attacker
 points, and preserves the selected provider identity, iteration count, and
 simulator settings.
+
+#### Standard local + Web validation
+
+The durable combined validation workflow has two depths. `standard` is the
+default: it freezes a legal diverse-nine opponent portfolio, runs all nine
+locally with every supported metric, then selects the frozen stress, central,
+and contrast representatives from complete trusted local evidence. Only those
+three opponents are prepared for New Recruit and run on Tessera Web. At 16 Web
+captures per opponent, this reduces the normal website pass from 144 captures
+to 48 without reducing the broad local sample.
+
+`exhaustive` runs all nine opponents on Tessera Web and must be requested and
+confirmed explicitly. Existing single-provider commands remain explicit and
+keep their current behavior. Standard local and Web reports are presented
+side-by-side as different provider evidence; they are not labeled strict
+numerical parity. If the representative website pass is incomplete,
+inconclusive, or materially crosses the local result bands, RosterPilot retains
+the completed evidence and offers **Run remaining six**. It does not start
+those runs automatically. A repaired successor Web job likewise requires a
+fresh confirmation and leaves its predecessor unchanged.
+
+Before either path can mutate New Recruit, one sealed batch preflight validates
+the player and all nine opponents under the same bundle lease. It checks
+legality, points, exact mappings, ROSZ round trips, model and loadout structure,
+leader allocation, catalogue identity, complete profile choices, verified
+cache hits, and mutation receipts. Cache and receipt checks are read-only and
+concurrent. Missing profile choices return `needs-input` before a worker or
+browser starts. Actual New Recruit misses remain serial; one uncertain outcome
+stops the batch rather than trying another delivery path.
+
+Local work uses up to three isolated child processes by default and a
+hash-verified result cache bound to provider, bundle, both rosters, profile
+policy, scenario contract, iterations, seed, compiler, and adapter identity.
+Website controls remain serial so every matrix refresh can be proven. The
+precompiled durable worker is built by `npm run build` and
+`npm run plugin:local:install`; a worker/agent/MCP hash mismatch stops before
+external activity.
+
 For a faster smoke test, quick mode runs Shooting wipe probability in both
 directions:
 
@@ -756,8 +794,9 @@ Job status is one of `queued`, `running`, `needs-input`, `complete`,
 `degraded`, `inconclusive`, `failed`, or `cancelled`. `run-status --full-json`
 includes the retained result when one exists. A `needs-input` job accepts a
 validated structured profile policy through `resolve-profiles`; resume then
-uses that frozen policy. A supplied legacy stress manifest (v1-v4) is copied,
-verified, and migrated into the durable bundle before recovery. Exact and
+uses that frozen policy. A supplied legacy stress manifest (v1-v6) is copied,
+verified, and migrated to schema v7 in the durable bundle before recovery.
+Completed predecessor jobs are never rewritten. Exact and
 stress paired revisions are durable jobs as well. The outer coordinator owns
 the first three automatic attempts; each stress stage advances at most once
 per outer attempt, while attempts four and five require explicit resume. The
@@ -964,7 +1003,8 @@ only the same player fingerprint, opponent faction, `bundleId`, semantic
 roster identity, suite, analysis
 strategy, requested and selected simulation backend, simulation setting,
 profile-policy hash, and exact frozen portfolio SHA-256. Schema-v1 through
-schema-v4 manifests are migrated in memory and rewritten as v5 when resumed.
+schema-v6 manifests are verified and rewritten as v7 when resumed; completed
+predecessor jobs are never rewritten.
 Every stage records attempt count, first/last attempt time,
 structured error code, retryability, and next action. Transient failures receive three automatic
 attempts with bounded backoff and up to five lifetime attempts through explicit
@@ -1367,6 +1407,62 @@ commits to build a compatibility snapshot. If no exact historical source is
 found, it preserves the roster and receipts and reports
 `waiting-for-compatible-source`. It never probes compatibility by creating a
 list, deletes a mutation receipt, or duplicates an uncertain import.
+
+### Repair history and performance evidence
+
+Local workflows keep a separate append-only reliability history under the
+RosterPilot application-support directory. It links authoritative journey,
+Tessera, data-update, and New Recruit receipt transitions to failures,
+diagnoses, repairs, verification, cache or artifact reuse, successor runs, and
+final evidence. Every event and journal head is hash-sealed. A journal failure
+adds a warning but never reverses the authoritative operation; the reconciler
+repairs missing head and registry projections from the specialized stores.
+Interrupted authoritative jobs append `recovered-after-crash` only when they
+can be requeued without replaying uncertain external activity.
+
+Inspect one workflow from the CLI:
+
+```bash
+npm run rosterpilot -- reliability history \
+  --workflow <workflow-id> \
+  --kind tessera-run
+npm run rosterpilot -- reliability summary \
+  --workflow <workflow-id> \
+  --kind tessera-run
+```
+
+The local MCP equivalents are `get_workflow_repair_history` and
+`get_reliability_summary`. Tessera run status also reports its current phase,
+completed and total work, elapsed time, and a timing-derived estimate when
+enough evidence exists. Summaries keep execution success separate from
+trusted-evidence success and expose recovery rate, recurrence, user actions,
+cache reuse, duplicate-mutation evidence, receipt validity, and confidence.
+
+Repair tests are selected from a fixed allowlist rather than accepting shell
+commands. List and run them with:
+
+```bash
+npm run rosterpilot -- reliability plans
+npm run rosterpilot -- reliability verify \
+  --plan batch-preflight \
+  --workflow <workflow-id> \
+  --kind tessera-run
+```
+
+Available plans cover the reliability journal, batch preflight, workers/local
+pool/cache, browser evidence, standard cross-provider orchestration, lint,
+plugin parity, application build, and the complete suite. Each verification
+record contains bounded-output hashes, test counts, timestamps, toolchain and
+source fingerprints, changed-file hashes, and the dirty-diff hash—not raw
+logs. `reliability associate-commit --record <verification.json>` associates a
+later clean commit only when its file hashes match that verified repair.
+
+The current non-gating performance targets for a heavy 2,000-point standard
+workflow are approximately 6–7 minutes for local diverse-nine, under 10
+minutes for the representative Web three, and roughly 15 minutes end to end.
+Warm queue-to-running should remain below 15 seconds and cold startup below 30
+seconds. These are measured from local timing spans rather than enforced as
+brittle CI wall-clock assertions.
 
 ### Hosted deployment and release operators
 

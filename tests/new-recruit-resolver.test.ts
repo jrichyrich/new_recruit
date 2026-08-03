@@ -63,6 +63,60 @@ test("resolves Eliminators as one Sergeant and two regular models", () => {
   );
 });
 
+test("uses model role to distinguish a shortened regular-model alias from its leader", () => {
+  const selection: NewRecruitUnitInput = {
+    unitId: "celestian-insidiants",
+    name: "Celestian Insidiants",
+    modelCount: 10,
+    equipment: [
+      {
+        itemId: "condemnor-bolt-pistol",
+        name: "Condemnor bolt pistol",
+        count: 10,
+      },
+      { itemId: "null-mace", name: "Null mace", count: 10 },
+    ],
+  };
+  const mapping =
+    newRecruitCatalogueMappings.factions["adepta-sororitas"].units[
+      selection.unitId
+    ];
+  assert.ok(mapping);
+
+  const resolved = resolveNewRecruitUnit(mapping, selection);
+  assert.equal(resolved.ok, true);
+  if (!resolved.ok) return;
+
+  assert.deepEqual(
+    resolved.models.map((model) => ({
+      name: model.reference.name,
+      count: model.count,
+      equipment: model.equipment.map((equipment) => ({
+        name: equipment.name,
+        count: equipment.count,
+      })),
+    })),
+    [
+      {
+        name: "Celestian Insidiant Superior",
+        count: 1,
+        equipment: [
+          { name: "Condemnor bolt pistol", count: 1 },
+          { name: "Null mace", count: 1 },
+        ],
+      },
+      {
+        name: "Insidiant",
+        count: 9,
+        equipment: [
+          { name: "Condemnor bolt pistol", count: 9 },
+          { name: "Null mace", count: 9 },
+        ],
+      },
+    ],
+  );
+});
+
 test("fails closed when the exact Sergeant mapping lacks required equipment", () => {
   const mapping = structuredClone(
     newRecruitCatalogueMappings.factions["space-wolves"].units[

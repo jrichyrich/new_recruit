@@ -155,10 +155,12 @@ test("durable Tessera runtime admission rejects stale or mismatched launchers", 
     sourceFingerprintNow: "source",
     buildId: "build",
     stale: false,
+    tesseraJobWorkerSha256: "a".repeat(64),
+    tesseraJobWorkerSourceSha256: "b".repeat(64),
     localAgentObservedStatus: {
       available: true,
       version: "fixture",
-      protocolVersion: 10,
+      protocolVersion: 11,
       protocolCompatible: true,
       projectDirectory: "/fixture",
       nodeExecutable: "/fixture/node",
@@ -166,6 +168,8 @@ test("durable Tessera runtime admission rejects stale or mismatched launchers", 
       brokerAvailable: true,
       runtimeBuildId: "build",
       runtimeSourceFingerprint: "source",
+      tesseraJobWorkerSha256: "a".repeat(64),
+      tesseraJobWorkerSourceSha256: "b".repeat(64),
       statusErrorCode: null,
     },
   };
@@ -303,6 +307,86 @@ test("durable Tessera jobs reserve isolated bundles and retain guided recovery s
     (await getTesseraRunStatus(job.requestPath)).job.status,
     "complete",
   );
+});
+
+test("known simulated batches resolve profile choices before a worker is queued", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-prequeue-profiles-"),
+  );
+  try {
+    const player = buildRoster({
+      faction: "adeptus-custodes",
+      pointsLimit: 2_000,
+      name: "Prequeue profile player",
+    });
+    const opponent = buildRoster({
+      faction: "aeldari",
+      pointsLimit: 2_000,
+      name: "Prequeue profile opponent",
+    });
+    assert.ok(player.ok && player.data);
+    assert.ok(opponent.ok && opponent.data);
+    const job = await startTesseraRun(
+      {
+        kind: "exact",
+        playerRoster: player.data,
+        opponent: { kind: "roster", roster: opponent.data },
+        options: {
+          executionMode: "simulate",
+          simulationBackend: "website",
+        },
+      },
+      {
+        outputDirectory: path.join(root, "runs"),
+        rootDir: root,
+        launch: false,
+      },
+    );
+    assert.equal(job.status, "needs-input");
+    assert.equal(job.workerPid, null);
+    assert.equal(job.startedAt, null);
+    assert.equal(
+      job.profileResolution?.violationCode,
+      "TESSERA_PROFILE_POLICY_REQUIRED",
+    );
+    assert.ok(job.profileResolution?.requirements.length);
+    assert.ok(job.profileResolution?.scaffoldPath);
+    await access(job.profileResolution!.scaffoldPath!);
+
+    const resolved = await resolveTesseraRunProfiles(
+      job.requestPath,
+      {
+        schemaVersion: 1,
+        policyKind: "tessera-profile-policy",
+        entries: job.profileResolution!.requirements.map(
+          (requirement) => ({
+            faction: requirement.faction,
+            unit: requirement.unit,
+            ...(requirement.unitOccurrence === undefined
+              ? {}
+              : { unitOccurrence: requirement.unitOccurrence }),
+            ...(requirement.modelCount === undefined
+              ? {}
+              : { modelCount: requirement.modelCount }),
+            weaponGroup: requirement.weaponGroup,
+            phase: requirement.phase,
+            selectedProfile: requirement.availableProfiles[0],
+            activeCount: requirement.activeCount,
+          }),
+        ),
+      },
+    );
+    assert.equal(resolved.status, "needs-input");
+    assert.ok(resolved.profilePolicyPath);
+    const resumed = await resumeTesseraRun(job.requestPath, {
+      launch: false,
+    });
+    assert.equal(resumed.status, "queued");
+    assert.equal(resumed.attempt, 2);
+    assert.equal(resumed.workerPid, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("durable Tessera resume rejects an unreceipted workflow manifest", async () => {
@@ -1278,7 +1362,7 @@ test("a launcher failure after publication retains the new durable run", async (
         kind: "stress",
         playerRoster: built.data,
         factionId: "aeldari",
-        options: { executionMode: "simulate" },
+        options: { executionMode: "prepare-only" },
       },
       {
         outputDirectory: path.join(root, "runs"),

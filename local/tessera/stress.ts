@@ -84,7 +84,14 @@ import {
   getRuntimeProvenance,
   runtimeRestartIssue,
 } from "../runtime-provenance";
-import { closeTesseraLocalAgentSession } from "../agent/client";
+import {
+  closeNewRecruitLocalAgentSession,
+  closeTesseraLocalAgentSession,
+} from "../agent/client";
+import {
+  projectRoot,
+  rosterPilotSupportDirectory,
+} from "../agent/paths";
 import {
   analyzeRosterMatchup,
   clearPreparedRosterDeliveryMemo,
@@ -117,12 +124,34 @@ import {
   verifyLocalTesseraEngineInput,
 } from "./local-engine-input";
 import {
+  runTesseraBatchPreflight,
+  verifyTesseraBatchPreflightManifest,
+  type TesseraBatchPreflightManifestV1,
+} from "./batch-preflight";
+import {
   localTesseraEngineIsAutoSelectable,
+  LOCAL_TESSERA_ADAPTER_VERSION,
+  LOCAL_TESSERA_ENGINE_IDENTITY,
+  LOCAL_TESSERA_ENGINE_ITERATIONS,
+  LOCAL_TESSERA_COMPILER_VERSION,
 } from "./local-engine";
+import {
+  runLocalEngineTaskPool,
+} from "./local-engine-task-pool";
+import {
+  createLocalEngineResultCacheKey,
+  loadLocalEngineResult,
+  storeLocalEngineResult,
+} from "./local-engine-result-cache";
+import type {
+  TesseraBrowserInput,
+  TesseraBrowserResult,
+} from "./browser";
 import {
   assertTesseraScenarioContractProvider,
   assertTesseraScenarioContractScope,
   canonicalTesseraScenarioContract,
+  localTesseraScenarioContract,
   observedTesseraScenarioContract,
   projectTesseraScenarioContract,
   TESSERA_SCENARIO_PHASES,
@@ -266,7 +295,7 @@ type ManifestStageContracts = {
 };
 
 type TesseraStressManifest = {
-  schemaVersion: 6;
+  schemaVersion: 7;
   reportKind: "tessera-stress-manifest";
   runId: string;
   createdAt: string;
@@ -290,6 +319,13 @@ type TesseraStressManifest = {
   stageContractsSha256: string;
   warnings: string[];
   cachedLiveUpdateCheck: LiveDataFreshness | null;
+  batchPreflight: {
+    manifestPath: string;
+    sha256: string;
+    status: TesseraBatchPreflightManifestV1["status"];
+    rosterCount: number;
+    verifiedCacheHits: number;
+  } | null;
   playerPreparationStartedAt: string | null;
   opponentPreparationStartedAt: Record<string, string>;
   preparedPlayer: TesseraPreparedRoster | null;
@@ -845,6 +881,7 @@ const StressManifestSchema = z.object({
     z.literal(4),
     z.literal(5),
     z.literal(6),
+    z.literal(7),
   ]),
   reportKind: z.literal("tessera-stress-manifest"),
   runId: z.string().min(1),
@@ -881,6 +918,13 @@ const StressManifestSchema = z.object({
     z.string().regex(/^[0-9a-f]{64}$/).optional(),
   warnings: z.array(z.string()),
   cachedLiveUpdateCheck: z.unknown().nullable().optional(),
+  batchPreflight: z.object({
+    manifestPath: z.string().min(1),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    status: z.enum(["passed", "needs-input", "failed"]),
+    rosterCount: z.number().int().positive(),
+    verifiedCacheHits: z.number().int().nonnegative(),
+  }).nullable().optional(),
   playerPreparationStartedAt: z.string().min(1).nullable(),
   opponentPreparationStartedAt: z.record(z.string().min(1)),
   preparedPlayer: PreparedRosterSchema.nullable(),
@@ -2102,7 +2146,17 @@ async function writeProfilePolicyScaffold(
 
 async function preflightPlayerRoster(
   roster: RosterDraftV1,
+  requireNewRecruitExport = true,
 ): Promise<ResultEnvelope<true>> {
+  if (!requireNewRecruitExport) {
+    const validation = validateRoster(roster);
+    return {
+      ok: validation.ok,
+      data: validation.ok ? true : null,
+      violations: validation.violations,
+      warnings: validation.warnings,
+    };
+  }
   const exported = await exportRoster(roster, "rosz");
   if (!exported.ok || !exported.data) {
     return {
@@ -2231,8 +2285,12 @@ function normalizePortfolioCoverage(
 async function preflightPortfolio(
   playerRoster: RosterDraftV1,
   portfolio: TesseraStressPortfolio,
+  requireNewRecruitExport = true,
 ): Promise<ResultEnvelope<TesseraStressPortfolio>> {
-  const player = await preflightPlayerRoster(playerRoster);
+  const player = await preflightPlayerRoster(
+    playerRoster,
+    requireNewRecruitExport,
+  );
   if (!player.ok) {
     return {
       ok: false,
@@ -2248,6 +2306,34 @@ async function preflightPortfolio(
   }));
   for (const item of checked.items) {
     if (item.status !== "ready" || !item.roster) continue;
+    if (!requireNewRecruitExport) {
+      const validation = validateRoster(item.roster);
+      warnings.push(
+        ...validation.warnings.map((warning) => ({
+          ...warning,
+          message: `[${item.templateId}] ${warning.message}`,
+        })),
+      );
+      if (validation.ok) continue;
+      const message =
+        validation.violations[0]?.message ??
+        "The proxy failed local roster validation.";
+      const warning = issue(
+        "STRESS_PROXY_PREFLIGHT_FAILED",
+        `${item.templateId}: ${message}`,
+        "warn",
+      );
+      item.status = "unavailable";
+      item.roster = null;
+      item.omissionReason = message;
+      item.warnings = [
+        ...item.warnings,
+        ...validation.warnings,
+        warning,
+      ];
+      warnings.push(warning);
+      continue;
+    }
     const exported = await exportRoster(item.roster, "rosz");
     if (exported.ok && exported.data) {
       warnings.push(
@@ -2580,7 +2666,7 @@ function newManifest(
     canonicalRequestedContract,
   );
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     reportKind: "tessera-stress-manifest",
     runId,
     createdAt: now,
@@ -2608,6 +2694,7 @@ function newManifest(
     stageContractsSha256: stageContractsSha256(stageContracts),
     warnings,
     cachedLiveUpdateCheck,
+    batchPreflight: null,
     playerPreparationStartedAt: null,
     opponentPreparationStartedAt: {},
     preparedPlayer: null,
@@ -2855,7 +2942,7 @@ async function readManifest(
     deepDive,
   );
   if (
-    data.schemaVersion === 6 &&
+    data.schemaVersion >= 6 &&
     (
       data.requestedScenarioContract === undefined ||
       data.requestedScenarioContractSha256 === undefined ||
@@ -2879,7 +2966,7 @@ async function readManifest(
     ? tesseraScenarioContractSha256(requestedScenarioContract)
     : null;
   if (
-    data.schemaVersion === 6 &&
+    data.schemaVersion >= 6 &&
     data.requestedScenarioContractSha256 !== undefined &&
     data.requestedScenarioContractSha256 !==
       requestedScenarioContractSha256
@@ -2889,7 +2976,7 @@ async function readManifest(
     );
   }
   if (
-    data.schemaVersion === 6 &&
+    data.schemaVersion >= 6 &&
     data.stageContractsSha256 !== undefined &&
     data.stageContractsSha256 !==
       stageContractsSha256(stageContracts)
@@ -2913,7 +3000,7 @@ async function readManifest(
     );
   const manifest = {
     ...data,
-    schemaVersion: 6,
+    schemaVersion: 7,
     simulationBackend: migratedSimulationBackend,
     selectedSimulationBackend:
       migratedSelectedSimulationBackend,
@@ -2942,7 +3029,8 @@ async function readManifest(
       (data.cachedLiveUpdateCheck as
         | LiveDataFreshness
         | null
-        | undefined) ?? null,
+      | undefined) ?? null,
+    batchPreflight: data.batchPreflight ?? null,
     portfolioSha256: computedPortfolioSha256,
     portfolio: normalizedPortfolio,
     screening,
@@ -2960,8 +3048,8 @@ async function readManifest(
 }
 
 /**
- * Verify a v1/v2/v3/v4/v5/v6 stress manifest and rewrite it in the current
- * portable v6 format. Durable jobs use this only after copying the complete run bundle
+ * Verify a v1/v2/v3/v4/v5/v6/v7 stress manifest and rewrite it in the current
+ * portable v7 format. Durable jobs use this only after copying the complete run bundle
  * into their own isolated directory.
  */
 export async function verifyAndMigrateTesseraStressManifest(
@@ -3230,6 +3318,10 @@ function createDeliveryCache(
   dependencies: TesseraStressDependencies,
 ): {
   dependencies: TesseraDependencies;
+  prime: (
+    cacheKey: string,
+    delivery: ResultEnvelope<NewRecruitDelivery>,
+  ) => void;
   seed: (
     roster: RosterDraftV1,
     prepared: TesseraPreparedRoster,
@@ -3265,6 +3357,9 @@ function createDeliveryCache(
       persistentCacheDelivery:
         dependencies.persistentCacheDelivery === true ||
         !dependencies.deliver,
+    },
+    prime: (cacheKey, delivery) => {
+      cache.set(cacheKey, Promise.resolve(delivery));
     },
     seed: async (roster, prepared) => {
       // Local-engine JSON is run-local evidence, not a New Recruit delivery.
@@ -4888,6 +4983,9 @@ const LIVE_READINESS_FAILURE_CODES = new Set([
 
 const GLOBAL_STAGE_FAILURE_CODES = new Set([
   ...LIVE_READINESS_FAILURE_CODES,
+  "LOCAL_ENGINE_POOL_BATCH_ABORTED",
+  "LOCAL_ENGINE_POOL_WORKER_EXITED",
+  "LOCAL_ENGINE_RESULT_CACHE_INVALID",
   "TESSERA_SETTINGS_CHANGED",
   "TESSERA_SETTINGS_REPLAY_FAILED",
   "TESSERA_SETTINGS_PROVENANCE_MISSING",
@@ -5079,6 +5177,197 @@ function freezeOrValidateStageContract(
   return { changed: false, code: null, message: null };
 }
 
+async function precomputeLocalEngineStage(
+  input: StressExecutionInput,
+  stage: "screening" | "deepDive",
+  items: TesseraStressPortfolioItem[],
+  metrics: TesseraMetric[],
+  mode: "quick" | "full",
+): Promise<Map<string, TesseraBrowserResult>> {
+  const results = new Map<string, TesseraBrowserResult>();
+  if (
+    !input.manifest.simulationRequested ||
+    input.manifest.selectedSimulationBackend !== "local-engine" ||
+    input.dependencies.runLocalEngine
+  ) {
+    return results;
+  }
+  const player = input.manifest.preparedPlayer;
+  if (!player) {
+    throw Object.assign(
+      new Error(
+        "The local-engine player input is missing before pooled simulation.",
+      ),
+      { code: "TESSERA_STRESS_BUNDLE_ARTIFACT_MISSING" },
+    );
+  }
+  const runnable = items.flatMap((item, index) => {
+    if (!item.roster || item.status !== "ready") return [];
+    const entry = input.manifest[stage][item.templateId];
+    if (stageEntryIsReusable(entry, true)) return [];
+    if (entry?.error && !entry.error.retryable && !input.options.forceRetry) {
+      return [];
+    }
+    if ((entry?.attemptCount ?? 0) >= retryLimit(input)) return [];
+    const prepared =
+      input.manifest.preparedOpponents[item.templateId]?.prepared;
+    if (!prepared) {
+      throw Object.assign(
+        new Error(
+          `The local-engine opponent input for ${item.templateId} is missing before pooled simulation.`,
+        ),
+        { code: "TESSERA_STRESS_BUNDLE_ARTIFACT_MISSING" },
+      );
+    }
+    const frozenContract =
+      stageContractFor(input.manifest, stage, item.templateId) ??
+      localTesseraScenarioContract(
+        LOCAL_TESSERA_ENGINE_ITERATIONS,
+        ["shooting", "fight"],
+        metrics,
+      );
+    const scopedRequirements = scopedProfileRequirements(
+      [input.playerRoster, item.roster],
+      input.manifest.enrichedProfileRequirements,
+    );
+    const payload: TesseraBrowserInput = {
+      profileDirectory: input.outputDirectory,
+      playerRoszPath: player.enrichedRoszPath,
+      playerName: player.rosterName,
+      opponentRoszPath: prepared.enrichedRoszPath,
+      opponentName: prepared.rosterName,
+      playerSimulationInput: player.simulationInput,
+      opponentSimulationInput: prepared.simulationInput,
+      analysisMode: mode,
+      phases: ["shooting", "fight"],
+      metrics,
+      profilePolicy: scopedProfilePolicy(
+        input.manifest.profilePolicy,
+        scopedRequirements,
+      ),
+      frozenScenarioContract: frozenContract,
+      sessionId: input.manifest.runId,
+    };
+    const scenarioContractSha256 =
+      tesseraScenarioContractSha256(frozenContract);
+    const iterations =
+      frozenContract.find(
+        (contract) => contract.iterations !== null,
+      )?.iterations ?? LOCAL_TESSERA_ENGINE_ITERATIONS;
+    const key = createLocalEngineResultCacheKey({
+      providerIdentitySha256: crypto
+        .createHash("sha256")
+        .update(canonicalJson(LOCAL_TESSERA_ENGINE_IDENTITY))
+        .digest("hex"),
+      bundleId: input.playerRoster.sourceData.bundleId,
+      bundleManifestSha256: input.playerRoster.sourceData.bundleId,
+      playerRosterSha256:
+        rosterExecutionFingerprint(input.playerRoster),
+      opponentRosterSha256:
+        rosterExecutionFingerprint(item.roster),
+      playerEntityHashesSha256: crypto
+        .createHash("sha256")
+        .update(canonicalJson(input.playerRoster.sourceData.entityHashes))
+        .digest("hex"),
+      opponentEntityHashesSha256: crypto
+        .createHash("sha256")
+        .update(canonicalJson(item.roster.sourceData.entityHashes))
+        .digest("hex"),
+      profilePolicySha256: input.manifest.profilePolicyHash,
+      scenarioContractSha256,
+      iterations,
+      seed: 0,
+      compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      adapterVersion: `${LOCAL_TESSERA_ADAPTER_VERSION}:seed-policy-v1`,
+    });
+    return [
+      {
+        item,
+        index,
+        payload,
+        key,
+      },
+    ];
+  });
+  if (runnable.length === 0) return results;
+
+  const cacheDirectory = path.join(
+    rosterPilotSupportDirectory(),
+    "TesseraLocalResultCache",
+  );
+  const cacheChecks = await Promise.all(
+    runnable.map(async (entry) => ({
+      entry,
+      cached: await loadLocalEngineResult<TesseraBrowserResult>(
+        cacheDirectory,
+        entry.key,
+      ),
+    })),
+  );
+  const misses: typeof runnable = [];
+  for (const { entry, cached } of cacheChecks) {
+    if (cached.status === "hit") {
+      results.set(entry.item.templateId, cached.result);
+    } else if (cached.status === "invalid") {
+      throw Object.assign(
+        new Error(
+          `The verified local-engine result cache entry for ${entry.item.templateId} is invalid (${cached.reason}).`,
+        ),
+        {
+          code: "LOCAL_ENGINE_RESULT_CACHE_INVALID",
+          taskId: entry.item.templateId,
+        },
+      );
+    } else {
+      misses.push(entry);
+    }
+  }
+  if (misses.length > 0) {
+    const computed = await runLocalEngineTaskPool<
+      TesseraBrowserInput,
+      TesseraBrowserResult
+    >(
+      misses.map((entry) => ({
+        id: entry.item.templateId,
+        orderKey: `${String(entry.index).padStart(4, "0")}:${entry.item.templateId}`,
+        payload: entry.payload,
+      })),
+      {
+        maxTaskAttempts: 2,
+        workerModule: path.join(
+          projectRoot,
+          "local",
+          "tessera",
+          "local-engine.ts",
+        ),
+      },
+    );
+    const computedById = new Map(
+      computed.map((entry) => [entry.id, entry.value]),
+    );
+    await Promise.all(
+      misses.map(async (entry) => {
+        const value = computedById.get(entry.item.templateId);
+        if (!value) {
+          throw Object.assign(
+            new Error(
+              `The local-engine pool omitted ${entry.item.templateId}.`,
+            ),
+            { code: "LOCAL_ENGINE_POOL_PROTOCOL_ERROR" },
+          );
+        }
+        await storeLocalEngineResult(
+          cacheDirectory,
+          entry.key,
+          value,
+        );
+        results.set(entry.item.templateId, value);
+      }),
+    );
+  }
+  return results;
+}
+
 async function runStage(
   input: StressExecutionInput,
   stage: "screening" | "deepDive",
@@ -5090,6 +5379,85 @@ async function runStage(
   const reports = new Map<string, TesseraMatchupReport>();
   const warnings: string[] = [];
   const stageManifest = input.manifest[stage];
+  let pooledLocalResults: Map<string, TesseraBrowserResult>;
+  try {
+    pooledLocalResults = await precomputeLocalEngineStage(
+      input,
+      stage,
+      items,
+      metrics,
+      mode,
+    );
+  } catch (error) {
+    const failedTaskId =
+      error &&
+      typeof error === "object" &&
+      "taskId" in error &&
+      typeof error.taskId === "string"
+        ? error.taskId
+        : null;
+    const failedCode =
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : "LOCAL_ENGINE_POOL_WORKER_EXITED";
+    const failedMessage =
+      error instanceof Error
+        ? error.message
+        : "The local-engine process pool failed before it produced verified results.";
+    const attemptedAt = new Date().toISOString();
+    for (const item of items) {
+      if (!item.roster || item.status !== "ready") continue;
+      const entry =
+        stageManifest[item.templateId] ?? newStageEntry();
+      stageManifest[item.templateId] = entry;
+      if (stageEntryIsReusable(entry, true)) continue;
+      if (
+        entry.error &&
+        !entry.error.retryable &&
+        !input.options.forceRetry
+      ) {
+        continue;
+      }
+      if (entry.attemptCount >= retryLimit(input)) continue;
+      const itemCode =
+        failedTaskId === null || failedTaskId === item.templateId
+          ? failedCode
+          : "LOCAL_ENGINE_POOL_BATCH_ABORTED";
+      const itemMessage =
+        failedTaskId === null || failedTaskId === item.templateId
+          ? failedMessage
+          : `The local-engine batch stopped after ${failedTaskId} failed; no partial process-pool result was accepted.`;
+      entry.attemptCount += 1;
+      entry.firstAttemptAt ??= attemptedAt;
+      entry.lastAttemptAt = attemptedAt;
+      entry.status = "failed";
+      entry.reportPath = null;
+      entry.reportSha256 = null;
+      entry.error = structuredStageError(itemCode, itemMessage);
+      entry.attemptHistory.push({
+        attempt: entry.attemptCount,
+        startedAt: attemptedAt,
+        completedAt: new Date().toISOString(),
+        outcome: "failed",
+        error: entry.error,
+      });
+      entry.nextAction =
+        itemCode === "LOCAL_ENGINE_RESULT_CACHE_INVALID"
+          ? "Repair or discard the invalid cache entry, then explicitly retry this stage."
+          : "Inspect the local-engine process failure, then explicitly retry this stage.";
+      warnings.push(`${item.templateId}: ${itemMessage}`);
+    }
+    await writeManifest(
+      input.manifest,
+      input.manifestPath,
+      input.options,
+      true,
+    );
+    return { reports, warnings: unique(warnings) };
+  }
   for (const item of items) {
     if (!item.roster || item.status !== "ready") continue;
     const entry =
@@ -5252,6 +5620,27 @@ async function runStage(
         input.options,
         true,
       );
+      const pooledLocalResult = pooledLocalResults.get(
+        item.templateId,
+      );
+      let pooledLocalResultConsumed = false;
+      const stageDependencies: TesseraDependencies = pooledLocalResult
+        ? {
+            ...delivery.dependencies,
+            runLocalEngine: async () => {
+              if (pooledLocalResultConsumed) {
+                throw Object.assign(
+                  new Error(
+                    `The pooled local-engine result for ${item.templateId} was requested more than once.`,
+                  ),
+                  { code: "LOCAL_ENGINE_POOL_PROTOCOL_ERROR" },
+                );
+              }
+              pooledLocalResultConsumed = true;
+              return structuredClone(pooledLocalResult);
+            },
+          }
+        : delivery.dependencies;
       result = await analyzeRosterMatchup(
         input.playerRoster,
         opponent,
@@ -5305,7 +5694,7 @@ async function runStage(
           allowPointMismatch: false,
           includeChangeCandidates: stage === "screening",
         },
-        delivery.dependencies,
+        stageDependencies,
       );
       const exactContractMismatch = result.violations.some(
         (violation) =>
@@ -6503,7 +6892,116 @@ async function executeStressTest(
       (receipt) => receipt.prepared.rosterId,
     ),
   ]);
+  let preflightCacheHits = new Map<
+    string,
+    ResultEnvelope<NewRecruitDelivery>
+  >();
+  try {
+    const preparationAlreadyStarted = Boolean(
+      input.manifest.playerPreparationStartedAt ||
+      input.manifest.preparedPlayer ||
+      Object.keys(input.manifest.opponentPreparationStartedAt).length > 0 ||
+      Object.keys(input.manifest.preparedOpponents).length > 0,
+    );
+    if (input.manifest.batchPreflight) {
+      const retained = await verifyTesseraBatchPreflightManifest(
+        input.manifest.batchPreflight.manifestPath,
+      );
+      if (
+        retained.workflowId !== input.manifest.runId ||
+        retained.manifestSha256 !==
+          input.manifest.batchPreflight.sha256 ||
+        retained.status !== "passed"
+      ) {
+        throw Object.assign(
+          new Error(
+            "The retained Tessera batch preflight no longer matches this run.",
+          ),
+          { code: "TESSERA_PREFLIGHT_MANIFEST_INVALID" },
+        );
+      }
+    } else if (!preparationAlreadyStarted) {
+      const readyRosters = input.portfolio.items.flatMap((item) =>
+        item.status === "ready" && item.roster
+          ? [
+              {
+                role: "opponent" as const,
+                templateId: item.templateId,
+                roster: item.roster,
+              },
+            ]
+          : [],
+      );
+      const preflight = await runTesseraBatchPreflight({
+        workflowId: input.manifest.runId,
+        rosters: [
+          {
+            role: "player",
+            templateId: null,
+            roster: input.playerRoster,
+          },
+          ...readyRosters,
+        ],
+        profilePolicy: input.manifest.profilePolicy,
+        requireNewRecruit:
+          input.manifest.selectedSimulationBackend === "website",
+        inspectPersistentDeliveryEvidence:
+          input.dependencies.persistentCacheDelivery === true ||
+          !input.dependencies.deliver,
+        outputDirectory: path.join(
+          input.outputDirectory,
+          "stress-runs",
+          input.manifest.runId,
+          "preflight",
+        ),
+      });
+      input.manifest.batchPreflight = {
+        manifestPath: preflight.manifestPath,
+        sha256: preflight.manifest.manifestSha256,
+        status: preflight.manifest.status,
+        rosterCount: preflight.manifest.rosterCount,
+        verifiedCacheHits:
+          preflight.manifest.inventory.verifiedCacheHits,
+      };
+      await writeManifest(
+        input.manifest,
+        input.manifestPath,
+        input.options,
+        true,
+      );
+      if (preflight.manifest.status !== "passed") {
+        return failure(
+          preflight.manifest.status === "needs-input"
+            ? "TESSERA_PROFILE_POLICY_REQUIRED"
+            : preflight.manifest.failureCodes[0] ??
+                "TESSERA_BATCH_PREFLIGHT_FAILED",
+          "The frozen player and opponent batch did not pass all read-only checks. No New Recruit or Tessera activity was started.",
+        );
+      }
+      preflightCacheHits = preflight.cacheHits;
+    } else {
+      input.manifest.warnings = unique([
+        ...input.manifest.warnings,
+        "This legacy run began preparation before batch-preflight evidence was introduced. Existing receipts remain authoritative, but the historical preflight is incomplete.",
+      ]);
+    }
+  } catch (error) {
+    return failure(
+      error &&
+        typeof error === "object" &&
+        "code" in error &&
+        typeof error.code === "string"
+        ? error.code
+        : "TESSERA_BATCH_PREFLIGHT_FAILED",
+      error instanceof Error
+        ? error.message
+        : "The Tessera batch preflight could not be verified.",
+    );
+  }
   const delivery = createDeliveryCache(input.dependencies);
+  for (const [cacheKey, cached] of preflightCacheHits) {
+    delivery.prime(cacheKey, cached);
+  }
   if (
     input.manifest.simulationRequested &&
     input.manifest.selectedSimulationBackend === "website" &&
@@ -8261,6 +8759,7 @@ export async function runRosterStressTest(
     const preflight = await preflightPortfolio(
       playerRoster,
       manifest.portfolio,
+      manifest.selectedSimulationBackend !== "local-engine",
     );
     if (!preflight.ok || !preflight.data) {
       return failure(
@@ -8482,6 +8981,8 @@ export async function runRosterStressTest(
     const preflight = await preflightPortfolio(
       playerRoster,
       generated.data,
+      selectedSimulationBackend(simulationBackend) !==
+        "local-engine",
     );
     if (!preflight.ok || !preflight.data) {
       return {
@@ -8635,9 +9136,14 @@ export async function runRosterStressTest(
     !dependencies.runBrowser &&
     !manifestHasRetryableWork(manifest)
   ) {
-    await closeTesseraLocalAgentSession(manifest.runId).catch(
-      () => undefined,
-    );
+    await Promise.all([
+      closeNewRecruitLocalAgentSession(manifest.runId).catch(
+        () => undefined,
+      ),
+      closeTesseraLocalAgentSession(manifest.runId).catch(
+        () => undefined,
+      ),
+    ]);
   }
   return result;
 }
@@ -9010,7 +9516,10 @@ export async function compareRosterStressRevision(
       validation.warnings,
     );
   }
-  const playerPreflight = await preflightPlayerRoster(revisedRoster);
+  const playerPreflight = await preflightPlayerRoster(
+    revisedRoster,
+    baseline.simulation?.selectedBackend !== "local-engine",
+  );
   if (!playerPreflight.ok) {
     return {
       ok: false,

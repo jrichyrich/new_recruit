@@ -53,6 +53,10 @@ import {
 import type {
   RuntimeDataBundleBuild,
 } from "../lib/rosterpilot/runtime-data-bundle";
+import {
+  createWorkflowReliabilityEventStore,
+  resolveWorkflowReliabilityIdentity,
+} from "../local/reliability";
 
 const digest = (character: string) => character.repeat(64);
 const NPM_INTEGRITY = `sha512-${"A".repeat(86)}==`;
@@ -378,6 +382,27 @@ test("coordinator keeps one queued job, records every stage, and activates throu
     assert.equal(status.state.consecutiveFailures, 0);
     assert.equal(status.state.latestObservation?.official.disposition, "update-pending");
     assert.equal(status.due.due, false);
+    const reliabilityRoot = path.join(root, "reliability");
+    const history = await createWorkflowReliabilityEventStore({
+      rootDirectory: reliabilityRoot,
+    }).history({
+      workflowId: completed!.jobId,
+      workflowKind: "local-data-update",
+    });
+    assert.equal(history.verification.ok, true);
+    assert.equal(history.events[0]?.stage, "queued");
+    assert.equal(history.events.at(-1)?.stage, "activated");
+    assert.equal(history.events.at(-1)?.outcome, "succeeded");
+    assert.deepEqual(
+      await resolveWorkflowReliabilityIdentity(
+        { kind: "data-update-job-id", value: completed!.jobId },
+        { rootDirectory: reliabilityRoot },
+      ),
+      {
+        workflowId: completed!.jobId,
+        workflowKind: "local-data-update",
+      },
+    );
 
     const skipped = await coordinator.enqueue({ trigger: "scheduled" });
     assert.equal(skipped.queued, false);
@@ -408,6 +433,60 @@ test("coordinator keeps one queued job, records every stage, and activates throu
     );
     assert.equal((await lstat(recent)).isDirectory(), true);
     assert.deepEqual(consumerForces, [false, true]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("local updates complete and retain a warning when journal append fails", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "local-source-journal-warning-"));
+  const reliabilityRoot = path.join(root, "reliability");
+  const failingStore = createWorkflowReliabilityEventStore({
+    rootDirectory: reliabilityRoot,
+    dependencies: {
+      onEventPersisted: () => {
+        throw new Error("simulated updater journal interruption");
+      },
+    },
+  });
+  const pipeline: LocalSourceUpdatePipeline = {
+    async run() {
+      return {
+        kind: "current",
+        observation: observation("2026-08-02T12:00:00.000Z"),
+        officialReconciliation: "verified",
+        candidate: null,
+        evidence: [],
+      };
+    },
+  };
+  try {
+    const coordinator = createLocalSourceUpdateCoordinator({
+      rootDirectory: root,
+      projectRoot: process.cwd(),
+      pipeline,
+      now: () => new Date("2026-08-02T12:00:00.000Z"),
+      reliability: {
+        store: failingStore,
+        rootDirectory: reliabilityRoot,
+      },
+    });
+    const queued = await coordinator.enqueue({
+      trigger: "manual",
+      force: true,
+    });
+    assert.equal(queued.job?.status, "queued");
+    assert.equal(
+      queued.job?.reliabilityWarnings?.[0]?.code,
+      "RELIABILITY_ADAPTER_FAILED",
+    );
+
+    const completed = await coordinator.runJob(queued.job!.jobId);
+    assert.equal(completed.status, "activated");
+    assert.ok((completed.reliabilityWarnings?.length ?? 0) >= 1);
+    const retained = await coordinator.getJob(completed.jobId);
+    assert.equal(retained.status, "activated");
+    assert.deepEqual(retained.reliabilityWarnings, completed.reliabilityWarnings);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

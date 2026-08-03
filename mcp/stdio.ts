@@ -42,6 +42,13 @@ import {
   startTesseraRun,
 } from "../local/tessera/jobs";
 import {
+  advanceTesseraValidationRuntime,
+  confirmTesseraValidationRemainingSixRuntime,
+  confirmTesseraValidationSuccessorRuntime,
+  readTesseraValidationRuntime,
+  startTesseraValidationRuntime,
+} from "../local/tessera/validation-runtime";
+import {
   approveAndMaterializeTesseraOptimizerCandidates,
   approveStoredTesseraOptimizerWinner,
   finalizeStoredTesseraOptimizer,
@@ -61,6 +68,14 @@ import {
 } from "../local/tessera/general-optimizer-store";
 import { getRuntimeProvenance } from "../local/runtime-provenance";
 import {
+  getReliabilitySummary,
+  getWorkflowRepairHistory,
+  getWorkflowReliabilityEventStore,
+} from "../local/reliability/runtime";
+import {
+  associatePendingRepairVerificationCommits,
+} from "../local/reliability/verification-plans";
+import {
   getCurrentLocalDataBundleProvider,
   initializeLocalDataBundleProvider,
 } from "../local/data-bundles/configure";
@@ -75,11 +90,29 @@ import {
   startRosterJourney,
 } from "../local/workflow/journey";
 
+void associatePendingRepairVerificationCommits({
+  store: getWorkflowReliabilityEventStore(),
+  repositoryRoot: process.cwd(),
+}).catch(() => undefined);
 await initializeLocalDataBundleProvider();
 const server = createRosterPilotMcpServer({
   localDataUpdates: true,
   dataBundleProviderResolver: getCurrentLocalDataBundleProvider,
   runtimeProvenance: getRuntimeProvenance,
+  reliability: {
+    history: getWorkflowRepairHistory,
+    summary: (input) =>
+      input.workflowId
+        ? getReliabilitySummary({
+            workflowId: input.workflowId,
+            workflowKind: input.workflowKind,
+          })
+        : getReliabilitySummary(
+            input.workflowKind
+              ? { workflowKind: input.workflowKind }
+              : undefined,
+          ),
+  },
   workflowJourneys: {
     start: startRosterJourney,
     status: getRosterJourney,
@@ -136,6 +169,51 @@ const server = createRosterPilotMcpServer({
         jobPath,
       }),
     cancel: cancelTesseraRun,
+  },
+  tesseraValidationWorkflows: {
+    start: async ({
+      playerRoster,
+      opponentFaction,
+      validationDepth,
+      exhaustiveConfirmation,
+      profilePolicy,
+      workflowId,
+    }) => {
+      const preview = await previewFactionStressPortfolio({
+        faction: opponentFaction,
+        pointsLimit: playerRoster.pointsLimit,
+        suite: "diverse-9",
+        pointsTolerancePercent: 5,
+        allowLegends: false,
+      });
+      if (!preview.ok || !preview.data) {
+        const primary = preview.violations[0];
+        const error = new Error(
+          primary?.message ??
+            "The diverse-nine opponent portfolio could not be frozen.",
+        ) as Error & { code?: string };
+        error.code = primary?.code ?? "PORTFOLIO_CONTRACT_UNMET";
+        throw error;
+      }
+      const result = await startTesseraValidationRuntime({
+        ...(workflowId ? { workflowId } : {}),
+        playerRoster,
+        portfolio: preview.data.portfolio,
+        portfolioPreview: preview.data,
+        validationDepth,
+        exhaustiveConfirmation,
+        profilePolicy: profilePolicy ?? null,
+      });
+      return {
+        ...result,
+        portfolioWarnings: preview.warnings,
+      };
+    },
+    status: readTesseraValidationRuntime,
+    advance: advanceTesseraValidationRuntime,
+    confirmRemainingSix:
+      confirmTesseraValidationRemainingSixRuntime,
+    confirmSuccessor: confirmTesseraValidationSuccessorRuntime,
   },
   tesseraOptimizerStore: {
     start: startTesseraOptimizer,

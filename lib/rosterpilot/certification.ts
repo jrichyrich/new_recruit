@@ -47,6 +47,7 @@ import {
 } from "./draft";
 import { getActiveDataBundleManifest } from "./active-data-context";
 import { factions } from "./runtime-dataset";
+import type { CatalogueSelectionReference } from "./catalogue-types";
 
 export const CERTIFICATION_SCHEMA_VERSION = 1 as const;
 
@@ -1575,6 +1576,16 @@ const RuntimeProvenanceSchema = z
     chromeVersion: z.string().min(1).nullable().optional(),
     playwrightVersion: z.string().min(1).nullable().optional(),
     brokerBuildId: z.string().min(1).nullable().optional(),
+    tesseraJobWorkerSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/i)
+      .nullable()
+      .optional(),
+    tesseraJobWorkerSourceSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/i)
+      .nullable()
+      .optional(),
     macOsVersion: z.string().min(1).nullable().optional(),
     localAgentExpectedProtocolVersion:
       z.number().int().nonnegative().optional(),
@@ -1596,6 +1607,16 @@ const RuntimeProvenanceSchema = z
         runtimeBuildId: z.string().min(1).nullable(),
         runtimeSourceFingerprint:
           z.string().min(1).nullable(),
+        tesseraJobWorkerSha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/i)
+          .nullable()
+          .optional(),
+        tesseraJobWorkerSourceSha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/i)
+          .nullable()
+          .optional(),
         statusErrorCode: z.string().min(1).nullable(),
       })
       .strict()
@@ -2310,24 +2331,60 @@ function assertEquipmentSelections(
   actual: CanonicalXmlNode[],
   expected: Array<{
     count: number;
-    reference: {
-      name: string;
-      entryId: string;
-      entryGroupId?: string;
-      group?: string;
-      type: string;
-    };
+    reference: CatalogueSelectionReference;
   }>,
   context: string,
 ): void {
+  const expectedTopLevelCount = new Set(
+    expected.map((item, index) =>
+      item.reference.loadoutChoice?.entryId ?? `equipment:${index}`,
+    ),
+  ).size;
   assertion(
-    actual.length === expected.length,
+    actual.length === expectedTopLevelCount,
     "CERTIFICATION_ROSZ_EQUIPMENT_MISMATCH",
-    `The canonical ROS ${context} has ${actual.length} equipment selections; expected ${expected.length}.`,
+    `The canonical ROS ${context} has ${actual.length} top-level equipment selections; expected ${expectedTopLevelCount}.`,
   );
+  let actualIndex = 0;
+  const checkedChoices = new Set<string>();
   for (const [index, item] of expected.entries()) {
+    const choice = item.reference.loadoutChoice;
+    if (choice) {
+      if (checkedChoices.has(choice.entryId)) continue;
+      checkedChoices.add(choice.entryId);
+      const choiceNode = actual[actualIndex++];
+      assertSelectionReference(
+        choiceNode,
+        choice,
+        1,
+        "CERTIFICATION_ROSZ_EQUIPMENT_MISMATCH",
+        `${context} loadout choice ${checkedChoices.size}`,
+      );
+      const choiceItems = expected
+        .filter(
+          (candidate) =>
+            candidate.reference.loadoutChoice?.entryId === choice.entryId,
+        )
+        .map((candidate) => ({
+          ...candidate,
+          reference: {
+            ...candidate.reference,
+            loadoutChoiceId: undefined,
+            loadoutChoice: undefined,
+          },
+        }));
+      assertEquipmentSelections(
+        childSelections(
+          choiceNode,
+          `${context} loadout choice ${checkedChoices.size}`,
+        ),
+        choiceItems,
+        `${context} loadout choice ${checkedChoices.size}`,
+      );
+      continue;
+    }
     assertSelectionReference(
-      actual[index],
+      actual[actualIndex++],
       item.reference,
       item.count,
       "CERTIFICATION_ROSZ_EQUIPMENT_MISMATCH",

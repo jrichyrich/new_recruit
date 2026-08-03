@@ -88,12 +88,30 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
    another list.
 13. Treat Tessera as a separate, optional workflow. Call
     `get_tessera_connection_status` first, then route the opponent explicitly:
-    - Known faction, unknown list: call
+    - Known faction, unknown list, combined local-and-Web validation: use
+      `start_tessera_validation`. Its default `standard` depth freezes a
+      diverse-nine portfolio, completes fail-fast validation and all nine
+      local scenarios, selects the frozen stress/central/contrast
+      representatives from trusted local evidence, and then runs those exact
+      three opponents on Tessera Web. Use `get_tessera_validation_status` and
+      `advance_tessera_validation` to follow the durable workflow. Starting it
+      launches only the local stage; a later advance may prepare New Recruit
+      artifacts and open Tessera Web after local evidence passes. Do not claim
+      strict provider parity from this diagnostic comparison.
+      Set `validationDepth="exhaustive"` only when the user explicitly asks
+      for all nine Web opponents, and also set
+      `exhaustiveConfirmation=true`. If standard validation offers the
+      remaining six because Web evidence is incomplete, inconclusive, or
+      materially outside local bands, call
+      `confirm_tessera_validation_remaining_six` only after a fresh explicit
+      confirmation, then advance again. A repair successor likewise requires
+      `confirm_tessera_validation_successor` before another Web job starts.
+    - Known faction, unknown list, one explicitly requested provider: call
       `preview_faction_stress_portfolio`, resolve any structured profile
       requirements, then start `stress` with `start_tessera_run`, passing the
-      returned full preview `data` object as `request.portfolioPreview`. The durable job
-      freezes and hashes that exact preview; do not regenerate or summarize
-      it before starting.
+      returned full preview `data` object as `request.portfolioPreview`. The
+      durable job freezes and hashes that exact preview; do not regenerate or
+      summarize it before starting.
     - Known canonical roster or `.rosz`: resolve its exact provenance and
       profile requirements, then start `exact` with `start_tessera_run`.
     - Build against a known canonical roster: use
@@ -162,6 +180,12 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
     Never bypass signed-manifest or local-receipt verification, silently change
     selections, delete a mutation receipt, retry New Recruit blindly, or make
     an old durable job adopt a new bundle.
+    When the user asks what failed, what was repaired, or how long recovery
+    took, use `get_workflow_repair_history` and `get_reliability_summary`.
+    Report execution success separately from trusted-evidence success. Do not
+    expose raw logs, credentials, list URLs, browser storage, or personal
+    filesystem paths; the reliability journal deliberately stores sanitized
+    hashes and bounded timing evidence instead.
 15. For an explicit local-engine-versus-Tessera-Web parity request, use one
     paired exact workflow rather than comparing unrelated result files:
     - Start the website exact durable run first with the validated canonical

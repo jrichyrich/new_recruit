@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
   access,
+  chmod,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   writeFile,
@@ -11,9 +13,9 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  buildRoster,
   generateFactionStressPortfolio,
 } from "../lib/rosterpilot";
-import { runLocalTesseraEngineMatchup } from "../local/tessera/local-engine";
 import { verifyLocalTesseraEngineInput } from "../local/tessera/local-engine-input";
 import { runRosterStressTest } from "../local/tessera/stress";
 import {
@@ -67,6 +69,75 @@ type StoredLocalStressManifest = {
   finalArtifacts: unknown;
 };
 
+test("local-engine stress preflight accepts a legal roster with blocking New Recruit mapping conflicts", { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-local-engine-unmapped-"),
+  );
+  try {
+    const player = buildRoster({
+      playerFaction: "aeldari",
+      pointsLimit: 1_000,
+      requiredUnitIds: ["eldrad-ulthran", "wraithblades"],
+      requiredWarlordUnitId: "eldrad-ulthran",
+      allowLegends: false,
+    });
+    assert.ok(player.ok && player.data);
+    assert.ok(
+      player.warnings.some(
+        (warning) => warning.code === "DATA_SOURCE_CONFLICT",
+      ),
+    );
+    const portfolio = generateFactionStressPortfolio({
+      faction: "adepta-sororitas",
+      pointsLimit: player.data.pointsLimit,
+      suite: "core-3",
+    });
+    assert.ok(portfolio.ok && portfolio.data);
+    const opponents = portfolio.data.items.flatMap((item) =>
+      item.roster ? [item.roster] : [],
+    );
+    const policyPath = path.join(directory, "profile-policy.json");
+    await writeFile(
+      policyPath,
+      `${JSON.stringify(
+        resolvedProfilePolicy(player.data, ...opponents),
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await runRosterStressTest(
+      player.data,
+      { kind: "faction", factionId: "adepta-sororitas" },
+      {
+        suite: "core-3",
+        analysisStrategy: "full-all",
+        simulationBackend: "local-engine",
+        executionMode: "prepare-only",
+        profilePolicyPath: policyPath,
+        outputDirectory: "stress",
+        rootDir: directory,
+      },
+      { runtimeIssue: () => null },
+    );
+
+    assert.equal(
+      result.ok,
+      true,
+      result.violations.map((issue) => issue.message).join("\n"),
+    );
+    assert.equal(
+      result.violations.some(
+        (issue) => issue.code === "NEW_RECRUIT_DATA_CONFLICT",
+      ),
+      false,
+    );
+    assert.equal(result.data?.preparation?.remoteMutations, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("local-engine stress runs avoid the New Recruit cache, retain deterministic evidence, resume safely, and reject prepared-input tampering", { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "rosterpilot-local-engine-stress-"),
@@ -116,7 +187,6 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       enrichment: 0,
       website: 0,
     };
-    let simulationCalls = 0;
     const dependencies = {
       runtimeIssue: () => null,
       enrich: async () => {
@@ -126,12 +196,6 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       runBrowser: async () => {
         calls.website += 1;
         throw new Error("website provider must not run");
-      },
-      runLocalEngine: async (
-        ...args: Parameters<typeof runLocalTesseraEngineMatchup>
-      ) => {
-        simulationCalls += 1;
-        return runLocalTesseraEngineMatchup(...args);
       },
     };
     const scenarioContract = localTesseraScenarioContract(64);
@@ -280,7 +344,7 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
     const manifest = JSON.parse(
       await readFile(manifestPath, "utf8"),
     ) as StoredLocalStressManifest;
-    assert.equal(manifest.schemaVersion, 6);
+    assert.equal(manifest.schemaVersion, 7);
     assert.equal(manifest.simulationBackend, "local-engine");
     assert.equal(manifest.selectedSimulationBackend, "local-engine");
     assert.deepEqual(
@@ -350,6 +414,71 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       sha256: prepared.simulationInput.sha256,
       fingerprint: prepared.fingerprint,
     }));
+    const localResultCache = path.join(
+      supportDirectory,
+      "TesseraLocalResultCache",
+      "v1",
+    );
+    const cachedKeys = (
+      await readdir(path.join(localResultCache, "keys"), {
+        recursive: true,
+      })
+    ).filter((entry) => entry.endsWith(".json"));
+    const cachedReceipts = (
+      await readdir(path.join(localResultCache, "receipts"), {
+        recursive: true,
+      })
+    ).filter((entry) => entry.endsWith(".json"));
+    const cachedResults = (
+      await readdir(path.join(localResultCache, "results"), {
+        recursive: true,
+      })
+    ).filter((entry) => entry.endsWith(".json"));
+    assert.equal(cachedKeys.length, 3);
+    assert.equal(cachedReceipts.length, 3);
+    assert.equal(cachedResults.length, 3);
+
+    const tamperedCacheResult = path.join(
+      localResultCache,
+      "results",
+      cachedResults[0],
+    );
+    await chmod(tamperedCacheResult, 0o600);
+    await writeFile(tamperedCacheResult, "{\"tampered\":true}");
+    const cacheRejected = await runRosterStressTest(
+      player,
+      { kind: "faction", factionId: "aeldari" },
+      {
+        suite: "core-3",
+        analysisStrategy: "full-all",
+        simulationBackend: "local-engine",
+        executionMode: "simulate",
+        profilePolicyPath: policyPath,
+        scenarioContract,
+        outputDirectory: "stress-invalid-cache",
+        rootDir: directory,
+      },
+      dependencies,
+    );
+    assert.equal(cacheRejected.ok, false);
+    assert.ok(
+      cacheRejected.violations.some(
+        (violation) =>
+          violation.code === "LOCAL_ENGINE_RESULT_CACHE_INVALID",
+      ),
+      cacheRejected.violations.map((violation) => violation.message).join("\n"),
+    );
+    assert.equal(
+      cacheRejected.data?.simulation?.trustedMatrices,
+      0,
+    );
+    assert.equal(
+      cacheRejected.data?.failures?.some(
+        (failure) =>
+          failure.code === "LOCAL_ENGINE_POOL_BATCH_ABORTED",
+      ) ?? false,
+      true,
+    );
 
     manifest.finalArtifacts = null;
     await writeFile(
@@ -399,7 +528,6 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       frozenInputIdentities,
     );
 
-    const simulationCallsBeforeTamper = simulationCalls;
     resumedManifest.finalArtifacts = null;
     await writeFile(
       manifestPath,
@@ -430,11 +558,6 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
     assert.match(
       tamperedResume.violations[0]?.message ?? "",
       /prepared player artifact is missing or changed/i,
-    );
-    assert.equal(
-      simulationCalls,
-      simulationCallsBeforeTamper,
-      "prepared-input drift must stop before local simulation",
     );
     assert.deepEqual(calls, {
       enrichment: 0,

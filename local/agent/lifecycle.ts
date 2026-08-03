@@ -312,7 +312,13 @@ function launchDomain(): string {
   return `gui/${uid}`;
 }
 
-async function waitForStatus(timeoutMs = 5_000): Promise<LocalAgentStatus> {
+// Loading and re-verifying a large locally built bundle can take well over a
+// minute on first start. Lifecycle commands must wait for the same bounded
+// startup window as ordinary agent clients instead of reporting a false
+// failure while launchd is still initializing the healthy process.
+async function waitForStatus(
+  timeoutMs = 5 * 60_000,
+): Promise<LocalAgentStatus> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {

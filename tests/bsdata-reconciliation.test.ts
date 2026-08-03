@@ -524,6 +524,205 @@ test("keeps duplicate equipment on one coherent sibling loadout branch", () => {
   );
 });
 
+test("distinguishes a scoped quantity option from an unscoped default", () => {
+  const references = choiceAwareEquipmentReferences([
+    {
+      reference: selectionReference(
+        "Avenger shuriken catapult",
+        "two-catapults",
+      ),
+      node: {
+        id: "two-catapults",
+        name: "Avenger shuriken catapult",
+        type: "upgrade",
+      },
+      ancestorEntryIds: ["two-catapults-choice"],
+    },
+    {
+      reference: selectionReference(
+        "Avenger shuriken catapult",
+        "default-catapult",
+      ),
+      node: {
+        id: "default-catapult",
+        name: "Avenger shuriken catapult",
+        type: "upgrade",
+      },
+      ancestorEntryIds: [],
+    },
+  ]);
+
+  assert.equal(
+    references[0].loadoutChoiceId,
+    "two-catapults-choice",
+  );
+  assert.equal(references[1].loadoutChoiceId, undefined);
+});
+
+test("retains the complete parent reference for nested loadout equipment", () => {
+  const parent: WalkedSelection = {
+    reference: selectionReference(
+      "Power Glaive and Shimmershield",
+      "shield-loadout",
+    ),
+    node: {
+      id: "shield-loadout",
+      name: "Power Glaive and Shimmershield",
+      type: "upgrade",
+    },
+    ancestorEntryIds: [],
+  };
+  const child = (
+    name: string,
+    entryId: string,
+  ): WalkedSelection => ({
+    reference: selectionReference(name, entryId),
+    node: { id: entryId, name, type: "upgrade" },
+    ancestorEntryIds: ["shield-loadout"],
+  });
+  const references = choiceAwareEquipmentReferences([
+    parent,
+    child("Power Glaive", "power-glaive"),
+    child("Shimmershield", "shimmershield"),
+  ]);
+
+  assert.deepEqual(references[1].loadoutChoice, parent.reference);
+  assert.deepEqual(references[2].loadoutChoice, parent.reference);
+});
+
+test("keeps duplicate model equipment on one coherent sibling loadout branch", () => {
+  const choice = (
+    name: string,
+    entryId: string,
+    loadoutChoiceId: string,
+  ): CatalogueSelectionReference => ({
+    ...selectionReference(name, entryId),
+    loadoutChoiceId,
+  });
+  const model: CatalogueModelReference = {
+    ...selectionReference("Dire Avenger Exarch", "exarch", "model"),
+    type: "model",
+    equipment: [
+      selectionReference("Close Combat Weapon", "exarch-close-combat"),
+      choice("Power Glaive", "glaive-shield", "shield-loadout"),
+      choice("Shimmershield", "shield", "shield-loadout"),
+      choice("Power Glaive", "glaive-pistol", "pistol-loadout"),
+      choice("Shuriken Pistol", "pistol", "pistol-loadout"),
+    ],
+  };
+  const rankAndFile: CatalogueModelReference = {
+    ...selectionReference("Dire Avenger", "dire-avenger", "model"),
+    type: "model",
+    equipment: [
+      selectionReference("Avenger shuriken catapult", "catapult"),
+      selectionReference("Close Combat Weapon", "close-combat"),
+    ],
+  };
+  const resolution = resolveNewRecruitUnit(
+    {
+      ...selectionReference("Dire Avengers", "dire-avengers", "unit"),
+      categories: [],
+      directEquipment: [],
+      models: [model, rankAndFile],
+      enhancements: {},
+      pointsByModelCount: {},
+    },
+    {
+      unitId: "dire-avengers",
+      name: "Dire Avengers",
+      modelCount: 5,
+      equipment: [
+        { itemId: "power-glaive", name: "Power Glaive", count: 1 },
+        { itemId: "shimmershield", name: "Shimmershield", count: 1 },
+        {
+          itemId: "avenger-shuriken-catapult",
+          name: "Avenger shuriken catapult",
+          count: 4,
+        },
+        {
+          itemId: "close-combat-weapon",
+          name: "Close Combat Weapon",
+          count: 5,
+        },
+      ],
+    },
+  );
+
+  assert.equal(resolution.ok, true);
+  assert.deepEqual(
+    resolution.ok
+      ? resolution.models
+          .find((item) => item.reference.entryId === "exarch")
+          ?.equipment.map((item) => item.reference.entryId)
+      : [],
+    ["exarch-close-combat", "glaive-shield", "shield"],
+  );
+
+  const twinCatapults = resolveNewRecruitUnit(
+    {
+      ...selectionReference("Dire Avengers", "dire-avengers", "unit"),
+      categories: [],
+      directEquipment: [],
+      models: [
+        {
+          ...model,
+          equipment: [
+            selectionReference(
+              "Close Combat Weapon",
+              "exarch-close-combat",
+            ),
+            choice(
+              "Avenger shuriken catapult",
+              "catapult-left",
+              "twin-catapults",
+            ),
+            choice(
+              "Avenger shuriken catapult",
+              "catapult-right",
+              "twin-catapults",
+            ),
+          ],
+        },
+        rankAndFile,
+      ],
+      enhancements: {},
+      pointsByModelCount: {},
+    },
+    {
+      unitId: "dire-avengers",
+      name: "Dire Avengers",
+      modelCount: 5,
+      equipment: [
+        {
+          itemId: "avenger-shuriken-catapult",
+          name: "Avenger shuriken catapult",
+          count: 6,
+        },
+        {
+          itemId: "close-combat-weapon",
+          name: "Close Combat Weapon",
+          count: 5,
+        },
+      ],
+    },
+  );
+  assert.equal(twinCatapults.ok, true);
+  assert.deepEqual(
+    twinCatapults.ok
+      ? twinCatapults.models
+          .find((item) => item.reference.entryId === "exarch")
+          ?.equipment.filter(
+            (item) => item.name === "Avenger shuriken catapult",
+          )
+          .map((item) => [item.reference.entryId, item.count])
+      : [],
+    [
+      ["catapult-left", 1],
+      ["catapult-right", 1],
+    ],
+  );
+});
+
 function selectionReference(
   name: string,
   entryId: string,

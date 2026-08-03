@@ -1,17 +1,21 @@
-export type CatalogueSelectionReference = {
+export type CatalogueLoadoutChoiceReference = {
   name: string;
   normalizedName: string;
   type: "model" | "unit" | "upgrade";
   entryId: string;
   entryGroupId?: string;
   group?: string;
+};
+
+export type CatalogueSelectionReference = CatalogueLoadoutChoiceReference & {
   /**
-   * Identifies a mutually exclusive parent loadout choice when BSData repeats
-   * the same equipment name beneath sibling choices. The resolver uses this
-   * only to keep a selected equipment set on one coherent branch; it is not
-   * serialized as a New Recruit selection attribute.
+   * Identifies the parent loadout selection that owns this equipment entry.
+   * The resolver uses the ID to keep a selected equipment set on one coherent
+   * branch, while the exporter serializes the complete reference as a parent
+   * selection so New Recruit retains the nested equipment.
    */
   loadoutChoiceId?: string;
+  loadoutChoice?: CatalogueLoadoutChoiceReference;
 };
 
 export type CatalogueCategoryReference = {

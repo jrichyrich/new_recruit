@@ -88,6 +88,54 @@ function selectionFromReference(
   };
 }
 
+type ResolvedEquipment = {
+  itemId: string;
+  count: number;
+  reference: CatalogueSelectionReference;
+};
+
+function equipmentSelections(
+  equipment: ResolvedEquipment[],
+  idParts: Array<string | number>,
+): XmlNode[] {
+  const result: XmlNode[] = [];
+  const choices = new Map<
+    string,
+    {
+      reference: NonNullable<CatalogueSelectionReference["loadoutChoice"]>;
+      children: XmlNode[];
+    }
+  >();
+  for (const item of equipment) {
+    const child = selectionFromReference(
+      item.reference,
+      deterministicId([...idParts, item.itemId, item.reference.entryId]),
+      item.count,
+    );
+    const choice = item.reference.loadoutChoice;
+    if (!choice) {
+      result.push(child);
+      continue;
+    }
+    const existing = choices.get(choice.entryId);
+    if (existing) {
+      existing.children.push(child);
+      continue;
+    }
+    const grouped = { reference: choice, children: [child] };
+    choices.set(choice.entryId, grouped);
+    result.push({
+      ...selectionFromReference(
+        choice,
+        deterministicId([...idParts, "loadout-choice", choice.entryId]),
+        1,
+      ),
+      selections: grouped.children,
+    });
+  }
+  return result;
+}
+
 function unitInFactionAncestry(
   unitId: string,
   factionId: string,
@@ -168,31 +216,14 @@ function rosterUnitSelection(
         ]),
         model.count,
       ),
-      selections: model.equipment.map((equipment) =>
-        selectionFromReference(
-          equipment.reference,
-          deterministicId([
-            selection.selectionId,
-            "model-equipment",
-            modelIndex,
-            equipment.itemId,
-            equipment.reference.entryId,
-          ]),
-          equipment.count,
-        ),
+      selections: equipmentSelections(
+        model.equipment,
+        [selection.selectionId, "model-equipment", modelIndex],
       ),
     })),
-    ...resolution.directEquipment.map((equipment) =>
-      selectionFromReference(
-        equipment.reference,
-        deterministicId([
-          selection.selectionId,
-          "direct-equipment",
-          equipment.itemId,
-          equipment.reference.entryId,
-        ]),
-        equipment.count,
-      ),
+    ...equipmentSelections(
+      resolution.directEquipment,
+      [selection.selectionId, "direct-equipment"],
     ),
   );
 

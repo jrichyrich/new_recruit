@@ -1,6 +1,29 @@
 export const NEW_RECRUIT_ORIGIN = "https://www.newrecruit.eu";
 export const NEW_RECRUIT_MY_LISTS = `${NEW_RECRUIT_ORIGIN}/app/MyLists`;
 
+const terminalSessionCodes = new Set([
+  "DOWNLOAD_FAILED",
+  "IMPORTED_LIST_NOT_OPENED",
+  "KEYCHAIN_READ_FAILED",
+  "LOGIN_FAILED",
+  "LOGIN_ORIGIN_REJECTED",
+  "NEW_RECRUIT_AUTHENTICATED_ORIGIN_REJECTED",
+  "NEW_RECRUIT_UI_CHANGED",
+  "NEW_RECRUIT_UI_IDENTITY_MISSING",
+  "NEW_RECRUIT_UI_IDENTITY_UNAVAILABLE",
+  "VERIFICATION_FAILED",
+]);
+
+export function stopsNewRecruitBrowserSession(
+  result: { code?: string; remoteOutcomeUnknown?: boolean },
+): boolean {
+  return (
+    result.remoteOutcomeUnknown === true ||
+    (typeof result.code === "string" &&
+      terminalSessionCodes.has(result.code))
+  );
+}
+
 export type WorkerRosterExpectation = {
   name: string;
   factionName: string;

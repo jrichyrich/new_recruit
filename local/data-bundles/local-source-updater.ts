@@ -47,6 +47,13 @@ import {
   type LocalSourceValidationPlanV1,
   type VerifiedLocalSourceCandidate,
 } from "./local-source-candidate";
+import {
+  appendWorkflowReliabilityEventSafely,
+  associateWorkflowReliabilityIdentities,
+  createWorkflowReliabilityEventStore,
+  type WorkflowReliabilityEventStore,
+  type WorkflowReliabilityOutcomeV1,
+} from "../reliability";
 
 export const LOCAL_SOURCE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 export const LOCAL_SOURCE_INITIAL_RETRY_MS = 60 * 60 * 1_000;
@@ -165,6 +172,18 @@ const localSourceUpdateJobDraftSchema = z
     candidate: candidateReferenceSchema.nullable(),
     evidence: z.array(jobEvidenceSchema),
     quarantinedScopes: z.array(z.string().min(1).max(256)),
+    reliabilityWarnings: z
+      .array(
+        z
+          .object({
+            code: z.string().min(1).max(256),
+            message: z.string().min(1).max(4_096),
+            recordedAt: z.string().datetime(),
+          })
+          .strict(),
+      )
+      .max(20)
+      .optional(),
     error: z
       .object({
         code: z.string().min(1).max(160),
@@ -275,6 +294,7 @@ export interface LocalSourceUpdatePipeline {
     projectRoot: string;
     supportRoot: string;
     latestCandidate: LocalSourceCandidateReference | null;
+    force?: boolean;
     bsDataCommitOverride: string | null;
     onProgress: LocalSourcePipelineProgress;
   }): Promise<LocalSourcePipelineResult>;
@@ -1242,8 +1262,20 @@ export function createDefaultLocalSourceUpdatePipeline(
           });
         }
         const latestSources = latestVerified?.buildEvidence.sources;
+        let builderChanged = false;
+        if (latestVerified && input.force) {
+          try {
+            await verifyLocalSourceCandidate(
+              latestVerified.reference.directory,
+              { expectedBuilderRoot: input.projectRoot },
+            );
+          } catch {
+            builderChanged = true;
+          }
+        }
         const needsBuild =
           !latestVerified ||
+          builderChanged ||
           latestSources?.rules.version !== observation.rules.version ||
           latestSources?.rules.distIntegrity !==
             observation.rules.distIntegrity ||
@@ -1911,6 +1943,11 @@ type CoordinatorOptions = {
   consumeCandidate?: LocalSourceCandidateConsumer;
   now?: () => Date;
   isProcessAlive?: (pid: number) => boolean;
+  reliability?: {
+    store?: WorkflowReliabilityEventStore;
+    rootDirectory?: string;
+    associateIdentities?: typeof associateWorkflowReliabilityIdentities;
+  };
 };
 
 async function acquireDirectoryLock(input: {
@@ -2004,6 +2041,53 @@ async function acquireDirectoryLock(input: {
   throw new Error("Could not acquire the local-source update lock.");
 }
 
+function localSourceReliabilityOutcome(
+  job: LocalSourceUpdateJobV1,
+): WorkflowReliabilityOutcomeV1 {
+  if (job.status === "activated" || job.status === "installed") {
+    return "succeeded";
+  }
+  if (job.status === "quarantined") return "degraded";
+  if (job.status === "failed") return "failed";
+  if (job.status === "queued" && job.recoveryCount > 0) return "recovered";
+  if (job.status === "queued") return "started";
+  return "in-progress";
+}
+
+function localSourceReliabilityExecution(
+  job: LocalSourceUpdateJobV1,
+): "running" | "succeeded" | "degraded" | "failed" {
+  if (job.status === "activated" || job.status === "installed") {
+    return "succeeded";
+  }
+  if (job.status === "quarantined") return "degraded";
+  if (job.status === "failed") return "failed";
+  return "running";
+}
+
+function localSourceReliabilityEventKind(
+  job: LocalSourceUpdateJobV1,
+): string {
+  if (job.status === "queued" && job.recoveryCount > 0) {
+    return "recovered-after-crash";
+  }
+  if (job.status === "failed" || job.status === "quarantined") {
+    return "failure";
+  }
+  if (job.status === "activated" || job.status === "installed") {
+    return "finalization";
+  }
+  if (job.status === "certifying") return "verification";
+  return "transition";
+}
+
+function defaultCoordinatorReliabilityRoot(rootDirectory: string): string {
+  const resolved = path.resolve(rootDirectory);
+  return path.basename(resolved) === "data-updates"
+    ? path.join(path.dirname(resolved), "reliability")
+    : path.join(resolved, "reliability");
+}
+
 export function createLocalSourceUpdateCoordinator(
   options: CoordinatorOptions,
 ) {
@@ -2017,6 +2101,15 @@ export function createLocalSourceUpdateCoordinator(
   const isProcessAlive = options.isProcessAlive ?? processIsAlive;
   const pipeline =
     options.pipeline ?? createDefaultLocalSourceUpdatePipeline({ now });
+  const reliabilityRootDirectory = path.resolve(
+    options.reliability?.rootDirectory ??
+      defaultCoordinatorReliabilityRoot(options.rootDirectory),
+  );
+  const reliabilityStore =
+    options.reliability?.store ??
+    createWorkflowReliabilityEventStore({
+      rootDirectory: reliabilityRootDirectory,
+    });
 
   const jobPath = (jobId: string) =>
     path.join(jobsRoot, jobId, JOB_FILENAME);
@@ -2109,11 +2202,128 @@ export function createLocalSourceUpdateCoordinator(
     );
   };
 
-  const writeJob = async (
+  const writeJobRecord = async (
     draft: Omit<LocalSourceUpdateJobV1, "integritySha256">,
   ): Promise<LocalSourceUpdateJobV1> => {
     const job = LocalSourceUpdateJobV1Schema.parse(await seal(draft));
     await atomicWriteJson(jobPath(job.jobId), job);
+    return job;
+  };
+
+  const appendJobReliabilityWarning = (
+    job: LocalSourceUpdateJobV1,
+    warning: { code: string; message: string },
+  ): Omit<LocalSourceUpdateJobV1, "integritySha256"> => {
+    const warnings = job.reliabilityWarnings ?? [];
+    const nextWarnings = warnings.some(
+      (existing) =>
+        existing.code === warning.code &&
+        existing.message === warning.message,
+    )
+      ? warnings
+      : [
+          ...warnings,
+          {
+            ...warning,
+            recordedAt: now().toISOString(),
+          },
+        ].slice(-20);
+    return {
+      ...withoutIntegrity(job),
+      reliabilityWarnings: nextWarnings,
+    };
+  };
+
+  const writeJob = async (
+    draft: Omit<LocalSourceUpdateJobV1, "integritySha256">,
+  ): Promise<LocalSourceUpdateJobV1> => {
+    // The job document is the authoritative transition. Journal and identity
+    // failures are advisory and are never allowed to undo this write.
+    let job = await writeJobRecord(draft);
+    const workflow = {
+      workflowId: job.jobId,
+      workflowKind: "local-data-update",
+    } as const;
+    const recorded = await appendWorkflowReliabilityEventSafely(
+      reliabilityStore,
+      {
+        workflow,
+        idempotencyKey: `data-update-revision:${job.revision}`,
+        eventKind: localSourceReliabilityEventKind(job),
+        stage: job.status,
+        provider: "local-source",
+        outcome: localSourceReliabilityOutcome(job),
+        occurredAt: job.updatedAt,
+        execution: {
+          status: localSourceReliabilityExecution(job),
+          attempt: job.revision + 1,
+        },
+        evidence: {
+          status:
+            job.status === "activated" || job.status === "installed"
+              ? "verified"
+              : job.status === "quarantined"
+                ? "invalid"
+                : job.evidence.length > 0
+                  ? "partial"
+                  : "pending",
+          artifactCount: 1 + job.evidence.length,
+          evidenceSha256: job.integritySha256,
+        },
+        error: job.error,
+        attributes: {
+          jobId: job.jobId,
+          jobRevision: job.revision,
+          trigger: job.trigger,
+          forced: job.forced,
+          recoveryCount: job.recoveryCount,
+          officialReconciliation: job.officialReconciliation,
+          candidateBundleId: job.candidate?.bundleId ?? null,
+          jobStateSha256: job.integritySha256,
+          evidence: job.evidence.map((entry) => ({
+            stage: entry.stage,
+            status: entry.status,
+            sha256: entry.sha256,
+          })),
+          quarantinedScopes: job.quarantinedScopes,
+        },
+      },
+    );
+    let association: { ok: boolean; warning: string | null };
+    try {
+      association = await (
+        options.reliability?.associateIdentities ??
+        associateWorkflowReliabilityIdentities
+      )(
+        {
+          workflow,
+          identities: [
+            { kind: "data-update-job-id", value: job.jobId },
+          ],
+        },
+        { rootDirectory: reliabilityRootDirectory },
+      );
+    } catch (error) {
+      association = {
+        ok: false,
+        warning:
+          error instanceof Error
+            ? error.message
+            : "The local update reliability identity could not be associated.",
+      };
+    }
+    const warnings: Array<{ code: string; message: string }> = [];
+    if (!recorded.ok) warnings.push(recorded.error);
+    if (!association.ok && association.warning) {
+      warnings.push({
+        code: "RELIABILITY_IDENTITY_ASSOCIATION_FAILED",
+        message: association.warning,
+      });
+    }
+    for (const warning of warnings) {
+      const warned = appendJobReliabilityWarning(job, warning);
+      job = await writeJobRecord(warned).catch(() => job);
+    }
     return job;
   };
 
@@ -2297,6 +2507,7 @@ export function createLocalSourceUpdateCoordinator(
         candidate: null,
         evidence: [],
         quarantinedScopes: [],
+        reliabilityWarnings: [],
         error: null,
       });
       await writeState({
@@ -2403,6 +2614,7 @@ export function createLocalSourceUpdateCoordinator(
         projectRoot: options.projectRoot,
         supportRoot: root,
         latestCandidate: state.latestCandidate,
+        force: current.forced,
         bsDataCommitOverride: current.bsDataCommitOverride,
         onProgress: async (status, progress) => {
           current = await mutateJob(jobId, (draft) => ({

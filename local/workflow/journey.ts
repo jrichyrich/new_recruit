@@ -54,6 +54,15 @@ import {
   ensureLocalServiceCompatibility,
   type LocalServiceCompatibilityResult as LocalServiceCompatibilityResolution,
 } from "../data-bundles/configure";
+import {
+  appendWorkflowReliabilityEventSafely,
+  associateWorkflowReliabilityIdentities,
+  createWorkflowReliabilityEventStore,
+  getWorkflowReliabilityEventStore,
+  type WorkflowReliabilityEventStore,
+  type WorkflowReliabilityIdentityV1,
+  type WorkflowReliabilityOutcomeV1,
+} from "../reliability";
 import type {
   RosterDataChangedScope,
   RosterDraftV1,
@@ -140,6 +149,11 @@ export type RosterJourneyV1 = {
     compatibleBundleId?: string | null;
     message: string;
   };
+  reliabilityWarnings?: Array<{
+    code: string;
+    message: string;
+    recordedAt: string;
+  }>;
   workflow: RosterWorkflowResult;
   recovery: RecoveryStateV1;
   stateSha256: string;
@@ -147,6 +161,11 @@ export type RosterJourneyV1 = {
 
 export type RosterJourneyStoreOptions = {
   rootDir?: string;
+  reliability?: {
+    store?: WorkflowReliabilityEventStore;
+    rootDirectory?: string;
+    associateIdentities?: typeof associateWorkflowReliabilityIdentities;
+  };
   dependencies?: Partial<{
     ensureLocalServiceCompatibility:
       typeof ensureLocalServiceCompatibility;
@@ -250,6 +269,217 @@ async function persist(
   await rename(temporary, filename);
 }
 
+function reliabilityOutcomeForJourney(
+  status: RosterJourneyStatus,
+): WorkflowReliabilityOutcomeV1 {
+  if (status === "complete") return "succeeded";
+  if (status === "cancelled" || status === "parked") return "cancelled";
+  if (status === "invalidated") return "failed";
+  if (
+    status === "action-required" ||
+    status === "needs-data-review" ||
+    status === "ready-for-web"
+  ) {
+    return "needs-input";
+  }
+  if (status === "in-progress") return "started";
+  return "in-progress";
+}
+
+function reliabilityExecutionForJourney(
+  status: RosterJourneyStatus,
+): "running" | "succeeded" | "needs-input" | "failed" | "cancelled" {
+  if (status === "complete") return "succeeded";
+  if (status === "cancelled" || status === "parked") return "cancelled";
+  if (status === "invalidated") return "failed";
+  if (
+    status === "action-required" ||
+    status === "needs-data-review" ||
+    status === "ready-for-web"
+  ) {
+    return "needs-input";
+  }
+  return "running";
+}
+
+function reliabilityEventKindForJourney(state: RosterJourneyV1): string {
+  const action = state.actions.at(-1);
+  if (action?.actionId === "tessera.start-successor") return "successor";
+  if (
+    action?.actionId === "roster.review-data-migration" &&
+    action.status === "succeeded"
+  ) {
+    return "approval";
+  }
+  if (action?.actionId === "data.refresh-compatible") {
+    return "repair-applied";
+  }
+  if (state.compatibilityRepair?.artifactReuse === "verified-reused") {
+    return "artifact-reuse";
+  }
+  if (state.status === "invalidated") return "failure";
+  return "transition";
+}
+
+function journeyReliabilityRoot(
+  options: RosterJourneyStoreOptions,
+): string | undefined {
+  if (options.reliability?.rootDirectory) {
+    return path.resolve(options.reliability.rootDirectory);
+  }
+  return options.rootDir
+    ? path.join(storeRoot(options), "reliability")
+    : undefined;
+}
+
+function journeyReliabilityStore(
+  options: RosterJourneyStoreOptions,
+): WorkflowReliabilityEventStore {
+  if (options.reliability?.store) return options.reliability.store;
+  const rootDirectory = journeyReliabilityRoot(options);
+  return rootDirectory
+    ? createWorkflowReliabilityEventStore({ rootDirectory })
+    : getWorkflowReliabilityEventStore();
+}
+
+function appendJourneyReliabilityWarning(
+  state: RosterJourneyV1,
+  warning: { code: string; message: string },
+): RosterJourneyV1 {
+  const warnings = state.reliabilityWarnings ?? [];
+  if (
+    warnings.some(
+      (existing) =>
+        existing.code === warning.code &&
+        existing.message === warning.message,
+    )
+  ) {
+    return state;
+  }
+  const { stateSha256: _stateSha256, ...payload } = state;
+  void _stateSha256;
+  return seal({
+    ...payload,
+    reliabilityWarnings: [
+      ...warnings,
+      {
+        ...warning,
+        recordedAt: new Date().toISOString(),
+      },
+    ].slice(-20),
+  });
+}
+
+async function persistJourneyTransition(
+  state: RosterJourneyV1,
+  previous: RosterJourneyV1 | null,
+  options: RosterJourneyStoreOptions,
+): Promise<RosterJourneyV1> {
+  // The journey is authoritative. Reliability evidence is deliberately
+  // appended only after this transition has been durably installed.
+  await persist(state, options);
+  const workflow = {
+    workflowId: state.journeyId,
+    workflowKind: "roster-journey",
+  } as const;
+  const lastAction = state.actions.at(-1) ?? null;
+  const activeRoster = state.workflow.roster;
+  const recorded = await appendWorkflowReliabilityEventSafely(
+    journeyReliabilityStore(options),
+    {
+      workflow,
+      idempotencyKey: `journey-revision:${state.stateRevision}`,
+      eventKind: reliabilityEventKindForJourney(state),
+      stage: lastAction?.actionId ?? state.status,
+      provider:
+        state.compatibilityRepair?.status === "running-successor"
+          ? "tessera-web"
+          : null,
+      outcome: reliabilityOutcomeForJourney(state.status),
+      occurredAt: state.updatedAt,
+      execution: {
+        status: reliabilityExecutionForJourney(state.status),
+        attempt: state.stateRevision,
+      },
+      evidence: {
+        status: "verified",
+        artifactCount: 1,
+        evidenceSha256: state.stateSha256,
+      },
+      error:
+        state.status === "invalidated"
+          ? {
+              code:
+                state.workflow.validation?.violations[0]?.code ??
+                "ROSTER_JOURNEY_INVALIDATED",
+              message:
+                state.workflow.validation?.violations[0]?.message ??
+                "The roster journey was invalidated.",
+              retryable: false,
+            }
+          : null,
+      attributes: {
+        journeyId: state.journeyId,
+        stateRevision: state.stateRevision,
+        previousStateRevision: previous?.stateRevision ?? null,
+        status: state.status,
+        journeyStateSha256: state.stateSha256,
+        actionId: lastAction?.actionId ?? null,
+        actionStatus: lastAction?.status ?? null,
+        actionAttemptId: lastAction?.attemptId ?? null,
+        rosterId: activeRoster?.id ?? null,
+        bundleId: activeRoster?.sourceData.bundleId ?? null,
+        recoveryStatus: state.recovery.status,
+        localUpdateJobId:
+          state.compatibilityRepair?.localUpdateJobId ?? null,
+        predecessorRunId:
+          state.compatibilityRepair?.predecessorRunId ?? null,
+        artifactReuse:
+          state.compatibilityRepair?.artifactReuse ?? null,
+      },
+    },
+  );
+  const identities: WorkflowReliabilityIdentityV1[] = [
+    { kind: "journey-id", value: state.journeyId },
+  ];
+  let association: { ok: boolean; warning: string | null };
+  try {
+    association = await (
+      options.reliability?.associateIdentities ??
+      associateWorkflowReliabilityIdentities
+    )(
+      { workflow, identities },
+      { rootDirectory: journeyReliabilityRoot(options) },
+    );
+  } catch (error) {
+    association = {
+      ok: false,
+      warning:
+        error instanceof Error
+          ? error.message
+          : "The reliability identities could not be associated.",
+    };
+  }
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (!recorded.ok) warnings.push(recorded.error);
+  if (!association.ok && association.warning) {
+    warnings.push({
+      code: "RELIABILITY_IDENTITY_ASSOCIATION_FAILED",
+      message: association.warning,
+    });
+  }
+  let result = state;
+  for (const warning of warnings) {
+    result = appendJourneyReliabilityWarning(result, warning);
+  }
+  if (result !== state) {
+    // Persisting the warning updates the same authoritative revision; it does
+    // not roll back or reinterpret the successful transition above.
+    await persist(result, options).catch(() => undefined);
+  }
+  return result;
+}
+
 function journeyStatus(
   workflow: RosterWorkflowResult,
   recovery: RecoveryStateV1,
@@ -335,14 +565,16 @@ export async function startRosterJourney(
     workflow: prepared.data,
     recovery,
   });
-  await withJourneyLock(journeyId, options, () => persist(state, options));
+  const persisted = await withJourneyLock(journeyId, options, () =>
+    persistJourneyTransition(state, null, options),
+  );
   if (prepared.data.roster) {
     await retainDataBundleReference(
       `roster-journey:${journeyId}`,
       prepared.data.roster.sourceData.bundleId,
     );
   }
-  return state;
+  return persisted;
 }
 
 export type RepairTesseraWebCompatibilityInput = {
@@ -946,8 +1178,7 @@ export async function repairRosterJourneyTesseraWebCompatibility(
           message: resolution.message,
         },
       });
-      await persist(waiting, options);
-      return waiting;
+      return persistJourneyTransition(waiting, current, options);
     }
 
     const rebased = await (
@@ -1011,8 +1242,7 @@ export async function repairRosterJourneyTesseraWebCompatibility(
             "The retained compatibility snapshot could not be opened and verified. The roster and mutation receipts remain saved; retry after the local data repair finishes.",
         },
       });
-      await persist(waiting, options);
-      return waiting;
+      return persistJourneyTransition(waiting, current, options);
     }
 
     const targetMigration = await migrateWorkflowTargets({
@@ -1068,8 +1298,7 @@ export async function repairRosterJourneyTesseraWebCompatibility(
             "The player roster matched the compatibility snapshot, but at least one frozen opponent could not be opened and revalidated from that same snapshot. The retained workflow and mutation receipts were preserved.",
         },
       });
-      await persist(waiting, options);
-      return waiting;
+      return persistJourneyTransition(waiting, current, options);
     }
 
     const validation = (
@@ -1148,8 +1377,7 @@ export async function repairRosterJourneyTesseraWebCompatibility(
             : "Locally verified compatible data is available, but the migrated roster did not revalidate cleanly. Review the legality findings before approving any change.",
         },
       });
-      await persist(review, options);
-      return review;
+      return persistJourneyTransition(review, current, options);
     }
 
     const artifactReconciliation =
@@ -1230,8 +1458,7 @@ export async function repairRosterJourneyTesseraWebCompatibility(
       `roster-journey:${journeyId}`,
       candidateRoster.sourceData.bundleId,
     );
-    await persist(ready, options);
-    return ready;
+    return persistJourneyTransition(ready, current, options);
   });
 }
 
@@ -1339,8 +1566,7 @@ export async function approveRosterJourneyDataMigration(
       `roster-journey:${journeyId}`,
       proposed.roster.sourceData.bundleId,
     );
-    await persist(next, options);
-    return next;
+    return persistJourneyTransition(next, current, options);
   });
 }
 
@@ -1431,8 +1657,7 @@ export async function startRosterJourneyRepairedTesseraWebRun(
           "A new Tessera Web job was started against the repaired bundle. The blocked predecessor remains unchanged.",
       },
     });
-    await persist(next, options);
-    return next;
+    return persistJourneyTransition(next, current, options);
   });
 }
 
@@ -1570,8 +1795,7 @@ export async function continueRosterJourneySafely(
       recovery,
       status: journeyStatus(workflow, recovery),
     });
-    await persist(next, options);
-    return next;
+    return persistJourneyTransition(next, current, options);
   });
 }
 
@@ -1619,7 +1843,6 @@ export async function chooseRosterJourneyAction(
         status: "parked",
       },
     });
-    await persist(next, options);
-    return next;
+    return persistJourneyTransition(next, current, options);
   });
 }

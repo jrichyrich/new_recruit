@@ -34,6 +34,7 @@ import {
   type CredentialState,
   type LocalAgentDeliveryPayload,
   type LocalAgentDeliveryResult,
+  type LocalAgentNewRecruitSessionControlResult,
   type LocalAgentNewRecruitProbeResult,
   type LocalAgentTesseraPayload,
   type LocalAgentTesseraResult,
@@ -45,6 +46,7 @@ import {
 } from "./contracts";
 import { FrameDecoder, encodeFrame } from "./framing";
 import {
+  compiledTesseraJobWorkerPath,
   installedBrokerPath,
   localAgentSpoolDirectory,
   localAgentSocketPath,
@@ -53,10 +55,12 @@ import {
   tesseraSemanticSnapshotDirectory,
 } from "./paths";
 import type {
+  WorkerDeliveryRequest,
   WorkerProbeResult,
-  WorkerRequest,
+  WorkerProbeRequest,
   WorkerResult,
 } from "../new-recruit/contracts";
+import { stopsNewRecruitBrowserSession } from "../new-recruit/contracts";
 import { safeNewRecruitUiIdentity } from "../new-recruit/ui-identity";
 import { getRuntimeProvenance } from "../runtime-provenance";
 
@@ -68,12 +72,6 @@ const tesseraWorkerPath = path.join(
   "local",
   "tessera",
   "worker.ts",
-);
-const tesseraJobWorkerPath = path.join(
-  projectRoot,
-  "local",
-  "tessera",
-  "job-worker.ts",
 );
 const maximumQueuedJobs = 4;
 const transientTesseraSessionCodes = new Set([
@@ -109,6 +107,8 @@ type LocalAgentServerOptions = {
   profileDirectory?: string;
   nodeExecutable?: string;
   workerPath?: string;
+  newRecruitPersistentWorkerPath?: string;
+  newRecruitSessionTtlMs?: number;
   tesseraWorkerPath?: string;
   tesseraPersistentWorkerPath?: string;
   tesseraJobWorkerPath?: string;
@@ -123,6 +123,13 @@ type TesseraWorkerResult =
 
 type PersistentTesseraWorker = {
   analyze: (request: Record<string, unknown>) => Promise<TesseraWorkerResult>;
+  reset: () => Promise<void>;
+  close: () => Promise<void>;
+};
+
+type PersistentNewRecruitWorker = {
+  deliver: (request: WorkerDeliveryRequest) => Promise<WorkerResult>;
+  probe: (request: WorkerProbeRequest) => Promise<WorkerProbeResult>;
   reset: () => Promise<void>;
   close: () => Promise<void>;
 };
@@ -170,6 +177,156 @@ async function runProcess(
     if (input) child.stdin.end(input);
     else child.stdin.end();
   });
+}
+
+function startPersistentNewRecruitWorker(
+  command: string,
+  args: string[],
+): PersistentNewRecruitWorker {
+  const child: ChildProcessWithoutNullStreams = spawn(command, args, {
+    cwd: projectRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
+  let closed = false;
+  let pending:
+    | {
+        resolve: (value: unknown) => void;
+        reject: (error: Error) => void;
+        timer: NodeJS.Timeout;
+      }
+    | null = null;
+
+  const failPending = (error: Error) => {
+    if (!pending) return;
+    const current = pending;
+    pending = null;
+    clearTimeout(current.timer);
+    current.reject(error);
+  };
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += Buffer.from(chunk).toString("utf8");
+    let newline = stdoutBuffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = stdoutBuffer.slice(0, newline).trim();
+      stdoutBuffer = stdoutBuffer.slice(newline + 1);
+      if (line && pending) {
+        const current = pending;
+        pending = null;
+        clearTimeout(current.timer);
+        try {
+          current.resolve(JSON.parse(line));
+        } catch {
+          current.reject(
+            Object.assign(
+              new Error(
+                "The persistent New Recruit worker returned an invalid response.",
+              ),
+              { code: "COMPANION_FAILED" },
+            ),
+          );
+        }
+      }
+      newline = stdoutBuffer.indexOf("\n");
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    stderrBuffer = (
+      stderrBuffer + Buffer.from(chunk).toString("utf8")
+    ).slice(-8_192);
+  });
+  child.on("error", (error) => {
+    closed = true;
+    failPending(error);
+  });
+  child.on("close", () => {
+    closed = true;
+    failPending(
+      Object.assign(
+        new Error(
+          stderrBuffer ||
+            "The persistent New Recruit worker closed unexpectedly.",
+        ),
+        { code: "NEW_RECRUIT_BROWSER_SESSION_CLOSED" },
+      ),
+    );
+  });
+
+  const send = <T>(
+    message: Record<string, unknown>,
+    timeoutMs = 5 * 60_000,
+  ): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      if (closed || child.stdin.destroyed) {
+        reject(
+          Object.assign(
+            new Error("The persistent New Recruit worker is not running."),
+            { code: "NEW_RECRUIT_BROWSER_SESSION_CLOSED" },
+          ),
+        );
+        return;
+      }
+      if (pending) {
+        reject(
+          Object.assign(
+            new Error(
+              "The persistent New Recruit worker already has a request.",
+            ),
+            { code: "BROWSER_PROFILE_BUSY" },
+          ),
+        );
+        return;
+      }
+      const timer = setTimeout(() => {
+        if (!pending) return;
+        pending = null;
+        child.kill("SIGTERM");
+        reject(
+          Object.assign(
+            new Error("The persistent New Recruit worker timed out."),
+            { code: "NEW_RECRUIT_BROWSER_TIMEOUT" },
+          ),
+        );
+      }, timeoutMs);
+      pending = {
+        resolve: (value) => resolve(value as T),
+        reject,
+        timer,
+      };
+      child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+        if (error) failPending(error);
+      });
+    });
+
+  return {
+    deliver: (request) =>
+      send<WorkerResult>({ action: "deliver", request }),
+    probe: (request) =>
+      send<WorkerProbeResult>({ action: "probe", request }),
+    reset: async () => {
+      const response = await send<{ ok: boolean; action?: string }>(
+        { action: "reset" },
+        30_000,
+      );
+      if (!response.ok || response.action !== "reset") {
+        throw Object.assign(
+          new Error(
+            "The persistent New Recruit worker did not reset cleanly.",
+          ),
+          { code: "NEW_RECRUIT_BROWSER_SESSION_CLOSED" },
+        );
+      }
+    },
+    close: async () => {
+      if (closed) return;
+      await send<{ ok: boolean; action?: string }>(
+        { action: "close" },
+        10_000,
+      ).catch(() => undefined);
+      if (!closed) child.kill("SIGTERM");
+    },
+  };
 }
 
 function startPersistentTesseraWorker(
@@ -404,20 +561,30 @@ export async function startLocalAgent(
     options.profileDirectory ?? newRecruitProfileDirectory();
   const nodeExecutable = options.nodeExecutable ?? process.execPath;
   const configuredWorkerPath = options.workerPath ?? workerPath;
+  const configuredPersistentNewRecruitWorkerPath =
+    options.newRecruitPersistentWorkerPath ?? workerPath;
   const configuredTesseraWorkerPath =
     options.tesseraWorkerPath ?? tesseraWorkerPath;
   const configuredPersistentTesseraWorkerPath =
     options.tesseraPersistentWorkerPath ?? tesseraWorkerPath;
   const configuredTesseraJobWorkerPath =
-    options.tesseraJobWorkerPath ?? tesseraJobWorkerPath;
+    options.tesseraJobWorkerPath ?? compiledTesseraJobWorkerPath();
+  const usesPrecompiledTesseraJobWorker =
+    options.tesseraJobWorkerPath === undefined;
   const semanticSnapshotDirectory =
     options.tesseraSemanticSnapshotDirectory ??
     tesseraSemanticSnapshotDirectory();
   const useInjectedOneShotTesseraWorker =
     options.tesseraWorkerPath !== undefined;
-  let activeJob = false;
+  const useInjectedOneShotNewRecruitWorker =
+    options.workerPath !== undefined &&
+    options.newRecruitPersistentWorkerPath === undefined;
+  let activeBrowserOperations = 0;
   let queuedJobs = 0;
-  let queue = Promise.resolve();
+  let newRecruitQueue = Promise.resolve();
+  let tesseraQueue = Promise.resolve();
+  const newRecruitSessionTtlMs =
+    options.newRecruitSessionTtlMs ?? 30 * 60_000;
   const tesseraSessionTtlMs =
     options.tesseraSessionTtlMs ?? 7 * 24 * 60 * 60_000;
   const tesseraSessionCleanupIntervalMs =
@@ -431,15 +598,98 @@ export async function startLocalAgent(
       worker: PersistentTesseraWorker | null;
     }
   >();
+  let newRecruitSession: {
+    id: string;
+    lastUsedAt: number;
+    active: boolean;
+    stopped: { code: string; message: string } | null;
+    worker: PersistentNewRecruitWorker | null;
+  } | null = null;
 
   function validatedSessionId(sessionId: string): string {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) {
       throw Object.assign(
-        new Error("The Tessera session id is invalid."),
+        new Error("The browser session id is invalid."),
         { code: "LOCAL_AGENT_PROTOCOL_ERROR" },
       );
     }
     return sessionId;
+  }
+
+  async function cleanupExpiredNewRecruitSession(): Promise<void> {
+    if (
+      !newRecruitSession ||
+      newRecruitSession.active ||
+      newRecruitSession.lastUsedAt >=
+        Date.now() - newRecruitSessionTtlMs
+    ) {
+      return;
+    }
+    const expired = newRecruitSession;
+    newRecruitSession = null;
+    await expired.worker?.close().catch(() => undefined);
+  }
+
+  async function currentNewRecruitSession(
+    sessionId: string,
+  ): Promise<NonNullable<typeof newRecruitSession>> {
+    const id = validatedSessionId(sessionId);
+    await cleanupExpiredNewRecruitSession();
+    if (newRecruitSession && newRecruitSession.id !== id) {
+      throw Object.assign(
+        new Error(
+          `New Recruit browser session ${newRecruitSession.id} is still open. Close it before starting ${id}.`,
+        ),
+        { code: "BROWSER_PROFILE_BUSY" },
+      );
+    }
+    newRecruitSession ??= {
+      id,
+      lastUsedAt: Date.now(),
+      active: false,
+      stopped: null,
+      worker: null,
+    };
+    newRecruitSession.lastUsedAt = Date.now();
+    return newRecruitSession;
+  }
+
+  async function resetNewRecruitSession(
+    sessionId: string,
+  ): Promise<LocalAgentNewRecruitSessionControlResult> {
+    const id = validatedSessionId(sessionId);
+    if (!newRecruitSession || newRecruitSession.id !== id) {
+      return { action: "reset", applied: false };
+    }
+    const session = newRecruitSession;
+    try {
+      await session.worker?.reset();
+    } catch {
+      await session.worker?.close().catch(() => undefined);
+      session.worker = null;
+    }
+    session.stopped = null;
+    session.lastUsedAt = Date.now();
+    return { action: "reset", applied: true };
+  }
+
+  async function closeNewRecruitSession(
+    sessionId: string,
+  ): Promise<LocalAgentNewRecruitSessionControlResult> {
+    const id = validatedSessionId(sessionId);
+    if (!newRecruitSession || newRecruitSession.id !== id) {
+      return { action: "close", applied: false };
+    }
+    const session = newRecruitSession;
+    newRecruitSession = null;
+    await session.worker?.close().catch(() => undefined);
+    return { action: "close", applied: true };
+  }
+
+  async function closeNewRecruitSessionWorker(): Promise<void> {
+    const session = newRecruitSession;
+    newRecruitSession = null;
+    await session?.worker?.close().catch(() => undefined);
   }
 
   async function cleanupExpiredTesseraSessions(): Promise<void> {
@@ -627,7 +877,7 @@ export async function startLocalAgent(
         [newRecruitBroker.response, tesseraBroker.response].find(
           (response) => response && !response.ok,
         )?.code ?? null,
-      activeJob,
+      activeJob: activeBrowserOperations > 0,
       queuedJobs,
       providers: [
         {
@@ -656,6 +906,11 @@ export async function startLocalAgent(
     const temporary = await mkdtemp(
       path.join(os.tmpdir(), "rosterpilot-agent-delivery-"),
     );
+    const session = payload.sessionId
+      ? await currentNewRecruitSession(payload.sessionId)
+      : null;
+    let deliveryDispatched = false;
+    if (session) session.active = true;
     try {
       const sourcePath = path.join(
         temporary,
@@ -670,7 +925,7 @@ export async function startLocalAgent(
       await writeFile(sourcePath, Buffer.from(payload.sourceRoszBase64, "base64"), {
         flag: "wx",
       });
-      const request: WorkerRequest = {
+      const request: WorkerDeliveryRequest = {
         action: "deliver",
         brokerPath,
         profileDirectory,
@@ -679,21 +934,15 @@ export async function startLocalAgent(
         prettyHtmlPath: prettyPath,
         expected: payload.expected,
       };
-      const result = await runProcess(
-        nodeExecutable,
-        ["--import", "tsx", configuredWorkerPath],
-        JSON.stringify(request),
-      );
       let worker: WorkerResult;
-      try {
-        worker = JSON.parse(result.stdout) as WorkerResult;
-      } catch {
+      if (session?.stopped) {
         worker = {
           ok: false,
-          code: "COMPANION_FAILED",
+          code: "NEW_RECRUIT_SESSION_STOPPED",
           message:
-            result.stderr || "The New Recruit worker returned an invalid response.",
-          remoteOutcomeUnknown: true,
+            `New Recruit session ${session.id} stopped after ` +
+            `${session.stopped.code}: ${session.stopped.message} ` +
+            "Reset or close the session before another delivery.",
           imported: false,
           sessionReused: false,
           listUrl: null,
@@ -701,6 +950,86 @@ export async function startLocalAgent(
           prettyHtmlPath: null,
           verification: null,
         };
+      } else if (
+        session &&
+        !useInjectedOneShotNewRecruitWorker
+      ) {
+        session.worker ??= startPersistentNewRecruitWorker(
+          nodeExecutable,
+          [
+            "--import",
+            "tsx",
+            configuredPersistentNewRecruitWorkerPath,
+            "--persistent",
+          ],
+        );
+        try {
+          deliveryDispatched = true;
+          worker = await session.worker.deliver(request);
+        } catch (error) {
+          worker = {
+            ok: false,
+            code:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "COMPANION_FAILED",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The persistent New Recruit worker failed.",
+            remoteOutcomeUnknown: true,
+            imported: false,
+            sessionReused: false,
+            listUrl: null,
+            enrichedRoszPath: null,
+            prettyHtmlPath: null,
+            verification: null,
+          };
+        }
+      } else {
+        deliveryDispatched = true;
+        const result = await runProcess(
+          nodeExecutable,
+          ["--import", "tsx", configuredWorkerPath],
+          JSON.stringify(request),
+        );
+        try {
+          worker = JSON.parse(result.stdout) as WorkerResult;
+        } catch {
+          worker = {
+            ok: false,
+            code: "COMPANION_FAILED",
+            message:
+              result.stderr ||
+              "The New Recruit worker returned an invalid response.",
+            remoteOutcomeUnknown: true,
+            imported: false,
+            sessionReused: false,
+            listUrl: null,
+            enrichedRoszPath: null,
+            prettyHtmlPath: null,
+            verification: null,
+          };
+        }
+      }
+      if (
+        session &&
+        !worker.ok &&
+        stopsNewRecruitBrowserSession(worker)
+      ) {
+        session.stopped = {
+          code: worker.code ?? "NEW_RECRUIT_DELIVERY_FAILED",
+          message: worker.message ?? "Delivery failed.",
+        };
+        try {
+          await session.worker?.reset();
+        } catch {
+          await session.worker?.close().catch(() => undefined);
+          session.worker = null;
+        }
       }
       const response: LocalAgentDeliveryResult = {
         worker: sanitizeWorkerResult(worker),
@@ -716,36 +1045,107 @@ export async function startLocalAgent(
         );
       }
       return response;
+    } catch (error) {
+      if (
+        session &&
+        deliveryDispatched &&
+        !session.stopped
+      ) {
+        session.stopped = {
+          code: "NEW_RECRUIT_DELIVERY_BOUNDARY_FAILED",
+          message:
+            "The local agent could not complete artifact transfer after delivery dispatch.",
+        };
+        try {
+          await session.worker?.reset();
+        } catch {
+          await session.worker?.close().catch(() => undefined);
+          session.worker = null;
+        }
+      }
+      throw error;
     } finally {
+      if (session) {
+        session.active = false;
+        session.lastUsedAt = Date.now();
+      }
       await rm(temporary, { recursive: true, force: true });
     }
   }
 
   async function performNewRecruitProbe(): Promise<LocalAgentNewRecruitProbeResult> {
-    const request: WorkerRequest = {
+    const request: WorkerProbeRequest = {
       action: "probe",
       brokerPath,
       profileDirectory,
     };
-    const result = await runProcess(
-      nodeExecutable,
-      ["--import", "tsx", configuredWorkerPath],
-      JSON.stringify(request),
-    );
     let worker: WorkerProbeResult;
-    try {
-      worker = JSON.parse(result.stdout) as WorkerProbeResult;
-    } catch {
-      return {
-        ok: false,
-        code: "COMPANION_FAILED",
-        message:
-          result.stderr ||
-          "The New Recruit probe returned an invalid response.",
-        uiIdentity: null,
-        sessionReused: false,
-        importControlVisible: false,
+    const session = newRecruitSession;
+    if (
+      session?.worker &&
+      !useInjectedOneShotNewRecruitWorker
+    ) {
+      session.active = true;
+      try {
+        worker = await session.worker.probe(request);
+      } catch (error) {
+        worker = {
+          ok: false,
+          code:
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string"
+              ? error.code
+              : "COMPANION_FAILED",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The persistent New Recruit probe failed.",
+          uiIdentity: null,
+          sessionReused: false,
+          importControlVisible: false,
+        };
+      } finally {
+        session.active = false;
+        session.lastUsedAt = Date.now();
+      }
+    } else {
+      const result = await runProcess(
+        nodeExecutable,
+        ["--import", "tsx", configuredWorkerPath],
+        JSON.stringify(request),
+      );
+      try {
+        worker = JSON.parse(result.stdout) as WorkerProbeResult;
+      } catch {
+        return {
+          ok: false,
+          code: "COMPANION_FAILED",
+          message:
+            result.stderr ||
+            "The New Recruit probe returned an invalid response.",
+          uiIdentity: null,
+          sessionReused: false,
+          importControlVisible: false,
+        };
+      }
+    }
+    if (
+      session &&
+      !worker.ok &&
+      stopsNewRecruitBrowserSession({ code: worker.code })
+    ) {
+      session.stopped = {
+        code: worker.code ?? "NEW_RECRUIT_AUTHENTICATION_FAILED",
+        message: worker.message ?? "Authentication failed.",
       };
+      try {
+        await session.worker?.reset();
+      } catch {
+        await session.worker?.close().catch(() => undefined);
+        session.worker = null;
+      }
     }
     const uiIdentity = safeNewRecruitUiIdentity(
       worker.uiIdentity,
@@ -934,98 +1334,94 @@ export async function startLocalAgent(
     }
   }
 
-  async function queuedDelivery(
+  async function enqueueBrowserOperation<T>(
+    provider: "new-recruit" | "tessera",
+    operation: () => Promise<T>,
+    enforceCapacity = true,
+  ): Promise<T> {
+    if (enforceCapacity && queuedJobs >= maximumQueuedJobs) {
+      throw Object.assign(
+        new Error("The RosterPilot browser queue is full."),
+        { code: "BROWSER_PROFILE_BUSY" },
+      );
+    }
+    queuedJobs += 1;
+    const providerQueue =
+      provider === "new-recruit" ? newRecruitQueue : tesseraQueue;
+    const task = providerQueue.then(async () => {
+      queuedJobs -= 1;
+      activeBrowserOperations += 1;
+      if (activeBrowserOperations > 2) {
+        activeBrowserOperations -= 1;
+        throw Object.assign(
+          new Error(
+            "The local agent exceeded its two-provider browser operation limit.",
+          ),
+          { code: "BROWSER_PROFILE_BUSY" },
+        );
+      }
+      try {
+        return await operation();
+      } finally {
+        activeBrowserOperations -= 1;
+      }
+    });
+    const continuation = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    if (provider === "new-recruit") {
+      newRecruitQueue = continuation;
+    } else {
+      tesseraQueue = continuation;
+    }
+    return task;
+  }
+
+  function queuedDelivery(
     payload: LocalAgentDeliveryPayload,
   ): Promise<LocalAgentDeliveryResult> {
-    if (queuedJobs >= maximumQueuedJobs) {
-      throw Object.assign(
-        new Error("The RosterPilot browser queue is full."),
-        { code: "BROWSER_PROFILE_BUSY" },
-      );
-    }
-    queuedJobs += 1;
-    const task = queue.then(async () => {
-      queuedJobs -= 1;
-      activeJob = true;
-      try {
-        return await performDelivery(payload);
-      } finally {
-        activeJob = false;
-      }
-    });
-    queue = task.then(
-      () => undefined,
-      () => undefined,
+    return enqueueBrowserOperation("new-recruit", () =>
+      performDelivery(payload),
     );
-    return task;
   }
 
-  async function queuedNewRecruitProbe(): Promise<LocalAgentNewRecruitProbeResult> {
-    if (queuedJobs >= maximumQueuedJobs) {
-      throw Object.assign(
-        new Error("The RosterPilot browser queue is full."),
-        { code: "BROWSER_PROFILE_BUSY" },
-      );
-    }
-    queuedJobs += 1;
-    const task = queue.then(async () => {
-      queuedJobs -= 1;
-      activeJob = true;
-      try {
-        return await performNewRecruitProbe();
-      } finally {
-        activeJob = false;
-      }
-    });
-    queue = task.then(
-      () => undefined,
-      () => undefined,
+  function queuedNewRecruitProbe(): Promise<LocalAgentNewRecruitProbeResult> {
+    return enqueueBrowserOperation("new-recruit", () =>
+      performNewRecruitProbe(),
     );
-    return task;
   }
 
-  async function queuedTessera(
+  function queuedNewRecruitSessionControl(
+    action: "reset" | "close",
+    sessionId: string,
+  ): Promise<LocalAgentNewRecruitSessionControlResult> {
+    return enqueueBrowserOperation(
+      "new-recruit",
+      () =>
+        action === "reset"
+          ? resetNewRecruitSession(sessionId)
+          : closeNewRecruitSession(sessionId),
+      false,
+    );
+  }
+
+  function queuedTessera(
     payload: LocalAgentTesseraPayload,
   ): Promise<LocalAgentTesseraResult> {
-    if (queuedJobs >= maximumQueuedJobs) {
-      throw Object.assign(
-        new Error("The RosterPilot browser queue is full."),
-        { code: "BROWSER_PROFILE_BUSY" },
-      );
-    }
-    queuedJobs += 1;
-    const task = queue.then(async () => {
-      queuedJobs -= 1;
-      activeJob = true;
-      try {
-        return await performTessera(payload);
-      } finally {
-        activeJob = false;
-      }
-    });
-    queue = task.then(
-      () => undefined,
-      () => undefined,
+    return enqueueBrowserOperation("tessera", () =>
+      performTessera(payload),
     );
-    return task;
   }
 
-  async function queuedTesseraSessionClose(
+  function queuedTesseraSessionClose(
     sessionId: string,
   ): Promise<{ closed: boolean }> {
-    const task = queue.then(async () => {
-      activeJob = true;
-      try {
-        return await closeTesseraSession(sessionId);
-      } finally {
-        activeJob = false;
-      }
-    });
-    queue = task.then(
-      () => undefined,
-      () => undefined,
+    return enqueueBrowserOperation(
+      "tessera",
+      () => closeTesseraSession(sessionId),
+      false,
     );
-    return task;
   }
 
   async function startTesseraRunWorker(
@@ -1057,6 +1453,10 @@ export async function startLocalAgent(
       jobKind?: unknown;
       requestPath?: unknown;
       workerTokenSha256?: unknown;
+      runtimeProvenance?: {
+        tesseraJobWorkerSha256?: unknown;
+        tesseraJobWorkerSourceSha256?: unknown;
+      };
     };
     const tokenSha256 = createHash("sha256")
       .update(payload.workerToken)
@@ -1075,15 +1475,43 @@ export async function startLocalAgent(
         { code: "TESSERA_WORKER_IDENTITY_MISMATCH" },
       );
     }
+    if (usesPrecompiledTesseraJobWorker) {
+      const runtime = getRuntimeProvenance();
+      const workerSha256 = createHash("sha256")
+        .update(await readFile(configuredTesseraJobWorkerPath))
+        .digest("hex");
+      if (
+        !runtime.tesseraJobWorkerSha256 ||
+        !runtime.tesseraJobWorkerSourceSha256 ||
+        workerSha256 !== runtime.tesseraJobWorkerSha256 ||
+        document.runtimeProvenance?.tesseraJobWorkerSha256 !==
+          workerSha256 ||
+        document.runtimeProvenance?.tesseraJobWorkerSourceSha256 !==
+          runtime.tesseraJobWorkerSourceSha256
+      ) {
+        throw Object.assign(
+          new Error(
+            "The installed Tessera job worker does not match the local agent and durable job runtime identity.",
+          ),
+          { code: "TESSERA_WORKER_BUILD_MISMATCH" },
+        );
+      }
+    }
     const worker = spawn(
       nodeExecutable,
-      [
-        "--import",
-        "tsx",
-        configuredTesseraJobWorkerPath,
-        payload.jobPath,
-        payload.workerToken,
-      ],
+      usesPrecompiledTesseraJobWorker
+        ? [
+            configuredTesseraJobWorkerPath,
+            payload.jobPath,
+            payload.workerToken,
+          ]
+        : [
+            "--import",
+            "tsx",
+            configuredTesseraJobWorkerPath,
+            payload.jobPath,
+            payload.workerToken,
+          ],
       {
         cwd: projectRoot,
         detached: true,
@@ -1122,20 +1550,34 @@ export async function startLocalAgent(
       };
     }
     try {
-      const execute = async () =>
-        request.operation === "agent.status"
-          ? status()
-          : request.operation === "new-recruit.deliver"
-            ? queuedDelivery(request.payload)
-            : request.operation === "new-recruit.probe"
-              ? queuedNewRecruitProbe()
-              : request.operation === "tessera.analyze"
-                ? queuedTessera(request.payload)
-                : request.operation === "tessera.session.close"
-                  ? queuedTesseraSessionClose(
-                      request.payload.sessionId,
-                    )
-                  : startTesseraRunWorker(request.payload);
+      const execute = async () => {
+        switch (request.operation) {
+          case "agent.status":
+            return status();
+          case "new-recruit.deliver":
+            return queuedDelivery(request.payload);
+          case "new-recruit.probe":
+            return queuedNewRecruitProbe();
+          case "new-recruit.session.reset":
+            return queuedNewRecruitSessionControl(
+              "reset",
+              request.payload.sessionId,
+            );
+          case "new-recruit.session.close":
+            return queuedNewRecruitSessionControl(
+              "close",
+              request.payload.sessionId,
+            );
+          case "tessera.analyze":
+            return queuedTessera(request.payload);
+          case "tessera.session.close":
+            return queuedTesseraSessionClose(
+              request.payload.sessionId,
+            );
+          case "tessera.run.start":
+            return startTesseraRunWorker(request.payload);
+        }
+      };
       const requiresDataSnapshot =
         request.operation === "new-recruit.deliver" ||
         request.operation === "tessera.analyze";
@@ -1294,6 +1736,7 @@ export async function startLocalAgent(
   const spoolCleanupTimer = setInterval(() => {
     void Promise.all([
       cleanStaleSpool(),
+      cleanupExpiredNewRecruitSession(),
       cleanupExpiredTesseraSessions(),
     ]);
   }, tesseraSessionCleanupIntervalMs);
@@ -1333,6 +1776,7 @@ export async function startLocalAgent(
       spoolClosed = true;
       clearInterval(spoolTimer);
       clearInterval(spoolCleanupTimer);
+      await closeNewRecruitSessionWorker();
       await closeAllTesseraSessionWorkers();
       stopLocalDataBundlePeriodicRefresh();
       throw error;
@@ -1356,7 +1800,8 @@ export async function startLocalAgent(
           if (error.code !== "ENOENT") throw error;
         });
       }
-      await queue;
+      await Promise.all([newRecruitQueue, tesseraQueue]);
+      await closeNewRecruitSessionWorker();
       await closeAllTesseraSessionWorkers();
       stopLocalDataBundlePeriodicRefresh();
     },

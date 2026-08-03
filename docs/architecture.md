@@ -24,6 +24,8 @@ capabilities:
 | Durable Tessera jobs | Exact, stress, build-and-stress, and build-and-analyze requests on local CLI or stdio MCP | Persistent job document, local-agent-owned detached worker, retained result bundle, and stress manifest where applicable |
 | Unified roster workflow | Fail-closed intent and faction resolution, deterministic build/validation, calibrated coaching, artifact-safe handoff, and explicit delivery authority | Shared `lib/rosterpilot/` orchestration under one transport-owned data-bundle lease |
 | Durable roster journey | Immutable roster revisions, typed branch recovery, retained child-job references, and revision-bound approvals | Hash-sealed local journey journal; existing Tessera, optimizer, bundle, and New Recruit stores remain authoritative |
+| Workflow reliability history | Append-only transitions, failures, diagnoses, repairs, verification, receipt reuse, successor lineage, and timing evidence without replacing the specialized stores | Hash-chained local reliability events, sealed heads and identity registry, plus a non-blocking reconciler |
+| Combined Tessera validation | Broad local evidence across a frozen diverse-nine portfolio followed by representative website validation, or an explicitly confirmed exhaustive website pass | Durable validation coordinator over the existing local and website job stores; results remain provider-specific rather than being presented as strict parity |
 | Approval-gated optimization | Frozen exact/faction baseline or six-archetype exact-report set, at most three candidate revisions, paired evidence, Pareto ranking, and exact winner or baseline-retention approval | Single-baseline and general-six optimizer coordinators plus existing durable Tessera exact/stress and paired-revision jobs |
 
 ### Workflow composition
@@ -97,6 +99,47 @@ Provider changes create sibling jobs. Semantic data changes, roster changes,
 profile choices, external mutations, and optimizer decisions require scoped
 approval. A pending, uncertain, created, or reused New Recruit mutation is
 never retried.
+
+### Reliability evidence and repair verification
+
+Authoritative workflow documents, Tessera jobs, data-update jobs, and New
+Recruit mutation receipts remain the source of operational truth. After an
+authoritative transition succeeds, RosterPilot attempts to append a schema-v1
+reliability event under the per-user application-support directory at
+`reliability/v1/`. Each immutable event identifies its workflow, stage,
+attempt, outcome, execution status, evidence status, error code, timing spans,
+and hash-bound artifact references. Events form a SHA-256 chain through
+`previousEventSha256`; an atomically replaced head and a separately sealed
+identity registry bind journey IDs, Tessera run IDs, data-update job IDs, New
+Recruit run IDs, and successor lineage to their workflows.
+
+Reliability recording is deliberately downstream of authoritative state. A
+journal or registry failure cannot undo a roster revision, remote-mutation
+receipt, data activation, or simulation result. The specialized record retains
+a warning, and the reconciler can rebuild a missing head or registry entry.
+Interrupted authoritative jobs append `recovered-after-crash` only when they
+can be safely requeued without replaying uncertain external activity. Legacy
+records are synthesized as explicitly incomplete evidence; they are never made
+indistinguishable from native event history.
+
+Read APIs expose the verified event history and an aggregate summary. The
+summary keeps execution success separate from trusted-evidence success and
+reports recovery, repeated error codes, repair duration, cache reuse, external
+mutation counts, receipt validity, user actions, and timing distributions.
+Timing spans cover queueing, worker startup, bundle lease, preflight, cache
+lookup, New Recruit preparation, browser startup/authentication, import,
+simulation/capture, validation, persistence, and report generation. They do
+not retain credentials, browser storage, list URLs, personal filesystem paths,
+or raw stack traces.
+
+Repair verification is also closed-world. A maintainer can select a named
+plan such as `reliability-journal`, `batch-preflight`, `tessera-workers`,
+`tessera-browser`, `standard-cross-provider`, `lint`, `plugin-parity`,
+`application-build`, or `complete-suite`; callers cannot supply an arbitrary
+command. The runner records bounded-output hashes, timestamps, exit status,
+test counts, toolchain identity, source and dirty-diff fingerprints, and the
+changed-file hashes. A later clean commit is associated only when those file
+hashes still match the verified repaired state.
 
 Space Marine chapter entries inherit the parent Adeptus Astartes unit pool while
 retaining their chapter detachments, faction exclusions, and validation
@@ -244,6 +287,66 @@ Neither provider changes roster legality or the operation's immutable
 data-bundle lease. An exact opponent supplied only as an enriched `.rosz` can
 still use the legacy archive compiler, but canonical player, opponent, and
 generated-proxy rosters use bundle-native JSON when `local-engine` is selected.
+
+#### Fail-fast batch and execution topology
+
+The combined validation path freezes the player and the complete diverse-nine
+opponent portfolio under one data-bundle lease before any external mutation.
+Its sealed batch-preflight manifest records legality and points, canonical and
+structural fingerprints, exact BSData/export mappings, service-compatible
+catalogue identity, ROSZ round-trip identity, model counts, loadout parents,
+leader allocations, complete profile requirements, the resolved profile-policy
+hash, and the verified New Recruit cache and mutation-receipt inventory.
+Read-only cache and receipt checks run concurrently. An incomplete profile
+policy returns `needs-input` without starting a durable worker or opening New
+Recruit or Tessera.
+
+Only cache misses proceed to New Recruit, and those mutations remain serial.
+The mutation receipt begins before browser activity and is finalized
+immediately afterward. An uncertain remote result or enrichment-integrity
+failure stops the delivery batch; the coordinator never tries a second path or
+creates another list to discover what happened. Verified cache hits are
+materialized before misses and remain bound to their original receipts.
+
+The detached Tessera job entry point is compiled during the application build
+and personal-plugin installation. Its output and source hashes are part of
+runtime identity. The local agent refuses the job before external activity if
+the installed worker, MCP process, and agent do not agree. This removes the
+per-job TypeScript startup cost while preserving the same build-admission
+boundary.
+
+Browser work uses two provider-specific serial queues: one for New Recruit and
+one for Tessera Web, with at most two browser operations active globally. A
+persistent New Recruit worker and the persistent Tessera worker reuse one
+authenticated context per safe batch. Transient failures may reset a context;
+uncertain mutation outcomes, authentication changes, or semantic drift stop
+the session. Tessera phase, direction, metric, and matrix-refresh transitions
+remain serial because their freshness evidence depends on ordered DOM state.
+
+Local simulation uses a bounded child-process pool whose default size is
+`min(3, max(1, availableParallelism - 1))`. Each child receives immutable,
+hash-verified inputs and writes an isolated sealed result; only the coordinator
+orders results, retries, checkpoints the stress manifest, and handles
+cancellation. A content-addressed local-result cache binds provider identity,
+bundle and manifest identities, both roster fingerprints, profile-policy and
+scenario-contract hashes, iterations, deterministic seed, compiler version,
+and adapter version. A changed or incomplete receipt is rejected rather than
+treated as a hit.
+
+The durable combined workflow defaults to `standard`: all nine frozen
+opponents run locally with every supported metric, then complete trusted local
+evidence selects the distinct stress, central, and contrast representatives.
+Only those three are prepared for New Recruit and run on Tessera Web, yielding
+48 website captures instead of 144. `exhaustive` keeps all nine website
+opponents and requires explicit confirmation. Single-provider exact and stress
+commands retain their existing explicit behavior.
+
+Local and website reports remain independent provider evidence. Standard mode
+does not claim strict numerical parity. If representative website evidence is
+incomplete, inconclusive, or materially crosses the local bands, the workflow
+retains completed work and offers the remaining six; it does not start them
+without confirmation. A repair that requires a successor website job likewise
+requires fresh confirmation and preserves predecessor lineage.
 
 The website adapter does not call private APIs or read browser storage. The
 orchestrator never handles premium keys: only its isolated Tessera worker may
@@ -505,15 +608,15 @@ Tessera simulation requires `executionMode: "simulate"`; prepare-only returns
 verified handoffs with `status: prepared` and no inferred cells. The legacy
 `experimental` option is a deprecated compatibility alias.
 
-Stress report schema v3 and manifest schema v5 record the player fingerprint,
+Stress report schema v3 and manifest schema v7 record the player fingerprint,
 `bundleId`, scoped semantic roster identities, profile-policy hash, opponent
 faction, the complete frozen portfolio and its canonical SHA-256, requested
 and selected simulation backend, configuration,
 prepared-artifact hashes, representative selection, and every stage's status,
 attempt count and history, timestamps, structured error, retryability, next
 action, report path, and content hash. Resume revalidates identity, requested
-cells, provider selection, exact profile policy, and hashes. V1 through V4
-manifests are migrated in memory and rewritten as v5 on resume. V1 paired
+cells, provider selection, exact profile policy, and hashes. V1 through V6
+manifests are verified and rewritten as v7 on resume. V1 paired
 baselines without exact profile
 provenance are rejected. Transient entries receive at most three automatic
 attempts with one- and three-second backoff and five lifetime attempts through
@@ -570,8 +673,8 @@ and exposes
 queued, running, needs-input, complete, degraded, inconclusive, failed, and
 cancelled states. Status can include the retained result. Profile resolution
 is allowed only while stopped, freezes a validated policy in the job bundle,
-and requires a subsequent resume. An external stress manifest from v1, v2, or
-v3 is copied into the run bundle, verified, and migrated to portable v3 before
+and requires a subsequent resume. An external stress manifest from v1 through
+v6 is copied into the run bundle, verified, and migrated to portable v7 before
 it is adopted; subsequent recovery uses only the shared durable job. Recovery
 does not widen the frozen request. In particular, `catalogueDriftMode` is part
 of the request hash; resume and restart inherit it and cannot enable or change
@@ -1071,8 +1174,9 @@ Security invariants:
 - Credentials never appear in CLI arguments, environment variables, MCP
   payloads, logs, screenshots, diagnostics, or exported files.
 - Only an isolated worker invokes the broker's credential retrieval command.
-  New Recruit workers are job-scoped; Tessera workers are session-scoped and
-  discard the in-memory key when the session closes or expires.
+  New Recruit and Tessera workers are provider-session-scoped and discard
+  in-memory credentials when the batch stops, the session closes, or it
+  expires.
 - The local-agent protocol accepts roster jobs and status checks, never a raw
   credential retrieval request.
 - The New Recruit worker enters credentials only after exact-origin
@@ -1099,6 +1203,7 @@ Security invariants:
 | Per-user local agent | Cross-process queue, provider status, checkout identity, and secret-free roster job transport | `local/agent/server.ts` |
 | Companion orchestrator | Validation, collisions, local-agent requests, and artifact publication | `local/new-recruit/companion.ts` |
 | Browser adapter | Authentication, import, verification, Pretty export | `local/new-recruit/browser.ts` |
+| Reliability projection | Append hash-chained workflow evidence, reconcile sealed heads and identity bindings, aggregate execution/evidence/timing summaries, and run only allowlisted repair-verification plans | `local/reliability/` |
 | Tessera orchestrator | Exact matchups, matched-points policy, scenario consolidation, findings, candidates, and exact-list revision deltas | `local/tessera/companion.ts` |
 | Tessera provider router | Freeze explicit/automatic provider selection, enforce promotion and preflight gates, and make any automatic website fallback atomic | `local/tessera/simulation-provider.ts` |
 | Local Tessera input compiler | Compile canonical rosters from the active immutable bundle into schema-, hash-, roster-, bundle-, compiler-, and policy-bound evaluation JSON without a remote mutation | `local/tessera/local-engine-input.ts`, `local/tessera/local-engine-preparation.ts` |
@@ -1106,11 +1211,12 @@ Security invariants:
 | Tessera provider parity | Revalidate receipt-bound local and website evidence, normalize only explicitly mapped provider settings, compare completeness/metric/winner gates, and emit portable checksummed parity artifacts | `local/tessera/provider-parity.ts`, `local/tessera/provider-parity-report-adapter.ts`, `local/tessera/provider-parity-workflow.ts` |
 | Exact-aware build loop | Validate an exact opponent, build and repair from its threat profile, enforce readiness, and invoke exact analysis | `local/tessera/exact-full-loop.ts`, `lib/rosterpilot/build-and-analyze.ts` |
 | Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
-| Durable Tessera jobs | Persist requests and results; ask the local agent to start workers; inspect, resume, resolve profiles, and cancel background runs | `local/tessera/jobs.ts`, `local/agent/server.ts` |
+| Combined Tessera validation | Freeze and preflight the diverse-nine, run and cache the bounded local pool, choose representative roles, and coordinate standard or exhaustive website validation | `local/tessera/batch-preflight.ts`, `local/tessera/local-engine-task-pool.ts`, `local/tessera/local-engine-result-cache.ts`, `local/tessera/validation-workflow.ts`, `local/tessera/validation-runtime.ts` |
+| Durable Tessera jobs | Persist requests and results; ask the local agent to start the hash-bound compiled worker; inspect, resume, resolve profiles, and cancel background runs | `local/tessera/jobs.ts`, `local/agent/server.ts`, `scripts/build-tessera-job-worker.mjs` |
 | Tessera optimizer coordinator | Freeze a verified baseline and active bundle identity; atomically persist candidate, comparison, Pareto, retention/winner approval, and finalization receipts; reject stale revisions and identity drift | `local/tessera/optimizer.ts`, `local/tessera/optimizer-store.ts` |
 | General-six Tessera optimizer | Freeze one deterministic portfolio and six completed exact baselines; materialize each candidate once; bind six paired revisions by candidate, archetype, and request hash; enforce aggregate no-regression Pareto and separate approvals | `local/tessera/general-optimizer.ts`, `local/tessera/general-optimizer-store.ts` |
 | Tessera website UI and reports | Visible website simulator control/extraction plus provider-aware exact-matchup and faction-stress HTML rendering | `local/tessera/browser.ts`, `local/tessera/report.ts`, `local/tessera/stress-report.ts` |
-| Isolated workers | Hold credentials in memory and return sanitized results; New Recruit is job-scoped and Tessera is session-scoped | `local/new-recruit/worker.ts`, `local/tessera/worker.ts` |
+| Isolated browser workers | Hold credentials in memory, return sanitized results, and reuse provider-specific authenticated contexts only while batch identity and safety checks remain valid | `local/new-recruit/worker.ts`, `local/tessera/worker.ts`, `local/agent/server.ts` |
 | Keychain broker | Native secure configuration and restricted credential access | `native/NewRecruitKeychainBroker.swift` |
 | Hosted API | Credential-free REST, browser-engine operations, and remote handoff under server snapshot leases | `app/api/v1/[...path]/route.ts`, `app/hosted-data-bundles.ts` |
 | Browser UI | Device-local draft history with roster operations delegated to a same-origin, Fetch-Metadata-guarded, credential-free leased engine; headerless and cross-origin callers use the authenticated REST surface instead | `app/page.tsx`, `app/api/browser-engine/route.ts` |

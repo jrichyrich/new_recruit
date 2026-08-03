@@ -63,11 +63,9 @@ function normalizedSelectionName(value: string): string {
 
 function semanticAncestryIdentity(value: string): string {
   const [entryId = "", name = "", type = ""] = value.split("|");
-  return [
-    entryId,
-    normalizedSelectionName(name),
-    normalized(type),
-  ].join("|");
+  return entryId
+    ? [entryId, normalized(type)].join("|")
+    : [normalizedSelectionName(name), normalized(type)].join("|");
 }
 
 function semanticSelections(snapshot: RoszGameplaySnapshot): string[] {
@@ -77,7 +75,9 @@ function semanticSelections(snapshot: RoszGameplaySnapshot): string[] {
       return JSON.stringify({
         ancestry: selection.ancestry.map(semanticAncestryIdentity),
         entryId: selection.entryId,
-        name: normalizedSelectionName(selection.name),
+        ...(selection.entryId
+          ? {}
+          : { name: normalizedSelectionName(selection.name) }),
         type: selection.type,
         number: selection.number,
       });

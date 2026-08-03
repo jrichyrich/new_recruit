@@ -42,6 +42,10 @@ import {
   enrichRoszThroughNewRecruit,
 } from "../local/new-recruit/companion";
 import { prepareRosterForTessera } from "../local/tessera/companion";
+import {
+  createWorkflowReliabilityEventStore,
+  resolveWorkflowReliabilityIdentity,
+} from "../local/reliability";
 
 function roster(
   faction = "adeptus-custodes",
@@ -1314,6 +1318,27 @@ test("uncertain receipts block redelivery until guided reconciliation", async ()
         }),
         message: "The browser response was lost.",
       });
+      const reliabilityRoot = path.join(supportDirectory, "reliability");
+      const reliabilityStore = createWorkflowReliabilityEventStore({
+        rootDirectory: reliabilityRoot,
+      });
+      const uncertainHistory = await reliabilityStore.history({
+        workflowId: "uncertain-run",
+        workflowKind: "new-recruit-mutation",
+      });
+      assert.equal(uncertainHistory.verification.ok, true);
+      assert.equal(uncertainHistory.events.length, 1);
+      assert.equal(uncertainHistory.events[0]?.outcome, "inconclusive");
+      assert.deepEqual(
+        await resolveWorkflowReliabilityIdentity(
+          { kind: "new-recruit-run-id", value: "uncertain-run" },
+          { rootDirectory: reliabilityRoot },
+        ),
+        {
+          workflowId: "uncertain-run",
+          workflowKind: "new-recruit-mutation",
+        },
+      );
 
       await assert.rejects(
         beginNewRecruitMutationReceipt({
@@ -1341,6 +1366,13 @@ test("uncertain receipts block redelivery until guided reconciliation", async ()
             "A guided saved-list inspection proved no list was created.",
         },
       });
+      const reconciledHistory = await reliabilityStore.history({
+        workflowId: "uncertain-run",
+        workflowKind: "new-recruit-mutation",
+      });
+      assert.equal(reconciledHistory.verification.ok, true);
+      assert.equal(reconciledHistory.events.length, 2);
+      assert.equal(reconciledHistory.events[1]?.outcome, "recovered");
       const retry = await beginNewRecruitMutationReceipt({
         roster: candidate,
         runId: "retry-run",

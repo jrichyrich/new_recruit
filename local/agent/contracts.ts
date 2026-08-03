@@ -18,8 +18,8 @@ import type {
   TesseraSavedListReuse,
 } from "../tessera/saved-list-reuse";
 
-export const LOCAL_AGENT_PROTOCOL_VERSION = 10;
-export const LOCAL_AGENT_VERSION = "1.9.0";
+export const LOCAL_AGENT_PROTOCOL_VERSION = 11;
+export const LOCAL_AGENT_VERSION = "1.10.0";
 export const LOCAL_AGENT_MAX_FRAME_BYTES = 32 * 1024 * 1024;
 
 export type CredentialState =
@@ -59,6 +59,7 @@ export type LocalAgentDeliveryPayload = {
   expected: WorkerRosterExpectation;
   downloadEnrichedRosz: boolean;
   downloadPrettyHtml: boolean;
+  sessionId?: string;
 };
 
 export type SanitizedWorkerResult = Omit<
@@ -74,6 +75,11 @@ export type LocalAgentDeliveryResult = {
 
 export type LocalAgentNewRecruitProbeResult =
   WorkerProbeResult;
+
+export type LocalAgentNewRecruitSessionControlResult = {
+  action: "reset" | "close";
+  applied: boolean;
+};
 
 export type LocalAgentTesseraPayload = {
   playerFilename: string;
@@ -126,6 +132,14 @@ export type LocalAgentRequest =
   | {
       id: string;
       protocolVersion: number;
+      operation:
+        | "new-recruit.session.reset"
+        | "new-recruit.session.close";
+      payload: { sessionId: string };
+    }
+  | {
+      id: string;
+      protocolVersion: number;
       operation: "tessera.analyze";
       payload: LocalAgentTesseraPayload;
     }
@@ -151,6 +165,7 @@ export type LocalAgentResponse =
         | LocalAgentStatus
         | LocalAgentDeliveryResult
         | LocalAgentNewRecruitProbeResult
+        | LocalAgentNewRecruitSessionControlResult
         | LocalAgentTesseraResult
         | LocalAgentTesseraSessionCloseResult
         | LocalAgentTesseraRunStartResult;

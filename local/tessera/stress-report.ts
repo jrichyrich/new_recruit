@@ -1,4 +1,7 @@
 import type {
+  TesseraMatchupReport,
+  TesseraScenarioCell,
+  TesseraScenarioResult,
   TesseraStressRevisionReport,
   TesseraStressTestReport,
 } from "../../lib/rosterpilot/types";
@@ -75,6 +78,36 @@ type UnitRobustnessView = {
   support: string;
 };
 
+type CombatMetricView = {
+  wipeProbability: number | null;
+  halfWipeProbability: number | null;
+  meanKills: number | null;
+  meanDamage: number | null;
+  damagePer100Points: number | null;
+  highWipeShare: number | null;
+};
+
+type CombatAggregateView = CombatMetricView & {
+  stage: string;
+  stageLabel: string;
+  phase: string;
+  direction: string;
+  opponent: string;
+  unitId: string;
+  unitLabel: string;
+  opponentCount: number;
+  pairingCount: number;
+  iterations: string;
+  confidence: string;
+};
+
+type CombatStatisticsView = {
+  overall: CombatAggregateView[];
+  units: CombatAggregateView[];
+  opponents: CombatAggregateView[];
+  rawReportFilename: string;
+};
+
 type ChangeView = {
   title: string;
   rationale: string;
@@ -147,6 +180,7 @@ type StressTestView = {
   missionOverall: string;
   missionDimensions: MissionDimensionView[];
   units: UnitRobustnessView[];
+  combatStatistics: CombatStatisticsView;
   findings: FindingView[];
   changes: ChangeView[];
   provenance: DisplayPair[];
@@ -1018,6 +1052,257 @@ function normalizeUnitRobustness(report: UnknownRecord): UnitRobustnessView[] {
   );
 }
 
+type CombatScenarioSample = {
+  stage: string;
+  stageLabel: string;
+  scenario: TesseraScenarioResult;
+  cells: TesseraScenarioCell[];
+  opponent: string;
+  unitId: string;
+  unitLabel: string;
+};
+
+function mean(values: Array<number | null>): number | null {
+  const usable = values.filter(
+    (value): value is number => value !== null && Number.isFinite(value),
+  );
+  return usable.length
+    ? usable.reduce((total, value) => total + value, 0) / usable.length
+    : null;
+}
+
+function scenarioMetrics(cells: TesseraScenarioCell[]): CombatMetricView {
+  const wipeProbabilities = cells
+    .map((cell) => finiteNumber(cell.values.wipeProbability))
+    .filter((value): value is number => value !== null);
+  return {
+    wipeProbability: mean(wipeProbabilities),
+    halfWipeProbability: mean(
+      cells.map((cell) => finiteNumber(cell.values.halfWipeProbability)),
+    ),
+    meanKills: mean(
+      cells.map((cell) => finiteNumber(cell.values.meanKills)),
+    ),
+    meanDamage: mean(
+      cells.map((cell) => finiteNumber(cell.values.meanDamage)),
+    ),
+    damagePer100Points: mean(
+      cells.map((cell) => finiteNumber(cell.values.damagePer100Points)),
+    ),
+    highWipeShare: wipeProbabilities.length
+      ? wipeProbabilities.filter((value) => value >= 0.5).length /
+        wipeProbabilities.length
+      : null,
+  };
+}
+
+function lowestConfidence(cells: TesseraScenarioCell[]): string {
+  const rank = new Map([
+    ["high", 0],
+    ["review", 1],
+    ["ambiguous", 2],
+  ]);
+  return cells.reduce(
+    (lowest, cell) => {
+      const confidence = safeText(cell.confidence, "review");
+      return (rank.get(confidence) ?? 1) > (rank.get(lowest) ?? 1)
+        ? confidence
+        : lowest;
+    },
+    "high",
+  );
+}
+
+function iterationSummary(samples: CombatScenarioSample[]): string {
+  const iterations = unique(
+    samples.flatMap(({ scenario }) => {
+      const metricRuns = scenario.metricRuns ?? [];
+      const values = metricRuns.length
+        ? metricRuns.map((run) => run.iterations)
+        : [scenario.iterations];
+      return values
+        .filter((value): value is number =>
+          typeof value === "number" && Number.isFinite(value),
+        )
+        .map((value) => String(value));
+    }),
+  )
+    .map(Number)
+    .sort((left, right) => left - right);
+  return iterations.length
+    ? iterations.map((value) => displayNumber(value)).join(", ")
+    : "Not recorded";
+}
+
+function aggregateCombatSamples(
+  samples: CombatScenarioSample[],
+): CombatAggregateView {
+  const metrics = samples.map((sample) => scenarioMetrics(sample.cells));
+  const cells = samples.flatMap((sample) => sample.cells);
+  const firstSample = samples[0];
+  return {
+    stage: firstSample?.stage ?? "unknown",
+    stageLabel: firstSample?.stageLabel ?? "Unknown stage",
+    phase: firstSample?.scenario.phase ?? "unknown",
+    direction: firstSample?.scenario.direction ?? "unknown",
+    opponent: firstSample?.opponent ?? "",
+    unitId: firstSample?.unitId ?? "",
+    unitLabel: firstSample?.unitLabel ?? "",
+    opponentCount: new Set(
+      samples.map((sample) => sample.scenario.opponentName),
+    ).size,
+    pairingCount: cells.length,
+    iterations: iterationSummary(samples),
+    confidence: lowestConfidence(cells),
+    wipeProbability: mean(metrics.map((metric) => metric.wipeProbability)),
+    halfWipeProbability: mean(
+      metrics.map((metric) => metric.halfWipeProbability),
+    ),
+    meanKills: mean(metrics.map((metric) => metric.meanKills)),
+    meanDamage: mean(metrics.map((metric) => metric.meanDamage)),
+    damagePer100Points: mean(
+      metrics.map((metric) => metric.damagePer100Points),
+    ),
+    highWipeShare: mean(metrics.map((metric) => metric.highWipeShare)),
+  };
+}
+
+function simulationEvidenceKey(report: TesseraMatchupReport | null): string {
+  const scenarios = report?.simulation.scenarios ?? [];
+  if (!scenarios.length) {
+    return "";
+  }
+  return `${safeText(report?.runId)}:${scenarios
+    .map((scenario) => safeText(scenario.scenarioId))
+    .sort()
+    .join("|")}`;
+}
+
+function combatSources(report: TesseraStressTestReport): Array<{
+  stage: string;
+  stageLabel: string;
+  report: TesseraMatchupReport;
+}> {
+  const screening = report.screeningReport;
+  const deepDive = report.deepDiveReport;
+  const screeningKey = simulationEvidenceKey(screening);
+  const deepDiveKey = simulationEvidenceKey(deepDive);
+  if (screening && screeningKey && screeningKey === deepDiveKey) {
+    return [{ stage: "full-suite", stageLabel: "Full suite", report: screening }];
+  }
+  return [
+    screening
+      ? { stage: "screening", stageLabel: "Screening", report: screening }
+      : null,
+    deepDive
+      ? { stage: "deep-dive", stageLabel: "Deep dive", report: deepDive }
+      : null,
+  ].filter(
+    (entry): entry is {
+      stage: string;
+      stageLabel: string;
+      report: TesseraMatchupReport;
+    } => entry !== null && (entry.report.simulation.scenarios?.length ?? 0) > 0,
+  );
+}
+
+function groupCombatSamples(
+  samples: CombatScenarioSample[],
+  key: (sample: CombatScenarioSample) => string,
+): CombatAggregateView[] {
+  const groups = new Map<string, CombatScenarioSample[]>();
+  for (const sample of samples) {
+    const groupKey = key(sample);
+    const group = groups.get(groupKey) ?? [];
+    group.push(sample);
+    groups.set(groupKey, group);
+  }
+  return [...groups.values()].map(aggregateCombatSamples);
+}
+
+function normalizeCombatStatistics(
+  report: TesseraStressTestReport,
+): CombatStatisticsView {
+  const overallSamples: CombatScenarioSample[] = [];
+  const unitSamples: CombatScenarioSample[] = [];
+  const opponentSamples: CombatScenarioSample[] = [];
+
+  for (const source of combatSources(report)) {
+    for (const scenario of source.report.simulation.scenarios ?? []) {
+      const base = {
+        stage: source.stage,
+        stageLabel: source.stageLabel,
+        scenario,
+        opponent: scenario.opponentName,
+        unitId: "",
+        unitLabel: "",
+      };
+      overallSamples.push({ ...base, cells: scenario.cells });
+      opponentSamples.push({ ...base, cells: scenario.cells });
+
+      const byPlayerUnit = new Map<
+        string,
+        { label: string; cells: TesseraScenarioCell[] }
+      >();
+      for (const cell of scenario.cells) {
+        const playerUnit = scenario.direction === "player-to-opponent"
+          ? cell.attacker
+          : cell.target;
+        if (playerUnit.side !== "player") {
+          continue;
+        }
+        const current = byPlayerUnit.get(playerUnit.instanceId) ?? {
+          label: playerUnit.label,
+          cells: [],
+        };
+        current.cells.push(cell);
+        byPlayerUnit.set(playerUnit.instanceId, current);
+      }
+      for (const [unitId, value] of byPlayerUnit) {
+        unitSamples.push({
+          ...base,
+          unitId,
+          unitLabel: value.label,
+          cells: value.cells,
+        });
+      }
+    }
+  }
+
+  const rawArtifact = report.artifacts.find(
+    (artifact) => artifact.format === "stress-json",
+  );
+  const rawReportFilename = basename(rawArtifact?.written, "");
+  return {
+    overall: groupCombatSamples(
+      overallSamples,
+      (sample) =>
+        `${sample.stage}|${sample.scenario.phase}|${sample.scenario.direction}`,
+    ),
+    units: groupCombatSamples(
+      unitSamples,
+      (sample) =>
+        `${sample.stage}|${sample.scenario.phase}|${sample.scenario.direction}|${sample.unitId}`,
+    ).sort((left, right) =>
+      left.unitLabel.localeCompare(right.unitLabel) ||
+      left.phase.localeCompare(right.phase) ||
+      left.direction.localeCompare(right.direction),
+    ),
+    opponents: groupCombatSamples(
+      opponentSamples,
+      (sample) =>
+        `${sample.stage}|${sample.scenario.opponentName}|${sample.scenario.phase}|${sample.scenario.direction}`,
+    ).sort((left, right) =>
+      left.opponent.localeCompare(right.opponent) ||
+      left.phase.localeCompare(right.phase) ||
+      left.direction.localeCompare(right.direction),
+    ),
+    rawReportFilename: /\.json$/i.test(rawReportFilename)
+      ? rawReportFilename
+      : "",
+  };
+}
+
 function normalizeChanges(report: UnknownRecord): ChangeView[] {
   return records(report.changeCandidates).map((change) => ({
     title: textAt(change, ["title", "name"], "Roster change"),
@@ -1169,6 +1454,7 @@ function normalizeStressTest(report: TesseraStressTestReport): StressTestView {
     missionOverall: mission.overall,
     missionDimensions: mission.dimensions,
     units: normalizeUnitRobustness(root),
+    combatStatistics: normalizeCombatStatistics(report),
     findings: normalizeFindings(root),
     changes: normalizeChanges(root),
     provenance: [
@@ -1506,6 +1792,173 @@ function renderCoverageTable(points: CoveragePointView[]): string {
     .join("")}</tbody></table></div>`;
 }
 
+function directionLabel(direction: string): string {
+  if (direction === "player-to-opponent") {
+    return "Player → opponent";
+  }
+  if (direction === "opponent-to-player") {
+    return "Opponent → player";
+  }
+  return humanize(direction);
+}
+
+function renderCombatMetricCells(row: CombatAggregateView): string {
+  return `<td>${displayPercent(row.wipeProbability)}</td><td>${displayPercent(
+    row.halfWipeProbability,
+  )}</td><td>${displayNumber(row.meanKills)}</td><td>${displayNumber(
+    row.meanDamage,
+  )}</td><td>${displayNumber(row.damagePer100Points)}</td><td>${displayPercent(
+    row.highWipeShare,
+  )}</td><td><span class="badge ${bandClass(row.confidence)}">${escapeHtml(
+    row.confidence,
+  )}</span></td>`;
+}
+
+function renderCombatSummary(rows: CombatAggregateView[]): string {
+  if (!rows.length) {
+    return '<p class="empty">No structured Tessera unit-pair metrics were retained.</p>';
+  }
+  return `<div class="table-scroll"><table class="combat-table">
+<thead><tr><th>Stage</th><th>Phase</th><th>Direction</th><th>Opponents</th><th>Unit pairings</th><th>Iterations / metric</th><th>Full wipe</th><th>Half wipe</th><th>Mean kills</th><th>Mean damage</th><th>Damage / 100 pts</th><th>Pairings ≥50% full wipe</th><th>Confidence</th></tr></thead>
+<tbody>${rows
+    .map(
+      (row) => `<tr><th scope="row">${escapeHtml(row.stageLabel)}</th><td>${escapeHtml(
+        humanize(row.phase),
+      )}</td><td>${escapeHtml(directionLabel(row.direction))}</td><td>${displayNumber(
+        row.opponentCount,
+      )}</td><td>${displayNumber(row.pairingCount)}</td><td>${escapeHtml(
+        row.iterations,
+      )}</td>${renderCombatMetricCells(row)}</tr>`,
+    )
+    .join("")}</tbody></table></div>`;
+}
+
+function renderCombatFilter(
+  id: string,
+  label: string,
+  values: Array<{ value: string; label: string }>,
+): string {
+  return `<label>${escapeHtml(label)}<select id="${escapeHtml(
+    id,
+  )}"><option value="all">All</option>${values
+    .map(
+      (value) => `<option value="${escapeHtml(value.value)}">${escapeHtml(
+        value.label,
+      )}</option>`,
+    )
+    .join("")}</select></label>`;
+}
+
+function combatFilters(
+  rows: CombatAggregateView[],
+  prefix: string,
+): string {
+  const stages = unique(rows.map((row) => row.stage)).map((stage) => ({
+    value: stage,
+    label: rows.find((row) => row.stage === stage)?.stageLabel ?? humanize(stage),
+  }));
+  const phases = unique(rows.map((row) => row.phase)).map((phase) => ({
+    value: phase,
+    label: humanize(phase),
+  }));
+  const directions = unique(rows.map((row) => row.direction)).map(
+    (direction) => ({
+      value: direction,
+      label: directionLabel(direction),
+    }),
+  );
+  return `<form class="filters combat-filters" data-combat-filter="${escapeHtml(
+    prefix,
+  )}">${renderCombatFilter(`${prefix}-stage`, "Stage", stages)}${renderCombatFilter(
+    `${prefix}-phase`,
+    "Phase",
+    phases,
+  )}${renderCombatFilter(
+    `${prefix}-direction`,
+    "Direction",
+    directions,
+  )}<span class="filter-count" id="${escapeHtml(
+    prefix,
+  )}-count" aria-live="polite"></span></form>`;
+}
+
+function combatRowAttributes(
+  prefix: string,
+  row: CombatAggregateView,
+): string {
+  return `class="combat-filter-row" data-combat-table="${escapeHtml(
+    prefix,
+  )}" data-stage="${escapeHtml(row.stage)}" data-phase="${escapeHtml(
+    row.phase,
+  )}" data-direction="${escapeHtml(row.direction)}"`;
+}
+
+function renderUnitCombatStatistics(rows: CombatAggregateView[]): string {
+  if (!rows.length) {
+    return '<p class="empty">No player-unit combat statistics were available.</p>';
+  }
+  return `${combatFilters(rows, "unit-combat")}
+<div class="table-scroll"><table class="combat-table">
+<thead><tr><th>Player unit</th><th>Stage</th><th>Phase</th><th>Direction</th><th>Opponents</th><th>Unit pairings</th><th>Iterations / metric</th><th>Full wipe</th><th>Half wipe</th><th>Mean kills</th><th>Mean damage</th><th>Damage / 100 pts</th><th>Pairings ≥50% full wipe</th><th>Confidence</th></tr></thead>
+<tbody>${rows
+    .map(
+      (row) => `<tr ${combatRowAttributes("unit-combat", row)}><th scope="row">${escapeHtml(
+        row.unitLabel,
+      )}<small>${escapeHtml(row.unitId)}</small></th><td>${escapeHtml(
+        row.stageLabel,
+      )}</td><td>${escapeHtml(humanize(row.phase))}</td><td>${escapeHtml(
+        directionLabel(row.direction),
+      )}</td><td>${displayNumber(row.opponentCount)}</td><td>${displayNumber(
+        row.pairingCount,
+      )}</td><td>${escapeHtml(row.iterations)}</td>${renderCombatMetricCells(
+        row,
+      )}</tr>`,
+    )
+    .join("")}</tbody></table></div>`;
+}
+
+function renderOpponentCombatStatistics(rows: CombatAggregateView[]): string {
+  if (!rows.length) {
+    return '<p class="empty">No opponent-proxy combat statistics were available.</p>';
+  }
+  return `${combatFilters(rows, "opponent-combat")}
+<div class="table-scroll"><table class="combat-table">
+<thead><tr><th>Opponent proxy</th><th>Stage</th><th>Phase</th><th>Direction</th><th>Unit pairings</th><th>Iterations / metric</th><th>Full wipe</th><th>Half wipe</th><th>Mean kills</th><th>Mean damage</th><th>Damage / 100 pts</th><th>Pairings ≥50% full wipe</th><th>Confidence</th></tr></thead>
+<tbody>${rows
+    .map(
+      (row) => `<tr ${combatRowAttributes("opponent-combat", row)}><th scope="row">${escapeHtml(
+        row.opponent,
+      )}</th><td>${escapeHtml(row.stageLabel)}</td><td>${escapeHtml(
+        humanize(row.phase),
+      )}</td><td>${escapeHtml(directionLabel(row.direction))}</td><td>${displayNumber(
+        row.pairingCount,
+      )}</td><td>${escapeHtml(row.iterations)}</td>${renderCombatMetricCells(
+        row,
+      )}</tr>`,
+    )
+    .join("")}</tbody></table></div>`;
+}
+
+function renderCombatStatistics(view: CombatStatisticsView): string {
+  const rawLink = view.rawReportFilename
+    ? `<p><a class="button" href="${escapeHtml(
+        encodeURIComponent(view.rawReportFilename),
+      )}">Open canonical JSON matrix</a></p>`
+    : "";
+  return `<section aria-labelledby="combat-statistics-heading"><h2 id="combat-statistics-heading">Tessera combat statistics</h2>
+<p><strong>These are simulated probabilities, not observed game outcomes.</strong> Each value is averaged across attacker–target unit pairings within an opponent, then equal-weighted across opponents so a proxy with more units does not dominate the portfolio.</p>
+<p class="meta">“Pairings ≥50% full wipe” is the share of modeled unit pairings whose full-wipe probability is at least 50%. Screening and deep-dive evidence remain separate unless they retained the same scenario set.</p>
+<h3>Portfolio summary</h3>${renderCombatSummary(view.overall)}
+<h3>Player-unit statistics</h3><p class="meta">Outgoing rows describe the player unit attacking. Incoming rows describe attacks into that player unit.</p>${renderUnitCombatStatistics(
+    view.units,
+  )}
+<details open><summary>Opponent-proxy statistics</summary><p class="meta">Use these rows to see whether aggregate results are concentrated in one proxy or posture.</p>${renderOpponentCombatStatistics(
+    view.opponents,
+  )}</details>
+<details open><summary>Detailed unit-pair matrix data</summary><p>The canonical JSON retains every attacker, target, phase, direction, probability, mean result, uncertainty field, warning reference, and scenario setting. It remains separate so the portable HTML does not duplicate thousands of raw rows.</p>${rawLink}</details>
+</section>`;
+}
+
 function renderRepresentatives(items: RepresentativeView[]): string {
   if (!items.length) {
     return '<p class="empty">No deep-dive representatives were selected.</p>';
@@ -1725,12 +2178,14 @@ function commonStyles(): string {
 *{box-sizing:border-box}body{margin:0;background:#eef1f5;color:var(--ink);font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 main{max-width:1180px;margin:0 auto;padding:32px 20px 72px}.hero,section{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px;margin-bottom:18px}
 h1,h2,h3{line-height:1.2;margin-top:0}h1{font-size:clamp(1.8rem,4vw,2.7rem);margin-bottom:8px}h2{font-size:1.3rem}h3{font-size:1rem;margin-bottom:8px}
+p,li,summary{overflow-wrap:anywhere}
 .kicker,.eyebrow{text-transform:uppercase;letter-spacing:.08em;font-size:.75rem;font-weight:700;color:var(--muted)}.meta,small{color:var(--muted)}small{display:block}.caution{border-left:4px solid var(--warn);background:#fff7e8;padding:12px 14px;margin-top:18px}
 .badge{display:inline-block;border-radius:999px;padding:3px 9px;font-size:.78rem;font-weight:700;background:#e7ebf2}.badge.good{background:#dff5e9;color:var(--good)}.badge.warn{background:#fff0dc;color:var(--warn)}.warn-text{color:var(--warn)}
 .pairs{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:0 24px;margin:0}.pairs div{display:grid;grid-template-columns:minmax(150px,1fr) 1.5fr;border-bottom:1px solid var(--line);padding:8px 0}.pairs dt{font-weight:700}.pairs dd{margin:0;overflow-wrap:anywhere}
-.table-scroll{overflow:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}thead th{position:sticky;top:0;background:#f0f3f7;z-index:1}tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
+.table-scroll{overflow:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:720px}table.combat-table{min-width:1320px;font-variant-numeric:tabular-nums}th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}thead th{position:sticky;top:0;background:#f0f3f7;z-index:1}tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.card{border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--panel)}.empty{color:var(--muted);font-style:italic}.chart{min-height:360px;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px;margin-bottom:14px}.chart svg{display:block;width:100%;height:340px}.chart-label{font-size:12px;fill:#435062}.chart-dot{stroke:#fff;stroke-width:2}.filters{margin:0 0 12px}.filters label{font-size:.8rem;font-weight:700;color:var(--muted)}select{margin-left:8px;border:1px solid var(--line);border-radius:8px;padding:7px;background:#fff;color:var(--ink)}
-code{overflow-wrap:anywhere}@media(max-width:820px){.pairs{grid-template-columns:1fr}}@media print{body{background:#fff}.hero,section{break-inside:avoid;border-color:#bbb}.filters{display:none}.chart{min-height:0}}
+.combat-filters{display:grid;grid-template-columns:repeat(3,minmax(150px,220px)) 1fr;gap:10px;align-items:end}.combat-filters label{display:grid;gap:4px}.combat-filters select{margin-left:0}.filter-count{color:var(--muted);font-size:.85rem;padding:7px 0}.button{display:inline-block;border:1px solid var(--accent);border-radius:8px;padding:8px 12px;color:var(--accent);font-weight:700;text-decoration:none}details{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}summary{cursor:pointer;font-weight:700}
+code{overflow-wrap:anywhere}@media(max-width:820px){.pairs{grid-template-columns:1fr}.combat-filters{grid-template-columns:1fr 1fr}.filter-count{grid-column:1/-1}}@media print{body{background:#fff}.hero,section{break-inside:avoid;border-color:#bbb}.filters{display:none}.chart{min-height:0}.combat-filter-row[hidden]{display:table-row!important}details{display:block}details>summary{display:none}details:not([open])>*:not(summary){display:block}}
 </style>`;
 }
 
@@ -1789,6 +2244,35 @@ function chartScript(): string {
   }
   if (phase) phase.addEventListener("change", render);
   render();
+  document.querySelectorAll("[data-combat-filter]").forEach((form) => {
+    const prefix = form.getAttribute("data-combat-filter");
+    if (!prefix) return;
+    const filterValue = (suffix) => {
+      const node = document.getElementById(prefix + "-" + suffix);
+      return node && "value" in node ? node.value : "all";
+    };
+    const apply = () => {
+      const stage = filterValue("stage");
+      const selectedPhase = filterValue("phase");
+      const direction = filterValue("direction");
+      const rows = Array.from(document.querySelectorAll(
+        '[data-combat-table="' + prefix + '"]'
+      ));
+      let visibleCount = 0;
+      rows.forEach((row) => {
+        const visible =
+          (stage === "all" || row.getAttribute("data-stage") === stage) &&
+          (selectedPhase === "all" || row.getAttribute("data-phase") === selectedPhase) &&
+          (direction === "all" || row.getAttribute("data-direction") === direction);
+        row.hidden = !visible;
+        if (visible) visibleCount += 1;
+      });
+      const count = document.getElementById(prefix + "-count");
+      if (count) count.textContent = visibleCount + " of " + rows.length + " rows";
+    };
+    form.addEventListener("change", apply);
+    apply();
+  });
 })();
 </script>`;
 }
@@ -1857,6 +2341,7 @@ ${renderPortfolio(view.items)}</section>
 <section aria-labelledby="ranges-heading"><h2 id="ranges-heading">Robustness ranges</h2>
 <p class="meta">Worst, median, mean, best, and tail values summarize equal-weight usable opponents; missing simulations are never inferred.</p>
 ${renderRanges(view.ranges)}</section>
+${renderCombatStatistics(view.combatStatistics)}
 <section aria-labelledby="coverage-exposure-heading"><h2 id="coverage-exposure-heading">Coverage versus exposure</h2>
 <p class="meta">Points-weighted offensive coverage and threat exposure use the report’s configured half-wipe threshold.</p>
 <form class="filters"><label>Phase<select id="coverage-phase"><option value="all">All</option>${phases

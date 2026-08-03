@@ -559,7 +559,11 @@ export function walkSelections(
  */
 export function choiceAwareEquipmentReferences(
   items: WalkedSelection[],
+  allItems: WalkedSelection[] = items,
 ): CatalogueSelectionReference[] {
+  const itemsByEntryId = new Map(
+    allItems.map((item) => [item.reference.entryId, item]),
+  );
   const itemsByName = new Map<string, WalkedSelection[]>();
   for (const item of items) {
     const name = item.reference.normalizedName;
@@ -575,21 +579,56 @@ export function choiceAwareEquipmentReferences(
     ];
     if (distinctItems.length < 2) continue;
     const paths = distinctItems.map((item) => item.ancestorEntryIds);
-    const sharedLength = Math.min(...paths.map((item) => item.length));
-    for (let index = 0; index < sharedLength; index += 1) {
+    const sharedAncestors = paths[0].filter((entryId, index) =>
+      paths.every((path) => path[index] === entryId),
+    );
+    const quantityBundleId = sharedAncestors.at(-1);
+    if (quantityBundleId) {
+      choiceIds.add(quantityBundleId);
+      continue;
+    }
+    const maximumLength = Math.max(...paths.map((item) => item.length));
+    for (let index = 0; index < maximumLength; index += 1) {
       const values = new Set(paths.map((item) => item[index]));
       if (values.size < 2) continue;
-      for (const item of paths) choiceIds.add(item[index]);
+      for (const item of paths) {
+        const entryId = item[index];
+        if (entryId) choiceIds.add(entryId);
+      }
       break;
     }
   }
 
   return items.map((item) => {
-    const loadoutChoiceId = item.ancestorEntryIds
+    const structuralParentId = item.ancestorEntryIds.at(-1);
+    const structuralParent = structuralParentId
+      ? itemsByEntryId.get(structuralParentId)?.reference
+      : undefined;
+    const inferredChoiceId = item.ancestorEntryIds
       .filter((entryId) => choiceIds.has(entryId))
       .at(-1);
+    const loadoutChoiceId = structuralParent?.entryId ?? inferredChoiceId;
     return loadoutChoiceId
-      ? { ...item.reference, loadoutChoiceId }
+      ? {
+          ...item.reference,
+          loadoutChoiceId,
+          ...(structuralParent
+            ? {
+                loadoutChoice: {
+                  name: structuralParent.name,
+                  normalizedName: structuralParent.normalizedName,
+                  type: structuralParent.type,
+                  entryId: structuralParent.entryId,
+                  ...(structuralParent.entryGroupId
+                    ? { entryGroupId: structuralParent.entryGroupId }
+                    : {}),
+                  ...(structuralParent.group
+                    ? { group: structuralParent.group }
+                    : {}),
+                },
+              }
+            : {}),
+        }
       : item.reference;
   });
 }
@@ -925,7 +964,7 @@ function unitMapping(
   candidate: UnitCandidate,
   index: SelectionIndex,
   relevantEnhancements: Map<string, string>,
-  relevantEquipment: Set<string>,
+  relevantEquipment: Map<string, string>,
 ): UnitMappingResult {
   const rootId = text(candidate.rootLink.id) as string;
   const targetId = text(candidate.target.id) as string;
@@ -947,13 +986,46 @@ function unitMapping(
       equipment: [],
     });
   }
-  const relevantWalkedEquipment = walked.filter(
-    (item) =>
-      item.reference.type === "upgrade" &&
-      relevantEquipment.has(item.reference.normalizedName),
-  );
+  const withoutLeadingArticle = (value: string) =>
+    value.startsWith("the ") ? value.slice(4) : value;
+  const canonicalEquipmentName = (item: WalkedSelection) => {
+    const direct = relevantEquipment.get(item.reference.normalizedName);
+    if (direct) return direct;
+    const matchingName = [...relevantEquipment].find(
+      ([normalizedName]) =>
+        withoutLeadingArticle(normalizedName) ===
+        withoutLeadingArticle(item.reference.normalizedName),
+    );
+    if (matchingName) return matchingName[1];
+    for (const profile of records(item.node.profiles)) {
+      const profileName = text(profile.name);
+      if (!profileName) continue;
+      const normalizedProfileName = normalizeNewRecruitName(profileName);
+      const matchingProfile = [...relevantEquipment].find(
+        ([normalizedName]) =>
+          withoutLeadingArticle(normalizedName) ===
+          withoutLeadingArticle(normalizedProfileName),
+      );
+      if (matchingProfile) return matchingProfile[1];
+    }
+    return undefined;
+  };
+  const relevantWalkedEquipment = walked.flatMap((item) => {
+    if (item.reference.type !== "upgrade") return [];
+    const canonicalName = canonicalEquipmentName(item);
+    if (!canonicalName) return [];
+    return [{
+      ...item,
+      reference: {
+        ...item.reference,
+        name: canonicalName,
+        normalizedName: normalizeNewRecruitName(canonicalName),
+      },
+    }];
+  });
   const choiceAwareWalkedEquipment = choiceAwareEquipmentReferences(
     relevantWalkedEquipment,
+    walked,
   ).map(
     (reference, index): WalkedSelection => ({
       ...relevantWalkedEquipment[index],
@@ -1022,7 +1094,7 @@ function deduplicateReferences(
   const result = new Map<string, CatalogueSelectionReference>();
   for (const reference of references) {
     result.set(
-      `${reference.entryId}\0${reference.normalizedName}\0${reference.loadoutChoiceId ?? ""}`,
+      `${reference.entryId}\0${reference.normalizedName}\0${reference.loadoutChoiceId ?? ""}\0${reference.loadoutChoice?.entryId ?? ""}`,
       reference,
     );
   }
@@ -2010,7 +2082,9 @@ export function generate(
         selected,
         shared,
         relevantEnhancements,
-        new Set(equipment.map((item) => item.normalizedName)),
+        new Map(
+          equipment.map((item) => [item.normalizedName, item.name]),
+        ),
       );
       const mapping = mappingResult.mapping;
       const baseResolutions = baseSelections(unit).map((selection) => {

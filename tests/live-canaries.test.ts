@@ -69,7 +69,7 @@ function readyAgent(projectDirectory: string): LocalAgentStatus {
   return {
     available: true,
     version: "test",
-    protocolVersion: 10,
+    protocolVersion: 11,
     protocolCompatible: true,
     runtime,
     platform: "darwin",
@@ -483,6 +483,14 @@ async function runPairedExactCanaryFixture(input: {
                 violations: [],
                 warnings: [],
               } as TesseraRunResult,
+              progress: {
+                phase: "complete" as const,
+                completedWork: 1,
+                totalWork: 1,
+                elapsedMs: 1,
+                estimatedRemainingMs: 0,
+                estimateSource: "terminal" as const,
+              },
             }
           : {
               job: websiteJob,
@@ -492,6 +500,14 @@ async function runPairedExactCanaryFixture(input: {
                 violations: [],
                 warnings: [],
               } as TesseraRunResult,
+              progress: {
+                phase: "complete" as const,
+                completedWork: 1,
+                totalWork: 1,
+                elapsedMs: 1,
+                estimatedRemainingMs: 0,
+                estimateSource: "terminal" as const,
+              },
             },
       compareProviders: async (options) => {
         comparisonOutputDirectory =
@@ -816,6 +832,8 @@ test("bundle-provider preflight failures emit checksummed unavailable release ev
           ROSTERPILOT_CERTIFICATION_LIVE: "1",
           ROSTERPILOT_DATA_TRUSTED_KEYS_FILE:
             trustedKeysFile,
+          ROSTERPILOT_SUPPORT_DIRECTORY: root,
+          ROSTERPILOT_LOCAL_UPDATE_WORKER: "1",
         },
       },
     );

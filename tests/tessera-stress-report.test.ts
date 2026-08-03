@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type {
+  TesseraMatchupReport,
+  TesseraScenarioCell,
   TesseraStressRevisionReport,
   TesseraStressTestReport,
+  TesseraUnitInstance,
 } from "../lib/rosterpilot/types";
 import {
   renderTesseraStressRevisionReportHtml,
@@ -457,6 +460,118 @@ function stressReport(): TesseraStressTestReport {
   } as unknown as TesseraStressTestReport;
 }
 
+function combatChildReport(): TesseraMatchupReport {
+  const playerUnit: TesseraUnitInstance = {
+    instanceId: "player-unit-1",
+    selectionId: "player-unit-1",
+    side: "player" as const,
+    name: "Player Unit",
+    label: "Player Unit — 100 pts",
+    ordinal: 1,
+    modelCount: 1,
+    points: 100,
+    tags: [],
+  };
+  const opponentUnit = (
+    opponent: string,
+    ordinal: number,
+  ): TesseraUnitInstance => ({
+    instanceId: `${opponent}-${ordinal}`,
+    selectionId: `${opponent}-${ordinal}`,
+    side: "opponent" as const,
+    name: `Opponent ${ordinal}`,
+    label: `Opponent ${ordinal}`,
+    ordinal,
+    modelCount: 1,
+    points: 100,
+    tags: [],
+  });
+  const values = (
+    wipeProbability: number,
+    halfWipeProbability: number,
+    meanKills: number,
+    meanDamage: number,
+  ) => ({
+    wipeProbability,
+    halfWipeProbability,
+    meanKills,
+    meanDamage,
+    damagePer100Points: meanDamage,
+  });
+  const scenario = (
+    scenarioId: string,
+    opponentName: string,
+    phase: "shooting" | "fight",
+    direction: "player-to-opponent" | "opponent-to-player",
+    cells: TesseraScenarioCell[],
+  ) => ({
+    scenarioId,
+    opponentName,
+    phase,
+    direction,
+    metrics: [
+      "wipe-probability" as const,
+      "half-wipe-probability" as const,
+      "mean-kills" as const,
+      "mean-damage" as const,
+    ],
+    metricRuns: [
+      {
+        metric: "wipe-probability" as const,
+        iterations: 500,
+        settings: {},
+      },
+    ],
+    iterations: 500,
+    settings: {},
+    cells,
+    status: "complete" as const,
+    warnings: [],
+  });
+  return {
+    runId: "combat-child",
+    simulation: {
+      scenarios: [
+        scenario("scenario-a", "Proxy A", "shooting", "player-to-opponent", [
+          {
+            attacker: playerUnit,
+            target: opponentUnit("proxy-a", 1),
+            values: values(0, 0.5, 1, 2),
+            confidence: "high",
+            warningRefs: [],
+          },
+          {
+            attacker: playerUnit,
+            target: opponentUnit("proxy-a", 2),
+            values: values(1, 1, 2, 4),
+            confidence: "review",
+            warningRefs: [],
+          },
+        ]),
+        scenario("scenario-b", "Proxy B", "shooting", "player-to-opponent", [
+          {
+            attacker: playerUnit,
+            target: opponentUnit("proxy-b", 1),
+            values: values(1, 1, 3, 6),
+            confidence: "high",
+            warningRefs: [],
+          },
+        ]),
+        scenario("scenario-c", "Proxy A", "fight", "opponent-to-player", [
+          {
+            attacker: opponentUnit("proxy-a", 1),
+            target: playerUnit,
+            values: values(0.25, 0.5, 0.5, 1),
+            confidence: "high",
+            warningRefs: [],
+          },
+        ]),
+      ],
+      matrices: [],
+    },
+  } as unknown as TesseraMatchupReport;
+}
+
 test("renders a complete, safe faction stress-test report", () => {
   const html = renderTesseraStressTestReportHtml(stressReport());
 
@@ -524,6 +639,35 @@ test("renders a complete, safe faction stress-test report", () => {
   assert.doesNotMatch(html, /never-render-stage-token/);
   assert.doesNotMatch(html, /never-render-scenario-token/);
   assert.doesNotMatch(html, /<script[^>]+src=/i);
+});
+
+test("aggregates retained Tessera combat metrics without proxy-size bias", () => {
+  const report = stressReport();
+  const child = combatChildReport();
+  report.screeningReport = child;
+  report.deepDiveReport = structuredClone(child);
+  report.artifacts.push({
+    format: "stress-json",
+    written: "combat-stress-test.json",
+  });
+
+  const html = renderTesseraStressTestReportHtml(report);
+
+  assert.match(html, /Tessera combat statistics/);
+  assert.match(html, /simulated probabilities, not observed game outcomes/i);
+  assert.match(html, /Player-unit statistics/);
+  assert.match(html, /Opponent-proxy statistics/);
+  assert.match(html, /Detailed unit-pair matrix data/);
+  assert.match(html, /href="combat-stress-test\.json"/);
+  assert.match(
+    html,
+    /<th scope="row">Full suite<\/th><td>Shooting<\/td><td>Player → opponent<\/td><td>2<\/td><td>3<\/td><td>500<\/td><td>75%<\/td><td>87\.5%<\/td><td>2\.25<\/td><td>4\.5<\/td><td>4\.5<\/td><td>75%<\/td><td><span class="badge warn">review<\/span><\/td>/,
+  );
+  assert.match(html, /data-stage="full-suite"/);
+  assert.match(html, /Player Unit — 100 pts/);
+  assert.match(html, /Opponent → player/);
+  assert.doesNotMatch(html, /data-stage="screening"/);
+  assert.doesNotMatch(html, /data-stage="deep-dive"/);
 });
 
 test("renders paired stress revision deltas and the mission guardrail", () => {

@@ -292,7 +292,10 @@ test("ROSZ gameplay snapshots detect Warlord, enhancement, and equipment drift",
   );
   const exported = sourceContent(await exportRoster(candidate, "rosz"));
   const drifted = enrichedContent(exported, (xml) =>
-    xml.replace('name="Warlord"', 'name="Removed Warlord"'),
+    xml.replace(
+      /name="Warlord" entryId="([^"]+)"/,
+      'name="Warlord" entryId="$1-changed"',
+    ),
   );
   const mismatches = compareRoszGameplaySnapshots(
     inspectRoszGameplaySnapshot(exported),
@@ -374,7 +377,10 @@ test("New Recruit enrichment drift is rejected before persistent reuse", async (
       },
       {
         deliver: artifactDelivery(directory, (xml) =>
-          xml.replace('name="Warlord"', 'name="Removed Warlord"'),
+          xml.replace(
+            /name="Warlord" entryId="([^"]+)"/,
+            'name="Warlord" entryId="$1-changed"',
+          ),
         ),
       },
     );

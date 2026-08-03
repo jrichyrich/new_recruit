@@ -17,6 +17,7 @@ import {
   getNewRecruitFactionSummary,
   isForwardGameSystemRevisionOnlyDrift,
   newRecruitCatalogue,
+  prepareNewRecruitHandoff,
   type ConnectorEvent,
   rosterExportFingerprint,
   rosterExecutionFingerprint,
@@ -32,6 +33,15 @@ import {
   validateTesseraReadyRosz,
 } from "../../lib/rosterpilot";
 import { rosterPilotSupportDirectory } from "../agent/paths";
+import {
+  compareRoszGameplaySnapshots,
+  inspectRoszGameplaySnapshot,
+} from "../tessera/rosz-integrity";
+import {
+  appendWorkflowReliabilityEventSafely,
+  associateWorkflowReliabilityIdentities,
+  createWorkflowReliabilityEventStore,
+} from "../reliability";
 import { safeNewRecruitUiIdentity } from "./ui-identity";
 
 type CacheReceiptV2 = {
@@ -160,6 +170,11 @@ export type NewRecruitCanonicalMutationReceipt = {
   createdAt: string;
   updatedAt: string;
   attempts: NewRecruitMutationAttempt[];
+  reliabilityWarnings?: Array<{
+    code: string;
+    message: string;
+    recordedAt: string;
+  }>;
   integritySha256: string;
 };
 
@@ -184,6 +199,11 @@ export type NewRecruitRoszMutationReceipt = {
   createdAt: string;
   updatedAt: string;
   attempts: NewRecruitMutationAttempt[];
+  reliabilityWarnings?: Array<{
+    code: string;
+    message: string;
+    recordedAt: string;
+  }>;
   integritySha256: string;
 };
 
@@ -612,6 +632,21 @@ function validMutationReceipt(
     isIsoDate(receipt.updatedAt) &&
     Array.isArray(receipt.attempts) &&
     receipt.attempts.every(validMutationAttempt) &&
+    (receipt.reliabilityWarnings === undefined ||
+      (Array.isArray(receipt.reliabilityWarnings) &&
+        receipt.reliabilityWarnings.length <= 20 &&
+        receipt.reliabilityWarnings.every(
+          (warning) =>
+            Boolean(
+              warning &&
+                typeof warning === "object" &&
+                typeof warning.code === "string" &&
+                warning.code.length > 0 &&
+                typeof warning.message === "string" &&
+                warning.message.length > 0 &&
+                isIsoDate(warning.recordedAt),
+            ),
+        ))) &&
     new Set(
       receipt.attempts.map((attempt) => attempt.attemptId),
     ).size === receipt.attempts.length &&
@@ -996,6 +1031,28 @@ async function appendInventoryEntry(
   const release = await acquireDirectoryLease(`${filename}.lock`);
   try {
     const inventory = await readInventoryFile();
+    const sameEvent = inventory.entries.find(
+      (candidate) => candidate.eventId === entry.eventId,
+    );
+    if (
+      sameEvent &&
+      sameEvent.cacheKey !== entry.cacheKey &&
+      sameEvent.connectorEventId === entry.connectorEventId &&
+      sameEvent.listUrl === entry.listUrl &&
+      sameEvent.contentSha256 === entry.contentSha256 &&
+      sameEvent.recordedAt === entry.recordedAt &&
+      sameEvent.outcome === entry.outcome &&
+      sameEvent.origin === entry.origin
+    ) {
+      // One verified browser event may be indexed first by its exact uploaded
+      // bytes and then by the canonical roster cache. Preserve both
+      // provenance edges under deterministic inventory IDs without treating
+      // that safe cross-index as conflicting or replaying the mutation.
+      entry = {
+        ...entry,
+        eventId: `${entry.eventId}-${entry.cacheKey.slice(0, 12)}`,
+      };
+    }
     if (
       inventory.entries.some(
         (candidate) => candidate.eventId === entry.eventId,
@@ -1173,6 +1230,7 @@ function newMutationReceipt(
     createdAt: now,
     updatedAt: now,
     attempts: [],
+    reliabilityWarnings: [],
   });
 }
 
@@ -1193,6 +1251,7 @@ function newRoszMutationReceipt(
     createdAt: now,
     updatedAt: now,
     attempts: [],
+    reliabilityWarnings: [],
   });
 }
 
@@ -1545,11 +1604,155 @@ function createdAttempt(
   );
 }
 
+async function recordMutationFinalizationReliability(input: {
+  filename: string;
+  receipt: NewRecruitMutationReceipt;
+  attempt: NewRecruitMutationAttempt;
+  recovered?: boolean;
+}): Promise<NewRecruitMutationReceipt> {
+  const reliabilityRoot = path.join(
+    rosterPilotSupportDirectory(),
+    "reliability",
+  );
+  const workflow = {
+    workflowId: input.attempt.runId,
+    workflowKind: "new-recruit-mutation",
+  } as const;
+  const connectorEventSha256 = input.attempt.connectorEvent
+    ? sha256Text(canonical(input.attempt.connectorEvent))
+    : null;
+  const recorded = await appendWorkflowReliabilityEventSafely(
+    createWorkflowReliabilityEventStore({
+      rootDirectory: reliabilityRoot,
+    }),
+    {
+      workflow,
+      idempotencyKey:
+        `new-recruit:${input.receipt.cacheKey}:${input.attempt.attemptId}:` +
+        `${input.attempt.outcome}:${input.attempt.finalizedAt ?? "unfinalized"}`,
+      eventKind:
+        input.recovered
+          ? "repair-applied"
+          : input.attempt.outcome === "created"
+            ? "external-mutation"
+            : input.attempt.outcome === "reused"
+              ? "artifact-reuse"
+              : "failure",
+      stage: "new-recruit-finalization",
+      provider: "new-recruit",
+      outcome:
+        input.recovered
+          ? "recovered"
+          : input.attempt.outcome === "created" ||
+              input.attempt.outcome === "reused"
+            ? "succeeded"
+            : input.attempt.outcome === "uncertain"
+              ? "inconclusive"
+              : "failed",
+      occurredAt: input.attempt.finalizedAt ?? input.receipt.updatedAt,
+      execution: {
+        status:
+          input.recovered ||
+          input.attempt.outcome === "created" ||
+          input.attempt.outcome === "reused"
+            ? "succeeded"
+            : input.attempt.outcome === "uncertain"
+              ? "inconclusive"
+              : "failed",
+        attempt: 1,
+      },
+      evidence: {
+        status:
+          input.attempt.outcome === "uncertain" ? "partial" : "verified",
+        artifactCount:
+          1 + (input.attempt.recoveryArtifact ? 2 : 0),
+        evidenceSha256: input.receipt.integritySha256,
+      },
+      error:
+        !input.recovered &&
+        (input.attempt.outcome === "uncertain" ||
+          input.attempt.outcome === "not-created")
+          ? {
+              code:
+                input.attempt.outcome === "uncertain"
+                  ? "NEW_RECRUIT_MUTATION_UNCERTAIN"
+                  : "NEW_RECRUIT_MUTATION_NOT_CREATED",
+              message:
+                input.attempt.message ??
+                "The New Recruit mutation did not complete.",
+              retryable: input.attempt.outcome === "not-created",
+            }
+          : null,
+      attributes: {
+        runId: input.attempt.runId,
+        attemptId: input.attempt.attemptId,
+        cacheKey: input.receipt.cacheKey,
+        receiptSha256: input.receipt.integritySha256,
+        outcome: input.attempt.outcome,
+        recovered: input.recovered ?? false,
+        connectorEventSha256,
+        connectorEventId:
+          input.attempt.connectorEvent?.eventId ?? null,
+        connectorContentSha256:
+          input.attempt.connectorEvent?.contentSha256 ?? null,
+        sourceRoszSha256:
+          input.attempt.recoveryArtifact?.sourceRoszSha256 ??
+          input.attempt.expectedSourceRoszSha256,
+        enrichedRoszSha256:
+          input.attempt.recoveryArtifact?.enrichedRoszSha256 ?? null,
+      },
+    },
+  );
+  const association = await associateWorkflowReliabilityIdentities(
+    {
+      workflow,
+      identities: [
+        { kind: "new-recruit-run-id", value: input.attempt.runId },
+      ],
+    },
+    { rootDirectory: reliabilityRoot },
+  );
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (!recorded.ok) warnings.push(recorded.error);
+  if (!association.ok && association.warning) {
+    warnings.push({
+      code: "RELIABILITY_IDENTITY_ASSOCIATION_FAILED",
+      message: association.warning,
+    });
+  }
+  if (warnings.length === 0) return input.receipt;
+  const currentWarnings = input.receipt.reliabilityWarnings ?? [];
+  const nextWarnings = [...currentWarnings];
+  for (const warning of warnings) {
+    if (
+      nextWarnings.some(
+        (existing) =>
+          existing.code === warning.code &&
+          existing.message === warning.message,
+      )
+    ) {
+      continue;
+    }
+    nextWarnings.push({
+      ...warning,
+      recordedAt: new Date().toISOString(),
+    });
+  }
+  const warned = resealMutationReceipt({
+    ...input.receipt,
+    reliabilityWarnings: nextWarnings.slice(-20),
+  });
+  return atomicWriteJson(input.filename, warned)
+    .then(() => warned)
+    .catch(() => input.receipt);
+}
+
 async function finalizeMutationAttempt(input: {
   filename: string;
   receipt: NewRecruitMutationReceipt;
   attemptId: string;
   finalization: NewRecruitMutationFinalization;
+  recovered?: boolean;
 }): Promise<NewRecruitMutationReceipt> {
   validateMutationFinalization(input.finalization);
   const attempt = input.receipt.attempts.find(
@@ -1569,8 +1772,15 @@ async function finalizeMutationAttempt(input: {
       canonical(attempt.recoveryArtifact ?? null) ===
         canonical(input.finalization.recoveryArtifact ?? null)
     ) {
-      await ensureFinalizedInventory(input.receipt);
-      return input.receipt;
+      const recorded = (input.receipt.reliabilityWarnings?.length ?? 0) > 0
+        ? input.receipt
+        : await recordMutationFinalizationReliability({
+            filename: input.filename,
+            receipt: input.receipt,
+            attempt,
+          });
+      await ensureFinalizedInventory(recorded);
+      return recorded;
     }
     throw failClosed(
       "NEW_RECRUIT_MUTATION_ALREADY_FINALIZED",
@@ -1621,10 +1831,18 @@ async function finalizeMutationAttempt(input: {
     input.finalization.outcome === "reused"
       ? `new-recruit-${input.finalization.connectorEvent!.eventId}`
       : null;
-  const sealed = resealMutationReceipt(input.receipt);
+  let sealed = resealMutationReceipt(input.receipt);
   // The finalized receipt is authoritative. If inventory persistence is
   // interrupted, the next read/resume backfills the exact event by ID.
   await atomicWriteJson(input.filename, sealed);
+  sealed = await recordMutationFinalizationReliability({
+    filename: input.filename,
+    receipt: sealed,
+    attempt: sealed.attempts.find(
+      (candidate) => candidate.attemptId === input.attemptId,
+    )!,
+    recovered: input.recovered,
+  });
   await ensureFinalizedInventory(sealed);
   return sealed;
 }
@@ -1948,6 +2166,7 @@ async function reconcileMutationReceipt(input: {
         "The selected New Recruit mutation attempt is already finalized.",
       );
     }
+    const recovered = attempt.outcome === "uncertain";
     attempt.outcome = "pending";
     attempt.finalizedAt = null;
     attempt.connectorEvent = null;
@@ -1958,6 +2177,7 @@ async function reconcileMutationReceipt(input: {
       receipt,
       attemptId: attempt.attemptId,
       finalization: input.resolution,
+      recovered,
     });
   } finally {
     await release();
@@ -2049,8 +2269,15 @@ export async function recordNewRecruitReuseReceipt(input: {
           "The New Recruit connector event was already recorded with different run provenance.",
         );
       }
-      await ensureFinalizedInventory(receipt);
-      return receipt;
+      const recorded = (receipt.reliabilityWarnings?.length ?? 0) > 0
+        ? receipt
+        : await recordMutationFinalizationReliability({
+            filename,
+            receipt,
+            attempt: existing,
+          });
+      await ensureFinalizedInventory(recorded);
+      return recorded;
     }
     const now = new Date().toISOString();
     const attempt: NewRecruitMutationAttempt = {
@@ -2069,6 +2296,11 @@ export async function recordNewRecruitReuseReceipt(input: {
       attempts: [...receipt.attempts, attempt],
     });
     await atomicWriteJson(filename, receipt);
+    receipt = await recordMutationFinalizationReliability({
+      filename,
+      receipt,
+      attempt,
+    });
     await ensureFinalizedInventory(receipt);
     return receipt;
   } finally {
@@ -2477,6 +2709,7 @@ async function repairLegacyStrictDriftMutationReceipt(input: {
 
 export async function loadNewRecruitProvisionalArtifact(
   roster: RosterDraftV1,
+  options: { repairMutationReceipt?: boolean } = {},
 ): Promise<ResultEnvelope<NewRecruitDelivery> | null> {
   const cacheKey = newRecruitCacheKey(roster);
   const parent = provisionalCacheRoot(cacheKey);
@@ -2557,11 +2790,13 @@ export async function loadNewRecruitProvisionalArtifact(
   );
   const selected = candidates[0];
   if (!selected) return null;
-  await repairLegacyStrictDriftMutationReceipt({
-    roster,
-    provisional: selected.receipt,
-    directory: selected.directory,
-  });
+  if (options.repairMutationReceipt !== false) {
+    await repairLegacyStrictDriftMutationReceipt({
+      roster,
+      provisional: selected.receipt,
+      directory: selected.directory,
+    });
+  }
   return provisionalDelivery(
     roster,
     selected.directory,
@@ -2624,6 +2859,31 @@ export async function loadNewRecruitMutationRecoveryArtifact(
   const recovered = await verifiedMutationRecoveryArtifact(receipt);
   if (!recovered) return null;
   const { attempt, artifact, event, enrichedContent } = recovered;
+  const currentHandoff = await prepareNewRecruitHandoff(roster, false);
+  const currentSource = currentHandoff.data?.artifacts.find(
+    (candidate) => candidate.format === "rosz",
+  );
+  if (!currentHandoff.ok || !currentSource) {
+    return null;
+  }
+  const sourceMismatches = compareRoszGameplaySnapshots(
+    inspectRoszGameplaySnapshot(
+      typeof currentSource.content === "string"
+        ? Buffer.from(currentSource.content, "utf8")
+        : currentSource.content,
+    ),
+    inspectRoszGameplaySnapshot(
+      await readFile(artifact.sourceRoszPath),
+    ),
+  );
+  if (sourceMismatches.length > 0) {
+    // The remote list remains durable evidence, but it was produced by a
+    // different exporter result. Reusing it would silently resurrect a fixed
+    // selection-tree bug. Callers may use a content-addressed successor
+    // mutation, while the original canonical receipt continues to prevent an
+    // accidental duplicate of the old bytes.
+    return null;
+  }
   const enrichedSha256 = artifact.enrichedRoszSha256;
   const identity = validateEnrichedRoszGameplayIdentity(
     enrichedContent,

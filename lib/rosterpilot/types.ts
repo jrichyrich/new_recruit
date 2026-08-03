@@ -2188,6 +2188,8 @@ export type RuntimeProvenance = {
   chromeVersion?: string | null;
   playwrightVersion?: string | null;
   brokerBuildId?: string | null;
+  tesseraJobWorkerSha256?: string | null;
+  tesseraJobWorkerSourceSha256?: string | null;
   macOsVersion?: string | null;
   localAgentExpectedProtocolVersion?: number;
   localAgentExpectedVersion?: string;
@@ -2202,6 +2204,8 @@ export type RuntimeProvenance = {
     brokerAvailable: boolean | null;
     runtimeBuildId: string | null;
     runtimeSourceFingerprint: string | null;
+    tesseraJobWorkerSha256?: string | null;
+    tesseraJobWorkerSourceSha256?: string | null;
     statusErrorCode: string | null;
   };
   localAgentProcessIdentity?: {

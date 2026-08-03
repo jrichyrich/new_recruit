@@ -67,6 +67,24 @@ export function tesseraSemanticSnapshotDirectory(): string {
   );
 }
 
+export function compiledTesseraJobWorkerPath(): string {
+  return path.join(
+    projectRoot,
+    "dist",
+    "workers",
+    "tessera-job-worker.mjs",
+  );
+}
+
+export function compiledTesseraJobWorkerReceiptPath(): string {
+  return path.join(
+    projectRoot,
+    "dist",
+    "workers",
+    "tessera-job-worker.receipt.json",
+  );
+}
+
 export function launchAgentPath(): string {
   return path.join(
     os.homedir(),
