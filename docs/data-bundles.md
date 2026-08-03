@@ -1,4 +1,4 @@
-# Signed semantic data bundles
+# Runtime semantic data snapshots
 
 RosterPilot updates runtime data independently from application releases.
 Games Workshop publications are authoritative where they can be verified
@@ -6,6 +6,23 @@ directly, 40kdc-data supplies structured game content, and BSData supplies New
 Recruit catalogue identities and selection paths. A bundle records all three
 provenance sources, but compatibility is decided by semantic hashes rather
 than release labels or Git commits.
+
+There are three provider modes:
+
+- `local-source` is the default for CLI, stdio MCP, the local agent, and
+  writable self-hosted Node installations. It builds from allowlisted upstream
+  sources on the user's machine and needs no signing key, trust registry, or
+  central RosterPilot publication.
+- `signed-channel` is an explicitly configured hosted/operator mode. It
+  authenticates publisher-issued snapshots for stateless deployments, release
+  canaries, and promotion evidence.
+- `compiled` is the startup and failure fallback. It keeps roster work usable
+  while a first local build runs or when no configured update provider can
+  produce a verified snapshot.
+
+Local mode never automatically falls back to the signed channel. Existing
+signed archives remain readable so old rosters and durable jobs can reacquire
+their exact snapshot during migration.
 
 ## Authority and conflict policy
 
@@ -25,24 +42,76 @@ the affected entity or faction is quarantined; the engine never silently
 chooses between community interpretations. BSData does not become the roster
 rules authority merely because New Recruit consumes it.
 
-The resulting signed `DataBundleProvider` snapshot is the canonical runtime
-rules source. New Recruit catalogue IDs and revisions observed after an import
+The accepted `DataBundleProvider` snapshot is the canonical runtime rules
+source. Its `dataTrust` is `locally-verified`, `signed-verified`, or
+`compiled-unverified`. New Recruit catalogue IDs and revisions observed after an import
 show whether the live service accepted the bundle's pinned BSData mapping;
 they are compatibility evidence only. They do not update points, profiles,
 abilities, legality, or any semantic hash in the leased bundle. The same rule
 applies to characteristics or effects rendered by Tessera Web: observations
 are retained beside the bundle, never merged back into it as rules data.
 
-Provider-compatibility certification binds those observations to more than the
-roster's source hashes. Its trust identity is derived from the activated
-signature-verified manifest and the current update-provider state: signing key,
-manifest and semantic hashes, active/latest/upstream/candidate bundle IDs,
-quarantines, rollback hold, official-authority identity, and durability. A
-compiled-unverified fallback or a source bundle that differs from the active
-verified manifest is retained as incomplete evidence and cannot pass the live
-compatibility gate.
+Provider-compatibility evidence binds those observations to the accepted
+manifest and current provider state: provider mode, trust origin, manifest and
+semantic hashes, active/latest/upstream/candidate bundle IDs, quarantines,
+rollback hold, official-authority identity, and durability. A
+`compiled-unverified` fallback is retained as incomplete evidence and cannot
+pass the live compatibility gate. Ordinary roster, New Recruit, Tessera, and
+local-versus-Web analysis may use `locally-verified`; maintainer release
+canaries and promotion evidence continue to require `signed-verified`.
 
-## Release pipeline
+## Local build receipts and trust
+
+A local snapshot is unsigned. Its build receipt binds:
+
+- the exact manifest, bundle ID, and every shard path and SHA-256;
+- the 40kdc package version, tarball integrity, and exact BSData commit;
+- the builder source hash and engine-data schema;
+- the validation plan, certification evidence inventory, delta classification,
+  and affected scopes; and
+- the parent snapshot, when one exists.
+
+The store re-verifies the receipt, manifest, and every shard whenever the
+snapshot is loaded. This provides reproducibility and corruption detection; it
+does not authenticate a publisher or protect against an attacker who can
+modify both the application and its application-support directory. That is an
+intentional local trust model: the user trusts the cloned RosterPilot code and
+the explicitly allowlisted upstream sources.
+
+## Local-source update pipeline
+
+The local coordinator persists one single-flight job under the user
+application-support directory. Its states are `queued`, `checking`,
+`fetching`, `building`, `certifying`, `installed`, `activated`, `quarantined`,
+and `failed`. Ordinary roster work never waits for it.
+
+- With no locally verified snapshot, startup queues a check immediately.
+- Otherwise CLI/MCP startup queues only when the last attempt is more than 24
+  hours old. The macOS companion wakes hourly and enqueues only when due.
+- Automatic failures retry after one hour and then back off to a six-hour cap.
+  An explicit refresh bypasses backoff.
+- Fetching is limited to npm metadata and the integrity-addressed
+  `@alpaca-software/40kdc-data` tarball, exact commits from
+  `BSData/wh40k-11e` through a persistent bare Git cache, and Games Workshop
+  pages for change detection.
+- Candidate work runs in an isolated temporary project with a sanitized
+  environment, no credentials, npm lifecycle scripts disabled, and bounded
+  time and output. It never writes generated data into the checkout.
+- Schema, mapping regressions, semantic delta, export smoke tests, and
+  deterministic certification must pass before atomic activation. Scoped
+  changes certify affected factions; global or methodology changes run the
+  full plan. Failed or ambiguous scopes are quarantined and the active
+  snapshot remains unchanged.
+
+Games Workshop change detection does not automatically extract or interpret
+new official material. Status reports `official-update-pending`, keeps the last
+usable values, and exposes official-authority state separately until reviewed,
+machine-verifiable reconciliation evidence exists.
+
+## Hosted signed-channel release pipeline
+
+This section is for hosted deployment and release operators. Local users do
+not run it and do not need its signing variables.
 
 `npm run data:prepare-update` performs the routine update:
 
@@ -349,26 +418,27 @@ it cannot install a bootstrap whose signing key is absent from the registry.
 
 ## Runtime activation and recovery
 
-Every configured surface uses the same provider contract. It checks the signed stable
-channel on startup. Long-lived runtimes schedule a check every 15 minutes;
-request-driven runtimes also check when that interval is due on the next data
-operation. Stable-channel refresh does not block a build after bootstrap
-initialization. A first hosted request may still load same-origin release
-assets, or an explicitly configured external bootstrap, before it can lease a
-snapshot. The provider downloads a candidate,
-verifies the stable pointer, manifest signature, schema, and every payload
-hash, then moves the local active pointer atomically only after validation.
+Every surface uses the same provider contract and every data-consuming
+operation leases one immutable snapshot. Local surfaces initialize immediately
+from the newest verified local archive, or from compiled data when no local
+snapshot exists yet. Their startup check is a non-blocking enqueue into the
+durable local coordinator. Hosted `signed-channel` surfaces instead verify
+their stable pointer, manifest signature, schema, and every payload hash before
+moving the active pointer. Neither mode changes a lease already in use.
 
 Use the same sequence through MCP, CLI, REST, or the local agent:
 
 1. Read engine provenance with `get_data_status`, then call
    `get_data_update_status` to distinguish `activeBundleId`,
-   `latestVerifiedBundleId`, `latestUpstreamBundleId`, the candidate
-   classification, quarantined scopes, and `officialAuthority`. The latter is
-   `verified` with source/overlay/receipt hashes and extractor IDs, or is
-   explicitly `unavailable`/`unverified-overlay` with a reason.
-2. Use `refresh_data_now` only when an immediate signed-channel check is
-   requested. The CLI equivalent is `rosterpilot data refresh`.
+   `providerMode`, `dataTrust`, `latestVerifiedBundleId`,
+   `latestUpstreamBundleId`, local job progress, service-compatible snapshots,
+   candidate classification, quarantined scopes, and `officialAuthority`. The
+   latter is `verified` with source/overlay/receipt hashes and extractor IDs,
+   or is explicitly pending/unavailable with a reason.
+2. Use `refresh_data_now` only when an immediate check is requested. In local
+   mode it queues the durable job and returns promptly; in hosted mode it keeps
+   the configured signed-channel behavior. The CLI equivalent is
+   `rosterpilot data refresh`.
 3. Open an existing roster with `rebase_roster` (CLI:
    `rosterpilot rebase --file roster.json`). A provenance-only change returns
    `compatible-rebased`; a relevant semantic change returns
@@ -382,11 +452,12 @@ Use the same sequence through MCP, CLI, REST, or the local agent:
    refreshes cannot silently reactivate the channel head. Only an explicit
    forced refresh (`rosterpilot data refresh --force`) releases the hold.
 
-If no runtime provider, trusted key, channel, or network is available,
-construction continues from compiled application-release data. Status reports
-that fallback instead of claiming that an unsigned or unverified payload is a
-verified bootstrap. When a signed bootstrap was successfully verified before
-the channel became unavailable, status retains that exact verified identity.
+If no locally verified snapshot exists yet, or if an update attempt cannot
+reach an upstream source, construction continues from compiled
+application-release data. Status reports `compiled-unverified` instead of
+claiming that the fallback is verified. A later successful local build
+activates without restarting current work. Hosted mode similarly retains an
+already verified bootstrap when its signed channel becomes unavailable.
 
 Each data-consuming request acquires one immutable snapshot lease. Status,
 refresh, and rollback are control-plane operations and intentionally do not
@@ -400,12 +471,12 @@ Durable roster journeys follow the same rule per transition. A journey retains
 the bundle referenced by each immutable roster revision and reacquires that
 exact snapshot only while executing an action. A provenance-only compatible
 rebase creates a new revision; a semantic change records `review-required` and
-preserves the prior revision. Activating a newer signed bundle never rewrites
+preserves the prior revision. Activating a newer snapshot never rewrites
 an existing journey, Tessera job, or mutation receipt.
 
 The local store retains the active bundle, the previous three bundles, every
-bundle with a registered roster or durable-job reference, and unreferenced
-bundles for at least 30 days. Integrity failures block garbage collection
+bundle with a registered roster, service-compatibility, or durable-job
+reference, and unreferenced candidate bundles for at least 30 days. Integrity failures block garbage collection
 rather than risk deleting referenced evidence. Snapshot leases are separate
 process-owned transient references with a bounded lifetime; retention recovers
 them immediately after a confirmed owner exit or at expiry, so a crashed CLI
@@ -437,6 +508,25 @@ change nor permission to replace the bundle. The narrowly scoped forward-only
 catalogue diagnostic remains diagnostic evidence and does not promote the
 observation into canonical data.
 
+Observed identities are stored as receipt-backed service evidence by
+game-system ID/revision and faction-catalogue ID/revision. Before New Recruit
+or Tessera Web preparation, RosterPilot chooses the newest retained snapshot
+that exactly matches the latest observation for the affected faction. If no
+retained snapshot matches, the repair coordinator searches up to 500 relevant
+commits in the persistent BSData history and may build a compatibility snapshot
+from that exact commit plus the newest certified 40kdc rules source. It never
+tests the service by creating a list. If the bounded history has no exact
+identity, it preserves the roster and reports
+`waiting-for-compatible-source`.
+
+The durable journey exposes the recovery states `updating-local-data`,
+`waiting-for-compatible-source`, `needs-data-review`, and `ready-for-web`.
+Unchanged compatible rebases may proceed automatically. Semantic roster
+changes always require review, and starting a successor Tessera Web job always
+requires a separate confirmation. Hash-verified New Recruit artifacts may be
+reused; mutation receipts are never deleted and uncertain imports are never
+duplicated.
+
 For Tessera Web, there is no reliable public semantic-data version to pin.
 RosterPilot records any declared version as advisory, fetches and hashes the
 bytes of every required same-origin script asset, and hashes normalized
@@ -462,7 +552,7 @@ version number:
 Version skew is therefore an issue when it changes or obscures one of these
 bound identities, not merely because two services display different release
 labels. Provider observations are append-only execution evidence; refresh and
-rollback continue to affect only future signed-bundle leases.
+rollback continue to affect only future snapshot leases.
 
 ## Compatibility and certification
 
@@ -471,7 +561,7 @@ Raw provenance determines which immutable bundle can reproduce a run.
 hashes, and conflict hashes determine which rosters, exports, caches, and
 expert reviews remain compatible.
 
-- `provenance-only`: publish without roster or certification invalidation.
+- `provenance-only`: install without roster or certification invalidation.
 - `mapping-only`: recheck affected export scopes without rerunning stress
   portfolios. A shared New Recruit game-system revision is recorded in each
   faction's mapping identity, so it may affect every export scope without
@@ -480,8 +570,8 @@ expert reviews remain compatible.
 - `methodology/global`: run all faction certification.
 - `ambiguous/regressive`: quarantine the affected scope and retain its last
   verified shard. Unaffected scopes may advance only in a dependency-consistent
-  bundle signed by the publisher; clients never synthesize or trust an
-  unsigned mixture.
+  snapshot accepted under one trust mode; clients never synthesize or trust an
+  unverified mixture.
 
 The replay from BSData
 `419a80d35346cd9bf26d32f69b4a5df404beb95d` to
@@ -489,45 +579,30 @@ The replay from BSData
 semantic inventories match, it must classify as `provenance-only`, retain all
 faction contracts, and leave the application checkout unchanged.
 
-## Application deployment prerequisites
+## Deployment prerequisites
 
-Every production surface needs these common inputs before runtime refresh is
-advertised:
+Local CLI, MCP, agent, personal-plugin, and writable self-hosted Node surfaces
+need only:
+
+- Node.js, npm, and Git;
+- writable application-support storage for jobs, immutable snapshots, the bare
+  BSData cache, and retention references; and
+- connectivity to the allowlisted upstream sources when checking or building
+  an update.
+
+Signing keys, a public-key registry, a bootstrap bundle, and a signed channel
+are not local readiness requirements. Generated standalone MCP,
+personal-plugin MCP, and LaunchAgent environments identify `local-source` mode
+and machine-local support storage; they do not carry publisher credentials or
+require a public channel. An offline machine remains usable from compiled data
+or its newest locally verified archive.
+
+Hosted `signed-channel` Next.js and Cloudflare surfaces instead need:
 
 - one signed bootstrap bundle compatible with the application's engine-data
   schema;
-- at least one pinned Ed25519 public verification key and key ID;
 - `ROSTERPILOT_DATA_CHANNEL_URL` pointing to the signed stable-channel
-  document;
-- immutable HTTPS bundle hosting in production.
-
-Local CLI, MCP, agent, and worker surfaces additionally need:
-
-- the public registry in `data/data-bundle-trusted-keys.json`, or an equivalent
-  file selected with `ROSTERPILOT_DATA_TRUSTED_KEYS_FILE`;
-- a bootstrap directory selected explicitly with
-  `ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY` or supplied by the
-  application-release default when that directory exists;
-- a writable application-support bundle store.
-
-Generated standalone MCP, personal-plugin MCP, and LaunchAgent environments
-always carry the signed-channel URL and trusted-public-key file. They include
-`ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY` only when the operator supplied
-it or when `data/bootstrap-data-bundle` exists in the checkout. Omitting a
-missing implicit default lets the runtime recover a previously installed
-signed bundle from its persistent store; if none is available, status reports
-that the signed provider is unavailable and the compiled application data
-remains active. An explicit override is preserved even when its target is
-unavailable, so initialization fails closed instead of silently substituting
-another bundle.
-
-The generated personal-plugin `.mcp.json` contains these non-secret public
-settings and absolute local executable paths. It is machine-local
-configuration, not a trust root: manifest signatures and the pinned public-key
-registry remain authoritative.
-
-Hosted Next.js and Cloudflare surfaces instead need:
-
+  document and immutable HTTPS bundle hosting;
 - a shipped bootstrap manifest at
   `/data-bundles/bootstrap/manifest.json` with its declared shard paths, or
   `ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_MANIFEST_URL` pointing to the same
@@ -547,6 +622,30 @@ The publisher additionally needs CI publication permission for the immutable
 secret store; clients receive public keys, never signing material. Key
 rotation publishes overlapping key IDs so existing clients can verify the
 transition.
+
+### Hosted/operator one-time signed-channel bootstrap
+
+Hosted and release operators use the manual **Bootstrap signed roster data**
+GitHub workflow when the trust registry and application bootstrap have not
+been published yet. Local users do not run this workflow. It validates
+that the signing key ID, private JWK, and explicit degraded-authority reason
+are configured; derives only public key material; creates matching local and
+hosted signed bootstrap assets; verifies them; and opens a reviewable pull
+request. It never prints or commits the private key. Merging that pull request
+triggers the freshness workflow, whose genesis path publishes a signed-v2
+stable pointer at revision zero even when upstream provenance is unchanged.
+
+Routine publication runs `data:publisher:check` first. The job fails with a
+specific bootstrap/rotation instruction if its signing key is absent from the
+checked-in registry or maps to different public material. This prevents a
+publisher from creating a channel that installed clients cannot verify.
+
+Catalogue mismatch recovery remains a consumer operation. A durable roster
+journey may refresh, rebase, revalidate, and prepare a lineage-linked successor
+Tessera Web job, but it cannot mutate the old frozen job or bypass trust. A
+semantic roster or opponent change creates a review-required candidate; an
+unchanged structural roster can become ready automatically. Starting the new
+external job is always a separate confirmation.
 
 Hosted Next.js routes and the Cloudflare Worker use the same portable
 initializer. It reads release assets through same-origin fetch or the

@@ -8,13 +8,19 @@ import type {
   TesseraSimulationProvider,
   TesseraSimulationProviderIdentity,
   TesseraWebsiteProviderEvidence,
-  VerifiedDataBundleManifestV1,
 } from "../../lib/rosterpilot";
+import type {
+  AcceptedDataBundleEvidenceIdentity,
+  VerifiedAcceptedDataBundleManifestV1,
+} from "../../lib/rosterpilot/data-bundle";
 import {
   tesseraImportedArmySemanticEvidenceIncompleteReasons,
 } from "./website-semantic-evidence";
 import { getActiveDataBundleManifest } from "../../lib/rosterpilot/active-data-context";
-import { getDataUpdateStatus } from "../../lib/rosterpilot/data-operations";
+import {
+  getConfiguredDataBundleProvider,
+  getDataUpdateStatus,
+} from "../../lib/rosterpilot/data-operations";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -172,13 +178,21 @@ export type ProviderCompatibilityBundleTrustIdentity = {
   schemaVersion: 1;
   manifest: {
     bundleId: string;
-    signingKeyId: string;
+    evidenceKind: "signed" | "local-receipt";
+    evidenceId: string;
+    signingKeyId: string | null;
+    receiptIntegritySha256: string;
+    builderSourceSha256: string | null;
     manifestSha256: string;
     semanticIdentitySha256: string;
   } | null;
   update: {
     providerConfigured: boolean;
-    dataTrust: "signed-verified" | "compiled-unverified";
+    dataTrust:
+      | "locally-verified"
+      | "signed-verified"
+      | "compiled-unverified";
+    providerMode: "local-source" | "signed-channel" | "compiled";
     state: DataUpdateStatus["state"];
     activeBundleId: string | null;
     latestVerifiedBundleId: string | null;
@@ -213,7 +227,8 @@ function sha256(value: unknown): string {
 }
 
 function bundleTrustWithoutDigest(input: {
-  manifest: VerifiedDataBundleManifestV1 | null;
+  manifest: VerifiedAcceptedDataBundleManifestV1 | null;
+  evidence?: AcceptedDataBundleEvidenceIdentity | null;
   status: DataUpdateStatus;
 }): Omit<ProviderCompatibilityBundleTrustIdentity, "identitySha256"> {
   const quarantinedScopes = [...input.status.quarantinedScopes]
@@ -229,11 +244,36 @@ function bundleTrustWithoutDigest(input: {
           [right.scope, right.bundleId, right.reason].join("\u0000"),
         ),
     );
-  const manifest = input.manifest
+  const manifestSha256 = input.manifest
+    ? sha256(input.manifest)
+    : null;
+  const evidence = input.evidence ?? null;
+  const signedManifest =
+    input.manifest && "signature" in input.manifest
+      ? input.manifest
+      : null;
+  const manifest = input.manifest && (evidence || signedManifest)
     ? {
         bundleId: input.manifest.bundleId,
-        signingKeyId: input.manifest.signature.keyId,
-        manifestSha256: sha256(input.manifest),
+        evidenceKind:
+          evidence?.kind ?? ("signed" as const),
+        evidenceId:
+          evidence?.kind === "local-receipt"
+            ? evidence.builderId
+            : evidence?.kind === "signed"
+              ? evidence.signingKeyId
+              : signedManifest!.signature.keyId,
+        signingKeyId:
+          evidence?.kind === "signed"
+            ? evidence.signingKeyId
+            : signedManifest?.signature.keyId ?? null,
+        receiptIntegritySha256:
+          evidence?.receiptIntegritySha256 ?? manifestSha256!,
+        builderSourceSha256:
+          evidence?.kind === "local-receipt"
+            ? evidence.builderSourceSha256
+            : null,
+        manifestSha256: evidence?.manifestSha256 ?? manifestSha256!,
         semanticIdentitySha256: sha256(input.manifest.semanticHashes),
       }
     : null;
@@ -243,6 +283,7 @@ function bundleTrustWithoutDigest(input: {
     update: {
       providerConfigured: input.status.providerConfigured,
       dataTrust: input.status.dataTrust ?? "compiled-unverified",
+      providerMode: input.status.providerMode,
       state: input.status.state,
       activeBundleId: input.status.activeBundleId,
       latestVerifiedBundleId: input.status.latestVerifiedBundleId,
@@ -266,7 +307,8 @@ function bundleTrustWithoutDigest(input: {
 }
 
 export function buildProviderCompatibilityBundleTrustIdentity(input: {
-  manifest: VerifiedDataBundleManifestV1 | null;
+  manifest: VerifiedAcceptedDataBundleManifestV1 | null;
+  evidence?: AcceptedDataBundleEvidenceIdentity | null;
   status: DataUpdateStatus;
 }): ProviderCompatibilityBundleTrustIdentity {
   const withoutDigest = bundleTrustWithoutDigest(input);
@@ -282,13 +324,39 @@ export function buildProviderCompatibilityBundleTrustIdentity(input: {
  * the runtime update-provider status. Callers bind this immutable value to
  * the compatibility envelope instead of inferring trust from roster hashes.
  */
-export async function captureProviderCompatibilityBundleTrustIdentity(): Promise<ProviderCompatibilityBundleTrustIdentity> {
-  const status = await getDataUpdateStatus();
-  return buildProviderCompatibilityBundleTrustIdentity({
-    manifest: getActiveDataBundleManifest(),
-    status:
-      status.data ?? {
+export async function captureProviderCompatibilityBundleTrustIdentity(
+  bundleId?: string | null,
+): Promise<ProviderCompatibilityBundleTrustIdentity> {
+  const provider = getConfiguredDataBundleProvider();
+  const status = await getDataUpdateStatus(provider);
+  let lease:
+    | Awaited<ReturnType<NonNullable<typeof provider>["acquireSnapshot"]>>
+    | null = null;
+  try {
+    lease = provider
+      ? await provider.acquireSnapshot({
+          ...(bundleId ? { bundleId } : {}),
+        })
+      : null;
+    const projectedStatus = status.data
+      ? {
+          ...status.data,
+          ...(lease
+            ? {
+                activeBundleId: lease.snapshot.bundleId,
+                dataTrust: lease.snapshot.trustOrigin,
+              }
+            : {}),
+        }
+      : null;
+    return buildProviderCompatibilityBundleTrustIdentity({
+      manifest:
+        lease?.snapshot.manifest ?? getActiveDataBundleManifest(),
+      evidence: lease?.snapshot.evidence ?? null,
+      status:
+        projectedStatus ?? {
         providerConfigured: false,
+        providerMode: "compiled",
         state: "offline",
         activeBundleId: null,
         latestVerifiedBundleId: null,
@@ -308,7 +376,10 @@ export async function captureProviderCompatibilityBundleTrustIdentity(): Promise
           reason: "Runtime data-update status was unavailable.",
         },
       },
-  });
+    });
+  } finally {
+    await lease?.release();
+  }
 }
 
 export function providerCompatibilityBundleTrustIdentitySha256(
@@ -350,7 +421,7 @@ export function providerCompatibilityDataSemanticIdentitySha256(
 }
 
 /**
- * Revalidates the signed-bundle/update identity embedded in a retained
+ * Revalidates the accepted bundle/update identity embedded in a retained
  * compatibility envelope. This is deliberately independent of the envelope
  * and report receipts: both are unkeyed digests that an editor could
  * recompute after changing nested trust fields.
@@ -364,17 +435,29 @@ export function providerCompatibilityTrustBindingIssues(
   if (!providerCompatibilityBundleTrustDigestValid(trust)) {
     issues.push("bundle-trust-identity-digest-mismatch");
   }
+  const evidenceComplete = Boolean(
+    manifest &&
+      validSha256(manifest.bundleId) &&
+      validSha256(manifest.manifestSha256) &&
+      validSha256(manifest.semanticIdentitySha256) &&
+      validSha256(manifest.receiptIntegritySha256) &&
+      manifest.evidenceId.trim() &&
+      ((manifest.evidenceKind === "signed" &&
+        trust.update.dataTrust === "signed-verified" &&
+        manifest.signingKeyId?.trim() &&
+        manifest.builderSourceSha256 === null) ||
+        (manifest.evidenceKind === "local-receipt" &&
+          trust.update.dataTrust === "locally-verified" &&
+          trust.update.providerMode === "local-source" &&
+          manifest.signingKeyId === null &&
+          validSha256(manifest.builderSourceSha256))),
+  );
   if (
     trust.schemaVersion !== 1 ||
-    trust.update.dataTrust !== "signed-verified" ||
     !trust.update.providerConfigured ||
-    !manifest ||
-    !validSha256(manifest.bundleId) ||
-    !validSha256(manifest.manifestSha256) ||
-    !validSha256(manifest.semanticIdentitySha256) ||
-    !manifest.signingKeyId.trim()
+    !evidenceComplete
   ) {
-    issues.push("signed-bundle-trust-incomplete");
+    issues.push("accepted-bundle-trust-incomplete");
   }
   if (
     manifest?.bundleId !== envelope.data.bundleId ||
@@ -400,7 +483,11 @@ export function providerCompatibilityTrustBindingIssues(
     manifest?.semanticIdentitySha256 !==
       envelope.data.semanticIdentitySha256
   ) {
-    issues.push("signed-semantic-identity-binding-mismatch");
+    issues.push(
+      manifest?.evidenceKind === "local-receipt"
+        ? "local-receipt-semantic-identity-binding-mismatch"
+        : "signed-semantic-identity-binding-mismatch",
+    );
   }
   return [...new Set(issues)].sort();
 }
@@ -550,6 +637,7 @@ export function buildProviderCompatibilityEnvelope(
       manifest: null,
       status: {
         providerConfigured: false,
+        providerMode: "compiled",
         state: "offline",
         activeBundleId: input.sourceData.bundleId,
         latestVerifiedBundleId: null,
@@ -573,20 +661,30 @@ export function buildProviderCompatibilityEnvelope(
       },
     });
   const manifest = trust.manifest;
+  const acceptedEvidence = Boolean(
+    manifest &&
+      validSha256(manifest.bundleId) &&
+      validSha256(manifest.manifestSha256) &&
+      validSha256(manifest.semanticIdentitySha256) &&
+      validSha256(manifest.receiptIntegritySha256) &&
+      manifest.evidenceId.trim() &&
+      ((manifest.evidenceKind === "signed" &&
+        trust.update.dataTrust === "signed-verified" &&
+        manifest.signingKeyId?.trim()) ||
+        (manifest.evidenceKind === "local-receipt" &&
+          trust.update.dataTrust === "locally-verified" &&
+          trust.update.providerMode === "local-source" &&
+          validSha256(manifest.builderSourceSha256))),
+  );
   if (
     !providerCompatibilityBundleTrustDigestValid(trust) ||
-    trust.update.dataTrust !== "signed-verified" ||
     !trust.update.providerConfigured ||
-    !manifest ||
-    !validSha256(manifest.bundleId) ||
-    !validSha256(manifest.manifestSha256) ||
-    !validSha256(manifest.semanticIdentitySha256) ||
-    !manifest.signingKeyId.trim()
+    !acceptedEvidence
   ) {
     issues.push({
       code: "DATA_BUNDLE_TRUST_UNVERIFIED",
       message:
-        "Provider compatibility requires the activated signature-verified bundle manifest, signing key, and trust identity.",
+        "Provider compatibility requires an activated signed manifest or locally verified build receipt with a complete trust identity.",
       side: null,
       occurrence: null,
     });
@@ -612,7 +710,7 @@ export function buildProviderCompatibilityEnvelope(
     issues.push({
       code: "DATA_BUNDLE_UPDATE_IDENTITY_INCOMPLETE",
       message:
-        "The runtime update status is not completely bound to the same activated signed bundle as this roster operation.",
+        "The runtime update status is not completely bound to the same activated verified snapshot as this roster operation.",
       side: null,
       occurrence: null,
     });
@@ -628,7 +726,7 @@ export function buildProviderCompatibilityEnvelope(
     issues.push({
       code: "SOURCE_IDENTITY_INCOMPLETE",
       message:
-        "The signed data bundle did not provide a complete semantic and BSData identity.",
+        "The verified data snapshot did not provide a complete semantic and BSData identity.",
       side: null,
       occurrence: null,
     });

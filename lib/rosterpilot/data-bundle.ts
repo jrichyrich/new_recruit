@@ -403,6 +403,11 @@ export const DataBundleManifestV1Schema =
     })
     .superRefine(validateManifestGraph);
 
+export const LocalDataBundleManifestV1Schema =
+  dataBundleManifestDraftObject
+    .extend({ bundleId: sha256Schema })
+    .superRefine(validateManifestGraph);
+
 export const DataBundleShardV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -647,6 +652,9 @@ export type DataBundleSignatureV1 = z.infer<
 export type DataBundleManifestV1 = z.infer<
   typeof DataBundleManifestV1Schema
 >;
+export type LocalDataBundleManifestV1 = z.infer<
+  typeof LocalDataBundleManifestV1Schema
+>;
 type ParsedDataBundleShardV1 = z.infer<
   typeof DataBundleShardV1Schema
 >;
@@ -685,6 +693,7 @@ export type DataBundleQuarantineRecordV1 = z.infer<
 >;
 
 declare const verifiedManifestBrand: unique symbol;
+declare const verifiedLocalManifestBrand: unique symbol;
 declare const verifiedShardBrand: unique symbol;
 declare const verifiedChannelBrand: unique symbol;
 declare const verifiedQuarantineBrand: unique symbol;
@@ -692,6 +701,13 @@ declare const verifiedQuarantineBrand: unique symbol;
 export type VerifiedDataBundleManifestV1 = DataBundleManifestV1 & {
   readonly [verifiedManifestBrand]: true;
 };
+export type VerifiedLocalDataBundleManifestV1 =
+  LocalDataBundleManifestV1 & {
+    readonly [verifiedLocalManifestBrand]: true;
+  };
+export type VerifiedAcceptedDataBundleManifestV1 =
+  | VerifiedDataBundleManifestV1
+  | VerifiedLocalDataBundleManifestV1;
 export type VerifiedDataBundleShardV1<TData = unknown> =
   DataBundleShardV1<TData> & {
     readonly [verifiedShardBrand]: true;
@@ -945,7 +961,7 @@ async function verifyCanonicalPayload(
 }
 
 function manifestDraft(
-  manifest: DataBundleManifestV1,
+  manifest: DataBundleManifestV1 | LocalDataBundleManifestV1,
 ): DataBundleManifestDraftV1 {
   return {
     schemaVersion: manifest.schemaVersion,
@@ -964,6 +980,61 @@ function manifestSignedPayload(
   manifest: Omit<DataBundleManifestV1, "signature">,
 ): Omit<DataBundleManifestV1, "signature"> {
   return manifest;
+}
+
+export async function createLocalDataBundleManifest(
+  input: DataBundleManifestDraftV1,
+): Promise<LocalDataBundleManifestV1> {
+  const draft = DataBundleManifestDraftV1Schema.parse(input);
+  const bundleId = await sha256Hex(canonicalJson(draft));
+  return LocalDataBundleManifestV1Schema.parse({
+    ...draft,
+    bundleId,
+  });
+}
+
+export function isLocalDataBundleManifest(
+  input: unknown,
+): boolean {
+  return LocalDataBundleManifestV1Schema.safeParse(input).success;
+}
+
+/**
+ * Verifies only the deterministic local manifest identity. Acceptance as
+ * locally verified additionally requires verifyLocalSourceDataBundleReceipt;
+ * callers must never use this function as a standalone trust decision.
+ */
+export async function verifyLocalDataBundleManifest(
+  input: unknown,
+): Promise<
+  DataBundleVerificationResult<VerifiedLocalDataBundleManifestV1>
+> {
+  const parsed = LocalDataBundleManifestV1Schema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: "INVALID_MANIFEST",
+      message: parsed.error.issues
+        .map((issue) => issue.message)
+        .join("; "),
+    };
+  }
+  const manifest = parsed.data;
+  const expectedBundleId = await sha256Hex(
+    canonicalJson(manifestDraft(manifest)),
+  );
+  if (manifest.bundleId !== expectedBundleId) {
+    return {
+      ok: false,
+      code: "BUNDLE_ID_MISMATCH",
+      message:
+        "The local data-bundle id does not match the canonical manifest payload.",
+    };
+  }
+  return {
+    ok: true,
+    data: deepFreeze(manifest) as VerifiedLocalDataBundleManifestV1,
+  };
 }
 
 export async function createSignedDataBundleManifest(
@@ -1041,7 +1112,7 @@ function sameStrings(
 }
 
 export async function verifyDataBundleShard<TData = unknown>(
-  manifest: VerifiedDataBundleManifestV1,
+  manifest: VerifiedAcceptedDataBundleManifestV1,
   input: unknown,
 ): Promise<
   DataBundleVerificationResult<VerifiedDataBundleShardV1<TData>>
@@ -1287,7 +1358,9 @@ class ImmutableReadonlyMap<K, V> implements ReadonlyMap<K, V> {
 
 export type DataBundleSnapshot<TShardData = unknown> = {
   readonly bundleId: string;
-  readonly manifest: VerifiedDataBundleManifestV1;
+  readonly manifest: VerifiedAcceptedDataBundleManifestV1;
+  readonly trustOrigin: "signed-verified" | "locally-verified";
+  readonly evidence: AcceptedDataBundleEvidenceIdentity | null;
   readonly acquiredAt: string;
   readonly shards: ReadonlyMap<
     string,
@@ -1302,10 +1375,12 @@ export type DataBundleSnapshot<TShardData = unknown> = {
 };
 
 export function createDataBundleSnapshot<TShardData>(
-  manifest: VerifiedDataBundleManifestV1,
+  manifest: VerifiedAcceptedDataBundleManifestV1,
   inputShards: Iterable<VerifiedDataBundleShardV1<TShardData>>,
   options: {
     acquiredAt?: string;
+    trustOrigin?: "signed-verified" | "locally-verified";
+    evidence?: AcceptedDataBundleEvidenceIdentity | null;
   } = {},
 ): DataBundleSnapshot<TShardData> {
   const acquiredAt = z
@@ -1350,6 +1425,8 @@ export function createDataBundleSnapshot<TShardData>(
   const snapshot: DataBundleSnapshot<TShardData> = {
     bundleId: manifest.bundleId,
     manifest,
+    trustOrigin: options.trustOrigin ?? "signed-verified",
+    evidence: options.evidence ?? null,
     acquiredAt,
     shards: readonlyShards,
     getShard(shardId) {
@@ -1362,6 +1439,21 @@ export function createDataBundleSnapshot<TShardData>(
   };
   return Object.freeze(snapshot);
 }
+
+export type AcceptedDataBundleEvidenceIdentity =
+  | {
+      kind: "signed";
+      manifestSha256: string;
+      receiptIntegritySha256: string;
+      signingKeyId: string;
+    }
+  | {
+      kind: "local-receipt";
+      manifestSha256: string;
+      receiptIntegritySha256: string;
+      builderId: string;
+      builderSourceSha256: string;
+    };
 
 export type DataBundleRefreshMode =
   | "disabled"
@@ -1421,6 +1513,11 @@ export type DataBundleProviderStatus = {
     state: "ready" | "degraded";
     reason: string | null;
   };
+  providerMode?: "local-source" | "signed-channel" | "compiled";
+  dataTrust?:
+    | "locally-verified"
+    | "signed-verified"
+    | "compiled-unverified";
 };
 
 export type DataBundleSnapshotLease<TShardData = unknown> = {

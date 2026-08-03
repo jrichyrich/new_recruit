@@ -61,29 +61,34 @@ import {
 } from "../local/tessera/general-optimizer-store";
 import { getRuntimeProvenance } from "../local/runtime-provenance";
 import {
-  getConfiguredDataBundleProvider,
-} from "../lib/rosterpilot/data-operations";
-import {
+  getCurrentLocalDataBundleProvider,
   initializeLocalDataBundleProvider,
 } from "../local/data-bundles/configure";
 import { createRosterPilotMcpServer } from "./server";
 import {
+  approveRosterJourneyDataMigration,
   chooseRosterJourneyAction,
   continueRosterJourneySafely,
   getRosterJourney,
+  repairRosterJourneyTesseraWebCompatibility,
+  startRosterJourneyRepairedTesseraWebRun,
   startRosterJourney,
 } from "../local/workflow/journey";
 
 await initializeLocalDataBundleProvider();
 const server = createRosterPilotMcpServer({
-  dataBundleProvider:
-    getConfiguredDataBundleProvider() ?? undefined,
+  localDataUpdates: true,
+  dataBundleProviderResolver: getCurrentLocalDataBundleProvider,
   runtimeProvenance: getRuntimeProvenance,
   workflowJourneys: {
     start: startRosterJourney,
     status: getRosterJourney,
     continue: continueRosterJourneySafely,
     choose: chooseRosterJourneyAction,
+    repairWebCompatibility:
+      repairRosterJourneyTesseraWebCompatibility,
+    approveDataMigration: approveRosterJourneyDataMigration,
+    startRepairedWeb: startRosterJourneyRepairedTesseraWebRun,
   },
   artifactWriter: (artifact, outputPath, overwrite) =>
     writeExportArtifact(artifact, outputPath, { overwrite }),

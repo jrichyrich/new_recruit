@@ -1204,10 +1204,6 @@ export async function prepareDataBundleUpdate(
     "preflight-output",
   );
   const finalOutput = path.join(stagingParent, "final-output");
-  const baselineOutput = path.join(
-    stagingParent,
-    "baseline-output",
-  );
   try {
     const candidateRoot = sourceChanged ? stagingRoot : root;
     const officialSourceArtifact = options.officialSourceArtifact
@@ -1239,24 +1235,9 @@ export async function prepareDataBundleUpdate(
       );
     }
 
-    let previousManifest = options.previousManifest
+    const previousManifest = options.previousManifest
       ? resolvedPath(root, options.previousManifest)
       : null;
-    if (!previousManifest) {
-      const baseline = buildCandidate(root, baselineOutput, {
-        channel: options.channel,
-        publicBaseUrl: options.publicBaseUrl,
-        previousManifest: null,
-        officialReconciliationEvidence: null,
-        officialAuthorityUnavailableReason:
-          options.officialAuthorityUnavailableReason ??
-          "Internal comparison baseline; not a published authority root.",
-        createdAt,
-        environment,
-        run,
-      });
-      previousManifest = baseline.manifestPath;
-    }
 
     const preflightCandidate = buildCandidate(
       candidateRoot,
@@ -1283,8 +1264,9 @@ export async function prepareDataBundleUpdate(
         run,
       },
     );
-    const previousPublished =
-      readJson<PublishedBundleIdentity>(previousManifest);
+    const previousPublished = previousManifest
+      ? readJson<PublishedBundleIdentity>(previousManifest)
+      : null;
     const preflightPublished =
       readJson<PublishedBundleIdentity>(
         preflightCandidate.manifestPath,
@@ -1303,6 +1285,7 @@ export async function prepareDataBundleUpdate(
       environment,
     });
     if (
+      previousPublished &&
       sameEffectiveBundle(
         previousPublished,
         preflightPublished,
@@ -1400,12 +1383,14 @@ export async function prepareDataBundleUpdate(
             createdAt,
           })
         : null;
-      const partialBlockReason = partialRollForwardBlockReason(
-        readJson<PartialRollForwardIdentity>(previousManifest),
-        readJson<PartialRollForwardIdentity>(
-          finalCandidate.manifestPath,
-        ),
-      );
+      const partialBlockReason = previousManifest
+        ? partialRollForwardBlockReason(
+            readJson<PartialRollForwardIdentity>(previousManifest),
+            readJson<PartialRollForwardIdentity>(
+              finalCandidate.manifestPath,
+            ),
+          )
+        : "the genesis bundle has no previously verified faction shards to retain";
       if (partialBlockReason) {
         throw new Error(
           `Certification review is required and partial roll-forward is unsafe because ${partialBlockReason}. No signed channel was promoted.${
@@ -1439,7 +1424,7 @@ export async function prepareDataBundleUpdate(
           publicBaseUrl: options.publicBaseUrl,
           previousManifest,
           previousBundleDirectory:
-            path.dirname(previousManifest),
+            path.dirname(previousManifest!),
           retainFactions: failedFactionIds,
           quarantineReason,
           trustedKeys: path.join(
@@ -1479,8 +1464,9 @@ export async function prepareDataBundleUpdate(
     );
     return {
       changed:
+        !previousManifest ||
         finalCandidate.bundleId !==
-        readJson<{ bundleId: string }>(previousManifest).bundleId,
+          readJson<{ bundleId: string }>(previousManifest).bundleId,
       sourceChanged,
       previousReleaseId: source.releaseId,
       releaseId: next.releaseId,

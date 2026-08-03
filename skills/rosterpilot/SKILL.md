@@ -12,17 +12,26 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
 1. Call `get_data_status` and `get_data_update_status` before substantial
    roster work. Report the bundle currently in use separately from the latest
    verified bundle, latest upstream candidate, any quarantined scopes, the
-   `dataTrust` state, and persistent-versus-memory durability.
+   `providerMode`, `dataTrust` state, local update-job progress, service-
+   compatible snapshot, official reconciliation state, and persistent-versus-
+   memory durability.
    `check_data_freshness` is an optional live-source diagnostic; use it when
    the user asks whether Games Workshop, 40kdc-data, or BSData has moved. A
    live-source result never changes the bundle leased by an operation.
-2. When the user explicitly asks to apply the newest verified data immediately,
-   call `refresh_data_now`. A successful activation affects only future
+2. Local installations normally schedule their own daily source check; users
+   do not need a data command. When the user explicitly asks to check now,
+   call `refresh_data_now`. It queues a durable background job and returns
+   promptly; inspect `get_data_update_status.localUpdate` instead of holding a
+   tool call open through a build. `start_local_data_update` and
+   `get_local_data_update_job` are local-only troubleshooting controls; normal
+   compatibility recovery should queue and follow the job automatically. A
+   successful activation affects only future
    requests; the current operation and durable jobs retain their immutable
-   bundle snapshots. If the update provider is unavailable, continue from the
-   application release's compiled data and report that signed updates are not
-   configured. Call it a verified signed bootstrap only when status confirms
-   that its manifest, shards, and public key were verified.
+   bundle snapshots. If the updater is unavailable, continue from the
+   application release's compiled data and report the Doctor action returned
+   by the tool. A local user never needs signing keys, a trust registry, or a
+   central RosterPilot publication. `signed-channel` is for configured hosted
+   deployments and release certification only.
 3. Before modifying, validating, exporting, or simulating a stored V1/V2/V3
    roster, call `rebase_roster`. Use the returned roster for `current` or
    `compatible-rebased`. For `review-required`, show the exact changed units,
@@ -123,12 +132,42 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
     add it during resume or restart. If an earlier default job stopped on
     qualifying drift, start a new diagnostic job so it can reuse the
     provisional artifact without another New Recruit mutation.
+    When a default Tessera Web job stops because its New Recruit catalogue
+    revisions do not match the frozen bundle, do not leave the user with a
+    manual refresh recipe. If the roster belongs to a durable journey, call
+    `repair_tessera_web_compatibility` with the terminal predecessor job path.
+    The tool reads the exact game-system and faction-catalogue identity from
+    the retained receipt; revision inputs are optional cross-checks only. This
+    action selects a retained
+    compatible snapshot or automatically queues/follows the needed local
+    source build, rebases and revalidates the retained roster, and attempts to
+    reuse a hash-verified New Recruit artifact without creating another list.
+    It never starts Tessera.
+    - For `updating-local-data`, explain that the repair is running in the
+      background and the roster, receipt, and failed job are safely retained.
+      Follow the returned job with `get_local_data_update_job`, then call
+      `repair_tessera_web_compatibility` again after it reaches a terminal
+      state. Do this for the user; do not give them a manual data command.
+    - For `waiting-for-compatible-source`, explain that no exact retained or
+      historical BSData source was found within the bounded search. Show the
+      returned retry/Doctor action; do not ask a non-technical user to edit
+      data, keys, receipts, manifests, or run signing workflows.
+    - For `needs-data-review`, show the exact proposed roster/opponent changes.
+      Call `approve_roster_data_migration` only after a separate explicit user
+      approval identifying the approver and approval.
+    - For `ready-for-web`, explain that compatibility is repaired, then obtain
+      a fresh separate confirmation before calling
+      `start_repaired_tessera_web_run`. The successor must link to, not mutate,
+      the failed frozen job.
+    Never bypass signed-manifest or local-receipt verification, silently change
+    selections, delete a mutation receipt, retry New Recruit blindly, or make
+    an old durable job adopt a new bundle.
 15. For an explicit local-engine-versus-Tessera-Web parity request, use one
     paired exact workflow rather than comparing unrelated result files:
     - Start the website exact durable run first with the validated canonical
       player and opponent rosters, an explicit `simulationBackend="website"`,
       and one frozen profile policy. Wait for a terminal result and require a
-      complete report, exact-report receipt, signed-bundle compatibility
+      complete report, exact-report receipt, verified-bundle compatibility
       envelope, website deployment asset digest, imported-semantics digest,
       and complete scenario-state bindings.
     - Read that report's observed `scenarioContract`, call
@@ -212,8 +251,9 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   identities, selection paths, constraints, and export structure. Unresolved
   official/community conflicts fail closed at the affected scope; remind users
   to confirm event-specific rulings.
-- Treat the verified signed RosterPilot bundle and its separate semantic
-  roster, faction, mapping, and portfolio hashes as the canonical rules/data
+- Treat the accepted RosterPilot snapshot (`locally-verified` for ordinary
+  local workflows or `signed-verified` for hosted/release workflows) and its
+  separate semantic roster, faction, mapping, and portfolio hashes as the canonical rules/data
   snapshot. New Recruit's observed game-system and faction-catalogue IDs and
   revisions prove which catalogue produced an enriched `.rosz`; they are
   compatibility evidence, not a second canonical points source. Tessera Web's
@@ -224,6 +264,11 @@ Use RosterPilot as the source of truth for roster data, points, and legality. Do
   scoped compatibility issue, but it should block only the affected handoff or
   parity comparison until the identities are reconciled or an explicit
   diagnostic run is authorized.
+- A local unsigned receipt proves that the manifest, shards, exact upstream
+  identities, builder hash, validation plan, and certification evidence still
+  agree. It provides reproducibility and corruption detection, not publisher
+  authentication. Never tell a local user to generate a signing key or edit a
+  trust registry to complete an ordinary refresh or compatibility repair.
 - Treat Games Workshop faction packs as the Legends-classification authority.
   The points manual and BSData labels do not prove membership. Check the
   `get_data_status.legends` coverage and authority counts, and use

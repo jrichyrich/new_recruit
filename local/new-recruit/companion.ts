@@ -36,8 +36,14 @@ import {
 import {
   installedBrokerPath,
   newRecruitProfileDirectory,
+  rosterPilotSupportDirectory,
   stagedBrokerPath,
 } from "../agent/paths";
+import {
+  createServiceCompatibilityStore,
+  deriveNewRecruitServiceIdentity,
+  type RecordNewRecruitServiceObservationInput,
+} from "../data-bundles/service-compatibility";
 import {
   getRuntimeProvenance,
   runtimeRestartIssue,
@@ -50,6 +56,7 @@ import {
   newRecruitRoszMutationSubject,
   storeNewRecruitProvisionalArtifact,
   type NewRecruitMutationFinalization,
+  type NewRecruitMutationReceipt,
   type NewRecruitMutationTransaction,
 } from "./cache";
 import { safeNewRecruitUiIdentity } from "./ui-identity";
@@ -60,6 +67,51 @@ const projectRoot = path.resolve(
 );
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+export async function recordVerifiedServiceObservation(
+  draft: RosterDraftV1,
+  delivery: NewRecruitDelivery,
+  receipt: NewRecruitMutationReceipt,
+  dependencies: Pick<
+    NewRecruitCompanionDependencies,
+    "recordServiceObservation"
+  > = {},
+): Promise<void> {
+  const observed =
+    delivery.enrichedSummary?.observedNewRecruitCatalogue;
+  const expectedCatalogueId = getNewRecruitFactionSummary(
+    draft.factionId,
+  )?.catalogue.id;
+  const evidenceEvent = [...(delivery.connectorEvents ?? [])]
+    .reverse()
+    .find((event) => event.contentSha256 !== null);
+  if (!observed || !expectedCatalogueId || !evidenceEvent?.contentSha256) {
+    return;
+  }
+  const input: RecordNewRecruitServiceObservationInput = {
+    identity: deriveNewRecruitServiceIdentity({
+      factionId: draft.factionId,
+      expectedFactionCatalogueId: expectedCatalogueId,
+      observed,
+    }),
+    observedAt: evidenceEvent.recordedAt,
+    evidence: {
+      receiptKind: "new-recruit-mutation-receipt",
+      receiptSha256: receipt.integritySha256,
+      enrichedRoszSha256: evidenceEvent.contentSha256,
+    },
+  };
+  if (dependencies.recordServiceObservation) {
+    await dependencies.recordServiceObservation(input);
+    return;
+  }
+  await createServiceCompatibilityStore({
+    rootDirectory: path.join(
+      rosterPilotSupportDirectory(),
+      "data-bundles",
+    ),
+  }).recordNewRecruitObservation(input);
+}
 
 export type NewRecruitDeliveryOptions = WriteOptions & {
   downloadEnrichedRosz?: boolean;
@@ -91,6 +143,9 @@ export type NewRecruitCompanionDependencies = {
   browserAvailable?: boolean;
   agentDeliver?: typeof deliverThroughLocalAgent;
   provisionalArtifactStore?: typeof storeNewRecruitProvisionalArtifact;
+  recordServiceObservation?: (
+    input: RecordNewRecruitServiceObservationInput,
+  ) => Promise<unknown>;
   runtimeIssue?: typeof runtimeRestartIssue;
 };
 
@@ -1134,7 +1189,7 @@ export async function deliverRosterToNewRecruit(
     delivery.connectorEvents = [verifiedMutationEvent];
     if (mutationTransaction) {
       mutationFinalizationAttempted = true;
-      await mutationTransaction.finalizeDelivery({
+      const finalizedReceipt = await mutationTransaction.finalizeDelivery({
         ok: catalogueProvenanceViolation === null,
         data: delivery,
         violations: catalogueProvenanceViolation
@@ -1146,6 +1201,28 @@ export async function deliverRosterToNewRecruit(
           ...optionalArtifactWarnings,
         ],
       });
+      if (
+        delivery.enrichedSummary?.observedNewRecruitCatalogue &&
+        verifiedMutationEvent.contentSha256
+      ) {
+        try {
+          await recordVerifiedServiceObservation(
+            draft,
+            delivery,
+            finalizedReceipt,
+            dependencies,
+          );
+        } catch (error) {
+          catalogueProvenanceWarnings.push({
+            code: "SERVICE_COMPATIBILITY_OBSERVATION_WRITE_FAILED",
+            message:
+              `The verified New Recruit artifact was retained, but its catalogue observation could not be indexed for automatic compatibility selection: ${
+                error instanceof Error ? error.message : String(error)
+              }. The mutation receipt prevents duplicate imports and Doctor can repair the local index.`,
+            severity: "warn",
+          });
+        }
+      }
     }
     if (
       retainForwardDriftProvisional &&

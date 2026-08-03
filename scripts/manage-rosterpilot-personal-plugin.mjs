@@ -24,7 +24,10 @@ import {
   installRosterPilotSkill,
   rosterPilotSkillHash,
 } from "./manage-rosterpilot-skill.mjs";
-import { renderLocalMcpServerConfig } from "./setup.mjs";
+import {
+  renderLocalMcpServerConfig,
+  validateNodeVersion,
+} from "./setup.mjs";
 import {
   inspectRosterPilotPlugin,
   syncRosterPilotPlugin,
@@ -137,6 +140,17 @@ function pathsFor(options = {}) {
     ),
     codexExecutable:
       options.codexExecutable ?? "codex",
+    supportDirectory: path.resolve(
+      options.supportDirectory ??
+        options.environment?.ROSTERPILOT_SUPPORT_DIRECTORY ??
+        process.env.ROSTERPILOT_SUPPORT_DIRECTORY ??
+        path.join(
+          home,
+          "Library",
+          "Application Support",
+          "RosterPilot",
+        ),
+    ),
   };
 }
 
@@ -216,7 +230,11 @@ async function probeMcpDefault(server, timeoutMs = 15_000) {
       "RosterPilot MCP tools/list",
     );
     const names = listed.tools.map((tool) => tool.name);
-    for (const required of ["build_roster", "get_data_status"]) {
+    for (const required of [
+      "build_roster",
+      "get_data_status",
+      "repair_tessera_web_compatibility",
+    ]) {
       if (!names.includes(required)) {
         throw new Error(
           `RosterPilot MCP tools/list omitted required tool: ${required}`,
@@ -226,7 +244,11 @@ async function probeMcpDefault(server, timeoutMs = 15_000) {
     return {
       ok: true,
       toolCount: names.length,
-      requiredTools: ["build_roster", "get_data_status"],
+      requiredTools: [
+        "build_roster",
+        "get_data_status",
+        "repair_tessera_web_compatibility",
+      ],
     };
   } finally {
     await client.close().catch(async () => {
@@ -453,6 +475,210 @@ function runtimeMcpMatches(observed, expected) {
   );
 }
 
+function runReadinessCommandDefault(command, args) {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5_000,
+  });
+  return {
+    code: result.status ?? 1,
+    error: result.error?.message ?? null,
+    stderr: result.stderr ?? "",
+    stdout: result.stdout ?? "",
+  };
+}
+
+function commandReadiness(label, result) {
+  const detail = [result.error, result.stderr?.trim()]
+    .filter(Boolean)
+    .join(" ");
+  return result.code === 0 && !result.error
+    ? {
+        status: "ready",
+        detail: `${label} ${result.stdout.trim()}`.trim(),
+      }
+    : {
+        status: "needs-attention",
+        detail: `${label} is unavailable${detail ? `: ${detail}` : ""}`,
+      };
+}
+
+async function probeSupportStorageDefault(directory) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const probe = path.join(
+    directory,
+    `.rosterpilot-write-check-${process.pid}-${randomUUID()}`,
+  );
+  try {
+    await writeFile(probe, "RosterPilot writable-storage check.\n", {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+  } finally {
+    await rm(probe, { force: true });
+  }
+}
+
+async function checkUpstreamConnectivityDefault(options = {}) {
+  const fetcher = options.fetch ?? globalThis.fetch;
+  if (typeof fetcher !== "function") {
+    return {
+      status: "warning",
+      detail: "network checks are unavailable in this Node runtime",
+      sources: [],
+    };
+  }
+  const endpoints = [
+    {
+      name: "40kdc npm data",
+      url: "https://registry.npmjs.org/@alpaca-software%2F40kdc-data/latest",
+    },
+    {
+      name: "BSData",
+      url: "https://github.com/BSData/wh40k-11e",
+    },
+    {
+      name: "Games Workshop",
+      url: "https://www.warhammer-community.com/en-gb/downloads/warhammer-40000/",
+    },
+  ];
+  const timeoutMs = options.upstreamTimeoutMs ?? 3_000;
+  const sources = await Promise.all(
+    endpoints.map(async (endpoint) => {
+      try {
+        const response = await fetcher(endpoint.url, {
+          headers: {
+            accept: "text/html,application/json;q=0.9,*/*;q=0.8",
+            "user-agent": "RosterPilot-local-readiness/1",
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        return {
+          name: endpoint.name,
+          status: response.ok ? "ready" : "warning",
+          detail: `HTTP ${response.status}`,
+        };
+      } catch (error) {
+        return {
+          name: endpoint.name,
+          status: "warning",
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
+  const available = sources.filter(
+    (source) => source.status === "ready",
+  ).length;
+  return {
+    status: available === sources.length ? "ready" : "warning",
+    detail:
+      available === sources.length
+        ? "all allowlisted upstream sources are reachable"
+        : `${available} of ${sources.length} allowlisted upstream sources are reachable; existing roster data remains usable`,
+    sources,
+  };
+}
+
+async function dataUpdateReadiness(paths, options = {}) {
+  const updaterPresent = await exists(
+    path.join(
+      paths.projectRoot,
+      "local",
+      "data-bundles",
+      "local-source-updater.ts",
+    ),
+  );
+  const runReadinessCommand =
+    options.runReadinessCommand ?? runReadinessCommandDefault;
+  const nodeResult = await runReadinessCommand(
+    paths.nodeExecutable,
+    ["--version"],
+  );
+  const parsedNode = validateNodeVersion(nodeResult.stdout?.trim() ?? "");
+  const node =
+    nodeResult.code === 0 && !nodeResult.error && parsedNode.supported
+      ? { status: "ready", detail: parsedNode.message }
+      : {
+          status: "needs-attention",
+          detail:
+            nodeResult.code === 0 && !nodeResult.error
+              ? parsedNode.message
+              : commandReadiness("Node", nodeResult).detail,
+        };
+  const npm = commandReadiness(
+    "npm",
+    await runReadinessCommand(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["--version"],
+    ),
+  );
+  const git = commandReadiness(
+    "Git",
+    await runReadinessCommand("git", ["--version"]),
+  );
+  let supportStorage;
+  try {
+    if (options.probeSupportStorage) {
+      await options.probeSupportStorage(paths.supportDirectory, paths);
+    } else {
+      await probeSupportStorageDefault(paths.supportDirectory);
+    }
+    supportStorage = {
+      status: "ready",
+      detail: `${paths.supportDirectory} is writable`,
+    };
+  } catch (error) {
+    supportStorage = {
+      status: "needs-attention",
+      detail: `${paths.supportDirectory} is not writable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+  const upstreamConnectivity = options.checkUpstreamConnectivity
+    ? await options.checkUpstreamConnectivity(paths)
+    : await checkUpstreamConnectivityDefault(options);
+  const localPrerequisitesReady = [
+    node,
+    npm,
+    git,
+    supportStorage,
+  ].every((check) => check.status === "ready");
+  const status = !updaterPresent
+    ? "updater-missing"
+    : !localPrerequisitesReady
+      ? "needs-attention"
+      : upstreamConnectivity.status === "ready"
+        ? "ready"
+        : "offline-ready";
+  return {
+    status,
+    providerMode: "local-source",
+    signingRequired: false,
+    localRosterUsable: true,
+    updaterPresent,
+    checks: {
+      node,
+      npm,
+      git,
+      supportStorage,
+      upstreamConnectivity,
+    },
+    nextAction:
+      status === "ready"
+        ? "Start a new Codex task after installation. RosterPilot will check allowlisted upstream sources in the background when the daily check is due."
+        : status === "offline-ready"
+          ? "Roster building works from the current snapshot. Reconnect later and the daily background check will retry automatically."
+          : status === "updater-missing"
+            ? "Update this checkout and reinstall the plugin. Roster building remains usable with compiled data until the local updater is present."
+            : "Roster building remains usable with compiled data. Fix the checks marked needs-attention, then rerun npm run plugin:local:check.",
+  };
+}
+
 export async function inspectPersonalRosterPilotPlugin(options = {}) {
   const paths = pathsFor(options);
   const repository = await inspectRosterPilotPlugin(paths.projectRoot);
@@ -462,6 +688,7 @@ export async function inspectPersonalRosterPilotPlugin(options = {}) {
   });
   const marketplace = await marketplaceState(paths);
   const projectMcpShadow = await projectMcpShadowState(paths);
+  const updateReadiness = await dataUpdateReadiness(paths, options);
   const source = await sourceState(
     paths,
     repository.sourceHash,
@@ -546,6 +773,7 @@ export async function inspectPersonalRosterPilotPlugin(options = {}) {
     installed,
     runtimeMcp,
     runtimeProbe,
+    updateReadiness,
     issues,
   };
 }

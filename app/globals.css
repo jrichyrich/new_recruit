@@ -421,6 +421,44 @@ nav {
   color: var(--accent-soft);
 }
 
+.data-recovery-status {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(212, 119, 87, 0.3);
+  border-radius: 10px;
+  background: rgba(73, 40, 28, 0.18);
+}
+
+.data-recovery-status.ready {
+  border-color: rgba(141, 181, 108, 0.28);
+  background: rgba(50, 74, 38, 0.16);
+}
+
+.data-recovery-status > span {
+  color: #d47757;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.data-recovery-status.ready > span {
+  color: #8db56c;
+}
+
+.data-recovery-status strong {
+  display: block;
+  color: #d2d3cc;
+  font-size: 10px;
+}
+
+.data-recovery-status p {
+  margin: 4px 0 0;
+  color: #85877f;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .agent-card {
   margin-top: 31px;
   overflow: hidden;

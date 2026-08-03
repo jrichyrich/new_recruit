@@ -1010,6 +1010,12 @@ test("the first stable channel requires reviewed authority or an explicit degrad
       signer,
       officialAuthorityUnavailableReason: unavailableReason,
     });
+    assert.equal(published.channelPointer.schemaVersion, 2);
+    if (published.channelPointer.schemaVersion === 2) {
+      assert.equal(published.channelPointer.revision, 0);
+      assert.equal(published.channelPointer.previous, null);
+      assert.equal(published.channelPointer.transition.kind, "publish");
+    }
     const global = published.updateReport.candidateBundleId
       ? build.shards.find((shard) => shard.shardId === "global")?.data
       : null;

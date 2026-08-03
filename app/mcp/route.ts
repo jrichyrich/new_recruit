@@ -6,6 +6,7 @@ import {
   withRemoteCors,
 } from "@/lib/rosterpilot/remote";
 import {
+  getDataUpdateStatus,
   getConfiguredDataBundleProvider,
 } from "@/lib/rosterpilot";
 import { createRosterPilotMcpServer } from "@/mcp/server";
@@ -17,10 +18,13 @@ async function handle(request: Request): Promise<Response> {
   const denied = authorizeRemoteRequest(request);
   if (denied) return withRemoteCors(denied, request);
   await initializeHostedDataForRequest(request);
+  const dataUpdateStatus = await getDataUpdateStatus();
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
   });
   const server = createRosterPilotMcpServer({
+    localDataUpdates:
+      dataUpdateStatus.data?.providerMode === "local-source",
     dataBundleProvider:
       getConfiguredDataBundleProvider() ?? undefined,
   });

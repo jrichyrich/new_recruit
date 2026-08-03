@@ -36,6 +36,7 @@ export type CreateLocalRuntimeDataBundleProviderOptions = {
   refreshOnInitialize?: boolean;
   periodicRefresh?: boolean;
   bootstrap?: LocalDataBundleInstallInput;
+  providerMode?: "local-source" | "signed-channel";
 };
 
 function runtimeSnapshot(
@@ -58,6 +59,8 @@ function runtimeSnapshot(
   }
   return createDataBundleSnapshot(snapshot.manifest, shards, {
     acquiredAt: snapshot.acquiredAt,
+    trustOrigin: snapshot.trustOrigin,
+    evidence: snapshot.evidence,
   });
 }
 
@@ -82,13 +85,19 @@ class LocalRuntimeDataBundleProvider
 {
   readonly #store: LocalDataBundleStore;
   readonly #remote: RemoteRuntimeDataBundleProvider;
+  readonly #providerMode: "local-source" | "signed-channel";
+  #dataTrust: "locally-verified" | "signed-verified";
 
   constructor(
     store: LocalDataBundleStore,
     remote: RemoteRuntimeDataBundleProvider,
+    providerMode: "local-source" | "signed-channel",
+    dataTrust: "locally-verified" | "signed-verified",
   ) {
     this.#store = store;
     this.#remote = remote;
+    this.#providerMode = providerMode;
+    this.#dataTrust = dataTrust;
   }
 
   async acquireSnapshot(
@@ -142,6 +151,12 @@ class LocalRuntimeDataBundleProvider
       bundleId: entry.bundleId,
       reason: entry.reason,
     }));
+    const activeStoredBundle = local.bundles.find(
+      (entry) => entry.bundleId === local.activeBundleId,
+    );
+    if (activeStoredBundle?.trustOrigin) {
+      this.#dataTrust = activeStoredBundle.trustOrigin;
+    }
     return {
       ...runtime,
       state:
@@ -160,6 +175,8 @@ class LocalRuntimeDataBundleProvider
         ),
       ],
       rollbackHold: local.rollbackHold,
+      providerMode: this.#providerMode,
+      dataTrust: this.#dataTrust,
     };
   }
 
@@ -339,7 +356,12 @@ export async function createLocalRuntimeDataBundleProvider(
     refresh: options.refreshOnInitialize ?? true,
   });
   if (options.periodicRefresh) remote.startPeriodicRefresh();
-  const provider = new LocalRuntimeDataBundleProvider(store, remote);
+  const provider = new LocalRuntimeDataBundleProvider(
+    store,
+    remote,
+    options.providerMode ?? "local-source",
+    installed.trustOrigin,
+  );
   return Object.assign(provider, {
     getStore: () => store,
   });

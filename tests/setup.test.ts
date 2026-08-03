@@ -43,11 +43,16 @@ function setupHarness(options: {
   freshnessState?: string;
   newRecruitAgentAvailable?: boolean;
   newRecruitAvailable?: boolean;
+  npmFailure?: boolean;
+  officialReconciliation?: "verified" | "pending" | "unavailable";
   personalPluginReport?: Record<string, unknown>;
   platform?: string;
   runtimeDataProviderAvailable?: boolean;
+  serviceCompatibilityMissing?: boolean;
+  supportStorageWritable?: boolean;
   tesseraCredentialsConfigured?: boolean;
   trackedChanges?: string;
+  upstreamNewer?: boolean;
 } = {}) {
   const projectRoot = "/tmp/Roster Pilot \"fixture\"";
   const configPath = path.join(projectRoot, ".codex", "config.toml");
@@ -73,6 +78,11 @@ function setupHarness(options: {
     calls.push({ command, args, options: commandOptions });
     if (command === "git" && args[0] === "--version") {
       return { code: 0, stdout: "git version 2.50.0\n", stderr: "" };
+    }
+    if ((command === "npm" || command === "npm.cmd") && args[0] === "--version") {
+      return options.npmFailure
+        ? { code: 1, stdout: "", stderr: "npm unavailable\n" }
+        : { code: 0, stdout: "10.9.2\n", stderr: "" };
     }
     if (command === "git" && args[0] === "status") {
       return {
@@ -184,10 +194,56 @@ function setupHarness(options: {
               sources: { releaseId: "2026-07-27.1" },
               dataBundle: {
                 providerConfigured: providerAvailable,
+                providerMode: "local-source",
                 state: providerAvailable ? "ready" : "offline",
                 activeBundleId: providerAvailable
                   ? "d".repeat(64)
                   : "c".repeat(64),
+                dataTrust: providerAvailable
+                  ? "locally-verified"
+                  : "compiled-unverified",
+                localUpdate: providerAvailable
+                  ? {
+                      jobId: "local-update-fixture",
+                      status: "activated",
+                      progress: "Local snapshot activated.",
+                      startedAt: "2026-08-02T00:00:01.000Z",
+                      updatedAt: "2026-08-02T00:00:02.000Z",
+                      completedAt: "2026-08-02T00:00:02.000Z",
+                      retryAt: null,
+                    }
+                  : null,
+                sourceStatus: {
+                  latestUpstream: {
+                    rulesVersion: options.upstreamNewer ? "1.2.2" : "1.2.1",
+                    newRecruitCommit: "b".repeat(40),
+                    officialContentSha256: "e".repeat(64),
+                  },
+                  latestLocallyCertified: providerAvailable
+                    ? {
+                        bundleId: "d".repeat(64),
+                        rulesVersion: "1.2.1",
+                        newRecruitCommit: "b".repeat(40),
+                        certifiedAt: "2026-08-02T00:00:02.000Z",
+                      }
+                    : null,
+                  officialReconciliation:
+                    options.officialReconciliation ?? "verified",
+                },
+                serviceCompatibility: options.serviceCompatibilityMissing
+                  ? [
+                      {
+                        service: "tessera-web",
+                        factionId: "adeptus-custodes",
+                        observedAt: "2026-08-02T00:00:02.000Z",
+                        gameSystemId: "sys-fixture",
+                        gameSystemRevision: 8,
+                        catalogueId: "cat-fixture",
+                        catalogueRevision: 7,
+                        compatibleBundleId: null,
+                      },
+                    ]
+                  : [],
               },
             },
           }),
@@ -221,8 +277,13 @@ function setupHarness(options: {
               ? {
                   ok: true,
                   data: {
-                    status: "activated",
-                    bundleId: "d".repeat(64),
+                    status: {
+                      providerMode: "local-source",
+                      state: "ready",
+                      activeBundleId: "d".repeat(64),
+                    },
+                    activatedBundleId: null,
+                    localUpdateJobId: "local-update-fixture",
                   },
                   violations: [],
                   warnings: [],
@@ -234,7 +295,7 @@ function setupHarness(options: {
                     {
                       code: "DATA_BUNDLE_PROVIDER_UNAVAILABLE",
                       message:
-                        "Signed runtime data updates are unavailable.",
+                        "The local data updater is unavailable.",
                       severity: "error",
                     },
                   ],
@@ -263,6 +324,11 @@ function setupHarness(options: {
         exists: (filename: string) => files.has(filename),
         isExecutable: () => true,
         mkdir: () => undefined,
+        probeWritableDirectory: () => {
+          if (options.supportStorageWritable === false) {
+            throw new Error("permission denied");
+          }
+        },
         read: (filename: string) => files.get(filename) ?? "",
         write: (filename: string, content: string) => {
           files.set(filename, content);
@@ -275,6 +341,7 @@ function setupHarness(options: {
       projectRoot,
       run,
       stderr: stderr.stream,
+      supportDirectory: path.join(projectRoot, "Application Support", "RosterPilot"),
       stdout: stdout.stream,
     },
     files,
@@ -393,17 +460,29 @@ test("MCP renderers use the active executable and safely quote checkout paths", 
     JSON.stringify(claude.mcpServers.rosterpilot),
     /file:\/\/\/tmp\/Roster%20%22Pilot%22/,
   );
-  assert.match(codex, /ROSTERPILOT_DATA_CHANNEL_URL/);
-  assert.match(codex, /data-bundle-trusted-keys\.json/);
-  assert.doesNotMatch(codex, /bootstrap-data-bundle/);
   assert.match(
-    claude.mcpServers.rosterpilot.env.ROSTERPILOT_DATA_CHANNEL_URL,
-    /data-bundles\/channels\/stable\.json$/,
+    codex,
+    /ROSTERPILOT_DATA_PROVIDER_MODE = "local-source"/,
   );
-  assert.match(
+  assert.doesNotMatch(codex, /ROSTERPILOT_DATA_CHANNEL_URL/);
+  assert.doesNotMatch(
+    codex,
+    /ROSTERPILOT_DATA_TRUSTED_KEYS_FILE/,
+  );
+  assert.doesNotMatch(codex, /bootstrap-data-bundle/);
+  assert.equal(
+    claude.mcpServers.rosterpilot.env
+      .ROSTERPILOT_DATA_PROVIDER_MODE,
+    "local-source",
+  );
+  assert.equal(
+    claude.mcpServers.rosterpilot.env.ROSTERPILOT_DATA_CHANNEL_URL,
+    undefined,
+  );
+  assert.equal(
     claude.mcpServers.rosterpilot.env
       .ROSTERPILOT_DATA_TRUSTED_KEYS_FILE,
-    /data-bundle-trusted-keys\.json$/,
+    undefined,
   );
   assert.equal(
     claude.mcpServers.rosterpilot.env
@@ -435,6 +514,39 @@ test("MCP environment includes only real or explicitly configured bootstrap data
       pathExists: () => false,
     }).ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY,
     "/operator/missing-bootstrap",
+  );
+  assert.deepEqual(
+    localDataBundleEnvironment(projectRoot, {
+      environment: {},
+      pathExists: () => false,
+    }),
+    { ROSTERPILOT_DATA_PROVIDER_MODE: "local-source" },
+  );
+});
+
+test("signed-channel MCP settings remain an explicit hosted operator choice", () => {
+  assert.deepEqual(
+    localDataBundleEnvironment("/tmp/RosterPilot", {
+      environment: {
+        ROSTERPILOT_DATA_PROVIDER_MODE: "signed-channel",
+        ROSTERPILOT_DATA_CHANNEL_URL:
+          "https://operator.example/data/stable.json",
+        ROSTERPILOT_DATA_TRUSTED_KEYS_FILE:
+          "/operator/trusted-keys.json",
+        ROSTERPILOT_SUPPORT_DIRECTORY:
+          "/operator/rosterpilot-support",
+      },
+      pathExists: () => false,
+    }),
+    {
+      ROSTERPILOT_DATA_PROVIDER_MODE: "signed-channel",
+      ROSTERPILOT_DATA_CHANNEL_URL:
+        "https://operator.example/data/stable.json",
+      ROSTERPILOT_DATA_TRUSTED_KEYS_FILE:
+        "/operator/trusted-keys.json",
+      ROSTERPILOT_SUPPORT_DIRECTORY:
+        "/operator/rosterpilot-support",
+    },
   );
 });
 
@@ -527,9 +639,21 @@ test("core setup installs locked dependencies and validates committed data", asy
   );
   assert.match(harness.stdout.chunks.join(""), /release 2026-07-27\.1/);
   assert.equal(
+    result.results.find((entry: { name: string }) => entry.name === "npm")
+      ?.status,
+    "ready",
+  );
+  assert.equal(
     result.results.find(
       (entry: { name: string }) =>
-        entry.name === "Signed data updates",
+        entry.name === "Application support storage",
+    )?.status,
+    "ready",
+  );
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "Active roster snapshot",
     )?.status,
     "ready",
   );
@@ -562,9 +686,90 @@ test("doctor verifies dependencies without installing or mutating data", async (
   assert.equal(
     result.results.find(
       (entry: { name: string }) =>
-        entry.name === "Signed data updates",
+        entry.name === "Active roster snapshot",
     )?.status,
     "ready",
+  );
+  for (const name of [
+    "Upstream data",
+    "Service compatibility",
+    "Official reconciliation",
+  ]) {
+    assert.ok(
+      result.results.some(
+        (entry: { name: string }) => entry.name === name,
+      ),
+    );
+  }
+});
+
+test("Doctor checks npm and writable snapshot storage", async () => {
+  const harness = setupHarness({
+    npmFailure: true,
+    supportStorageWritable: false,
+  });
+  const result = await runSetup(
+    {
+      doctor: true,
+      help: false,
+      nonInteractive: true,
+      profile: "core",
+      refresh: "skip",
+    },
+    harness.dependencies,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(
+    result.results.find((entry: { name: string }) => entry.name === "npm")
+      ?.status,
+    "error",
+  );
+  assert.equal(
+    result.results.find(
+      (entry: { name: string }) =>
+        entry.name === "Application support storage",
+    )?.status,
+    "error",
+  );
+  assert.match(
+    harness.stdout.chunks.join(""),
+    /Roster building can still use the compiled snapshot/,
+  );
+});
+
+test("setup separates upstream, service, and official data state", async () => {
+  const harness = setupHarness({
+    officialReconciliation: "pending",
+    serviceCompatibilityMissing: true,
+    upstreamNewer: true,
+  });
+  const result = await runSetup(
+    {
+      doctor: false,
+      help: false,
+      nonInteractive: true,
+      profile: "core",
+      refresh: "skip",
+    },
+    harness.dependencies,
+  );
+
+  for (const name of [
+    "Upstream data",
+    "Service compatibility",
+    "Official reconciliation",
+  ]) {
+    assert.equal(
+      result.results.find(
+        (entry: { name: string }) => entry.name === name,
+      )?.status,
+      "warning",
+    );
+  }
+  assert.match(
+    harness.stdout.chunks.join(""),
+    /rosters and mutation receipts are preserved/,
   );
 });
 
@@ -601,7 +806,7 @@ test("doctor keeps local diagnostics usable when remote freshness is offline", a
   assert.deepEqual(
     result.results.find(
       (entry: { name: string }) =>
-        entry.name === "Remote data freshness",
+        entry.name === "Upstream connectivity",
     )?.status,
     "warning",
   );
@@ -773,9 +978,9 @@ test("MCP setup creates missing local config and preserves an existing file", as
   assert.match(preserved.stdout.chunks.join(""), /was not overwritten/);
 });
 
-test("explicit refresh activates runtime data without requiring a clean tracked worktree", async () => {
+test("explicit refresh queues a background job without claiming activation", async () => {
   const clean = setupHarness({ freshnessState: "update-available" });
-  await runSetup(
+  const cleanResult = await runSetup(
     {
       doctor: false,
       help: false,
@@ -797,6 +1002,24 @@ test("explicit refresh activates runtime data without requiring a clean tracked 
       call.args.includes("data:prepare-update"),
     ),
     false,
+  );
+  assert.equal(
+    cleanResult.results.find(
+      (entry: { name: string }) => entry.name === "Live freshness",
+    )?.status,
+    "warning",
+  );
+  assert.match(
+    clean.stdout.chunks.join(""),
+    /background update job local-update-fixture was queued/,
+  );
+  assert.match(
+    clean.stdout.chunks.join(""),
+    /current snapshot dddddddddddd… remains active/,
+  );
+  assert.doesNotMatch(
+    clean.stdout.chunks.join(""),
+    /newest verified runtime snapshot is ready/,
   );
 
   const dirty = setupHarness({
@@ -865,13 +1088,13 @@ test("setup keeps pinned compiled data when the runtime provider is unavailable"
   assert.equal(
     result.results.find(
       (entry: { name: string }) =>
-        entry.name === "Signed data updates",
+        entry.name === "Active roster snapshot",
     )?.status,
     "warning",
   );
   assert.match(
     harness.stdout.chunks.join(""),
-    /continuing from the pinned compiled offline data/,
+    /local data updater is unavailable; continuing from pinned compiled data/,
   );
 });
 

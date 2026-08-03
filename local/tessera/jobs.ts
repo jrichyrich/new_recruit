@@ -262,6 +262,8 @@ export type TesseraRunJob = {
   jobKind: "rosterpilot-tessera-run";
   runId: string;
   runKind: TesseraRunKind;
+  /** Immutable lineage to a terminal job blocked on older data. */
+  supersedesRunId?: string | null;
   status: TesseraRunStatus;
   createdAt: string;
   startedAt: string | null;
@@ -313,6 +315,7 @@ export type StartTesseraRunOptions = {
   rootDir?: string;
   allowOutsideRoot?: boolean;
   launch?: boolean;
+  supersedesRunId?: string | null;
 };
 
 function pathInside(root: string, candidate: string): boolean {
@@ -4156,6 +4159,15 @@ export async function startTesseraRun(
   request: TesseraRunRequest,
   options: StartTesseraRunOptions = {},
 ): Promise<TesseraRunJob> {
+  if (
+    options.supersedesRunId != null &&
+    !/^[0-9a-f-]{36}$/i.test(options.supersedesRunId)
+  ) {
+    throw jobError(
+      "TESSERA_SUPERSEDED_RUN_ID_INVALID",
+      "A superseded Tessera run ID must be an exact UUID.",
+    );
+  }
   if (requestPreparedReuse(request)) {
     throw jobError(
       "TESSERA_JOB_INPUT_INVALID",
@@ -4235,6 +4247,7 @@ export async function startTesseraRun(
       jobKind: "rosterpilot-tessera-run",
       runId,
       runKind: request.kind,
+      supersedesRunId: options.supersedesRunId ?? null,
       status: "queued",
       createdAt: now,
       startedAt: null,

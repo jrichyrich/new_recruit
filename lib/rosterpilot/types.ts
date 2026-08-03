@@ -335,6 +335,12 @@ export type RosterDataChangedScope = {
 export type RosterDataRebaseResult = {
   status: "current" | "compatible-rebased" | "review-required";
   roster: RosterDraftV3;
+  /**
+   * Target-bundle identity projected onto the unchanged selections. This is
+   * evidence for a specialized mapping-only migration; general callers must
+   * still honor review-required and must not apply it automatically.
+   */
+  candidateRoster: RosterDraftV3 | null;
   fromBundleId: string;
   toBundleId: string;
   provenanceChanged: boolean;
@@ -829,13 +835,24 @@ export type TesseraProviderCompatibilityEnvelope = {
       schemaVersion: 1;
       manifest: {
         bundleId: string;
-        signingKeyId: string;
+        evidenceKind: "signed" | "local-receipt";
+        evidenceId: string;
+        signingKeyId: string | null;
+        receiptIntegritySha256: string;
+        builderSourceSha256: string | null;
         manifestSha256: string;
         semanticIdentitySha256: string;
       } | null;
       update: {
         providerConfigured: boolean;
-        dataTrust: "signed-verified" | "compiled-unverified";
+        dataTrust:
+          | "locally-verified"
+          | "signed-verified"
+          | "compiled-unverified";
+        providerMode:
+          | "local-source"
+          | "signed-channel"
+          | "compiled";
         state:
           | "ready"
           | "checking"
@@ -2302,6 +2319,7 @@ export type LiveDataFreshness = {
 
 export type DataUpdateStatus = {
   providerConfigured: boolean;
+  providerMode: "local-source" | "signed-channel" | "compiled";
   state:
     | "ready"
     | "checking"
@@ -2346,7 +2364,68 @@ export type DataUpdateStatus = {
     engagedAt: string;
     release: "force-refresh";
   } | null;
-  dataTrust?: "signed-verified" | "compiled-unverified";
+  dataTrust?:
+    | "locally-verified"
+    | "signed-verified"
+    | "compiled-unverified";
+  localUpdate?: {
+    jobId: string;
+    status:
+      | "queued"
+      | "checking"
+      | "fetching"
+      | "building"
+      | "certifying"
+      | "installed"
+      | "activated"
+      | "quarantined"
+      | "failed";
+    progress: string;
+    startedAt: string | null;
+    updatedAt: string;
+    completedAt: string | null;
+    retryAt: string | null;
+    trigger?:
+      | "startup"
+      | "scheduled"
+      | "manual"
+      | "compatibility";
+    forced?: boolean;
+    bsDataCommitOverride?: string | null;
+    quarantinedScopes?: string[];
+    error?: {
+      code: string;
+      message: string;
+      retryable: boolean;
+    } | null;
+  } | null;
+  sourceStatus?: {
+    latestUpstream: {
+      rulesVersion: string | null;
+      newRecruitCommit: string | null;
+      officialContentSha256: string | null;
+    };
+    latestLocallyCertified: {
+      bundleId: string;
+      rulesVersion: string;
+      newRecruitCommit: string;
+      certifiedAt: string;
+    } | null;
+    officialReconciliation:
+      | "verified"
+      | "pending"
+      | "unavailable";
+  };
+  serviceCompatibility?: Array<{
+    service: "new-recruit" | "tessera-web";
+    factionId: string;
+    observedAt: string;
+    gameSystemId: string;
+    gameSystemRevision: number;
+    catalogueId: string;
+    catalogueRevision: number;
+    compatibleBundleId: string | null;
+  }>;
   durability?: {
     mode: "memory" | "persistent";
     state: "ready" | "degraded";
@@ -2358,4 +2437,5 @@ export type DataRefreshResult = {
   status: DataUpdateStatus;
   activatedBundleId: string | null;
   classification: DataBundleDeltaResult | null;
+  localUpdateJobId?: string | null;
 };

@@ -12,6 +12,7 @@ import {
   explainRoster,
   exportRoster,
   getNewRecruitCapability,
+  getLocalDataUpdateJob,
   getDataStatus,
   getDataUpdateStatus,
   GeneralThreatArchetypeIds,
@@ -24,6 +25,7 @@ import {
   rollbackDataBundle,
   searchFactions,
   searchUnits,
+  startLocalDataUpdate,
   validateRoster,
   withDataBundleSnapshotLease,
   type ExportFormat,
@@ -91,9 +93,12 @@ import {
   type TesseraRunRequest,
 } from "../local/tessera/jobs";
 import {
+  approveRosterJourneyDataMigration,
   chooseRosterJourneyAction,
   continueRosterJourneySafely,
   getRosterJourney,
+  repairRosterJourneyTesseraWebCompatibility,
+  startRosterJourneyRepairedTesseraWebRun,
   startRosterJourney,
 } from "../local/workflow/journey";
 import { ProfilePolicySchema } from "../local/tessera/profile-policy";
@@ -776,12 +781,17 @@ Usage:
   rosterpilot freshness
   rosterpilot data update-status
   rosterpilot data refresh [--force]
+  rosterpilot data start-local-update [--force]
+  rosterpilot data update-job --job <job-id>
   rosterpilot data rollback --bundle <bundle-id>
   rosterpilot rebase --file roster.json [--out rebased.json]
   rosterpilot conflicts [--faction adeptus-custodes] [--blocking true]
   rosterpilot search [query] [--faction adeptus-custodes] [--tags mobility,objective] [--include-legends]
   rosterpilot compare <faction> <faction>
   rosterpilot workflow --prompt "Build a 1,000 point Custodes army and upload it to New Recruit" [--intent build|prepare-new-recruit|deliver-new-recruit|optimize] [--coaching none|concise|full] [--optimizer-mode guided|recommend-only] [--simulation-backend auto|local-engine|website] [--opponent-faction aeldari | --opponent-roster enemy.json] [--out roster.json] [--portfolio-out general-threat-portfolio.json] [--out-dir exports/new-recruit] [--tessera-out-dir exports/tessera]
+  rosterpilot workflow repair-web --journey <id> [--new-recruit-game-revision <n> --new-recruit-catalogue-revision <n>] [--predecessor-job tessera-run.json]
+  rosterpilot workflow approve-data-migration --journey <id> --approval-id <id> --approved-by <name>
+  rosterpilot workflow start-repaired-web --journey <id> --confirm-external-preparation [--tessera-out-dir exports/tessera/runs]
   rosterpilot build --prompt "Build a fast 1,000 point Aeldari army" [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--out roster.json]
   rosterpilot modify --file roster.json --operation '{"type":"remove","selectionId":"..."}' [--out next.json]
   rosterpilot validate --file roster.json
@@ -1001,6 +1011,20 @@ async function main(): Promise<void> {
     const result =
       action === "update-status" || action === "status"
         ? await getDataUpdateStatus()
+        : action === "start-local-update"
+          ? await startLocalDataUpdate({
+              force:
+                args.force === undefined
+                  ? true
+                  : flag(args, "force"),
+            })
+          : action === "update-job"
+            ? await getLocalDataUpdateJob(
+                value(args, "job") ??
+                  value(args, "job-id") ??
+                  positionals[1] ??
+                  "",
+              )
         : action === "refresh"
           ? await refreshDataNow({
               force:
@@ -2821,6 +2845,9 @@ async function main(): Promise<void> {
       "continue",
       "choose",
       "doctor",
+      "repair-web",
+      "approve-data-migration",
+      "start-repaired-web",
     ].includes(positionals[0] ?? "")
       ? positionals[0]
       : null;
@@ -2828,7 +2855,10 @@ async function main(): Promise<void> {
       workflowAction === "status" ||
       workflowAction === "doctor" ||
       workflowAction === "continue" ||
-      workflowAction === "choose"
+      workflowAction === "choose" ||
+      workflowAction === "repair-web" ||
+      workflowAction === "approve-data-migration" ||
+      workflowAction === "start-repaired-web"
     ) {
       const journeyId = value(args, "journey") ?? positionals[1];
       if (!journeyId) {
@@ -2868,6 +2898,98 @@ async function main(): Promise<void> {
           await continueRosterJourneySafely(
             journeyId,
             expectedRevision,
+          ),
+        );
+        return;
+      }
+      if (workflowAction === "repair-web") {
+        const gameRevisionValue = value(
+          args,
+          "new-recruit-game-revision",
+        );
+        const catalogueRevisionValue = value(
+          args,
+          "new-recruit-catalogue-revision",
+        );
+        if (
+          (gameRevisionValue === undefined) !==
+          (catalogueRevisionValue === undefined)
+        ) {
+          throw new Error(
+            "Optional New Recruit revision hints must be supplied together.",
+          );
+        }
+        const gameSystemRevision =
+          gameRevisionValue === undefined
+            ? null
+            : Number(gameRevisionValue);
+        const catalogueRevision =
+          catalogueRevisionValue === undefined
+            ? null
+            : Number(catalogueRevisionValue);
+        if (
+          (gameSystemRevision !== null &&
+            (!Number.isInteger(gameSystemRevision) ||
+              gameSystemRevision < 0)) ||
+          (catalogueRevision !== null &&
+            (!Number.isInteger(catalogueRevision) ||
+              catalogueRevision < 0))
+        ) {
+          throw new Error(
+            "New Recruit revision hints must be non-negative integers.",
+          );
+        }
+        print(
+          await repairRosterJourneyTesseraWebCompatibility(
+            journeyId,
+            expectedRevision,
+            {
+              ...(gameSystemRevision !== null &&
+              catalogueRevision !== null
+                ? {
+                    observedNewRecruitIdentity: {
+                      gameSystemRevision,
+                      catalogueRevision,
+                    },
+                  }
+                : {}),
+              predecessorJobPath: value(args, "predecessor-job"),
+            },
+          ),
+        );
+        return;
+      }
+      if (workflowAction === "approve-data-migration") {
+        const approvalId = value(args, "approval-id");
+        const approvedBy = value(args, "approved-by");
+        if (!approvalId || !approvedBy) {
+          throw new Error(
+            "workflow approve-data-migration requires --approval-id and --approved-by.",
+          );
+        }
+        print(
+          await approveRosterJourneyDataMigration(
+            journeyId,
+            expectedRevision,
+            { approvalId, approvedBy },
+          ),
+        );
+        return;
+      }
+      if (workflowAction === "start-repaired-web") {
+        if (!flag(args, "confirm-external-preparation")) {
+          throw new Error(
+            "workflow start-repaired-web requires --confirm-external-preparation.",
+          );
+        }
+        print(
+          await startRosterJourneyRepairedTesseraWebRun(
+            journeyId,
+            expectedRevision,
+            {
+              confirmExternalPreparation: true,
+              outputDirectory: value(args, "tessera-out-dir"),
+            },
           ),
         );
         return;

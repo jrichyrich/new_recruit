@@ -1,6 +1,12 @@
 name: Roster data freshness
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - data/data-bundle-trusted-keys.json
+      - data/bootstrap-data-bundle/**
+      - public/data-bundles/**
   schedule:
     - cron: "17 11 * * *"
   workflow_dispatch:
@@ -38,7 +44,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ROSTERPILOT_DATA_SIGNING_KEY_ID: ${{ vars.ROSTERPILOT_DATA_SIGNING_KEY_ID }}
-      ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK: ${{ secrets.ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK }}
       ROSTERPILOT_DATA_BUNDLE_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/data-bundles
     steps:
       - uses: actions/checkout@v4
@@ -75,16 +80,18 @@ jobs:
           echo "root=$channel_root" >> "$GITHUB_OUTPUT"
           echo "previous_manifest=$previous_manifest" >> "$GITHUB_OUTPUT"
 
-      - name: Build, classify, and certify the candidate bundle
+      - name: Verify publisher, build, certify, and sign the candidate bundle
         shell: bash
         env:
+          ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK: ${{ secrets.ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK }}
           OFFICIAL_EVIDENCE_INPUT: ${{ inputs.official_reconciliation_evidence }}
           OFFICIAL_SOURCE_INPUT: ${{ inputs.official_source_artifact }}
           OFFICIAL_LEGEND_SOURCES_INPUT: ${{ inputs.official_legend_source_artifacts }}
           OFFICIAL_RECEIPT_INPUT: ${{ inputs.official_extraction_receipt }}
-          OFFICIAL_UNAVAILABLE_REASON: ${{ inputs.official_authority_unavailable_reason }}
+          OFFICIAL_UNAVAILABLE_REASON: ${{ inputs.official_authority_unavailable_reason || vars.ROSTERPILOT_OFFICIAL_AUTHORITY_UNAVAILABLE_REASON }}
         run: |
           set -euo pipefail
+          npm run data:publisher:check
           args=(
             --out-dir "${{ steps.channel.outputs.root }}"
             --channel stable

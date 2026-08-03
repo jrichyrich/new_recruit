@@ -77,7 +77,10 @@ export type HostedDataBundleProviderInitializationOptions = {
 
 export type HostedDataBundleProviderInitializationResult = {
   configured: boolean;
-  source: "signed-verified" | "compiled-unverified";
+  source:
+    | "locally-verified"
+    | "signed-verified"
+    | "compiled-unverified";
   reason: string | null;
   activeBundleId: string | null;
   refreshScheduled: boolean;

@@ -7,6 +7,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   buildRuntimeDataBundle,
   buildRoster,
+  configureDataBundleProvider,
+  configureLocalDataUpdateControl,
+  getLocalDataUpdateJob,
   getDataUpdateStatus,
   rebaseRoster,
   rebaseRosterData,
@@ -17,6 +20,7 @@ import {
   rollbackDataBundle,
   runtimeRosterCompatibilitySnapshot,
   signRuntimeDataBundle,
+  startLocalDataUpdate,
   verifyRuntimeDataBundle,
   type DataBundleProvider,
   type DataBundleProviderStatus,
@@ -32,6 +36,8 @@ function status(
 ): DataBundleProviderStatus {
   return {
     state: "ready",
+    providerMode: "local-source",
+    dataTrust: "locally-verified",
     activeBundleId,
     latestVerifiedBundleId: activeBundleId,
     latestUpstreamBundleId: candidateBundleId,
@@ -116,6 +122,8 @@ test("data operations preserve provider status, refresh classification, and roll
   const fixture = providerFixture();
   const updateStatus = await getDataUpdateStatus(fixture.provider);
   assert.equal(updateStatus.ok, true);
+  assert.equal(updateStatus.data?.providerMode, "local-source");
+  assert.equal(updateStatus.data?.dataTrust, "locally-verified");
   assert.equal(updateStatus.data?.activeBundleId, activeBundleId);
   assert.equal(
     updateStatus.data?.latestUpstreamBundleId,
@@ -182,6 +190,7 @@ test("data operations fail closed without disabling the bootstrap bundle", async
   assert.equal(updateStatus.ok, true);
   assert.equal(updateStatus.data?.state, "offline");
   assert.equal(updateStatus.data?.providerConfigured, false);
+  assert.equal(updateStatus.data?.providerMode, "compiled");
   assert.match(updateStatus.data?.activeBundleId ?? "", /^[a-f0-9]{64}$/);
   assert.equal(updateStatus.data?.latestVerifiedBundleId, null);
   assert.equal(updateStatus.data?.dataTrust, "compiled-unverified");
@@ -200,6 +209,88 @@ test("data operations fail closed without disabling the bootstrap bundle", async
     ),
     false,
   );
+});
+
+test("local refresh queues a durable job while compiled fallback remains usable", async () => {
+  const enqueueCalls: Array<{ force: boolean }> = [];
+  const localJobId = "11111111-1111-4111-8111-111111111111";
+  const localJob = {
+    jobId: localJobId,
+    status: "queued" as const,
+    progress: "Waiting for the local updater.",
+    startedAt: null,
+    updatedAt: "2026-08-02T03:00:00.000Z",
+    completedAt: null,
+    retryAt: null,
+  };
+  configureDataBundleProvider(null);
+  configureLocalDataUpdateControl({
+    async getStatus() {
+      return {
+        localUpdate: localJob,
+        sourceStatus: {
+          latestUpstream: {
+            rulesVersion: "2026.08.02",
+            newRecruitCommit: "a".repeat(40),
+            officialContentSha256: "b".repeat(64),
+          },
+          latestLocallyCertified: null,
+          officialReconciliation: "verified",
+        },
+      };
+    },
+    async getJob(jobId) {
+      return jobId === localJobId ? localJob : null;
+    },
+    async enqueue(options) {
+      enqueueCalls.push(options);
+      return { jobId: localJobId, queued: true };
+    },
+  });
+  try {
+    const before = await getDataUpdateStatus(null);
+    assert.equal(before.ok, true);
+    assert.equal(before.data?.providerConfigured, false);
+    assert.equal(before.data?.providerMode, "local-source");
+    assert.equal(before.data?.dataTrust, "compiled-unverified");
+    assert.match(before.data?.activeBundleId ?? "", /^[a-f0-9]{64}$/);
+    assert.equal(before.data?.localUpdate?.status, "queued");
+
+    const refreshed = await refreshDataNow({ force: true }, null);
+    assert.equal(refreshed.ok, true);
+    assert.equal(refreshed.data?.activatedBundleId, null);
+    assert.equal(refreshed.data?.localUpdateJobId, localJobId);
+    assert.equal(refreshed.data?.status.providerMode, "local-source");
+    assert.equal(
+      refreshed.data?.status.dataTrust,
+      "compiled-unverified",
+    );
+    assert.deepEqual(enqueueCalls, [{ force: true }]);
+    assert.equal(
+      refreshed.warnings[0]?.code,
+      "LOCAL_DATA_UPDATE_QUEUED",
+    );
+
+    const started = await startLocalDataUpdate({ force: false });
+    assert.equal(started.ok, true);
+    assert.equal(started.data?.jobId, localJobId);
+    assert.equal(started.data?.job?.status, "queued");
+    const inspected = await getLocalDataUpdateJob(localJobId);
+    assert.equal(inspected.ok, true);
+    assert.deepEqual(inspected.data?.job, localJob);
+    const invalid = await getLocalDataUpdateJob("not-a-job");
+    assert.equal(
+      invalid.violations[0]?.code,
+      "LOCAL_DATA_UPDATE_JOB_ID_INVALID",
+    );
+    assert.deepEqual(enqueueCalls, [
+      { force: true },
+      { force: false },
+    ]);
+  } finally {
+    configureLocalDataUpdateControl(null);
+    configureDataBundleProvider(null);
+  }
 });
 
 test("rebase operation never changes selections when semantic review is required", () => {
@@ -333,6 +424,7 @@ test("MCP exposes the same data provider operations", async () => {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   const server = createRosterPilotMcpServer({
+    localDataUpdates: true,
     dataBundleProvider: fixture.provider,
   });
   const client = new Client({
@@ -344,6 +436,17 @@ test("MCP exposes the same data provider operations", async () => {
     client.connect(clientTransport),
   ]);
   try {
+    const tools = await client.listTools();
+    assert.ok(
+      tools.tools.some(
+        (tool) => tool.name === "start_local_data_update",
+      ),
+    );
+    assert.ok(
+      tools.tools.some(
+        (tool) => tool.name === "get_local_data_update_job",
+      ),
+    );
     const dataStatus = await client.callTool({
       name: "get_data_status",
       arguments: {},
@@ -361,6 +464,32 @@ test("MCP exposes the same data provider operations", async () => {
         }
       ).data.dataBundle.activeBundleId,
       activeBundleId,
+    );
+    assert.equal(
+      (
+        dataStatus.structuredContent as {
+          data: {
+            dataBundle: {
+              providerMode: string;
+              dataTrust: string;
+            };
+          };
+        }
+      ).data.dataBundle.providerMode,
+      "local-source",
+    );
+    assert.equal(
+      (
+        dataStatus.structuredContent as {
+          data: {
+            dataBundle: {
+              providerMode: string;
+              dataTrust: string;
+            };
+          };
+        }
+      ).data.dataBundle.dataTrust,
+      "locally-verified",
     );
     assert.equal(
       (

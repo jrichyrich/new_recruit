@@ -262,7 +262,10 @@ const defaultDependencies: LiveCanaryRunnerDependencies = {
   resumeRun: resumeTesseraRun,
   compareRevision: compareRosterRevision,
   compareProviders: runTesseraProviderParityWorkflow,
-  getActiveBundleManifest: getActiveDataBundleManifest,
+  getActiveBundleManifest: () => {
+    const manifest = getActiveDataBundleManifest();
+    return manifest && "signature" in manifest ? manifest : null;
+  },
   captureBundleTrust:
     captureProviderCompatibilityBundleTrustIdentity,
   platform: process.platform,

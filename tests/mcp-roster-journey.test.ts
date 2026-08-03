@@ -9,9 +9,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { buildRoster } from "../lib/rosterpilot/engine";
 import {
+  approveRosterJourneyDataMigration,
   chooseRosterJourneyAction,
   continueRosterJourneySafely,
   getRosterJourney,
+  repairRosterJourneyTesseraWebCompatibility,
+  startRosterJourneyRepairedTesseraWebRun,
   startRosterJourney,
 } from "../local/workflow/journey";
 import { createRosterPilotMcpServer } from "../mcp/server";
@@ -30,6 +33,27 @@ test("local MCP exposes durable journey start, status, continue, and park", asyn
         chooseRosterJourneyAction(journeyId, revision, actionId, {
           rootDir,
         }),
+      repairWebCompatibility: (journeyId, revision, input) =>
+        repairRosterJourneyTesseraWebCompatibility(
+          journeyId,
+          revision,
+          input,
+          { rootDir },
+        ),
+      approveDataMigration: (journeyId, revision, approval) =>
+        approveRosterJourneyDataMigration(
+          journeyId,
+          revision,
+          approval,
+          { rootDir },
+        ),
+      startRepairedWeb: (journeyId, revision, input) =>
+        startRosterJourneyRepairedTesseraWebRun(
+          journeyId,
+          revision,
+          input,
+          { rootDir },
+        ),
     },
   });
   const client = new Client({
@@ -41,6 +65,35 @@ test("local MCP exposes durable journey start, status, continue, and park", asyn
     client.connect(clientTransport),
   ]);
   try {
+    const listed = await client.listTools();
+    assert.ok(
+      listed.tools.some(
+        (tool) => tool.name === "repair_tessera_web_compatibility",
+      ),
+    );
+    const repairTool = listed.tools.find(
+      (tool) => tool.name === "repair_tessera_web_compatibility",
+    );
+    const requiredRepairInputs =
+      (repairTool?.inputSchema as { required?: string[] }).required ?? [];
+    assert.equal(
+      requiredRepairInputs.includes("observedGameSystemRevision"),
+      false,
+    );
+    assert.equal(
+      requiredRepairInputs.includes("observedCatalogueRevision"),
+      false,
+    );
+    assert.ok(
+      listed.tools.some(
+        (tool) => tool.name === "approve_roster_data_migration",
+      ),
+    );
+    assert.ok(
+      listed.tools.some(
+        (tool) => tool.name === "start_repaired_tessera_web_run",
+      ),
+    );
     const opponent = buildRoster({
       playerFaction: "aeldari",
       pointsLimit: 1000,

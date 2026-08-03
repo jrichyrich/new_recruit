@@ -178,6 +178,190 @@ function freshnessMessage(freshness: LiveDataFreshness): string {
   return "Live source check was incomplete; this roster remains reproducible from its frozen data bundle.";
 }
 
+export type WebsiteDataReadinessItem = {
+  id:
+    | "snapshot"
+    | "update-job"
+    | "upstream"
+    | "service-compatibility"
+    | "official-reconciliation";
+  label: string;
+  title: string;
+  detail: string;
+  tone: "ready" | "warning";
+};
+
+function shortBrowserIdentity(value: string | null | undefined): string {
+  if (!value) return "unknown";
+  return value.length > 12 ? `${value.slice(0, 12)}…` : value;
+}
+
+export function websiteDataReadiness(
+  bundle: BrowserEngineBootstrap["dataStatus"]["dataBundle"],
+): WebsiteDataReadinessItem[] {
+  const activeIdentity = shortBrowserIdentity(bundle.activeBundleId);
+  const snapshot: WebsiteDataReadinessItem =
+    bundle.dataTrust === "locally-verified"
+      ? {
+          id: "snapshot",
+          label: "Roster snapshot",
+          title: "Locally verified",
+          detail: `Snapshot ${activeIdentity} is active for new roster work.`,
+          tone: "ready",
+        }
+      : bundle.dataTrust === "signed-verified"
+        ? {
+            id: "snapshot",
+            label: "Roster snapshot",
+            title: "Signed verified",
+            detail: `Hosted snapshot ${activeIdentity} is active for new roster work.`,
+            tone: "ready",
+          }
+        : {
+            id: "snapshot",
+            label: "Roster snapshot",
+            title: "Compiled data is ready",
+            detail: `Snapshot ${activeIdentity} keeps roster building available while local data initializes.`,
+            tone: "warning",
+          };
+
+  const localUpdate = bundle.localUpdate;
+  let updateJob: WebsiteDataReadinessItem;
+  if (!localUpdate) {
+    updateJob = {
+      id: "update-job",
+      label: "Background update",
+      title:
+        bundle.providerMode === "signed-channel"
+          ? "Hosted update channel"
+          : "Waiting for the first check",
+      detail:
+        bundle.providerMode === "signed-channel"
+          ? "This hosted deployment checks its configured signed channel without changing an open roster."
+          : `No local update job is running. Snapshot ${activeIdentity} remains usable and the next due check can start in the background.`,
+      tone: bundle.providerMode === "signed-channel" ? "ready" : "warning",
+    };
+  } else if (localUpdate.status === "activated") {
+    updateJob = {
+      id: "update-job",
+      label: "Background update",
+      title: "Update activated",
+      detail: `Job ${localUpdate.jobId} finished. Snapshot ${activeIdentity} is the current snapshot.`,
+      tone: "ready",
+    };
+  } else {
+    updateJob = {
+      id: "update-job",
+      label: "Background update",
+      title: `Update ${localUpdate.status}`,
+      detail: `Job ${localUpdate.jobId}: ${localUpdate.progress} Snapshot ${activeIdentity} remains active until a candidate passes certification and activates.`,
+      tone: "warning",
+    };
+  }
+
+  const sourceStatus = bundle.sourceStatus;
+  const upstream = sourceStatus?.latestUpstream;
+  const certified = sourceStatus?.latestLocallyCertified;
+  const upstreamObserved = Boolean(
+    upstream &&
+      (upstream.rulesVersion !== null ||
+        upstream.newRecruitCommit !== null),
+  );
+  const upstreamCurrent = Boolean(
+    upstream &&
+      certified &&
+      (upstream.rulesVersion === null ||
+        upstream.rulesVersion === certified.rulesVersion) &&
+      (upstream.newRecruitCommit === null ||
+        upstream.newRecruitCommit === certified.newRecruitCommit),
+  );
+  const upstreamItem: WebsiteDataReadinessItem = upstreamCurrent
+    ? {
+        id: "upstream",
+        label: "Upstream data",
+        title: "Locally certified data is current",
+        detail: "The latest checked 40kdc and BSData identities match the locally certified snapshot.",
+        tone: "ready",
+      }
+    : upstreamObserved
+      ? {
+          id: "upstream",
+          label: "Upstream data",
+          title: "Upstream is newer",
+          detail: "RosterPilot keeps the current snapshot active while the newer sources are built and certified in the background.",
+          tone: "warning",
+        }
+      : {
+          id: "upstream",
+          label: "Upstream data",
+          title: "Upstream check pending",
+          detail: "The current snapshot remains usable even if the internet is unavailable or a source has not been checked yet.",
+          tone: "warning",
+        };
+
+  const observations = bundle.serviceCompatibility ?? [];
+  const missingCompatibility = observations.filter(
+    (observation) => !observation.compatibleBundleId,
+  );
+  const serviceCompatibility: WebsiteDataReadinessItem =
+    missingCompatibility.length === 0
+      ? {
+          id: "service-compatibility",
+          label: "New Recruit and Tessera",
+          title:
+            observations.length === 0
+              ? "No service mismatch observed"
+              : "Service-compatible snapshot available",
+          detail:
+            observations.length === 0
+              ? "RosterPilot records the exact catalogue identity when an external handoff is prepared; no mismatch has been observed yet."
+              : `All ${observations.length} observed service ${observations.length === 1 ? "identity has" : "identities have"} an exact retained snapshot.`,
+          tone: "ready",
+        }
+      : {
+          id: "service-compatibility",
+          label: "New Recruit and Tessera",
+          title: "Compatibility repair needed",
+          detail: `${missingCompatibility.length} observed service ${missingCompatibility.length === 1 ? "identity needs" : "identities need"} a matching snapshot. RosterPilot preserves the roster and receipts while it searches retained and historical sources.`,
+          tone: "warning",
+        };
+
+  const officialState =
+    sourceStatus?.officialReconciliation ?? "unavailable";
+  const officialReconciliation: WebsiteDataReadinessItem =
+    officialState === "verified"
+      ? {
+          id: "official-reconciliation",
+          label: "Official source",
+          title: "Official reconciliation verified",
+          detail: "The active official-source overlay is verified separately from community and New Recruit data.",
+          tone: "ready",
+        }
+      : officialState === "pending"
+        ? {
+            id: "official-reconciliation",
+            label: "Official source",
+            title: "Official reconciliation pending",
+            detail: "A Games Workshop source changed. RosterPilot keeps the last usable values and does not claim the change is reconciled yet.",
+            tone: "warning",
+          }
+        : {
+            id: "official-reconciliation",
+            label: "Official source",
+            title: "Official reconciliation unavailable",
+            detail: "Official-source authority could not be confirmed; this is reported separately from roster and service compatibility.",
+            tone: "warning",
+          };
+
+  return [
+    snapshot,
+    updateJob,
+    upstreamItem,
+    serviceCompatibility,
+    officialReconciliation,
+  ];
+}
+
 export default function Home() {
   const [workspace, setWorkspace] =
     useState<BrowserRosterWorkspace | null>(null);
@@ -646,6 +830,7 @@ export default function Home() {
   const newRecruitCapability = workspace.newRecruitCapability;
   const newRecruitMapped = newRecruitCapability.available;
   const remaining = draft.pointsLimit - draft.totalPoints;
+  const dataReadiness = websiteDataReadiness(dataStatus.dataBundle);
   const rosterCommand = `Build or review "${draft.name}" as a ${draft.pointsLimit}-point ${draft.factionName} roster. Validate it before making any legality claim, then ${
     newRecruitMapped
       ? "export .rosz for New Recruit"
@@ -678,11 +863,15 @@ export default function Home() {
         <div className="status-pill">
           <span className="status-dot" />
           Release {dataStatus.sources.releaseId ?? "pinned"} ·{" "}
-          {runtimeData.source === "signed-verified"
+          {runtimeData.source !== "compiled-unverified"
             ? runtimeData.durability.mode === "persistent"
-              ? "verified durable server data"
-              : "verified server data"
-            : "compiled server fallback"}
+              ? runtimeData.source === "locally-verified"
+                ? "locally verified durable data"
+                : "verified durable server data"
+              : runtimeData.source === "locally-verified"
+                ? "locally verified data"
+                : "verified server data"
+            : "compiled data while updates initialize"}
         </div>
       </header>
 
@@ -806,6 +995,29 @@ export default function Home() {
                 </p>
                 <span className="workflow-surface">Local CLI or MCP</span>
               </article>
+            </div>
+            <div
+              aria-label="Roster data readiness"
+              className="data-readiness-list"
+            >
+              {dataReadiness.map((item) => (
+                <div
+                  className={`data-recovery-status ${
+                    item.tone === "ready" ? "ready" : ""
+                  }`}
+                  data-readiness={item.id}
+                  key={item.id}
+                >
+                  <span aria-hidden="true">
+                    {item.tone === "ready" ? "✓" : "!"}
+                  </span>
+                  <div>
+                    <small>{item.label}</small>
+                    <strong>{item.title}</strong>
+                    <p>{item.detail}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
 

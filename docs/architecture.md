@@ -112,24 +112,41 @@ RosterPilot therefore consumes the public
 [`BSData/wh40k-11e`](https://github.com/BSData/wh40k-11e) repository at an
 exact commit. It does not scrape the New Recruit UI or call private APIs.
 
-Runtime data is distributed in signed, content-addressed bundles. A manifest
+Runtime data is stored in content-addressed snapshots. A manifest
 records exact official, 40kdc-data, and BSData provenance separately from
 global, faction, entity, mapping, portfolio, and conflict semantic hashes.
 Global and dependency-aware faction shards allow one affected scope to advance
 without invalidating unrelated rosters. `data/sources.json` and the generated
-overlay describe the compiled application-release snapshot. The release gate
-derives and verifies the separately signed offline bootstrap from that
-snapshot; routine updates do not rewrite the tracked source files.
+overlay describe the compiled application-release snapshot. Local CLI, MCP,
+agent, and writable self-hosted Node runtimes default to `local-source` and
+build changed upstream data outside the checkout. An unsigned build receipt
+binds every manifest and shard hash, exact npm integrity and BSData commit,
+builder source hash, schema, validation plan, certification evidence, and
+parent snapshot. Disk loads re-verify the complete receipt. Hosted/stateless
+deployments may instead use an explicitly configured `signed-channel`; release
+gates derive and verify a signed offline bootstrap. Routine updates in either
+mode do not rewrite tracked source files.
 `scripts/sync-bsdata.ts` remains the deterministic candidate/bootstrap
 extractor.
 
-The verified `DataBundleProvider` snapshot leased by the operation is the
+The accepted `DataBundleProvider` snapshot leased by the operation is the
 canonical rules-data identity for construction, validation, export, and
-simulation preparation. Live observations never rewrite that lease. In
+simulation preparation. `dataTrust` distinguishes `locally-verified`,
+`signed-verified`, and `compiled-unverified`. Live observations never rewrite that lease. In
 particular, a New Recruit-enriched archive's game-system and faction-catalogue
 IDs and revisions are compatibility evidence for the exported selection paths;
 they are not a second rules source and cannot replace the bundle's official,
 40kdc, BSData, or semantic identities.
+
+Service compatibility is selected per workflow, not by replacing the globally
+active snapshot. Receipt-backed New Recruit observations retain exact
+game-system and faction-catalogue IDs and revisions. Before New Recruit or
+Tessera Web preparation, RosterPilot selects the newest retained matching
+snapshot for the affected faction. If none exists, a bounded resolver searches
+up to 500 relevant commits in the persistent BSData history and may build a
+compatibility snapshot using that commit and the newest certified 40kdc rules
+source. Missing history preserves the roster and enters
+`waiting-for-compatible-source`; no probe list is created.
 
 The authority order is scoped, not global. Machine-verifiable Games Workshop
 downloads are authoritative for published points, leader links, Detachment
@@ -141,18 +158,21 @@ community-authored mechanics. BSData is the New Recruit interoperability
 source for catalogue IDs, selection paths, constraints, and export structure.
 An unresolved official/community disagreement is quarantined at entity or
 faction scope; RosterPilot never silently chooses a community interpretation.
-Official overrides cross a separate publication trust boundary: the publisher
+Published official overrides cross a separate hosted-release trust boundary: the publisher
 must hash the actual Games Workshop source artifacts and verify a one-to-one
 inventory receipt signed by an independently reviewed extractor key. Runtime
 overlay application is intentionally reusable, but it cannot by itself
-authorize a signed bundle or application bootstrap.
-The signed global shard carries the resulting authority state. Status tools
+authorize a signed bundle or application bootstrap. The local updater detects
+Games Workshop changes but does not auto-extract them: it retains the last
+usable values and reports `official-update-pending` until separately reviewed,
+machine-verifiable reconciliation evidence exists.
+The global shard carries the resulting authority state. Status tools
 and roster provenance expose it on every transport; builds made from an
 unavailable or legacy-unverified state remain usable but carry an explicit
 warning. A verified-to-unavailable transition changes global semantic identity
 and is quarantined before activation, while rotation between verified evidence
 receipts does not invalidate roster or certification semantics.
-The signed global shard retains the exact normalized official overlay alongside
+The global shard retains the exact normalized official overlay alongside
 its receipt-bound authority hashes. On a routine refresh, an unchanged official
 version/content hash lets the publisher recover that evidence from the prior
 verified snapshot. When 40kdc provenance is unchanged, the exact effective
@@ -240,8 +260,8 @@ characteristic values equal another rules source.
 #### Provider compatibility and deterministic replay
 
 Every simulated matchup can retain a content-addressed provider-compatibility
-envelope. The envelope binds the activated signature-verified manifest,
-signing key, and normalized update-provider status—not merely the roster's
+envelope. The envelope binds the accepted manifest, provider mode, trust
+origin, and normalized update-provider status—not merely the roster's
 syntax-valid source hashes—plus its semantic rules, faction, mapping, and
 entity identities; the canonical roster and prepared-input
 fingerprints; the frozen and observed New Recruit catalogue identities for a
@@ -254,7 +274,9 @@ a product name as a version.
 The trust portion includes active/latest/upstream/candidate bundle identities,
 quarantine and rollback state, official-authority identity, and durability.
 Compiled-unverified fallback data or a manifest/source mismatch makes the
-envelope incomplete. Live rollout activation is durably latched by the
+envelope incomplete. `locally-verified` is accepted for ordinary roster,
+New Recruit, Tessera, and local-versus-Web analysis; maintainer canaries and
+promotion evidence require `signed-verified`. Live rollout activation is durably latched by the
 repository tag `rosterpilot-provider-compatibility-enforced-v1`; subsequent
 runtime and release workflows cannot fall back to observation mode merely
 because Actions artifacts expire.
@@ -682,21 +704,26 @@ is opt-in through `--full-json`.
 ### Freshness policy
 
 Reproducibility and freshness are separate checks. Every data-consuming
-request leases one immutable verified bundle; a live source check or atomic activation never
-changes points in the middle of a build.
+request leases one immutable verified snapshot; a live source check or atomic
+activation never changes points in the middle of a build.
 
-- The shared provider checks the signed stable channel at startup. Long-lived
-  runtimes schedule a 15-minute background check; request-driven runtimes also
-  check when the interval has elapsed on the next data operation. Stable-channel
-  refresh never blocks a build after bootstrap initialization. A verified
-  candidate is downloaded and classified before the active pointer moves
-  atomically, and activation affects only future leases.
+- Local startup continues from the newest accepted local snapshot, or compiled
+  data, and non-blockingly queues a check when the last attempt is more than 24
+  hours old. The macOS companion wakes hourly and queues only when due. Failed
+  automatic checks retry after one hour with a six-hour cap; force refresh
+  bypasses that backoff.
+- The single-flight coordinator persists `queued`, `checking`, `fetching`,
+  `building`, `certifying`, `installed`, `activated`, `quarantined`, and
+  `failed` states. Candidate work is isolated, credential-free, bounded, and
+  never writes the checkout. Only a certified candidate moves the active
+  pointer, and activation affects future leases.
 - `get_data_status` reports engine and roster provenance.
-  `get_data_update_status` distinguishes the bundle currently in use, the
-  latest verified bundle, the latest upstream candidate, its semantic
-  classification, and quarantined scopes. `refresh_data_now` performs an
-  immediate signed-channel check; `rollback_data_bundle` selects an exact
-  archived verified bundle for future leases.
+  `get_data_update_status` distinguishes provider mode, trust, the snapshot in
+  use, latest upstream and locally certified identities, job progress,
+  service-compatible snapshots, official reconciliation, semantic
+  classification, and quarantined scopes. `refresh_data_now` queues an
+  immediate durable check and returns promptly; `rollback_data_bundle` selects
+  an exact archived verified snapshot for future leases.
 - Update-status, refresh, and rollback are control-plane operations. They intentionally
   do not acquire a roster-data lease; activation waits for existing
   data-consuming leases before moving the active pointer.
@@ -715,21 +742,11 @@ changes points in the middle of a build.
 - CLI, MCP, REST, the local agent, workers, and the browser-facing engine use
   the same active provider snapshot rather than importing their own
   process-global dataset.
-- A daily GitHub workflow stages candidate data outside the checkout, computes
-  semantic deltas, skips certification churn for provenance-only updates, and
-  certifies only affected scopes otherwise. It publishes immutable bundle
-  objects and moves the independently signed stable pointer last on the
-  `data-bundles` branch. Signed pointers form a monotonic, content-addressed
-  predecessor chain. Local and hosted providers retain the accepted cursor
-  with compare-and-set storage, reject replayed revisions after restart, and
-  represent canary rollback as a newer explicitly signed transition rather
-  than rewinding channel history. Automated canary rollback derives its target
-  only from that verified signed-v2 ancestry; the mutable update report is
-  informational and cannot redirect it. Repeated freshness observations with
-  no source-identity change reuse the current bundle and do not grow pointer
-  ancestry, while a new upstream commit is still recorded even when classified
-  `provenance-only`. An ambiguous or regressive candidate is quarantined;
-  the current verified pointer remains unchanged. See
+- Signed publication remains a separate hosted/release-operator path. It
+  publishes immutable bundle objects and advances an independently signed,
+  anti-replay stable-pointer chain only after certification. Local-source mode
+  never falls back to that channel automatically. Both paths preserve durable
+  bundle references and quarantine ambiguous or regressive candidates. See
   [`data-bundles.md`](data-bundles.md).
 
 ## ChatGPT/Codex local integration boundary
@@ -1071,7 +1088,7 @@ Security invariants:
 | Component | Responsibility | Primary source |
 | --- | --- | --- |
 | Roster engine | Search, build, modify, validate, explain, export | `lib/rosterpilot/` |
-| Data-bundle provider | Verify signed channel and payloads, lease immutable snapshots, activate atomically, archive, quarantine, retain, and roll back | `lib/rosterpilot/runtime-data-bundle.ts`, `lib/rosterpilot/remote-data-bundle-provider.ts`, `lib/rosterpilot/hosted-data-bundle-provider.ts`, `local/data-bundles/` |
+| Data-bundle provider | Verify local receipts or hosted signatures, lease immutable snapshots, activate atomically, archive, quarantine, retain, and roll back | `lib/rosterpilot/runtime-data-bundle.ts`, `lib/rosterpilot/remote-data-bundle-provider.ts`, `lib/rosterpilot/hosted-data-bundle-provider.ts`, `local/data-bundles/` |
 | Catalogue generator | Pin and reconcile BSData identifiers, coverage, and conflicts | `scripts/sync-bsdata.ts` |
 | Bundle release pipeline | Reconcile official evidence, build/sign immutable shards, verify bootstrap/trust assets, classify scoped deltas, certify, publish the stable pointer last, and quarantine failed candidates | `scripts/official-data-overlay.ts`, `scripts/prepare-data-bundle-release.ts`, `scripts/prepare-data-bundle-update.ts`, `.github/workflows/application-release.yml`, `.github/workflows/data-freshness.yml` |
 | Freshness monitor | Compare raw upstream Games Workshop, 40kdc-data, and BSData provenance without changing the active bundle | `lib/rosterpilot/freshness.ts` |
@@ -1100,13 +1117,13 @@ Security invariants:
 | Canonical Codex workflow package | Keep the canonical skill and portable tracked plugin source-synchronized without machine-local paths | `skills/rosterpilot/`, `plugins/rosterpilot/`, `scripts/sync-rosterpilot-plugin.mjs` |
 | Managed standalone Codex skill | Install and inspect only the marker-protected per-user skill copy | `scripts/manage-rosterpilot-skill.mjs` |
 | Personal ChatGPT/Codex publication | Validate marketplace ownership, generate the machine source and MCP binding, request immutable-cache registration, probe startup, verify effective state, and roll back managed layers on failure | `scripts/manage-rosterpilot-personal-plugin.mjs` |
-| Local MCP configuration renderer | Generate one checkout-bound Node, loader, server, working-directory, and public data environment contract for standalone and plugin MCP paths | `scripts/setup.mjs` |
+| Local MCP configuration renderer | Generate one checkout-bound Node, loader, server, working-directory, and local-source support contract for standalone and plugin MCP paths | `scripts/setup.mjs` |
 
 ## Installation and deployment boundaries
 
 | Surface | Installation unit | Portability and durability rule |
 | --- | --- | --- |
-| Core engine, CLI, and stdio MCP | Complete Git checkout, locked Node dependencies, and compiled release data; signed bootstrap, trusted Ed25519 public keys, and a channel URL enable runtime updates | Supported on macOS, Linux, and Windows; without signed-update configuration it reports compiled fallback explicitly rather than claiming a verified signed bootstrap |
+| Core engine, CLI, and stdio MCP | Complete Git checkout, locked Node dependencies, Git, compiled release data, and writable application-support storage | Supported on macOS, Linux, and Windows; local-source updates need no signing keys, trust registry, bootstrap bundle, or central data channel |
 | Standalone local MCP configuration | Ignored project-local `.codex/config.toml` or a copied client configuration | Absolute Node and checkout paths are generated from the current machine; do not combine the `rosterpilot` entry with the personal plugin in one checkout |
 | Personal ChatGPT/Codex plugin | Portable tracked package, generated per-user source, marker-protected standalone skill, and a Codex-created immutable cache version | Registry and cache are never edited directly; moving the checkout or Node requires `plugin:local:install` and a new task or app restart |
 | Hosted website, REST, and HTTP MCP | Validated Cloudflare-compatible build, signed bootstrap bundle, trusted public keys, signed-channel URL, and persistent bundle storage | Uses only credential-free core capabilities and never imports local automation modules into a hosted tool contract |
@@ -1123,14 +1140,17 @@ to call stale background code. `agent ensure-current` also compares build
 provenance and runtime staleness, then uses the existing restart or installation
 lifecycle and returns both the original issues and the repair actions.
 
-Runtime refresh is enabled only when the application has a schema-compatible
-signed bootstrap, at least one pinned Ed25519 public verification key and key
-ID, a signed stable-channel URL, and writable bundle storage. CI publication
-additionally requires the matching private signing JWK, immutable bundle
-hosting, and permission to move the stable pointer after certification. The
-private key never ships to a client. Key rotation overlaps trusted key IDs.
+Local runtime refresh requires Node, npm, Git, writable application-support
+storage, and access to the allowlisted upstream sources. It uses unsigned,
+integrity-bound local receipts and no publisher secrets. Hosted signed-channel
+refresh separately requires a schema-compatible signed bootstrap, at least one
+pinned Ed25519 public verification key and key ID, a signed stable-channel URL,
+and an archive adapter. CI publication additionally requires the matching
+private signing JWK, immutable bundle hosting, and permission to move the
+stable pointer after certification. The private key never ships to a client.
+Key rotation overlaps trusted key IDs.
 The persistent local store retains the active bundle, the previous three,
-every registered roster or durable-job reference, and unreferenced bundles for
+every registered roster, service-compatibility, or durable-job reference, and unreferenced bundles for
 at least 30 days. Hosted deployments must configure their archive adapter to
 promise the same cold-start rollback and quarantine durability; an ephemeral
 runtime reports that limitation and cannot advertise persistent rollback.

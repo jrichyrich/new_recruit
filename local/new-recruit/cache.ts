@@ -20,6 +20,7 @@ import {
   type ConnectorEvent,
   rosterExportFingerprint,
   rosterExecutionFingerprint,
+  rosterStructuralFingerprint,
   rosterSourceDataCompatibleForExport,
   type EnrichedRoszSummary,
   type NewRecruitDelivery,
@@ -2696,6 +2697,92 @@ export async function loadNewRecruitMutationRecoveryArtifact(
       },
     ],
   };
+}
+
+/**
+ * Adopt a sealed enriched artifact after a compatible data migration without
+ * creating another New Recruit list. The gameplay shape and newly expected
+ * catalogue identity must both match exactly.
+ */
+export async function adoptNewRecruitMutationArtifactAcrossRosterRevision(
+  previousRoster: RosterDraftV1,
+  nextRoster: RosterDraftV1,
+): Promise<ResultEnvelope<NewRecruitDelivery> | null> {
+  if (
+    rosterStructuralFingerprint(previousRoster) !==
+    rosterStructuralFingerprint(nextRoster)
+  ) {
+    return null;
+  }
+  const receipt = await readNewRecruitMutationReceipt(previousRoster);
+  const recovered = await verifiedMutationRecoveryArtifact(receipt);
+  if (!recovered) return null;
+  const { attempt, artifact, event, enrichedContent } = recovered;
+  const identity = validateEnrichedRoszGameplayIdentity(
+    enrichedContent,
+    nextRoster,
+  );
+  const catalogueProvenance = provisionalCatalogueComparison(
+    nextRoster,
+    identity.summary,
+  );
+  if (!catalogueProvenance || catalogueProvenance.status !== "matched") {
+    return null;
+  }
+  const reusedEvent: ConnectorEvent = {
+    schemaVersion: 1,
+    eventId: crypto.randomUUID(),
+    recordedAt: new Date().toISOString(),
+    provider: "new-recruit",
+    action: "prepare",
+    origin: "manifest-reuse",
+    outcome: "reused",
+    remoteId: event.remoteId,
+    contentSha256: artifact.enrichedRoszSha256,
+  };
+  const delivery: ResultEnvelope<NewRecruitDelivery> = {
+    ok: true,
+    data: {
+      rosterId: nextRoster.id,
+      rosterName: identity.summary.rosterName,
+      uiIdentity: null,
+      listUrl: event.remoteId,
+      imported: false,
+      sessionReused: true,
+      cacheReused: true,
+      connectorEvents: [event, reusedEvent],
+      verification: null,
+      enrichedSummary: identity.summary,
+      catalogueProvenance,
+      artifacts: [
+        {
+          format: "rosterpilot-source-rosz",
+          filename: path.basename(artifact.sourceRoszPath),
+          mimeType: "application/zip",
+          written: artifact.sourceRoszPath,
+        },
+        {
+          format: "new-recruit-enriched-rosz",
+          filename: path.basename(artifact.enrichedRoszPath),
+          mimeType: "application/zip",
+          written: artifact.enrichedRoszPath,
+        },
+      ],
+    },
+    violations: [],
+    warnings: [
+      {
+        code: "NEW_RECRUIT_CROSS_REVISION_ARTIFACT_REUSED",
+        message:
+          `Reused the hash-verified New Recruit artifact from run ${attempt.runId} after exact gameplay and catalogue verification; no new list was created.`,
+        severity: "warn",
+      },
+    ],
+  };
+  await storeNewRecruitCache(nextRoster, delivery, {
+    runId: `compatibility-repair-${crypto.randomUUID()}`,
+  });
+  return delivery;
 }
 
 export async function loadNewRecruitRoszMutationRecoveryArtifact(input: {

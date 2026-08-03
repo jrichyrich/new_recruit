@@ -12,18 +12,24 @@ export type WorkflowOutcomeClass =
 
 export const RecoveryActionIds = [
   "data.inspect",
+  "data.refresh-compatible",
   "roster.rebase-compatible",
+  "roster.review-data-migration",
   "artifact.export-fallback",
   "new-recruit.inspect-mutation",
   "new-recruit.reconcile-outcome",
   "new-recruit.deliver",
   "tessera.start-baseline",
+  "tessera.start-successor",
   "tessera.resume",
   "tessera.resolve-profiles",
   "provider.start-local-sibling",
   "provider.start-web-sibling",
   "optimizer.approve-candidates",
   "optimizer.approve-result",
+  "data.follow-local-update",
+  "workflow.wait-for-compatible-source",
+  "workflow.wait-for-verified-data",
   "workflow.park",
 ] as const;
 
@@ -221,5 +227,117 @@ export function projectWorkflowRecovery(
     remoteMutationOutcome: "none",
     recommendedActionId: actions[0]?.actionId ?? "workflow.park",
     actions,
+  };
+}
+
+export function projectCompatibilityRepairRecovery(
+  workflow: RosterWorkflowResult,
+  input: {
+    journeyId: string;
+    journeyRevision: number;
+    status:
+      | "updating-local-data"
+      | "waiting-for-compatible-source"
+      | "waiting-for-verified-data"
+      | "needs-data-review"
+      | "ready-for-web"
+      | "running-successor";
+  },
+): RecoveryStateV1 {
+  const base = projectWorkflowRecovery(workflow, input);
+  const binding = { ...input, workflow };
+  if (input.status === "running-successor") {
+    return {
+      ...base,
+      status: "completed",
+      outcomeClass: "succeeded",
+      blockedStep: null,
+      recommendedActionId: null,
+      actions: [],
+    };
+  }
+  const park = offer("workflow.park", {
+    ...binding,
+    reasonCodes: ["PRESERVE_FOR_LATER"],
+  });
+  if (input.status === "updating-local-data") {
+    const follow = offer("data.follow-local-update", {
+      ...binding,
+      reasonCodes: ["LOCAL_DATA_UPDATE_IN_PROGRESS"],
+      mcpTool: "get_data_update_status",
+    });
+    return {
+      ...base,
+      status: "action-required",
+      outcomeClass: "action-required",
+      blockedStep: "local-data-update",
+      recommendedActionId: follow.actionId,
+      actions: [follow, park],
+    };
+  }
+  if (
+    input.status === "waiting-for-compatible-source" ||
+    input.status === "waiting-for-verified-data"
+  ) {
+    const wait = offer("workflow.wait-for-compatible-source", {
+      ...binding,
+      reasonCodes: ["NO_COMPATIBLE_HISTORICAL_SOURCE"],
+    });
+    return {
+      ...base,
+      status: "blocked",
+      outcomeClass: "blocked",
+      blockedStep: "compatible-source-history",
+      recommendedActionId: wait.actionId,
+      actions: [
+        wait,
+        offer("data.inspect", {
+          ...binding,
+          reasonCodes: ["CHECK_LOCAL_SOURCE_STATUS"],
+          mcpTool: "get_data_update_status",
+        }),
+        park,
+      ],
+    };
+  }
+  if (input.status === "needs-data-review") {
+    const review = offer("roster.review-data-migration", {
+      ...binding,
+      eligibility: "needs-approval",
+      authority: {
+        kind: "fresh-approval",
+        challengeId: `approve-data-migration:${input.journeyId}:${input.journeyRevision}`,
+      },
+      reasonCodes: ["ROSTER_DATA_REVIEW_REQUIRED"],
+      consequence: { rosterSelectionChange: true },
+      mcpTool: "approve_roster_data_migration",
+    });
+    return {
+      ...base,
+      status: "action-required",
+      outcomeClass: "action-required",
+      blockedStep: "roster-data-review",
+      recommendedActionId: review.actionId,
+      actions: [review, park],
+    };
+  }
+  const start = offer("tessera.start-successor", {
+    ...binding,
+    eligibility: "needs-approval",
+    authority: {
+      kind: "fresh-approval",
+      challengeId: `start-repaired-tessera:${input.journeyId}:${input.journeyRevision}`,
+    },
+    reasonCodes: ["TESSERA_SUCCESSOR_READY"],
+    consequence: { externalRead: true, externalMutation: true },
+    mcpTool: "start_repaired_tessera_web_run",
+  });
+  return {
+    ...base,
+    status: "action-required",
+    outcomeClass: "action-required",
+    blockedStep: "tessera-successor-confirmation",
+    recommendedActionId: start.actionId,
+    actions: [start, park],
   };
 }

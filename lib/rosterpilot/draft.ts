@@ -1180,6 +1180,7 @@ export function rebaseRosterData(
       data: {
         status: "current",
         roster,
+        candidateRoster: roster,
         fromBundleId: roster.sourceData.bundleId,
         toBundleId: targetSourceData.bundleId,
         provenanceChanged: false,
@@ -1240,6 +1241,10 @@ export function rebaseRosterData(
           ...roster,
           sourceData: targetSourceData,
         },
+        candidateRoster: {
+          ...roster,
+          sourceData: targetSourceData,
+        },
         fromBundleId: roster.sourceData.bundleId,
         toBundleId: targetSourceData.bundleId,
         provenanceChanged,
@@ -1263,6 +1268,10 @@ export function rebaseRosterData(
     data: {
       status: "review-required",
       roster,
+      candidateRoster: {
+        ...roster,
+        sourceData: targetSourceData,
+      },
       fromBundleId: roster.sourceData.bundleId,
       toBundleId: targetSourceData.bundleId,
       provenanceChanged,

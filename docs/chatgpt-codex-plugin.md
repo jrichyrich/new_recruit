@@ -74,7 +74,7 @@ npm run rosterpilot -- tessera status
 `plugin:local:check` verifies skill/package parity, marketplace source, cache,
 plugin registration, checkout-bound MCP configuration, startup, and baseline
 tool discovery. It does not prove Keychain credentials, browser readiness,
-data-channel readiness, or local-agent freshness; Doctor and the provider
+local-source update readiness, or local-agent freshness; Doctor and the provider
 status commands cover those separate boundaries.
 
 Open a new ChatGPT/Codex task after every successful plugin installation. An
@@ -95,12 +95,35 @@ not sufficient.
 | Active ChatGPT/Codex task | App-owned skill and tool snapshot; refreshed only by a new task or app restart |
 | Per-user RosterPilot LaunchAgent | Separate local-automation lifecycle managed by setup and `agent ensure-current` |
 
-The generated `.mcp.json` contains absolute local paths and non-secret public
-data-channel configuration, so it is machine-local and is never committed. It
-always carries the signed-channel URL and trusted-public-key file. The
-bootstrap-directory variable is included only when explicitly supplied or
-when the checkout's default bootstrap directory exists. An unavailable
-explicit override remains present so initialization fails closed.
+The generated `.mcp.json` contains absolute local paths, `local-source`
+provider selection, and machine-local support configuration, so it is never
+committed. It contains no signing key, trust registry, signed bootstrap, or
+central RosterPilot data-channel requirement. Hosted/operator signed-channel
+settings are a separate deployment concern and are not generated for the
+personal plugin.
+
+## Local data updates
+
+The plugin uses the same local-first provider as the CLI and local agent. A new
+task can work immediately from compiled data while the first certified local
+snapshot builds in the background. Thereafter startup checks only when the last
+attempt is more than 24 hours old; the macOS companion wakes hourly and queues
+a check only when due. Updates are built outside the checkout and accepted as
+`locally-verified` only after their receipt, manifest, shards, exact upstream
+identities, builder hash, validation plan, and certification evidence pass.
+
+Users normally do nothing. `get_data_update_status` (or
+`npm run rosterpilot -- data update-status`) shows progress, and
+`refresh_data_now` (or `data refresh`) queues a forced check without holding
+the task open through compilation. Doctor checks Node, npm, Git, writable
+application-support storage, and upstream connectivity. It never asks a local
+user to create a signing key or bootstrap a central data channel.
+
+If New Recruit or Tessera Web observes a different catalogue revision, the
+durable repair journey selects a retained compatible snapshot or searches
+bounded BSData history and queues a compatibility build. It preserves the
+roster, failed job, and mutation receipts; semantic changes require approval,
+and a successor Tessera Web job still requires separate confirmation.
 
 ## Updates and recovery
 

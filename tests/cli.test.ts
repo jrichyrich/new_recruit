@@ -23,7 +23,12 @@ test("CLI standard help flag describes independent workflows", async () => {
     /none runs automatically after another/i,
   );
   assert.match(stdout, /rosterpilot data update-status/);
+  assert.match(stdout, /rosterpilot data start-local-update/);
+  assert.match(stdout, /rosterpilot data update-job --job/);
   assert.match(stdout, /rosterpilot rebase --file/);
+  assert.match(stdout, /workflow repair-web/);
+  assert.match(stdout, /workflow approve-data-migration/);
+  assert.match(stdout, /workflow start-repaired-web/);
   assert.match(stdout, /--portfolio-out general-threat-portfolio\.json/);
   assert.match(
     stdout,

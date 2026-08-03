@@ -42,6 +42,7 @@ import {
   explainRoster,
   exportRoster,
   getNewRecruitCapability,
+  getLocalDataUpdateJob,
   getDataStatus,
   getDataUpdateStatus,
   listDataConflicts,
@@ -55,6 +56,7 @@ import {
   searchFactions,
   searchUnits,
   setCachedDataFreshness,
+  startLocalDataUpdate,
   validateRoster,
   withDataBundleSnapshotLease,
   CollectionProfileSchema,
@@ -118,6 +120,8 @@ type HandoffWriter = (
 ) => Promise<string[]>;
 
 type ServerOptions = {
+  /** Exposes durable machine-local update job controls; omit on hosted MCP. */
+  localDataUpdates?: boolean;
   runtimeProvenance?: () => RuntimeProvenance;
   artifactWriter?: ArtifactWriter;
   handoffWriter?: HandoffWriter;
@@ -132,6 +136,30 @@ type ServerOptions = {
       journeyId: string,
       expectedRevision: number,
       actionId: RecoveryActionId,
+    ) => Promise<unknown>;
+    repairWebCompatibility: (
+      journeyId: string,
+      expectedRevision: number,
+      input: {
+        observedNewRecruitIdentity?: {
+          gameSystemRevision: number;
+          catalogueRevision: number;
+        } | null;
+        predecessorJobPath?: string | null;
+      },
+    ) => Promise<unknown>;
+    approveDataMigration: (
+      journeyId: string,
+      expectedRevision: number,
+      approval: { approvalId: string; approvedBy: string },
+    ) => Promise<unknown>;
+    startRepairedWeb: (
+      journeyId: string,
+      expectedRevision: number,
+      input: {
+        confirmExternalPreparation: true;
+        outputDirectory?: string;
+      },
     ) => Promise<unknown>;
   };
   newRecruitCompanion?: {
@@ -408,6 +436,11 @@ type ServerOptions = {
   freshnessChecker?: () => Promise<ResultEnvelope<LiveDataFreshness>>;
   freshnessCacheMs?: number;
   dataBundleProvider?: DataBundleProvider;
+  /** Resolve the current provider for long-lived local MCP processes. */
+  dataBundleProviderResolver?: () =>
+    | DataBundleProvider
+    | null
+    | Promise<DataBundleProvider | null>;
 };
 
 const GeneralThreatArchetypeSchema = z.enum(
@@ -862,6 +895,12 @@ function tesseraGeneralOptimizerStoreContent(
 export function createRosterPilotMcpServer(
   options: ServerOptions = {},
 ): McpServer {
+  const currentDataBundleProvider = async (): Promise<
+    DataBundleProvider | null
+  > =>
+    (await options.dataBundleProviderResolver?.()) ??
+    options.dataBundleProvider ??
+    null;
   const server = new McpServer({
     name: "rosterpilot",
     version: "0.2.0",
@@ -876,15 +915,17 @@ export function createRosterPilotMcpServer(
       typeof args[0] === "string" ? args[0] : "";
     const controlPlaneTool =
       toolName === "get_data_update_status" ||
+      toolName === "get_local_data_update_job" ||
+      toolName === "start_local_data_update" ||
       toolName === "refresh_data_now" ||
       toolName === "rollback_data_bundle";
     const handlerIndex = args.length - 1;
     const handler = args[handlerIndex];
     if (typeof handler === "function" && !controlPlaneTool) {
-      args[handlerIndex] = (...handlerArgs: unknown[]) =>
+      args[handlerIndex] = async (...handlerArgs: unknown[]) =>
         withDataBundleSnapshotLease(
           () => Reflect.apply(handler, undefined, handlerArgs),
-          options.dataBundleProvider ?? null,
+          await currentDataBundleProvider(),
         );
     }
     return Reflect.apply(registerTool, server, args);
@@ -923,7 +964,7 @@ export function createRosterPilotMcpServer(
     async () => {
       const result = getDataStatus();
       const updateStatus = await getDataUpdateStatus(
-        options.dataBundleProvider,
+        await currentDataBundleProvider(),
       );
       return resultContent({
         ...result,
@@ -972,9 +1013,9 @@ export function createRosterPilotMcpServer(
   server.registerTool(
     "get_data_update_status",
     {
-      title: "Get signed data update status",
+      title: "Get roster data update status",
       description:
-        "Distinguish the bundle currently in use from the latest verified bundle and latest upstream candidate, including scoped quarantines.",
+        "Distinguish the snapshot currently in use from the latest upstream and locally certified identities, background update progress, service-compatible snapshots, official reconciliation state, and scoped quarantines.",
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -984,16 +1025,16 @@ export function createRosterPilotMcpServer(
     },
     async () =>
       resultContent(
-        await getDataUpdateStatus(options.dataBundleProvider),
+        await getDataUpdateStatus(await currentDataBundleProvider()),
       ),
   );
 
   server.registerTool(
     "refresh_data_now",
     {
-      title: "Refresh signed roster data",
+      title: "Check roster data sources now",
       description:
-        "Check the signed stable channel now, verify and classify a candidate, and atomically activate only safe scopes for future requests.",
+        "Queue a durable local-source update check and return promptly. Changed sources are built, verified, certified, and atomically activated for future requests in the background; hosted signed-channel deployments keep their configured behavior.",
       inputSchema: {
         force: z.boolean().default(true),
       },
@@ -1007,10 +1048,50 @@ export function createRosterPilotMcpServer(
       resultContent(
         await refreshDataNow(
           { force },
-          options.dataBundleProvider,
+          await currentDataBundleProvider(),
         ),
       ),
   );
+
+  if (options.localDataUpdates) {
+    server.registerTool(
+      "start_local_data_update",
+      {
+        title: "Start a local roster data update",
+        description:
+          "Start the durable machine-local upstream check and return its job id immediately.",
+        inputSchema: {
+          force: z.boolean().default(true),
+        },
+        annotations: {
+          readOnlyHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      async ({ force }) =>
+        resultContent(await startLocalDataUpdate({ force })),
+    );
+
+    server.registerTool(
+      "get_local_data_update_job",
+      {
+        title: "Inspect a local roster data update",
+        description:
+          "Read one durable local-source update job by the id returned when it was queued, including progress and terminal status.",
+        inputSchema: {
+          jobId: z.string().uuid(),
+        },
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ jobId }) =>
+        resultContent(await getLocalDataUpdateJob(jobId)),
+    );
+  }
 
   server.registerTool(
     "rollback_data_bundle",
@@ -1031,7 +1112,7 @@ export function createRosterPilotMcpServer(
       resultContent(
         await rollbackDataBundle(
           bundleId,
-          options.dataBundleProvider,
+          await currentDataBundleProvider(),
         ),
       ),
   );
@@ -1336,6 +1417,151 @@ export function createRosterPilotMcpServer(
               journeyId,
               expectedRevision,
               actionId,
+            ),
+            violations: [],
+            warnings: [],
+          });
+        } catch (error) {
+          return journeyError(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      "repair_tessera_web_compatibility",
+      {
+        title: "Repair Tessera Web data compatibility",
+        description:
+          "Use the latest receipt-backed New Recruit observation to find or build a locally verified compatible snapshot, preserve safe New Recruit work, and prepare a successor Tessera Web run without starting it. Revision inputs are optional cross-checks, not the source of service identity.",
+        inputSchema: {
+          journeyId: z.string().uuid(),
+          expectedRevision: z.number().int().positive(),
+          observedGameSystemRevision: z.number().int().nonnegative().optional(),
+          observedCatalogueRevision: z.number().int().nonnegative().optional(),
+          predecessorJobPath: z.string().min(1).optional(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({
+        journeyId,
+        expectedRevision,
+        observedGameSystemRevision,
+        observedCatalogueRevision,
+        predecessorJobPath,
+      }) => {
+        try {
+          if (
+            (observedGameSystemRevision === undefined) !==
+            (observedCatalogueRevision === undefined)
+          ) {
+            throw Object.assign(
+              new Error(
+                "Optional New Recruit revision hints must be supplied together.",
+              ),
+              { code: "NEW_RECRUIT_REVISION_HINT_INCOMPLETE" },
+            );
+          }
+          return resultContent({
+            ok: true,
+            data: await options.workflowJourneys!.repairWebCompatibility(
+              journeyId,
+              expectedRevision,
+              {
+                ...(observedGameSystemRevision !== undefined &&
+                observedCatalogueRevision !== undefined
+                  ? {
+                      observedNewRecruitIdentity: {
+                        gameSystemRevision: observedGameSystemRevision,
+                        catalogueRevision: observedCatalogueRevision,
+                      },
+                    }
+                  : {}),
+                predecessorJobPath,
+              },
+            ),
+            violations: [],
+            warnings: [],
+          });
+        } catch (error) {
+          return journeyError(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      "approve_roster_data_migration",
+      {
+        title: "Approve a reviewed roster data migration",
+        description:
+          "Apply a separately reviewed roster migration after a verified data update changed roster or opponent selections. This does not start Tessera Web.",
+        inputSchema: {
+          journeyId: z.string().uuid(),
+          expectedRevision: z.number().int().positive(),
+          approvalId: z.string().min(1),
+          approvedBy: z.string().min(1),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ journeyId, expectedRevision, approvalId, approvedBy }) => {
+        try {
+          return resultContent({
+            ok: true,
+            data: await options.workflowJourneys!.approveDataMigration(
+              journeyId,
+              expectedRevision,
+              { approvalId, approvedBy },
+            ),
+            violations: [],
+            warnings: [],
+          });
+        } catch (error) {
+          return journeyError(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      "start_repaired_tessera_web_run",
+      {
+        title: "Start the repaired Tessera Web run",
+        description:
+          "After compatibility repair or explicit migration approval, start a new lineage-linked Tessera Web job. The failed frozen job is retained unchanged.",
+        inputSchema: {
+          journeyId: z.string().uuid(),
+          expectedRevision: z.number().int().positive(),
+          confirmExternalPreparation: z.literal(true),
+          outputDirectory: z.string().min(1).optional(),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async ({
+        journeyId,
+        expectedRevision,
+        confirmExternalPreparation,
+        outputDirectory,
+      }) => {
+        try {
+          return resultContent({
+            ok: true,
+            data: await options.workflowJourneys!.startRepairedWeb(
+              journeyId,
+              expectedRevision,
+              { confirmExternalPreparation, outputDirectory },
             ),
             violations: [],
             warnings: [],
@@ -2937,7 +3163,7 @@ export function createRosterPilotMcpServer(
       resultContent(
         await rebaseRosterWithProvider(
           roster,
-          options.dataBundleProvider ?? null,
+          await currentDataBundleProvider(),
         ),
       ),
   );

@@ -1,9 +1,9 @@
 import type {
   DataBundleOfficialAuthorityStatus,
-  VerifiedDataBundleManifestV1,
+  VerifiedAcceptedDataBundleManifestV1,
 } from "./data-bundle";
 
-let activeManifest: VerifiedDataBundleManifestV1 | null = null;
+let activeManifest: VerifiedAcceptedDataBundleManifestV1 | null = null;
 let activeOfficialAuthority: DataBundleOfficialAuthorityStatus | null = null;
 
 /**
@@ -12,13 +12,13 @@ let activeOfficialAuthority: DataBundleOfficialAuthorityStatus | null = null;
  * context supplies the exact signed bundle and scoped compatibility hashes.
  */
 export function getActiveDataBundleManifest():
-  | VerifiedDataBundleManifestV1
+  | VerifiedAcceptedDataBundleManifestV1
   | null {
   return activeManifest;
 }
 
 export function setActiveDataBundleManifest(
-  manifest: VerifiedDataBundleManifestV1,
+  manifest: VerifiedAcceptedDataBundleManifestV1,
   officialAuthority?: DataBundleOfficialAuthorityStatus,
 ): void {
   activeManifest = manifest;

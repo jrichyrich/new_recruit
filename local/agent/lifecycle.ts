@@ -210,6 +210,7 @@ export function renderLaunchAgent(options: {
   profileDirectory: string;
   stdoutPath: string;
   stderrPath: string;
+  dataProviderMode?: "local-source" | "signed-channel";
   dataChannelUrl?: string;
   dataTrustedKeysFile?: string;
   bootstrapDataBundleDirectory?: string;
@@ -243,6 +244,15 @@ export function renderLaunchAgent(options: {
       <key>ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY</key>
       <string>${xml(options.bootstrapDataBundleDirectory)}</string>`
     : "";
+  const signedChannelEnvironment =
+    (options.dataProviderMode ?? dataBundle.providerMode) ===
+    "signed-channel"
+      ? `
+      <key>ROSTERPILOT_DATA_CHANNEL_URL</key>
+      <string>${xml(options.dataChannelUrl ?? dataBundle.channelUrl ?? "")}</string>
+      <key>ROSTERPILOT_DATA_TRUSTED_KEYS_FILE</key>
+      <string>${xml(options.dataTrustedKeysFile ?? dataBundle.trustedKeysFile)}</string>`
+      : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -263,10 +273,8 @@ ${argumentsXml}
       <string>${xml(options.socketPath)}</string>
       <key>ROSTERPILOT_NEW_RECRUIT_PROFILE</key>
       <string>${xml(options.profileDirectory)}</string>
-      <key>ROSTERPILOT_DATA_CHANNEL_URL</key>
-      <string>${xml(options.dataChannelUrl ?? dataBundle.channelUrl)}</string>
-      <key>ROSTERPILOT_DATA_TRUSTED_KEYS_FILE</key>
-      <string>${xml(options.dataTrustedKeysFile ?? dataBundle.trustedKeysFile)}</string>
+      <key>ROSTERPILOT_DATA_PROVIDER_MODE</key>
+      <string>${xml(options.dataProviderMode ?? dataBundle.providerMode)}</string>${signedChannelEnvironment}
 ${bootstrapEnvironment}
     </dict>
     <key>RunAtLoad</key>

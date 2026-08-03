@@ -60,6 +60,7 @@ function trustedBundle(sourceData: ReturnType<typeof sourceRoster>["sourceData"]
   } as unknown as VerifiedDataBundleManifestV1;
   const status: DataUpdateStatus = {
     providerConfigured: true,
+    providerMode: "signed-channel",
     state: "ready",
     activeBundleId: sourceData.bundleId,
     latestVerifiedBundleId: sourceData.bundleId,

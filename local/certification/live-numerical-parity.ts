@@ -1260,7 +1260,8 @@ function signedBundleEvidenceComplete(
     trust.manifest.semanticIdentitySha256 ===
       envelope.data.semanticIdentitySha256 &&
     SHA256_PATTERN.test(trust.manifest.manifestSha256) &&
-    trust.manifest.signingKeyId.length > 0 &&
+    trust.manifest.evidenceKind === "signed" &&
+    Boolean(trust.manifest.signingKeyId?.length) &&
     trust.update.dataTrust === "signed-verified" &&
     trust.update.activeBundleId === envelope.data.bundleId &&
     SHA256_PATTERN.test(trust.identitySha256)

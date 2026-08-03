@@ -40,6 +40,7 @@ import {
   type DataBundleSigner,
   type DataBundleVerificationResult,
   type Ed25519KeyRegistry,
+  type VerifiedAcceptedDataBundleManifestV1,
   type VerifiedDataBundleManifestV1,
   type VerifiedDataBundleShardV1,
 } from "./data-bundle";
@@ -1740,7 +1741,7 @@ export function runtimeRosterCompatibilitySnapshot(
 }
 
 function runtimeCatalogueSources(
-  manifest: VerifiedDataBundleManifestV1,
+  manifest: VerifiedAcceptedDataBundleManifestV1,
 ): NewRecruitCatalogueManifest["sources"] {
   if (
     manifest.provenance.rules.package !==
@@ -2077,7 +2078,7 @@ export function activateRuntimeDataBundle(
 }
 
 export function createVerifiedRuntimeSnapshot(
-  manifest: VerifiedDataBundleManifestV1,
+  manifest: VerifiedAcceptedDataBundleManifestV1,
   shards: Iterable<
     VerifiedDataBundleShardV1<RuntimeDataBundleShardDataV1>
   >,
@@ -2091,7 +2092,10 @@ export async function verifyRuntimeDataBundle(input: {
   trustedKeys: Ed25519KeyRegistry;
 }): Promise<
   DataBundleVerificationResult<
-    DataBundleSnapshot<RuntimeDataBundleShardDataV1>
+    DataBundleSnapshot<RuntimeDataBundleShardDataV1> & {
+      readonly manifest: VerifiedDataBundleManifestV1;
+      readonly trustOrigin: "signed-verified";
+    }
   >
 > {
   const manifest = await verifyDataBundleManifest(
@@ -2154,7 +2158,10 @@ export async function verifyRuntimeDataBundle(input: {
     await assertRuntimeDataBundleSemanticIdentity(snapshot);
     return {
       ok: true,
-      data: snapshot,
+      data: snapshot as DataBundleSnapshot<RuntimeDataBundleShardDataV1> & {
+        readonly manifest: VerifiedDataBundleManifestV1;
+        readonly trustOrigin: "signed-verified";
+      },
     };
   } catch (error) {
     return {

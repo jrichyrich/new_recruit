@@ -12,6 +12,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  createLocalDataBundleManifest,
   createSignedDataBundleChannelPointer,
   createSignedDataBundleManifest,
   type DataBundleManifestDraftV1,
@@ -32,9 +33,17 @@ import {
   createLocalRuntimeDataBundleProvider,
 } from "../local/data-bundles/provider";
 import {
+  createLocalSourceDataBundleReceipt,
+} from "../local/data-bundles/receipt";
+import {
   createLocalDataBundleStore,
   LocalDataBundleStoreError,
 } from "../local/data-bundles/store";
+import {
+  getCurrentLocalDataBundleProvider,
+  initializeLocalDataBundleProvider,
+  resetLocalDataBundleProviderInitializationForTests,
+} from "../local/data-bundles/configure";
 
 const digest = (character: string): string => character.repeat(64);
 
@@ -45,6 +54,16 @@ type BundleFixture = {
   shards: Record<string, unknown>;
   pointer: Awaited<
     ReturnType<typeof createSignedDataBundleChannelPointer>
+  >;
+};
+
+type LocalBundleFixture = {
+  manifest: Awaited<
+    ReturnType<typeof createLocalDataBundleManifest>
+  >;
+  shards: Record<string, unknown>;
+  localBuildReceipt: Awaited<
+    ReturnType<typeof createLocalSourceDataBundleReceipt>
   >;
 };
 
@@ -195,6 +214,101 @@ async function bundleFixture(
   };
 }
 
+function draftFromSignedManifest(
+  manifest: BundleFixture["manifest"],
+): DataBundleManifestDraftV1 {
+  return {
+    schemaVersion: manifest.schemaVersion,
+    engineDataSchemaVersion: manifest.engineDataSchemaVersion,
+    createdAt: manifest.createdAt,
+    provenance: manifest.provenance,
+    semanticHashes: manifest.semanticHashes,
+    shards: manifest.shards,
+    ...(manifest.composition
+      ? { composition: manifest.composition }
+      : {}),
+  };
+}
+
+async function localBundleFixture(
+  pair: CryptoKeyPair,
+  sequence: number,
+  parentBundleId: string | null = null,
+): Promise<LocalBundleFixture> {
+  const signed = await bundleFixture(pair, sequence);
+  const manifest = await createLocalDataBundleManifest(
+    draftFromSignedManifest(signed.manifest),
+  );
+  const localBuildReceipt = await localReceiptForManifest(
+    manifest,
+    parentBundleId,
+  );
+  return {
+    manifest,
+    shards: signed.shards,
+    localBuildReceipt,
+  };
+}
+
+async function localReceiptForManifest(
+  manifest: Awaited<
+    ReturnType<typeof createLocalDataBundleManifest>
+  >,
+  parentBundleId: string | null,
+) {
+  const manifestSha256 = await sha256Hex(canonicalJson(manifest));
+  return createLocalSourceDataBundleReceipt({
+    schemaVersion: 1,
+    receiptKind: "rosterpilot-local-source-data-bundle",
+    trustOrigin: "locally-verified",
+    bundleId: manifest.bundleId,
+    installedAt: manifest.createdAt,
+    manifestSha256,
+    parentBundleId,
+    engineDataSchemaVersion: manifest.engineDataSchemaVersion,
+    signing: {
+      algorithm: "none",
+      keyId: "local-source",
+    },
+    source: {
+      channel: null,
+      channelPointerSha256: null,
+      provenance: manifest.provenance,
+      rulesPackageIntegrity: `sha512-${"A".repeat(86)}==`,
+    },
+    builder: {
+      builderId: "rosterpilot-local-builder",
+      builderVersion: "1.0.0",
+      sourceSha256: digest("b"),
+    },
+    acceptance: {
+      classification: "rules",
+      certificationStatus: "passed",
+      certificationEvidenceSha256: digest("c"),
+    },
+    validation: {
+      planId: "local-certification-v1",
+      planSha256: digest("d"),
+      scopes: ["faction:adeptus-custodes"],
+      checks: [
+        {
+          checkId: "runtime-schema",
+          scope: "faction:adeptus-custodes",
+          status: "passed",
+          evidenceSha256: digest("e"),
+        },
+      ],
+    },
+    shards: manifest.shards.map((descriptor) => ({
+      shardId: descriptor.shardId,
+      path: descriptor.path,
+      contentSha256: descriptor.contentSha256,
+      semanticHash: descriptor.semanticHash,
+      byteLength: descriptor.byteLength,
+    })),
+  });
+}
+
 async function withStoreDirectory(
   label: string,
   run: (rootDirectory: string) => Promise<void>,
@@ -286,6 +400,270 @@ test("local bundle install atomically activates a fully verified snapshot and re
   });
 });
 
+test("an unsigned local-source bundle requires and exposes complete build evidence", async () => {
+  await withStoreDirectory("local-source-bundle", async (root) => {
+    const pair = await keyPair();
+    const candidate = await localBundleFixture(pair, 61);
+    const store = createLocalDataBundleStore({
+      rootDirectory: root,
+      trustedKeys: {},
+    });
+
+    await assert.rejects(
+      store.installBundle({
+        manifest: candidate.manifest,
+        shards: candidate.shards,
+      }),
+      (error: unknown) =>
+        isStoreError(error, "DATA_BUNDLE_INSTALL_INVALID"),
+    );
+
+    const installed = await store.installBundle(
+      {
+        manifest: candidate.manifest,
+        shards: candidate.shards,
+        localBuildReceipt: candidate.localBuildReceipt,
+      },
+      { activate: true },
+    );
+    assert.equal(
+      installed.receipt.receiptKind,
+      "rosterpilot-local-source-data-bundle",
+    );
+    assert.equal(installed.receipt.signing.algorithm, "none");
+
+    const verified = await store.loadActiveBundle();
+    assert.equal(verified.trustOrigin, "locally-verified");
+    assert.equal(verified.evidence.kind, "local-receipt");
+    assert.equal(verified.snapshot.trustOrigin, "locally-verified");
+    assert.deepEqual(verified.snapshot.evidence, verified.evidence);
+    assert.equal("signature" in verified.manifest, false);
+
+    const active = (await store.getStatus()).bundles.find(
+      (entry) => entry.role === "active",
+    );
+    assert.equal(active?.trustOrigin, "locally-verified");
+    assert.equal(active?.evidenceKind, "local-receipt");
+  });
+});
+
+test("a failed first-provider cutover can restore compiled fallback without deleting the candidate", async () => {
+  await withStoreDirectory("data-bundle-store-deactivate", async (root) => {
+    const pair = await keyPair();
+    const candidate = await bundleFixture(pair, 60);
+    const store = createLocalDataBundleStore({
+      rootDirectory: root,
+      trustedKeys: { "release-2026": pair.publicKey },
+    });
+    await store.installBundle(
+      {
+        manifest: candidate.manifest,
+        shards: candidate.shards,
+        channelPointer: candidate.pointer,
+      },
+      { activate: true },
+    );
+    await store.clearActiveBundle(candidate.manifest.bundleId);
+    const status = await store.getStatus();
+    assert.equal(status.activeBundleId, null);
+    assert.equal(status.state, "degraded");
+    assert.equal(
+      status.bundles.some(
+        (entry) => entry.bundleId === candidate.manifest.bundleId,
+      ),
+      true,
+    );
+  });
+});
+
+test("a long-lived compiled process adopts the first snapshot installed by a detached worker", async () => {
+  await withStoreDirectory("data-bundle-cross-process-adoption", async (root) => {
+    const priorSupport = process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+    const priorWorker = process.env.ROSTERPILOT_LOCAL_UPDATE_WORKER;
+    process.env.ROSTERPILOT_SUPPORT_DIRECTORY = root;
+    process.env.ROSTERPILOT_LOCAL_UPDATE_WORKER = "1";
+    resetLocalDataBundleProviderInitializationForTests();
+    try {
+      const initialized = await initializeLocalDataBundleProvider();
+      assert.equal(initialized.activeBundleId, null);
+
+      const built = await buildRuntimeDataBundle({
+        createdAt: "2026-08-02T12:00:00.000Z",
+      });
+      const manifest = await createLocalDataBundleManifest(built.draft);
+      const localBuildReceipt = await localReceiptForManifest(
+        manifest,
+        null,
+      );
+      const shards = Object.fromEntries(
+        manifest.shards.map((descriptor) => [
+          descriptor.path,
+          built.shards.find(
+            (shard) => shard.shardId === descriptor.shardId,
+          ),
+        ]),
+      );
+      const store = createLocalDataBundleStore({
+        rootDirectory: path.join(root, "data-bundles"),
+        trustedKeys: {},
+      });
+      await store.installBundle(
+        {
+          manifest,
+          shards,
+          localBuildReceipt,
+        },
+        { activate: true },
+      );
+
+      const adopted = await getCurrentLocalDataBundleProvider();
+      assert.ok(adopted);
+      const lease = await adopted.acquireSnapshot();
+      assert.equal(lease.snapshot.bundleId, manifest.bundleId);
+      assert.equal(lease.snapshot.trustOrigin, "locally-verified");
+      await lease.release();
+    } finally {
+      resetLocalDataBundleProviderInitializationForTests();
+      if (priorSupport === undefined) {
+        delete process.env.ROSTERPILOT_SUPPORT_DIRECTORY;
+      } else {
+        process.env.ROSTERPILOT_SUPPORT_DIRECTORY = priorSupport;
+      }
+      if (priorWorker === undefined) {
+        delete process.env.ROSTERPILOT_LOCAL_UPDATE_WORKER;
+      } else {
+        process.env.ROSTERPILOT_LOCAL_UPDATE_WORKER = priorWorker;
+      }
+    }
+  });
+});
+
+test("local-source receipts fail closed on integrity and exact-source binding changes", async () => {
+  await withStoreDirectory("local-source-binding", async (root) => {
+    const pair = await keyPair();
+    const candidate = await localBundleFixture(pair, 62);
+    const store = createLocalDataBundleStore({
+      rootDirectory: root,
+      trustedKeys: {},
+    });
+
+    const changedSourceDraft = structuredClone(
+      candidate.localBuildReceipt,
+    );
+    delete (changedSourceDraft as { integritySha256?: string })
+      .integritySha256;
+    changedSourceDraft.source.provenance.rules.version = "99.0.0";
+    const reboundWrongSource =
+      await createLocalSourceDataBundleReceipt(changedSourceDraft);
+    await assert.rejects(
+      store.installBundle({
+        manifest: candidate.manifest,
+        shards: candidate.shards,
+        localBuildReceipt: reboundWrongSource,
+      }),
+      (error: unknown) =>
+        isStoreError(error, "DATA_BUNDLE_INSTALL_INVALID"),
+    );
+
+    const tamperedReceipt = structuredClone(
+      candidate.localBuildReceipt,
+    );
+    tamperedReceipt.builder.sourceSha256 = digest("f");
+    await assert.rejects(
+      store.installBundle({
+        manifest: candidate.manifest,
+        shards: candidate.shards,
+        localBuildReceipt: tamperedReceipt,
+      }),
+      (error: unknown) =>
+        isStoreError(error, "DATA_BUNDLE_INSTALL_INVALID"),
+    );
+
+    await store.installBundle(
+      {
+        manifest: candidate.manifest,
+        shards: candidate.shards,
+        localBuildReceipt: candidate.localBuildReceipt,
+      },
+      { activate: true },
+    );
+    const manifestFilename = path.join(
+      root,
+      "v1",
+      "bundles",
+      candidate.manifest.bundleId,
+      "manifest.json",
+    );
+    const onDiskManifest = structuredClone(candidate.manifest);
+    onDiskManifest.provenance.rules.version = "tampered";
+    await writeFile(manifestFilename, JSON.stringify(onDiskManifest));
+    await assert.rejects(
+      store.loadActiveBundle(),
+      (error: unknown) =>
+        isStoreError(error, "DATA_BUNDLE_INTEGRITY_FAILED"),
+    );
+    await writeFile(
+      manifestFilename,
+      JSON.stringify(candidate.manifest),
+    );
+    const receiptFilename = path.join(
+      root,
+      "v1",
+      "bundles",
+      candidate.manifest.bundleId,
+      "receipt.json",
+    );
+    const onDiskReceipt = JSON.parse(
+      await readFile(receiptFilename, "utf8"),
+    ) as typeof candidate.localBuildReceipt;
+    onDiskReceipt.validation.checks[0]!.evidenceSha256 = digest("0");
+    await writeFile(receiptFilename, JSON.stringify(onDiskReceipt));
+    await assert.rejects(
+      store.loadActiveBundle(),
+      (error: unknown) =>
+        isStoreError(error, "DATA_BUNDLE_INTEGRITY_FAILED"),
+    );
+  });
+});
+
+test("signed archives remain independently readable after local-source activation", async () => {
+  await withStoreDirectory("mixed-trust-archive", async (root) => {
+    const pair = await keyPair();
+    const signed = await bundleFixture(pair, 63);
+    const local = await localBundleFixture(
+      pair,
+      64,
+      signed.manifest.bundleId,
+    );
+    const store = createLocalDataBundleStore({
+      rootDirectory: root,
+      trustedKeys: { "release-2026": pair.publicKey },
+    });
+    await store.installBundle(signed, { activate: true });
+    await store.installBundle(
+      {
+        manifest: local.manifest,
+        shards: local.shards,
+        localBuildReceipt: local.localBuildReceipt,
+      },
+      { activate: true },
+    );
+
+    assert.equal(
+      (await store.loadBundle(signed.manifest.bundleId)).trustOrigin,
+      "signed-verified",
+    );
+    assert.equal(
+      (await store.loadBundle(local.manifest.bundleId)).trustOrigin,
+      "locally-verified",
+    );
+    const rollback = await store.rollbackBundle(
+      signed.manifest.bundleId,
+    );
+    assert.equal(rollback.bundleId, signed.manifest.bundleId);
+  });
+});
+
 test("a long-lived provider follows an active pointer advanced by another process", async () => {
   await withStoreDirectory(
     "data-bundle-cross-process-pointer",
@@ -355,6 +733,46 @@ test("a long-lived provider follows an active pointer advanced by another proces
       );
     },
   );
+});
+
+test("the local runtime provider reports local-source mode and locally verified trust", async () => {
+  await withStoreDirectory("local-runtime-trust", async (root) => {
+    const built = await buildRuntimeDataBundle({
+      createdAt: "2026-07-31T12:00:00.000Z",
+    });
+    const manifest = await createLocalDataBundleManifest(built.draft);
+    const localBuildReceipt = await localReceiptForManifest(
+      manifest,
+      null,
+    );
+    const provider = await createLocalRuntimeDataBundleProvider({
+      rootDirectory: root,
+      trustedKeys: {},
+      channelUrl: null,
+      refreshOnInitialize: false,
+      providerMode: "local-source",
+      bootstrap: {
+        manifest,
+        shards: Object.fromEntries(
+          manifest.shards.map((descriptor) => [
+            descriptor.path,
+            built.shards.find(
+              (shard) => shard.shardId === descriptor.shardId,
+            ),
+          ]),
+        ),
+        localBuildReceipt,
+      },
+    });
+
+    const status = await provider.getStatus();
+    assert.equal(status.providerMode, "local-source");
+    assert.equal(status.dataTrust, "locally-verified");
+    const lease = await provider.acquireSnapshot();
+    assert.equal(lease.snapshot.trustOrigin, "locally-verified");
+    assert.equal(lease.snapshot.evidence?.kind, "local-receipt");
+    await lease.release();
+  });
 });
 
 test("failed validation and a crash after install never switch the active pointer", async () => {

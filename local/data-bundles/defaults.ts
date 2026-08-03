@@ -6,14 +6,23 @@ export const DEFAULT_DATA_BUNDLE_CHANNEL_URL =
 export function defaultLocalDataBundleEnvironment(
   projectDirectory: string,
 ): {
-  channelUrl: string;
+  providerMode: "local-source" | "signed-channel";
+  channelUrl: string | null;
   trustedKeysFile: string;
   bootstrapDirectory: string;
 } {
+  const configuredMode = process.env.ROSTERPILOT_DATA_PROVIDER_MODE;
+  const providerMode =
+    configuredMode === "signed-channel"
+      ? "signed-channel"
+      : "local-source";
   return {
+    providerMode,
     channelUrl:
-      process.env.ROSTERPILOT_DATA_CHANNEL_URL ??
-      DEFAULT_DATA_BUNDLE_CHANNEL_URL,
+      providerMode === "signed-channel"
+        ? (process.env.ROSTERPILOT_DATA_CHANNEL_URL ??
+          DEFAULT_DATA_BUNDLE_CHANNEL_URL)
+        : null,
     trustedKeysFile:
       process.env.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE ??
       path.join(

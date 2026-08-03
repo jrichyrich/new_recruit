@@ -210,6 +210,7 @@ test("durable Tessera jobs reserve isolated bundles and retain guided recovery s
   });
   assert.ok(built.ok && built.data);
 
+  const predecessorRunId = "11111111-1111-4111-8111-111111111111";
   const job = await startTesseraRun(
     {
       kind: "stress",
@@ -224,9 +225,11 @@ test("durable Tessera jobs reserve isolated bundles and retain guided recovery s
       outputDirectory: path.join(root, "runs"),
       rootDir: root,
       launch: false,
+      supersedesRunId: predecessorRunId,
     },
   );
   assert.equal(job.status, "queued");
+  assert.equal(job.supersedesRunId, predecessorRunId);
   assert.match(job.runId, /^[0-9a-f-]{36}$/);
   assert.ok(job.manifestPath?.endsWith("stress-manifest.json"));
   assert.match(job.requestSha256, /^[0-9a-f]{64}$/);

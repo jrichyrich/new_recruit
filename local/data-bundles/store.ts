@@ -17,14 +17,18 @@ import { z } from "zod";
 import {
   createDataBundleSnapshot,
   DataBundleChannelCursorV1Schema,
+  isLocalDataBundleManifest,
   verifyDataBundleChannelPointer,
   verifyDataBundleManifest,
   verifyDataBundleShard,
+  verifyLocalDataBundleManifest,
   type DataBundleShardDescriptorV1,
   type DataBundleChannelCursorV1,
   type DataBundleSnapshot,
   type DataBundleSnapshotLease,
   type Ed25519KeyRegistry,
+  type AcceptedDataBundleEvidenceIdentity,
+  type VerifiedAcceptedDataBundleManifestV1,
   type VerifiedDataBundleManifestV1,
   type VerifiedDataBundleShardV1,
 } from "../../lib/rosterpilot/data-bundle";
@@ -34,10 +38,14 @@ import {
   type DataBundleDeltaClassification,
 } from "../../lib/rosterpilot/semantic-hash";
 import {
+  acceptedDataBundleEvidenceIdentity,
   createLocalDataBundleIntegrityReceipt,
+  LocalSourceDataBundleReceiptV1Schema,
+  storedReceiptTrustOrigin,
   verifyLocalDataBundleIntegrityReceipt,
-  type LocalDataBundleIntegrityReceiptV1,
+  verifyLocalSourceDataBundleReceipt,
   type LocalDataBundleReceiptShardV1,
+  type StoredLocalDataBundleReceiptV1,
 } from "./receipt";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -126,6 +134,7 @@ const localDataBundleStoreStateDraftV1Schema = z
       "clear-quarantine",
       "rollback-hold",
       "clear-rollback-hold",
+      "deactivate",
       "retention",
     ]),
   })
@@ -308,6 +317,7 @@ export type LocalDataBundleInstallInput = {
     | Readonly<Record<string, unknown>>;
   channelPointer?: unknown;
   acceptance?: LocalDataBundleAcceptanceMetadata;
+  localBuildReceipt?: unknown;
 };
 
 export type LocalDataBundleMutationOptions = {
@@ -324,7 +334,7 @@ export type LocalDataBundleInstallResult = {
   installed: boolean;
   activated: boolean;
   previousBundleId: string | null;
-  receipt: LocalDataBundleIntegrityReceiptV1;
+  receipt: StoredLocalDataBundleReceiptV1;
 };
 
 export type LocalDataBundleActivationResult = {
@@ -336,13 +346,15 @@ export type LocalDataBundleActivationResult = {
 
 export type LocalDataBundleVerifiedInstall = {
   bundleId: string;
-  manifest: VerifiedDataBundleManifestV1;
+  manifest: VerifiedAcceptedDataBundleManifestV1;
   shards: ReadonlyMap<
     string,
     VerifiedDataBundleShardV1<unknown>
   >;
   snapshot: DataBundleSnapshot<unknown>;
-  receipt: LocalDataBundleIntegrityReceiptV1;
+  receipt: StoredLocalDataBundleReceiptV1;
+  trustOrigin: "signed-verified" | "locally-verified";
+  evidence: AcceptedDataBundleEvidenceIdentity;
 };
 
 export type LocalDataBundleStatusEntry = {
@@ -350,6 +362,8 @@ export type LocalDataBundleStatusEntry = {
   role: "active" | "previous" | "installed" | "quarantined";
   integrity: "verified" | "invalid";
   installedAt: string | null;
+  trustOrigin: "signed-verified" | "locally-verified" | null;
+  evidenceKind: "signed" | "local-receipt" | null;
   referencedBy: number;
   quarantine: LocalDataBundleQuarantineV1 | null;
   issue: string | null;
@@ -745,11 +759,11 @@ class OwnedLocalDataBundleUpdateLease
 }
 
 type PreparedInstall = {
-  manifest: VerifiedDataBundleManifestV1;
+  manifest: VerifiedAcceptedDataBundleManifestV1;
   shards: Map<string, VerifiedDataBundleShardV1<unknown>>;
   serializedManifest: Uint8Array;
   serializedShards: Map<string, Uint8Array>;
-  receipt: LocalDataBundleIntegrityReceiptV1;
+  receipt: StoredLocalDataBundleReceiptV1;
 };
 
 type ReadReferencesResult = {
@@ -1057,6 +1071,34 @@ export class LocalDataBundleStore {
         quarantines: state.quarantines,
         rollbackHold: null,
         lastOperation: "clear-rollback-hold",
+      });
+    });
+  }
+
+  /**
+   * Restores an empty store after a failed first-provider activation. This is
+   * intentionally narrower than rollback: it can only clear the exact active
+   * bundle named by the caller and never removes the immutable installation.
+   */
+  async clearActiveBundle(
+    expectedBundleId: string,
+    options: LocalDataBundleMutationOptions = {},
+  ): Promise<LocalDataBundleStoreStateV1> {
+    assertBundleId(expectedBundleId);
+    return this.#withLease(options.lease, async () => {
+      const state = await this.#readState();
+      if (state.activeBundleId !== expectedBundleId) return state;
+      return this.#writeNextState(state, {
+        activeBundleId: null,
+        previousBundleIds: state.previousBundleIds.filter(
+          (bundleId) => bundleId !== expectedBundleId,
+        ),
+        quarantines: state.quarantines,
+        rollbackHold:
+          state.rollbackHold?.bundleId === expectedBundleId
+            ? null
+            : state.rollbackHold ?? null,
+        lastOperation: "deactivate",
       });
     });
   }
@@ -1552,10 +1594,16 @@ export class LocalDataBundleStore {
       let integrity: LocalDataBundleStatusEntry["integrity"] =
         "verified";
       let installedAt: string | null = null;
+      let trustOrigin: LocalDataBundleStatusEntry["trustOrigin"] =
+        null;
+      let evidenceKind: LocalDataBundleStatusEntry["evidenceKind"] =
+        null;
       let issue: string | null = null;
       try {
         const verified = await this.#verifyInstalledBundle(bundleId);
         installedAt = verified.receipt.installedAt;
+        trustOrigin = verified.trustOrigin;
+        evidenceKind = verified.evidence.kind;
       } catch (error) {
         integrity = "invalid";
         issue = String(error);
@@ -1574,6 +1622,8 @@ export class LocalDataBundleStore {
         role,
         integrity,
         installedAt,
+        trustOrigin,
+        evidenceKind,
         referencedBy: referenceCounts.get(bundleId) ?? 0,
         quarantine,
         issue,
@@ -1622,10 +1672,13 @@ export class LocalDataBundleStore {
   async #prepareInstall(
     input: LocalDataBundleInstallInput,
   ): Promise<PreparedInstall> {
-    const manifestResult = await verifyDataBundleManifest(
-      input.manifest,
-      this.#trustedKeys,
-    );
+    const localSource = isLocalDataBundleManifest(input.manifest);
+    const manifestResult = localSource
+      ? await verifyLocalDataBundleManifest(input.manifest)
+      : await verifyDataBundleManifest(
+          input.manifest,
+          this.#trustedKeys,
+        );
     if (!manifestResult.ok) {
       throw new LocalDataBundleStoreError(
         "DATA_BUNDLE_INSTALL_INVALID",
@@ -1633,6 +1686,28 @@ export class LocalDataBundleStore {
       );
     }
     const manifest = manifestResult.data;
+    if (localSource) {
+      if (input.localBuildReceipt === undefined) {
+        throw new LocalDataBundleStoreError(
+          "DATA_BUNDLE_INSTALL_INVALID",
+          "A locally built data bundle requires its complete unsigned build receipt.",
+        );
+      }
+      if (
+        input.channelPointer !== undefined ||
+        input.acceptance !== undefined
+      ) {
+        throw new LocalDataBundleStoreError(
+          "DATA_BUNDLE_INSTALL_INVALID",
+          "Local-source acceptance comes only from its build receipt; signed-channel pointers and acceptance overrides are not allowed.",
+        );
+      }
+    } else if (input.localBuildReceipt !== undefined) {
+      throw new LocalDataBundleStoreError(
+        "DATA_BUNDLE_INSTALL_INVALID",
+        "A signed data bundle cannot be relabeled with a local-source build receipt.",
+      );
+    }
     let sourceChannel: string | null = null;
     let channelPointerSha256: string | null = null;
     if (input.channelPointer !== undefined) {
@@ -1665,7 +1740,7 @@ export class LocalDataBundleStore {
     if (!localShardPathsAreSafe(declaredPaths)) {
       throw new LocalDataBundleStoreError(
         "DATA_BUNDLE_INSTALL_INVALID",
-        "The signed manifest repeats or overlaps a shard path or reserved local bundle filename.",
+        "The accepted manifest repeats or overlaps a shard path or reserved local bundle filename.",
       );
     }
     const suppliedPaths = [...shardInputs.keys()].sort();
@@ -1673,7 +1748,7 @@ export class LocalDataBundleStore {
     if (canonicalJson(suppliedPaths) !== canonicalJson(expectedPaths)) {
       throw new LocalDataBundleStoreError(
         "DATA_BUNDLE_INSTALL_INVALID",
-        `The supplied shard set does not exactly match the signed manifest (expected ${expectedPaths.join(
+        `The supplied shard set does not exactly match the accepted manifest (expected ${expectedPaths.join(
           ", ",
         )}; received ${suppliedPaths.join(", ")}).`,
       );
@@ -1724,42 +1799,70 @@ export class LocalDataBundleStore {
       verifiedShards.set(descriptor.shardId, shardResult.data);
       serializedShards.set(descriptor.path, bytes);
     }
+    const trustOrigin = localSource
+      ? "locally-verified"
+      : "signed-verified";
     createDataBundleSnapshot(manifest, verifiedShards.values(), {
       acquiredAt: this.#timestamp(),
+      trustOrigin,
     });
 
-    const acceptance = input.acceptance ?? {};
-    const receipt = await createLocalDataBundleIntegrityReceipt({
-      schemaVersion: 1,
-      receiptKind: "rosterpilot-local-data-bundle-integrity",
-      bundleId: manifest.bundleId,
-      installedAt: this.#timestamp(),
-      manifestSha256: await sha256Hex(
-        canonicalJson(manifest),
-      ),
-      signing: {
-        algorithm: "Ed25519",
-        keyId: manifest.signature.keyId,
-      },
-      source: {
-        channel: sourceChannel,
-        channelPointerSha256,
-      },
-      acceptance: {
-        classification: acceptance.classification ?? null,
-        certificationStatus:
-          acceptance.certificationStatus ?? "not-required",
-        certificationEvidenceSha256:
-          acceptance.certificationEvidenceSha256 ?? null,
-      },
-      shards: manifest.shards.map((descriptor) => ({
-        shardId: descriptor.shardId,
-        path: descriptor.path,
-        contentSha256: descriptor.contentSha256,
-        semanticHash: descriptor.semanticHash,
-        byteLength: descriptor.byteLength,
-      })),
-    });
+    const receiptShards = manifest.shards.map((descriptor) => ({
+      shardId: descriptor.shardId,
+      path: descriptor.path,
+      contentSha256: descriptor.contentSha256,
+      semanticHash: descriptor.semanticHash,
+      byteLength: descriptor.byteLength,
+    }));
+    const manifestSha256 = await sha256Hex(canonicalJson(manifest));
+    let receipt: StoredLocalDataBundleReceiptV1;
+    if (localSource) {
+      const receiptResult =
+        await verifyLocalSourceDataBundleReceipt(
+          input.localBuildReceipt,
+          {
+            bundleId: manifest.bundleId,
+            manifestSha256,
+            engineDataSchemaVersion:
+              manifest.engineDataSchemaVersion,
+            provenance: manifest.provenance,
+            shards: receiptShards,
+          },
+        );
+      if (!receiptResult.ok) {
+        throw new LocalDataBundleStoreError(
+          "DATA_BUNDLE_INSTALL_INVALID",
+          `Local-source build receipt verification failed (${receiptResult.code}): ${receiptResult.message}`,
+        );
+      }
+      receipt = receiptResult.receipt;
+    } else {
+      const acceptance = input.acceptance ?? {};
+      const signedManifest = manifest as VerifiedDataBundleManifestV1;
+      receipt = await createLocalDataBundleIntegrityReceipt({
+        schemaVersion: 1,
+        receiptKind: "rosterpilot-local-data-bundle-integrity",
+        bundleId: manifest.bundleId,
+        installedAt: this.#timestamp(),
+        manifestSha256,
+        signing: {
+          algorithm: "Ed25519",
+          keyId: signedManifest.signature.keyId,
+        },
+        source: {
+          channel: sourceChannel,
+          channelPointerSha256,
+        },
+        acceptance: {
+          classification: acceptance.classification ?? null,
+          certificationStatus:
+            acceptance.certificationStatus ?? "not-required",
+          certificationEvidenceSha256:
+            acceptance.certificationEvidenceSha256 ?? null,
+        },
+        shards: receiptShards,
+      });
+    }
     return {
       manifest,
       shards: verifiedShards,
@@ -1801,10 +1904,20 @@ export class LocalDataBundleStore {
       path.join(bundleDirectory, MANIFEST_FILENAME),
       this.#limits.manifestBytes,
     );
-    const manifestResult = await verifyDataBundleManifest(
-      manifestInput,
-      this.#trustedKeys,
+    const receiptInput = await readBoundedJson(
+      path.join(bundleDirectory, RECEIPT_FILENAME),
+      this.#limits.receiptBytes,
     );
+    const localSourceReceipt =
+      LocalSourceDataBundleReceiptV1Schema.safeParse(
+        receiptInput,
+      ).success;
+    const manifestResult = localSourceReceipt
+      ? await verifyLocalDataBundleManifest(manifestInput)
+      : await verifyDataBundleManifest(
+          manifestInput,
+          this.#trustedKeys,
+        );
     if (!manifestResult.ok) {
       throw new LocalDataBundleStoreError(
         "DATA_BUNDLE_INTEGRITY_FAILED",
@@ -1873,17 +1986,6 @@ export class LocalDataBundleStore {
       }
       shards.set(descriptor.shardId, shardResult.data);
     }
-    const snapshot = createDataBundleSnapshot(
-      manifest,
-      shards.values(),
-      {
-        acquiredAt: this.#timestamp(),
-      },
-    );
-    const receiptInput = await readBoundedJson(
-      path.join(bundleDirectory, RECEIPT_FILENAME),
-      this.#limits.receiptBytes,
-    );
     const receiptShards: LocalDataBundleReceiptShardV1[] =
       manifest.shards.map((descriptor) => ({
         shardId: descriptor.shardId,
@@ -1892,30 +1994,57 @@ export class LocalDataBundleStore {
         semanticHash: descriptor.semanticHash,
         byteLength: descriptor.byteLength,
       }));
-    const receiptResult =
-      await verifyLocalDataBundleIntegrityReceipt(receiptInput, {
-        bundleId,
-        manifestSha256: await sha256Hex(
-          canonicalJson(manifest),
-        ),
-        signing: {
-          algorithm: "Ed25519",
-          keyId: manifest.signature.keyId,
-        },
-        shards: receiptShards,
-      });
+    const manifestSha256 = await sha256Hex(
+      canonicalJson(manifest),
+    );
+    const receiptResult = localSourceReceipt
+      ? await verifyLocalSourceDataBundleReceipt(receiptInput, {
+          bundleId,
+          manifestSha256,
+          engineDataSchemaVersion:
+            manifest.engineDataSchemaVersion,
+          provenance: manifest.provenance,
+          shards: receiptShards,
+        })
+      : await verifyLocalDataBundleIntegrityReceipt(receiptInput, {
+          bundleId,
+          manifestSha256,
+          signing: {
+            algorithm: "Ed25519",
+            keyId: (manifest as VerifiedDataBundleManifestV1)
+              .signature.keyId,
+          },
+          shards: receiptShards,
+        });
     if (!receiptResult.ok) {
       throw new LocalDataBundleStoreError(
         "DATA_BUNDLE_INTEGRITY_FAILED",
         `Installed data-bundle receipt verification failed (${receiptResult.code}): ${receiptResult.message}`,
       );
     }
+    const evidence = acceptedDataBundleEvidenceIdentity(
+      receiptResult.receipt,
+    );
+    const trustOrigin = storedReceiptTrustOrigin(
+      receiptResult.receipt,
+    );
+    const snapshot = createDataBundleSnapshot(
+      manifest,
+      shards.values(),
+      {
+        acquiredAt: this.#timestamp(),
+        trustOrigin,
+        evidence,
+      },
+    );
     return {
       bundleId,
       manifest,
       shards: snapshot.shards,
       snapshot,
       receipt: receiptResult.receipt,
+      trustOrigin,
+      evidence,
     };
   }
 

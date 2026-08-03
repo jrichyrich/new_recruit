@@ -1008,6 +1008,13 @@ export class RemoteRuntimeDataBundleProvider
     })();
     try {
       return await this.#activationPromise;
+    } catch (error) {
+      if (this.#pending === pending) {
+        this.#pending = null;
+        this.#candidate = null;
+      }
+      this.#state = "degraded";
+      throw error;
     } finally {
       this.#activationPromise = null;
     }

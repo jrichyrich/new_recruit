@@ -67,6 +67,7 @@ import {
   deliverRosterToNewRecruit,
   enrichRoszThroughNewRecruit,
   forgetKeychainProvider,
+  recordVerifiedServiceObservation,
   type NewRecruitDeliveryOptions,
 } from "../new-recruit/companion";
 import {
@@ -86,7 +87,14 @@ import {
   LocalAgentError,
   runTesseraThroughLocalAgent,
 } from "../agent/client";
-import { projectRoot } from "../agent/paths";
+import {
+  projectRoot,
+  rosterPilotSupportDirectory,
+} from "../agent/paths";
+import {
+  createServiceCompatibilityStore,
+  type RecordTesseraServiceEvidenceInput,
+} from "../data-bundles/service-compatibility";
 import {
   runTesseraBrowserMatchup,
   TESSERA_URL,
@@ -264,6 +272,9 @@ export type TesseraDependencies = {
   runBrowser?: typeof runTesseraBrowserMatchup;
   runLocalEngine?: typeof runLocalTesseraEngineMatchup;
   runtimeIssue?: typeof runtimeRestartIssue;
+  recordTesseraServiceEvidence?: (
+    input: RecordTesseraServiceEvidenceInput,
+  ) => Promise<unknown>;
   /**
    * Marks an injected delivery adapter as the production persistent-cache
    * path. Test doubles remain isolated by default.
@@ -522,11 +533,29 @@ export async function prepareRosterForTessera(
     if (persisted) {
       delivery = persisted;
       cacheReused = true;
-      await recordNewRecruitReuseReceipt({
+      const reuseReceipt = await recordNewRecruitReuseReceipt({
         roster,
         runId: mutationRunId,
         delivery,
       });
+      if (delivery.data) {
+        try {
+          await recordVerifiedServiceObservation(
+            roster,
+            delivery.data,
+            reuseReceipt,
+          );
+        } catch (error) {
+          delivery.warnings.push({
+            code: "SERVICE_COMPATIBILITY_OBSERVATION_WRITE_FAILED",
+            message:
+              `The hash-verified cached New Recruit artifact remains reusable, but its catalogue identity could not be indexed: ${
+                error instanceof Error ? error.message : String(error)
+              }. Doctor can rebuild the compatibility index without uploading another list.`,
+            severity: "warn",
+          });
+        }
+      }
     } else {
       if (managesPersistentCache && dependencies.deliver) {
         mutationTransaction =
@@ -579,7 +608,26 @@ export async function prepareRosterForTessera(
         });
         pendingPersistentCacheStore = delivery.ok;
       }
-      await mutationTransaction?.finalizeDelivery(delivery);
+      const finalizedReceipt =
+        await mutationTransaction?.finalizeDelivery(delivery);
+      if (finalizedReceipt && delivery.data) {
+        try {
+          await recordVerifiedServiceObservation(
+            roster,
+            delivery.data,
+            finalizedReceipt,
+          );
+        } catch (error) {
+          delivery.warnings.push({
+            code: "SERVICE_COMPATIBILITY_OBSERVATION_WRITE_FAILED",
+            message:
+              `The verified New Recruit artifact was retained, but its catalogue observation could not be indexed for automatic compatibility selection: ${
+                error instanceof Error ? error.message : String(error)
+              }. The mutation receipt prevents duplicate imports and Doctor can repair the local index.`,
+            severity: "warn",
+          });
+        }
+      }
       if (
         mutationTransaction &&
         delivery.data?.catalogueProvenance &&
@@ -2143,11 +2191,29 @@ async function prepareUploadedRosz(
             "The verified New Recruit cache omitted its enriched ROSZ artifact.",
           );
         }
-        await recordNewRecruitReuseReceipt({
+        const reuseReceipt = await recordNewRecruitReuseReceipt({
           roster: opponentRosterContext!,
           runId: mutationRunId,
           delivery: persisted,
         });
+        if (persisted.data) {
+          try {
+            await recordVerifiedServiceObservation(
+              opponentRosterContext!,
+              persisted.data,
+              reuseReceipt,
+            );
+          } catch (error) {
+            warnings.push({
+              code: "SERVICE_COMPATIBILITY_OBSERVATION_WRITE_FAILED",
+              message:
+                `The hash-verified cached opponent remains reusable, but its catalogue identity could not be indexed: ${
+                  error instanceof Error ? error.message : String(error)
+                }. No duplicate upload was attempted.`,
+              severity: "warn",
+            });
+          }
+        }
         prepared = {
           rosterName: persisted.data.rosterName,
           listUrl: persisted.data.listUrl,
@@ -5260,7 +5326,11 @@ export async function analyzeRosterMatchup(
     ? tesseraScenarioContractSha256(reportScenarioContract)
     : null;
   const bundleTrust =
-    await captureProviderCompatibilityBundleTrustIdentity();
+    await captureProviderCompatibilityBundleTrustIdentity(
+      "bundleId" in playerRoster.sourceData
+        ? playerRoster.sourceData.bundleId
+        : null,
+    );
   const providerCompatibilityEnvelopes =
     buildMatchupProviderCompatibilityEnvelopes({
       sourceData: playerRoster.sourceData,
@@ -5571,6 +5641,55 @@ export async function analyzeRosterMatchup(
     supplementalAnalyses,
     artifacts: [],
   };
+  const websiteServiceEvidence =
+    selectedSimulationBackend === "website" &&
+    providerEvidence &&
+    preparedPlayer.enrichedRoszSha256
+      ? {
+          factionId: playerRoster.factionId,
+          enrichedRoszSha256: preparedPlayer.enrichedRoszSha256,
+          observedAt: report.generatedAt,
+          deploymentAssetSha256:
+            providerEvidence.deployment.identitySha256,
+          importedSemanticsSha256:
+            providerEvidence.importSemantics.playerSha256 ??
+            providerEvidence.importSemantics.combinedSha256,
+        }
+      : null;
+  const recordTesseraServiceEvidence =
+    dependencies.recordTesseraServiceEvidence ??
+    (
+      !dependencies.deliver &&
+      !dependencies.enrich &&
+      !dependencies.runBrowser &&
+      !dependencies.runLocalEngine
+        ? (input: RecordTesseraServiceEvidenceInput) =>
+            createServiceCompatibilityStore({
+              rootDirectory: path.join(
+                rosterPilotSupportDirectory(),
+                "data-bundles",
+              ),
+            }).recordTesseraEvidence(input)
+        : null
+    );
+  if (websiteServiceEvidence && recordTesseraServiceEvidence) {
+    try {
+      const recorded = await recordTesseraServiceEvidence(
+        websiteServiceEvidence,
+      );
+      if (recorded === null) {
+        report.warnings.push(
+          "The Tessera deployment evidence was captured, but no matching receipt-backed New Recruit observation was available to index it. No list was uploaded again.",
+        );
+      }
+    } catch (error) {
+      report.warnings.push(
+        `The Tessera report remains valid, but its deployment evidence could not be added to the local service-compatibility index: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   try {
     const resolvedOutputDirectory = path.resolve(
       options.rootDir ?? process.cwd(),
@@ -5721,6 +5840,15 @@ export async function analyzeRosterMatchup(
       path.join(outputDirectory, `${basename}.receipt.json`),
       options,
     );
+    if (websiteServiceEvidence && recordTesseraServiceEvidence) {
+      await recordTesseraServiceEvidence({
+        ...websiteServiceEvidence,
+        jobReceiptSha256: crypto
+          .createHash("sha256")
+          .update(JSON.stringify(receipt))
+          .digest("hex"),
+      }).catch(() => undefined);
+    }
     report.artifacts = portableArtifacts.map((artifact, index) => ({
       ...artifact,
       written:

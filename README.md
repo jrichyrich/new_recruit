@@ -80,6 +80,8 @@ npm run rosterpilot -- status
 npm run rosterpilot -- freshness
 npm run rosterpilot -- data update-status
 npm run rosterpilot -- data refresh
+npm run rosterpilot -- data start-local-update
+npm run rosterpilot -- data update-job --job <job-id>
 npm run rosterpilot -- data rollback --bundle <retained-bundle-id>
 npm run rosterpilot -- conflicts --faction adeptus-custodes --blocking true
 npm run rosterpilot -- search custodes
@@ -98,10 +100,17 @@ npm run data:check-latest
 npm run data:sync-check
 ```
 
-The data status commands are always safe to run. Refresh and rollback report a
-configuration error until the application release or local setup has installed
-a signed bootstrap, trusted public key, channel URL, and archive store; they do
-not fall back to unsigned updates.
+The data status commands are always safe to run. A cloned or self-hosted Node
+installation defaults to `local-source`: it needs no signing key, public-key
+registry, signed bootstrap, or RosterPilot data-channel account. On startup it
+continues immediately from the compiled application snapshot, queues a
+background source check when due, and activates only a fully certified local
+snapshot for future operations. `data refresh` forces that durable check now
+and returns without waiting for downloads or compilation; `data update-status`
+shows the latest job and its progress. For troubleshooting or automation,
+`data start-local-update` returns the durable job ID and `data update-job`
+inspects that exact job; normal recovery queues and follows these jobs for the
+user automatically.
 
 File writes stay within the current directory unless `--allow-outside-root` is supplied. Existing files are never replaced unless `--overwrite` is supplied.
 
@@ -109,8 +118,9 @@ File writes stay within the current directory unless `--allow-outside-root` is s
 
 A fresh clone already contains the reviewed source manifest and generated
 compiled data for its application-release snapshot. First-time setup verifies
-that snapshot;
-it does not silently advance the repository to newer upstream data.
+that snapshot and starts the local updater in the background. Roster work does
+not wait for the first source build, and the updater never rewrites tracked
+checkout files.
 
 ```bash
 git clone <repository-url>
@@ -138,14 +148,12 @@ npm run setup -- --profile new-recruit --non-interactive --refresh skip
 npm run setup -- --profile tessera --non-interactive --refresh skip
 ```
 
-`--refresh check` checks live sources and reports newer data without changing
-the active bundle in a noninteractive run. `--refresh apply` asks the runtime
-provider to download, verify, and activate the signed stable bundle. It never
-rewrites the checkout, publishes a release bundle, commits, or pushes. When
-the provider or network is unavailable, setup continues from compiled release
-data and reports that signed updates are not configured. It calls the fallback
-a verified signed bootstrap only when the installed manifest, shards, and
-public key have actually passed verification.
+`--refresh check` compares live sources without changing the active snapshot.
+`--refresh apply` queues the same durable local-source job used by the daily
+updater. It never rewrites the checkout, publishes a release bundle, commits,
+or pushes. When the network or updater is unavailable, setup continues from
+compiled release data and reports a clear Doctor action. A later successful
+job atomically activates its `locally-verified` snapshot for new work only.
 
 Use Doctor after setup to diagnose the selected profile without installing
 dependencies, rebuilding the companion, opening credential dialogs, or
@@ -218,14 +226,17 @@ Tessera tools when their independently managed macOS agent is ready. The tool
 set is capability-driven and may grow; clients should discover it through MCP
 instead of relying on a fixed count.
 
-The shared provider checks the signed stable channel at startup. Long-lived
-runtimes schedule a 15-minute check, while request-driven runtimes check when
-the interval is due on their next data operation. Every data-consuming
-operation leases one immutable bundle, so activation affects only later
-operations. Update status, refresh, and rollback are control-plane operations and do
-not acquire a roster-data lease. `check_data_freshness` is a separate
-raw-upstream diagnostic; it cannot replace signature verification or change
-the active data.
+Local CLI, MCP, agent, and writable self-hosted Node runtimes default to the
+same durable `local-source` provider. Startup queues a non-blocking check when
+the last attempt is more than 24 hours old; the macOS companion wakes hourly
+and queues only when due. A changed source is fetched and built in isolated
+temporary storage, certified, written as an immutable local snapshot, and then
+activated atomically. Failed automatic checks retry with bounded backoff while
+the last usable snapshot remains active. Every data-consuming operation leases
+one immutable snapshot, so activation affects only later operations. Status,
+refresh, and rollback are control-plane operations and do not acquire a roster
+data lease. `check_data_freshness` is a separate raw-upstream diagnostic; it
+cannot certify or activate data.
 
 The repository-contained Codex skill is in `skills/rosterpilot`. Setup installs
 or updates a hash-marked managed copy without touching unrelated skills:
@@ -294,8 +305,8 @@ files.
 Every validated faction can export New Recruit-shaped JSON, canonical roster
 JSON, text, and print-ready HTML. `.ros/.rosz` import at
 [New Recruit](https://www.newrecruit.eu/app/MyLists) uses mappings generated
-from the exact `BSData/wh40k-11e` provenance recorded by the active signed
-bundle. Export compatibility is governed by the selected semantic
+from the exact `BSData/wh40k-11e` provenance recorded by the active verified
+snapshot. Export compatibility is governed by the selected semantic
 `mappingHash`, so a metadata-only BSData commit change does not invalidate an
 unchanged export. Export is enabled per roster when every selected
 configuration, unit, model, and wargear reference is mapped and conflict-free.
@@ -521,12 +532,12 @@ Website reports also retain provider-compatibility evidence. RosterPilot does
 not assume that Tessera Web has a public semantic-data version: any declared
 version is advisory, while the fetched bytes of same-origin scripts and the
 normalized imported army/unit/weapon/effect snapshots are content-hashed.
-Those hashes are bound to the activated signature-verified manifest (including
-its signing key and manifest hash), current update-provider identity, canonical
+Those hashes are bound to the accepted manifest, its provider mode and trust
+origin, current update-provider identity, canonical
 roster inputs, observed New Recruit catalogue identities, profile policy, and
 scenario contract. Syntax-valid roster hashes without verified runtime bundle
 trust remain incomplete. New Recruit observations prove handoff compatibility
-only; they never replace the signed bundle as the rules source.
+only; they never replace the accepted snapshot as the rules source.
 
 Provider compatibility defaults to `observe`: reports retain failures without
 changing the legacy simulation-completeness decision. Use
@@ -1156,6 +1167,37 @@ ending at the first blocked optional action. Use `workflow start`, `status`,
 `start_roster_workflow`, `get_roster_workflow_status`,
 `continue_roster_workflow`, and `choose_roster_workflow_action` MCP tools.
 
+When Tessera Web reports newer New Recruit catalogue revisions, the retained
+journey has a guided recovery path instead of ending at the mismatch:
+
+```bash
+npm run rosterpilot -- workflow repair-web \
+  --journey <journey-id> \
+  --new-recruit-game-revision 8 \
+  --new-recruit-catalogue-revision 7 \
+  --predecessor-job <tessera-run.json>
+```
+
+The repair records the exact New Recruit game-system and faction-catalogue
+identity, then selects the newest retained snapshot that matches it. If none
+matches, RosterPilot searches a bounded BSData history and queues a local
+compatibility build using the exact catalogue commit and the newest certified
+40kdc rules source. The journey may report `updating-local-data`,
+`waiting-for-compatible-source`, `needs-data-review`, or `ready-for-web`; the
+roster, failed job, and mutation receipts remain safely retained throughout.
+It does not start Tessera or create another New Recruit list. If selections
+changed, use `workflow approve-data-migration` only after reviewing the exact
+difference. When status becomes `ready-for-web`, use
+`workflow start-repaired-web --confirm-external-preparation` as a separate
+user-approved action. The successor records the failed job as its predecessor;
+the frozen failed job is never rewritten.
+
+This recovery is automatic for ordinary local users. They do not edit source
+files, delete receipts, configure signing keys, or publish a RosterPilot data
+bundle. Doctor reports a concrete action only when the machine is missing a
+local prerequisite such as Node, npm, Git, writable application-support
+storage, or upstream connectivity.
+
 Analysis is distinct from optimization. Local-engine analysis compiles the
 player and opponent portfolios directly from canonical bundle data and has no
 New Recruit dependency. Website analysis performs its profile-rich New
@@ -1257,14 +1299,21 @@ and embeds hash-verifiable execution evidence in its report. Skipped or
 unexecuted Chrome fixtures fail certification; source text alone cannot satisfy
 the connector gate.
 
-Runtime rules are distributed as signed, content-addressed global and faction
-data bundles. Each bundle records exact Games Workshop, 40kdc-data, and
-`BSData/wh40k-11e` provenance while separate semantic hashes decide whether a
-roster, export, cache, or certification remains compatible. The checked-in
-`data/sources.json` and generated catalogue overlay form the compiled
-application snapshot; a release additionally packages one verified signed
-bootstrap for offline runtime updates. Routine refreshes rewrite neither. See
-[`docs/data-bundles.md`](docs/data-bundles.md).
+Runtime rules use content-addressed global and faction data snapshots. Each
+snapshot records exact Games Workshop, 40kdc-data, and `BSData/wh40k-11e`
+provenance while separate semantic hashes decide whether a roster, export,
+cache, or certification remains compatible. The checked-in
+`data/sources.json` and generated catalogue overlay form the compiled startup
+snapshot. Routine local refreshes build outside the checkout and rewrite none
+of those tracked files. See [`docs/data-bundles.md`](docs/data-bundles.md).
+
+Local installations accept a completed snapshot only with an unsigned local
+build receipt that binds the manifest and every shard hash, exact upstream
+commit or npm integrity, builder source hash, engine-data schema, validation
+plan, certification evidence, and parent snapshot. RosterPilot re-verifies all
+of that evidence whenever it loads the snapshot from disk. This establishes
+reproducibility and corruption detection on a machine whose user trusts the
+cloned code and allowlisted sources; it is not publisher authentication.
 
 `npm run data:check` verifies the cross-faction build matrix, manifest
 consistency, provisional point coverage, legal acceptance rosters, and both
@@ -1272,33 +1321,32 @@ Custodes and cross-faction `.rosz` export. `npm run data:check-latest` checks
 all three live source classes without mutating the release.
 `npm run data:sync-check` regenerates the compiled catalogue overlay in a
 temporary checkout from its pinned BSData commit and fails if the application
-release copy differs; it does not move or rewrite the signed runtime
-bootstrap. The daily `Roster data freshness` workflow uses
-`npm run data:prepare-update` to stage upstream
-data outside the checkout, classify semantic changes, run scoped
-certification, and publish a signed stable-channel pointer on the
-`data-bundles` branch. Metadata-only changes cause no tracked repository diff
-and no faction certification churn. Stable pointers form a monotonic,
-content-addressed signed history; clients persist their accepted revision and
-reject replayed older pointers. A canary rollback advances that history with a
-new signed rollback transition rather than moving the channel backward. Its
-target comes only from the verified signed-v2 predecessor chain, never the
-mutable update report. A repeated daily observation with no new source identity
-reuses the existing bundle and pointer; an actual upstream commit still records
-new exact provenance even when gameplay semantics are unchanged.
+release copy differs. Local updates likewise stage all fetching, generation,
+and certification outside the checkout. They fetch only allowlisted npm and
+BSData sources, disable npm lifecycle scripts, use a persistent bare Git
+cache, and preserve the active snapshot on any failed or ambiguous candidate.
+Games Workshop pages are checked for change detection only. A detected change
+reports `official-update-pending` and retains the last usable official values;
+it never claims that new official material was automatically interpreted or
+reconciled.
 
 The runtime update flow is intentionally separate from publishing:
 
-1. `rosterpilot data update-status` distinguishes the bundle in use, latest
-   verified bundle, latest upstream candidate, semantic classification, and
+1. `rosterpilot data update-status` distinguishes the snapshot in use, provider
+   mode, trust, latest upstream and locally certified identities, background
+   job progress, service-compatible snapshots, official reconciliation, and
    quarantined scopes.
-2. `rosterpilot data refresh` performs an immediate signed-channel check and
-   atomically activates a verified candidate for future operations.
-3. `rosterpilot rebase --file roster.json --out rebased.json` updates only
+2. `rosterpilot data refresh` queues an immediate durable local-source check
+   and returns promptly. A successful candidate activates atomically for future
+   operations.
+3. `rosterpilot data start-local-update` and `data update-job --job <id>` are
+   explicit local-only controls for scripts and troubleshooting. Ordinary
+   compatibility repair invokes them automatically.
+4. `rosterpilot rebase --file roster.json --out rebased.json` updates only
    compatible provenance. If relevant rules or mappings changed, it returns
    `review-required` with exact scopes and does not change selections.
-4. `rosterpilot data rollback --bundle <bundle-id>` selects one exact retained
-   verified bundle for future work. Existing requests and durable jobs remain
+5. `rosterpilot data rollback --bundle <bundle-id>` selects one exact retained
+   verified snapshot for future work. Existing requests and durable jobs remain
    on their frozen snapshots.
 
 Schema-v3 rosters record their exact `bundleId`, engine-data schema,
@@ -1307,9 +1355,25 @@ hashes. They also freeze `sourceData.official.authority`; community-only or
 legacy-unverified authority produces `OFFICIAL_AUTHORITY_UNAVAILABLE` on build
 and validation instead of looking officially reconciled. Durable Tessera jobs
 reacquire their archived bundle on resume rather than mixing evidence across
-updates. If signed-update configuration or the network is unavailable, builds
-continue from compiled release data; status distinguishes that fallback from a
-verified signed bootstrap.
+updates. If no local snapshot exists yet, or a network/update attempt fails,
+builds continue from compiled release data. Status labels that fallback
+`compiled-unverified` rather than pretending it is locally certified.
+
+For New Recruit and Tessera Web, the globally newest snapshot is not blindly
+forced onto the service. RosterPilot records the exact observed New Recruit
+game-system and faction-catalogue IDs and revisions, selects the newest retained
+matching snapshot per faction, and may search up to 500 relevant BSData history
+commits to build a compatibility snapshot. If no exact historical source is
+found, it preserves the roster and receipts and reports
+`waiting-for-compatible-source`. It never probes compatibility by creating a
+list, deletes a mutation receipt, or duplicates an uncertain import.
+
+### Hosted deployment and release operators
+
+The following signed-channel workflow is optional for local users. It remains
+the authenticated distribution path for stateless hosted deployments,
+maintainer release canaries, and promotion evidence. Local `local-source` mode
+never falls back to it automatically.
 
 Run `npm run data:prepare-update -- --help` to inspect the command without a
 freshness check, dependency install, staged generation, signing, or
@@ -1365,17 +1429,17 @@ For an offline or repeated local verification, set
 `ROSTERPILOT_BSDATA_CHECKOUT` to an existing checkout at the exact pinned
 commit. The same revision check runs before the local checkout is trusted.
 
-Every data-consuming operation leases one immutable verified bundle for
+Every data-consuming operation leases one immutable verified snapshot for
 reproducibility. Update status, refresh, and rollback coordinate the provider without
 claiming a roster-data lease.
 Confirm event-specific rulings before play. Public deployments must display
 the included “Powered by 40kdc-data” attribution.
 
-Runtime refresh must not be advertised until the deployment includes a signed
+Hosted signed-channel refresh must not be advertised until the deployment includes a signed
 bootstrap bundle, a pinned Ed25519 public-key registry, a signed stable-channel
 URL, and writable bundle storage. Publishers also require the CI-only signing
 key ID/private JWK, immutable bundle hosting, and stable-pointer publication
-permission. Signing material never ships to clients. Data refresh, activation,
+permission. Local clones do not need any of these signing settings. Signing material never ships to clients. Data refresh, activation,
 rebase, rollback, quarantine, and retention never create, replace, or delete a
 New Recruit list.
 

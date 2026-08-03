@@ -1,0 +1,80 @@
+name: Bootstrap signed roster data
+
+on:
+  workflow_dispatch:
+    inputs:
+      degraded_authority_reason:
+        description: Reviewable reason official reconciliation is unavailable; defaults to the repository variable
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: roster-data-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  prepare-bootstrap-pr:
+    runs-on: ubuntu-latest
+    env:
+      ROSTERPILOT_DATA_SIGNING_KEY_ID: ${{ vars.ROSTERPILOT_DATA_SIGNING_KEY_ID }}
+      DEGRADED_REASON: ${{ inputs.degraded_authority_reason || vars.ROSTERPILOT_OFFICIAL_AUTHORITY_UNAVAILABLE_REASON }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate the one-time bootstrap configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ROSTERPILOT_DATA_SIGNING_KEY_ID" || { echo "Add repository variable ROSTERPILOT_DATA_SIGNING_KEY_ID." >&2; exit 1; }
+          test -n "$DEGRADED_REASON" || { echo "Add repository variable ROSTERPILOT_OFFICIAL_AUTHORITY_UNAVAILABLE_REASON or supply the workflow input." >&2; exit 1; }
+
+      - name: Create the signed degraded bootstrap and public trust registry
+        env:
+          ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK: ${{ secrets.ROSTERPILOT_DATA_SIGNING_PRIVATE_JWK }}
+        run: >-
+          npm run data:bundle:prepare-release --
+          --official-authority-unavailable "$DEGRADED_REASON"
+
+      - name: Verify the exact release assets
+        run: npm run data:bundle:verify-release
+
+      - name: Open or update the reviewed bootstrap pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="codex/bootstrap-signed-roster-data"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$branch:refs/remotes/origin/$branch" || true
+          git switch -C "$branch"
+          git add data/data-bundle-trusted-keys.json data/bootstrap-data-bundle public/data-bundles
+          if git diff --cached --quiet; then
+            echo "The signed bootstrap already matches this release."
+            exit 0
+          fi
+          git commit -m "Bootstrap signed roster data channel"
+          git push --force-with-lease origin "$branch"
+          existing="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // empty')"
+          if test -n "$existing"; then
+            echo "Updated $existing"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "Bootstrap signed roster data channel" \
+              --body "Creates the reviewed public trust registry and signed degraded bootstrap. No private signing material is committed. After merge, the freshness workflow publishes revision zero and future signed updates automatically."
+          fi

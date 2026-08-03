@@ -37,6 +37,12 @@ nvm use
 npm run setup -- --profile core
 ```
 
+Local setup defaults to `local-source`. It checks Node, npm, Git, writable
+application-support storage, and upstream connectivity; it does not require a
+signing key, public-key registry, signed bootstrap, or central RosterPilot data
+publication. Roster work starts from compiled data while the first certified
+local snapshot builds in the background.
+
 Use the smallest cumulative profile that includes the surface you need:
 
 ```bash
@@ -115,15 +121,20 @@ RosterPilot separates four questions that older pin-based workflows often
 collapsed into one:
 
 1. `rosterpilot status` reports the rules snapshot used by the engine.
-2. `rosterpilot data update-status` reports the bundle currently in use, the
-   newest verified bundle, the newest signed-channel candidate, its semantic
-   classification, quarantined scopes, `dataTrust`, and whether rollback
-   archives are process-memory or persistent.
+2. `rosterpilot data update-status` reports the snapshot currently in use,
+   `providerMode`, `dataTrust`, the newest upstream and locally certified
+   identities, durable job progress, service-compatible snapshots, official
+   reconciliation, quarantined scopes, and storage durability.
 3. `rosterpilot freshness` compares raw upstream Games Workshop, 40kdc-data,
    and BSData provenance. It is diagnostic only and never changes active data.
-4. `rosterpilot data refresh` explicitly verifies the signed channel and makes
-   a safe candidate available to future data-consuming operations. It never
-   changes a build or durable job already in progress.
+4. `rosterpilot data refresh` queues a durable local-source check and returns
+   promptly. It never changes a build or durable job already in progress.
+
+Normally no command is needed. Startup queues a check when the last attempt is
+more than 24 hours old, and the macOS companion wakes hourly to enqueue only
+when due. A changed source is fetched, built, and certified outside the
+checkout. Automatic failures back off while the last usable snapshot remains
+active; an explicit refresh bypasses that backoff.
 
 Use this sequence when opening an existing roster:
 
@@ -149,11 +160,14 @@ continues to use the exact archived `bundleId` recorded in its manifest.
 Control-plane update-status, refresh, and rollback calls do not themselves acquire a
 roster-data lease and never call New Recruit.
 
-When signed runtime updates are not configured, status says so explicitly and
-RosterPilot continues from the application release's compiled data. A release
-may advertise that fallback as a verified signed bootstrap only when the
-bootstrap manifest, shards, and installed public key have actually been
-verified. Network failure never changes data mid-operation.
+Before the first local snapshot activates, or when an update cannot reach an
+upstream source, RosterPilot continues from compiled application data and
+reports `compiled-unverified`. A local snapshot reports `locally-verified`
+only after its manifest, shards, source identities, builder hash, validation
+plan, and certification receipt are reverified. Games Workshop changes are
+reported separately as `official-update-pending`; they are not automatically
+interpreted or claimed as reconciled. Network failure never changes data
+mid-operation.
 
 ## Unified conversation and CLI workflow
 
@@ -443,6 +457,28 @@ provisional artifact. It is not placed in the trusted cache and does not
 authorize Tessera by itself. The mutation receipt prevents a retry from
 creating a duplicate list. Pretty HTML remains optional. Delivery never
 replaces or deletes an existing list.
+
+When New Recruit's observed revisions differ, normal recovery is one guided
+journey action rather than a data-management exercise for the user:
+
+```bash
+npm run rosterpilot -- workflow repair-web \
+  --journey <journey-id> \
+  --new-recruit-game-revision <revision> \
+  --new-recruit-catalogue-revision <revision> \
+  --predecessor-job <tessera-run.json>
+```
+
+The repair records the exact service identity and first checks retained
+snapshots. If needed, it searches up to 500 relevant BSData commits and queues
+an isolated compatibility build. Status moves through
+`updating-local-data`, `waiting-for-compatible-source`,
+`needs-data-review`, or `ready-for-web`. Hash-verified artifacts are reused;
+mutation receipts are never deleted, an uncertain New Recruit import is never
+repeated, and the failed durable Tessera job never adopts new data. A semantic
+roster change requires explicit migration approval. Even at `ready-for-web`,
+starting the lineage-linked successor Tessera Web job requires a separate
+confirmation.
 
 ## Workflow 3: exact-list Tessera comparison
 

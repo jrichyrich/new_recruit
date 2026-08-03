@@ -22,6 +22,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
       }
     | undefined;
   const server = createRosterPilotMcpServer({
+    localDataUpdates: true,
     freshnessChecker: async () => {
       freshnessChecks += 1;
       return {
@@ -181,6 +182,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "export_roster",
         "get_data_status",
         "get_data_update_status",
+        "get_local_data_update_job",
         "get_new_recruit_capability",
         "get_new_recruit_connection_status",
         "get_tessera_connection_status",
@@ -196,6 +198,7 @@ test("MCP exposes the planned tool contract and matches the engine", async () =>
         "run_roster_workflow",
         "search_factions",
         "search_units",
+        "start_local_data_update",
         "validate_roster",
       ],
     );
@@ -372,6 +375,8 @@ test("hosted MCP omits local credential-backed New Recruit tools", async () => {
     assert.ok(!names.includes("get_tessera_connection_status"));
     assert.ok(!names.includes("prepare_roster_for_tessera"));
     assert.ok(!names.includes("analyze_roster_matchup"));
+    assert.ok(!names.includes("start_local_data_update"));
+    assert.ok(!names.includes("get_local_data_update_job"));
   } finally {
     await client.close();
     await server.close();

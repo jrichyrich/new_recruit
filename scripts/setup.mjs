@@ -5,8 +5,10 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,8 +19,6 @@ const supportedProfiles = new Set(["core", "mcp", "new-recruit", "tessera"]);
 const supportedRefreshModes = new Set(["skip", "check", "apply"]);
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const defaultDataBundleChannelUrl =
-  "https://raw.githubusercontent.com/jrichyrich/new_recruit/data-bundles/channels/stable.json";
 const ensureCurrentNextStep =
   'Run "npm run rosterpilot -- agent ensure-current" from this checkout.';
 
@@ -117,17 +117,23 @@ export function localDataBundleEnvironment(
     environment.ROSTERPILOT_BOOTSTRAP_DATA_BUNDLE_DIRECTORY;
   /** @type {Record<string, string>} */
   const result = {
-    ROSTERPILOT_DATA_CHANNEL_URL:
-      environment.ROSTERPILOT_DATA_CHANNEL_URL ??
-      defaultDataBundleChannelUrl,
-    ROSTERPILOT_DATA_TRUSTED_KEYS_FILE:
-      environment.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE ??
-      path.join(
-        projectRoot,
-        "data",
-        "data-bundle-trusted-keys.json",
-      ),
+    ROSTERPILOT_DATA_PROVIDER_MODE:
+      environment.ROSTERPILOT_DATA_PROVIDER_MODE ?? "local-source",
   };
+  if (environment.ROSTERPILOT_SUPPORT_DIRECTORY) {
+    result.ROSTERPILOT_SUPPORT_DIRECTORY =
+      environment.ROSTERPILOT_SUPPORT_DIRECTORY;
+  }
+  // Signed-channel settings are operator-controlled. A cloned local install
+  // must not silently fall back to the publisher channel or require keys.
+  if (environment.ROSTERPILOT_DATA_CHANNEL_URL) {
+    result.ROSTERPILOT_DATA_CHANNEL_URL =
+      environment.ROSTERPILOT_DATA_CHANNEL_URL;
+  }
+  if (environment.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE) {
+    result.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE =
+      environment.ROSTERPILOT_DATA_TRUSTED_KEYS_FILE;
+  }
   if (
     explicitBootstrapDirectory ||
     pathExists(defaultBootstrapDirectory)
@@ -273,6 +279,22 @@ function defaultFileSystem() {
       }
     },
     mkdir: (directory) => mkdirSync(directory, { recursive: true }),
+    probeWritableDirectory(directory) {
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const probe = path.join(
+        directory,
+        `.rosterpilot-write-check-${process.pid}-${Date.now()}`,
+      );
+      try {
+        writeFileSync(probe, "RosterPilot writable-storage check.\n", {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+      } finally {
+        if (existsSync(probe)) unlinkSync(probe);
+      }
+    },
     read: (filename) => readFileSync(filename, "utf8"),
     write: (filename, content) => writeFileSync(filename, content),
   };
@@ -414,6 +436,32 @@ function ensureProjectFiles(dependencies) {
         `Missing ${filename}. Run this command from a complete RosterPilot checkout.`,
       );
     }
+  }
+}
+
+function diagnoseSupportStorage(results, dependencies, blocking) {
+  try {
+    dependencies.fs.probeWritableDirectory(
+      dependencies.supportDirectory,
+    );
+    addResult(
+      results,
+      "Application support storage",
+      "ready",
+      `${dependencies.supportDirectory} is writable`,
+    );
+  } catch (error) {
+    addResult(
+      results,
+      "Application support storage",
+      blocking ? "error" : "warning",
+      `RosterPilot cannot write its local snapshots at ${dependencies.supportDirectory}: ${
+        error instanceof Error ? error.message : String(error)
+      }. Roster building can still use the compiled snapshot.`,
+      [
+        "Make that folder writable for your account, then rerun Doctor. Do not run RosterPilot as root.",
+      ],
+    );
   }
 }
 
@@ -842,7 +890,7 @@ async function handleFreshness(
           name: "Live freshness",
           status: "warning",
           detail:
-            "signed runtime updates are unavailable; continuing from the pinned compiled offline data",
+            "the local data updater is unavailable; continuing from pinned compiled data",
         },
       );
       return;
@@ -860,48 +908,144 @@ async function handleFreshness(
     1,
     {
       name: "Live freshness",
-      status: "ready",
-      detail:
-        "latest verified runtime bundle activated; the tracked offline bootstrap was unchanged",
+      status: refreshResponse.data?.activatedBundleId
+        ? "ready"
+        : "warning",
+      detail: refreshResponse.data?.activatedBundleId
+        ? `verified snapshot ${shortIdentity(refreshResponse.data.activatedBundleId)} activated for future work`
+        : refreshResponse.data?.localUpdateJobId
+          ? `background update job ${refreshResponse.data.localUpdateJobId} was queued; current snapshot ${shortIdentity(refreshResponse.data.status?.activeBundleId)} remains active until the candidate finishes certification`
+          : "the refresh request was accepted, but no activated snapshot or background job was reported; the current snapshot remains active",
+      nextSteps: refreshResponse.data?.localUpdateJobId
+        ? [
+            `Run "npm run rosterpilot -- data update-job --job ${refreshResponse.data.localUpdateJobId}" to follow the background job.`,
+          ]
+        : [],
     },
+  );
+}
+
+function shortIdentity(value) {
+  if (typeof value !== "string" || value.length === 0) return "unknown";
+  return value.length > 12 ? `${value.slice(0, 12)}…` : value;
+}
+
+function locallyCertifiedMatchesUpstream(sourceStatus) {
+  const upstream = sourceStatus?.latestUpstream;
+  const certified = sourceStatus?.latestLocallyCertified;
+  if (!upstream || !certified) return false;
+  return (
+    (upstream.rulesVersion === null ||
+      upstream.rulesVersion === certified.rulesVersion) &&
+    (upstream.newRecruitCommit === null ||
+      upstream.newRecruitCommit === certified.newRecruitCommit)
   );
 }
 
 function addDataBundleReadiness(results, status) {
   const bundle = status?.dataBundle;
-  const signed =
-    bundle?.dataTrust === undefined ||
-    bundle.dataTrust === "signed-verified";
-  const healthy =
-    bundle?.state !== "degraded" &&
-    bundle?.state !== "offline";
-  const durable = bundle?.durability?.state !== "degraded";
-  const ready =
-    bundle?.providerConfigured === true &&
-    typeof bundle.activeBundleId === "string" &&
-    bundle.activeBundleId.length > 0 &&
-    signed &&
-    healthy &&
-    durable;
+  const activeIdentity = shortIdentity(bundle?.activeBundleId);
+  const locallyVerified = bundle?.dataTrust === "locally-verified";
+  const signedVerified = bundle?.dataTrust === "signed-verified";
+  const activeVerified = locallyVerified || signedVerified;
   addResult(
     results,
-    "Signed data updates",
-    ready ? "ready" : "warning",
-    ready
-      ? `provider is ${bundle.state ?? "ready"} on bundle ${bundle.activeBundleId}`
-      : bundle?.providerConfigured
-        ? `signed provider is configured but not release-ready (state ${bundle.state ?? "degraded"}, trust ${bundle.dataTrust ?? "unknown"}${
-            bundle?.durability?.reason
-              ? `; ${bundle.durability.reason}`
-              : ""
-          })`
-        : "signed runtime provider is unavailable; builds use pinned compiled data",
-    ready
+    "Active roster snapshot",
+    activeVerified ? "ready" : "warning",
+    locallyVerified
+      ? `locally verified snapshot ${activeIdentity} is active for new roster work`
+      : signedVerified
+        ? `signed verified snapshot ${activeIdentity} is active for this hosted deployment`
+        : `compiled snapshot ${activeIdentity} is active and roster building remains available while local data initializes`,
+    activeVerified
       ? []
       : [
-          'Run "npm run rosterpilot -- data update-status" to inspect bootstrap, trust-key, and channel readiness.',
-          'Release operators must run "npm run data:bundle:verify-release" before deployment.',
+          "Keep using the compiled snapshot; RosterPilot will switch future work only after a local snapshot passes certification.",
         ],
+  );
+
+  const localUpdate = bundle?.localUpdate;
+  if (localUpdate) {
+    const updateFinished = localUpdate.status === "activated";
+    addResult(
+      results,
+      "Background data update",
+      updateFinished ? "ready" : "warning",
+      updateFinished
+        ? `job ${localUpdate.jobId} activated the current snapshot; ${localUpdate.progress}`
+        : `job ${localUpdate.jobId} is ${localUpdate.status}; ${localUpdate.progress} Current snapshot ${activeIdentity} remains active.`,
+      updateFinished
+        ? []
+        : [
+            `Run "npm run rosterpilot -- data update-job --job ${localUpdate.jobId}" to see its current progress.`,
+          ],
+    );
+  } else if (bundle?.providerMode === "local-source") {
+    addResult(
+      results,
+      "Background data update",
+      "warning",
+      `no local update job has been recorded; current snapshot ${activeIdentity} remains usable`,
+      [
+        'Run "npm run rosterpilot -- data refresh" to queue a check now, or leave RosterPilot to run its daily background check.',
+      ],
+    );
+  }
+
+  const sourceStatus = bundle?.sourceStatus;
+  const upstreamObserved = Boolean(
+    sourceStatus?.latestUpstream &&
+      (sourceStatus.latestUpstream?.rulesVersion !== null ||
+        sourceStatus.latestUpstream?.newRecruitCommit !== null),
+  );
+  const upstreamCurrent = locallyCertifiedMatchesUpstream(sourceStatus);
+  addResult(
+    results,
+    "Upstream data",
+    upstreamCurrent ? "ready" : "warning",
+    upstreamCurrent
+      ? `latest checked 40kdc and BSData identities match locally certified snapshot ${shortIdentity(sourceStatus.latestLocallyCertified?.bundleId)}`
+      : upstreamObserved
+        ? "newer or not-yet-certified upstream data was observed; the current snapshot stays active while the background updater checks it"
+        : "upstream identity has not been checked yet; this does not prevent use of the current snapshot",
+    upstreamCurrent
+      ? []
+      : [
+          'Run "npm run rosterpilot -- data update-status" to inspect the latest upstream and certified identities.',
+        ],
+  );
+
+  const observations = bundle?.serviceCompatibility ?? [];
+  const incompatible = observations.filter(
+    (observation) => !observation.compatibleBundleId,
+  );
+  addResult(
+    results,
+    "Service compatibility",
+    incompatible.length === 0 ? "ready" : "warning",
+    observations.length === 0
+      ? "no New Recruit or Tessera Web catalogue mismatch has been observed yet"
+      : incompatible.length === 0
+        ? `${observations.length} observed New Recruit/Tessera catalogue ${observations.length === 1 ? "identity has" : "identities have"} an exact compatible retained snapshot`
+        : `${incompatible.length} observed service ${incompatible.length === 1 ? "identity needs" : "identities need"} compatibility repair; rosters and mutation receipts are preserved`,
+    incompatible.length === 0
+      ? []
+      : [
+          "Continue the affected workflow; RosterPilot will queue the compatibility search without creating another external list.",
+        ],
+  );
+
+  const officialReconciliation =
+    sourceStatus?.officialReconciliation ?? "unavailable";
+  addResult(
+    results,
+    "Official reconciliation",
+    officialReconciliation === "verified" ? "ready" : "warning",
+    officialReconciliation === "verified"
+      ? "the active official-source overlay is verified"
+      : officialReconciliation === "pending"
+        ? "an official Games Workshop source change was detected and still needs reconciliation; the last usable values remain active"
+        : "official-source reconciliation status is unavailable; community and New Recruit source status remains separate",
   );
 }
 
@@ -1133,7 +1277,7 @@ async function diagnoseRemoteFreshness(options, dependencies, results) {
   if (options.refresh === "skip") {
     addResult(
       results,
-      "Remote data freshness",
+      "Upstream connectivity",
       "warning",
       "live upstream check skipped; all local diagnostics still ran",
       [
@@ -1149,7 +1293,7 @@ async function diagnoseRemoteFreshness(options, dependencies, results) {
   if (!response.ok) {
     addResult(
       results,
-      "Remote data freshness",
+      "Upstream connectivity",
       "warning",
       `${response.detail} Local readiness results remain valid for the active frozen data bundle.`,
       [
@@ -1162,7 +1306,7 @@ async function diagnoseRemoteFreshness(options, dependencies, results) {
   const action = freshnessAction(state);
   addResult(
     results,
-    "Remote data freshness",
+    "Upstream connectivity",
     action === "current" ? "ready" : "warning",
     action === "current"
       ? "the active verified data matches the checked upstream sources"
@@ -1223,6 +1367,22 @@ function diagnosePinnedSourceSynchronization(
 }
 
 async function runDoctor(options, dependencies, results) {
+  const npm = dependencies.run(
+    npmExecutable(dependencies.platform),
+    ["--version"],
+    {
+      capture: true,
+      cwd: dependencies.projectRoot,
+    },
+  );
+  diagnoseCommand(results, {
+    name: "npm",
+    label: "npm prerequisite",
+    result: npm,
+    readyDetail: `npm ${npm.stdout.trim()}`,
+    nextSteps: ["Install npm with Node.js, then rerun Doctor."],
+  });
+
   const git = dependencies.run("git", ["--version"], {
     capture: true,
     cwd: dependencies.projectRoot,
@@ -1234,6 +1394,7 @@ async function runDoctor(options, dependencies, results) {
     readyDetail: git.stdout.trim(),
     nextSteps: ["Install Git, then rerun Doctor."],
   });
+  diagnoseSupportStorage(results, dependencies, true);
 
   const loaderPath = path.join(
     dependencies.projectRoot,
@@ -1358,7 +1519,7 @@ async function runDoctor(options, dependencies, results) {
     );
     addResult(
       results,
-      "Remote data freshness",
+      "Upstream connectivity",
       "warning",
       "live check skipped because lockfile dependencies are missing; local file checks above remain authoritative",
       [
@@ -1380,9 +1541,13 @@ async function runDoctor(options, dependencies, results) {
 }
 
 export async function runSetup(rawOptions, overrides = {}) {
+  const environment = overrides.environment ?? process.env;
+  const homeDirectory = overrides.homeDirectory ?? os.homedir();
   const dependencies = {
     ask: overrides.ask,
+    environment,
     fs: overrides.fs ?? defaultFileSystem(),
+    homeDirectory,
     isTTY: overrides.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY),
     nodeExecutable: overrides.nodeExecutable ?? process.execPath,
     nodeVersion: overrides.nodeVersion ?? process.version,
@@ -1391,6 +1556,15 @@ export async function runSetup(rawOptions, overrides = {}) {
     run: overrides.run ?? defaultRun,
     stderr: overrides.stderr ?? process.stderr,
     stdin: overrides.stdin ?? process.stdin,
+    supportDirectory:
+      overrides.supportDirectory ??
+      environment.ROSTERPILOT_SUPPORT_DIRECTORY ??
+      path.join(
+        homeDirectory,
+        "Library",
+        "Application Support",
+        "RosterPilot",
+      ),
     stdout: overrides.stdout ?? process.stdout,
   };
   const options = { ...rawOptions };
@@ -1428,12 +1602,24 @@ export async function runSetup(rawOptions, overrides = {}) {
     ensureNewRecruitPrerequisites(dependencies);
   }
 
+  const npm = dependencies.run(
+    npmExecutable(dependencies.platform),
+    ["--version"],
+    {
+      capture: true,
+      cwd: dependencies.projectRoot,
+    },
+  );
+  assertCommand("npm prerequisite", npm);
+  addResult(results, "npm", "ready", `npm ${npm.stdout.trim()}`);
+
   const git = dependencies.run("git", ["--version"], {
     capture: true,
     cwd: dependencies.projectRoot,
   });
   assertCommand("Git prerequisite", git);
   addResult(results, "Git", "ready", git.stdout.trim());
+  diagnoseSupportStorage(results, dependencies, false);
 
   const loaderPath = path.join(
     dependencies.projectRoot,

@@ -228,6 +228,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    env:
+      ROSTERPILOT_DATA_PROVIDER_MODE: signed-channel
     steps:
       - uses: actions/checkout@v4
 
@@ -732,6 +734,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    env:
+      ROSTERPILOT_DATA_PROVIDER_MODE: signed-channel
     steps:
       - uses: actions/checkout@v4
 

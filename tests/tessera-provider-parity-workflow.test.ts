@@ -269,13 +269,18 @@ function compatibilityEnvelope(input: {
     schemaVersion: 1,
     manifest: {
       bundleId: BUNDLE,
+      evidenceKind: "signed",
+      evidenceId: "fixture-key",
       signingKeyId: "fixture-key",
+      receiptIntegritySha256: "1".repeat(64),
+      builderSourceSha256: null,
       manifestSha256: "1".repeat(64),
       semanticIdentitySha256: "9".repeat(64),
     },
     update: {
       providerConfigured: true,
       dataTrust: "signed-verified",
+      providerMode: "signed-channel",
       state: "ready",
       activeBundleId: BUNDLE,
       latestVerifiedBundleId: BUNDLE,
