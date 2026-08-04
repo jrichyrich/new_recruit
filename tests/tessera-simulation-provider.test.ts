@@ -93,6 +93,13 @@ const browserInput: TesseraBrowserInput = {
   opponentName: "Opponent",
 };
 
+const frozenRequestSha256 = "a".repeat(64);
+const fallbackAuthorization = {
+  action: "new-recruit-import-and-tessera-web" as const,
+  requestSha256: frozenRequestSha256,
+  source: "confirmed-fallback" as const,
+};
+
 function browserResult(uiIdentity = "website-ui-fixture"): TesseraBrowserResult {
   return {
     uiIdentity,
@@ -205,7 +212,34 @@ test("auto selects local only after promotion and a complete preflight", async (
   assert.equal(website.calls(), 0);
 });
 
-test("auto uses the website when local rejects the complete input", async () => {
+test("auto offers but does not start Web when local rejects the complete input", async () => {
+  const local = localProvider({
+    promoted: true,
+    preflight: {
+      ok: false,
+      reasonCodes: ["TESSERA_LOCAL_UNSUPPORTED_RULES"],
+      warnings: [],
+    },
+  });
+  const website = websiteRoute();
+  await assert.rejects(
+    routeTesseraSimulation({
+      requestedBackend: "auto",
+      local: { provider: local, input: "unsupported" },
+      website: website.route,
+      requestSha256: frozenRequestSha256,
+    }),
+    (error: unknown) =>
+      error instanceof TesseraSimulationProviderError &&
+      error.code === "TESSERA_WEBSITE_FALLBACK_REQUIRES_CONFIRMATION" &&
+      error.fallbackOffer?.requestSha256 === frozenRequestSha256,
+  );
+  assert.equal(local.calls.preflight, 1);
+  assert.equal(local.calls.run, 0);
+  assert.equal(website.calls(), 0);
+});
+
+test("authorized auto fallback starts Web after local preflight rejection", async () => {
   const local = localProvider({
     promoted: true,
     preflight: {
@@ -219,16 +253,46 @@ test("auto uses the website when local rejects the complete input", async () => 
     requestedBackend: "auto",
     local: { provider: local, input: "unsupported" },
     website: website.route,
+    requestSha256: frozenRequestSha256,
+    websiteFallbackAuthorization: fallbackAuthorization,
   });
 
   assert.equal(routed.selection.selectedBackend, "website");
   assert.equal(routed.selection.reason, "local-preflight-failed");
-  assert.equal(local.calls.preflight, 1);
+  assert.equal(routed.fallback?.requestSha256, frozenRequestSha256);
   assert.equal(local.calls.run, 0);
   assert.equal(website.calls(), 1);
 });
 
-test("auto discards failed local evidence before restarting on the website", async () => {
+test("auto offers but does not start Web after a failed local execution", async () => {
+  const local = localProvider({
+    promoted: true,
+    run: () => {
+      throw new TesseraSimulationProviderError(
+        "TESSERA_LOCAL_SELF_CHECK_FAILED",
+        "Local output did not pass its integrity check.",
+        { backend: "local-engine" },
+      );
+    },
+  });
+  const website = websiteRoute();
+  await assert.rejects(
+    routeTesseraSimulation({
+      requestedBackend: "auto",
+      local: { provider: local, input: "atomic-run" },
+      website: website.route,
+      requestSha256: frozenRequestSha256,
+    }),
+    (error: unknown) =>
+      error instanceof TesseraSimulationProviderError &&
+      error.code === "TESSERA_WEBSITE_FALLBACK_REQUIRES_CONFIRMATION" &&
+      error.fallbackOffer?.code === "TESSERA_LOCAL_SELF_CHECK_FAILED",
+  );
+  assert.equal(local.calls.run, 1);
+  assert.equal(website.calls(), 0);
+});
+
+test("authorized auto fallback discards local evidence and starts Web", async () => {
   const local = localProvider({
     promoted: true,
     run: () => {
@@ -244,6 +308,8 @@ test("auto discards failed local evidence before restarting on the website", asy
     requestedBackend: "auto",
     local: { provider: local, input: "atomic-run" },
     website: website.route,
+    requestSha256: frozenRequestSha256,
+    websiteFallbackAuthorization: fallbackAuthorization,
   });
 
   assert.equal(routed.selection.selectedBackend, "website");
@@ -254,6 +320,7 @@ test("auto discards failed local evidence before restarting on the website", asy
     code: "TESSERA_LOCAL_SELF_CHECK_FAILED",
     message: "Local output did not pass its integrity check.",
     discardedLocalEvidence: true,
+    requestSha256: frozenRequestSha256,
   });
   assert.equal(local.calls.run, 1);
   assert.equal(website.calls(), 1);

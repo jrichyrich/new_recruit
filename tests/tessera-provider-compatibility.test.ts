@@ -206,6 +206,7 @@ function semanticSnapshot(side: "player" | "opponent") {
           count: 1,
           visibleCharacteristics: [
             { name: "phase", value: "shooting" },
+            { name: "range", value: "24\"" },
             { name: "attacks", value: "1" },
             { name: "ballistic skill", value: "3+" },
             { name: "strength", value: "4" },

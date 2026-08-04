@@ -6,10 +6,15 @@ import path from "node:path";
 import {
   analyzeMissionReadiness,
   baselineDamageCells,
+  canonicalJson,
+  compileCombatBridgeV2,
+  compileCombatBridgeV3,
   compareNewRecruitCatalogueProvenance,
+  currentRosterSourceData,
   exportRoster,
   generateFactionStressPortfolio,
   getNewRecruitFactionSummary,
+  getConfiguredDataBundleProvider,
   inspectEnrichedRosz,
   inspectEnrichedProfileRequirements,
   inspectEnrichedUnitProfileCoverage,
@@ -22,6 +27,10 @@ import {
   type EnrichedRoszSummary,
   type ExportArtifact,
   type ConnectorEvent,
+  type CombatBridgeV2,
+  type CombatBridgeV3,
+  type DataBundleSnapshot,
+  type DataBundleProvider,
   type ModifyRosterOperation,
   type NewRecruitDelivery,
   type ProfilePolicyV1,
@@ -48,6 +57,8 @@ import {
   type TesseraRevisionDelta,
   type TesseraScenarioCell,
   type TesseraScenarioResult,
+  type TesseraScenarioPolicyContractV2Snapshot,
+  type TesseraScenarioPolicyContractV3Snapshot,
   type TesseraSimulationBackend,
   type TesseraSimulationFallbackReceipt,
   type TesseraSimulationProvider,
@@ -56,6 +67,8 @@ import {
   type TesseraUnitInstance,
   type TesseraWebsiteProviderEvidence,
 } from "../../lib/rosterpilot";
+import { dataset as activeRuntimeDataset } from "../../lib/rosterpilot/runtime-dataset";
+import type { RuntimeDataBundleShardDataV1 } from "../../lib/rosterpilot/runtime-data-bundle";
 import {
   resolveExportArtifactTargets,
   writeExportArtifact,
@@ -136,19 +149,35 @@ import {
 import {
   createLocalTesseraEngineProvider,
   localTesseraEngineIsAutoSelectable,
+  localTesseraProviderIdentityAllowsAnalyticalClaims,
   LOCAL_TESSERA_ENGINE_IDENTITY,
+  LOCAL_TESSERA_ENGINE_ITERATIONS,
   LOCAL_TESSERA_ENGINE_STATUS,
   runLocalTesseraEngineMatchup,
 } from "./local-engine";
+import type {
+  PersonalLocalParityAttestationContextV1,
+} from "./personal-local-attestation";
+import {
+  personalLocalProviderIdentitySha256,
+} from "./personal-local-attestation";
+import {
+  loadCurrentPersonalLocalParityAttestationContextV1,
+} from "./personal-local-attestation-store";
 import {
   prepareRosterForLocalTesseraEngine,
 } from "./local-engine-preparation";
-import {
-  verifyLocalTesseraEngineInput,
+import type {
+  LocalTesseraEngineDataContext,
 } from "./local-engine-input";
+import {
+  compileRosterForLocalTesseraEngineV2,
+  verifyLocalTesseraEngineInputAnyVersion,
+} from "./local-engine-input-v2";
 import {
   createWebsiteTesseraProvider,
   routeTesseraSimulation,
+  type TesseraWebsiteFallbackAuthorization,
 } from "./simulation-provider";
 import {
   assertTesseraScenarioContractProvider,
@@ -158,15 +187,201 @@ import {
   tesseraScenarioContractSha256,
 } from "./scenario-contract";
 import {
+  assertTesseraScenarioPolicyContractV2Scope,
+  canonicalTesseraScenarioPolicyContractV2,
+  migrateTesseraScenarioContractV1ToV2,
+  selectedBaselineTesseraScenarioPolicyContractV2,
+  tesseraScenarioPolicyContractV2Sha256,
+  type TesseraScenarioPolicyContractV2,
+} from "./scenario-contract-v2";
+import {
+  assertTesseraScenarioPolicyContractV3Scope,
+  canonicalTesseraScenarioPolicyContractV3,
+  selectedBaselineTesseraScenarioPolicyContractV3,
+  tesseraScenarioPolicyContractV3Sha256,
+  type TesseraScenarioPolicyContractV3,
+} from "./scenario-contract-v3";
+import {
   buildMatchupProviderCompatibilityEnvelopes,
   captureProviderCompatibilityBundleTrustIdentity,
   effectiveProviderCompatibilityMode,
 } from "./provider-compatibility";
+import {
+  compileCombatBridgeInputV2FromDataset,
+  compileCombatBridgeInputV2FromSnapshot,
+  runtimeDatasetFromSnapshot,
+} from "./combat-bridge-input";
+import {
+  CombatBridgeInputV3PreparationError,
+  prepareCombatBridgeInputV3FromSnapshot,
+  type CombatBridgeInputV3PreparationArtifact,
+  type PreparedCombatBridgeInputV3,
+} from "./combat-bridge-input-v3";
+import { compactCombatBridgeEvidence } from "./combat-bridge-evidence";
+import { projectCombatBridgeCellToTessera } from "./combat-bridge-adapter";
+import type {
+  TesseraParityCoveringSuiteV2,
+} from "./provider-parity-covering-suite-v2";
+import {
+  buildTesseraProviderParityReportEvidenceV2,
+  deriveTesseraParityFactionMechanicsV2,
+} from "./provider-parity-report-evidence-v2";
 
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 const verifiedUploadedArtifactCapabilities = new WeakSet<object>();
+
+function combatBridgeEvidenceError(
+  code:
+    | "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISSING"
+    | "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISMATCH",
+  message: string,
+): Error {
+  return Object.assign(new Error(message), { code });
+}
+
+/**
+ * An injected local provider is still an untrusted transport boundary. Require
+ * every returned scalar to bind back to the exact in-memory bridge compiled
+ * for this opponent before accepting any matrix or scenario evidence.
+ */
+function assertLocalCombatBridgeExecutionEvidence(
+  result: TesseraBrowserResult,
+  bridge: CombatBridgeV2 | CombatBridgeV3,
+): void {
+  if (result.scenarios.length === 0) {
+    throw combatBridgeEvidenceError(
+      "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISSING",
+      "The local engine returned no scenario cells carrying combat-bridge evidence.",
+    );
+  }
+
+  const bridgeCellsById = new Map(
+    bridge.cells.map((cell) => [cell.cellId, cell]),
+  );
+  const bridgeProjectionsByCellId = new Map(
+    bridge.cells.map((cell) => [
+      cell.cellId,
+      projectCombatBridgeCellToTessera(cell),
+    ]),
+  );
+  let envelopeCount = 0;
+  for (const scenario of result.scenarios) {
+    if (scenario.cells.length === 0) {
+      throw combatBridgeEvidenceError(
+        "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISSING",
+        `Local scenario ${scenario.id} returned no scalar cells to verify against the combat bridge.`,
+      );
+    }
+    for (const cell of scenario.cells) {
+      const envelope = cell.combatEnvelope;
+      if (!envelope) {
+        throw combatBridgeEvidenceError(
+          "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISSING",
+          `Local scenario ${scenario.id} returned a scalar without a combat-bridge envelope.`,
+        );
+      }
+      envelopeCount += 1;
+      const bridgeCell = bridgeCellsById.get(envelope.bridgeCellId);
+      if (
+        envelope.bridgeSha256 !== bridge.bridgeSha256 ||
+        !bridgeCell ||
+        envelope.bridgeCellSha256 !== bridgeCell.cellSha256 ||
+        envelope.bridgeScenarioSha256 !== bridgeCell.scenarioSha256 ||
+        bridgeCell.scenario.phase !== scenario.phase ||
+        bridgeCell.direction !== scenario.direction ||
+        bridgeCell.metric !== scenario.metric
+      ) {
+        throw combatBridgeEvidenceError(
+          "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISMATCH",
+          `Local scenario ${scenario.id} returned an envelope that does not match its frozen bridge cell.`,
+        );
+      }
+      const variant = bridgeCell.variants.find(
+        (candidate) => candidate.variantId === envelope.selectedVariantId,
+      );
+      const cellProjection = bridgeProjectionsByCellId.get(
+        bridgeCell.cellId,
+      );
+      const projection = cellProjection?.variants.find(
+        (candidate) =>
+          candidate.bridgeVariantId === envelope.selectedVariantId,
+      );
+      const expectedOmittedEffectIds = [
+        ...new Set(
+          (cellProjection?.variants ?? []).flatMap((candidate) =>
+            candidate.omissions.map((omission) => omission.effectId),
+          ),
+        ),
+      ].sort();
+      const expectedApproximatedEffectIds = [
+        ...new Set(
+          bridgeCell.variants.flatMap((candidate) =>
+            candidate.effects.flatMap((effect) =>
+              effect.status === "approximated" ? [effect.effectId] : [],
+            ),
+          ),
+        ),
+      ].sort();
+      if (
+        !variant ||
+        !cellProjection ||
+        !projection ||
+        envelope.selectedVariantSha256 !== variant.variantSha256 ||
+        envelope.selectedProjectionSha256 !==
+          projection.projectionSha256 ||
+        envelope.attachmentPlanId !== variant.attachmentPlan.id ||
+        envelope.activationId !== variant.activation.id ||
+        envelope.variantCount !== cellProjection.uniqueExecutionCount ||
+        envelope.sourceVariantCount !== bridgeCell.variants.length ||
+        envelope.median !== cell.metricValue ||
+        canonicalJson(envelope.coverage) !==
+          canonicalJson(cellProjection.coverage) ||
+        canonicalJson(envelope.omittedEffectIds) !==
+          canonicalJson(expectedOmittedEffectIds) ||
+        canonicalJson(envelope.approximatedEffectIds) !==
+          canonicalJson(expectedApproximatedEffectIds)
+      ) {
+        throw combatBridgeEvidenceError(
+          "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISMATCH",
+          `Local scenario ${scenario.id} returned scalar provenance that does not match its selected bridge variant.`,
+        );
+      }
+    }
+  }
+  if (envelopeCount === 0) {
+    throw combatBridgeEvidenceError(
+      "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISSING",
+      "The local engine returned no combat-bridge envelopes.",
+    );
+  }
+}
+
+export function localCombatScenarioClaimsEligible(
+  scenarios: readonly Pick<
+    TesseraScenarioResult,
+    "metrics" | "cells"
+  >[],
+): boolean {
+  return (
+    scenarios.length > 0 &&
+    scenarios.every(
+      (scenario) =>
+        scenario.metrics.length > 0 &&
+        scenario.cells.length > 0 &&
+        scenario.cells.every((cell) =>
+          scenario.metrics.every(
+            (metric) =>
+              cell.combatEnvelope?.[metric]?.coverage
+                .claimEligibility === "decision-grade" &&
+              cell.combatEnvelope?.[metric]?.conclusionEligibility
+                ?.scalarClaimsAllowed === true,
+          ),
+        ),
+    )
+  );
+}
 
 function grantVerifiedUploadedArtifactCapability(): object {
   const capability = {};
@@ -255,6 +470,17 @@ export type TesseraAnalysisOptions = WriteOptions & {
   frozenOpponentReuse?: TesseraPreparedRoster;
   /** Caller-supplied deterministic simulation contract for a fresh run. */
   scenarioContract?: TesseraFrozenScenarioContract[];
+  /** Bundle-native combat context and bounded option/attachment policy. */
+  scenarioPolicyContractV2?: TesseraScenarioPolicyContractV2;
+  /** Physical player/opponent state and exact scalar/envelope conclusion policy. */
+  scenarioPolicyContractV3?: TesseraScenarioPolicyContractV3;
+  /** Exact covering-suite case to seal into a paired local/Web parity report. */
+  providerParityCase?: {
+    coveringSuite: TesseraParityCoveringSuiteV2;
+    coveringCaseId: string;
+  };
+  /** Hash-bound permission to leave the local engine after an auto failure. */
+  websiteFallbackAuthorization?: TesseraWebsiteFallbackAuthorization;
   /** Internal replay contract frozen by stress/revision coordinators. */
   frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
   sessionId?: string;
@@ -271,7 +497,12 @@ export type TesseraDependencies = {
   enrich?: typeof enrichRoszThroughNewRecruit;
   runBrowser?: typeof runTesseraBrowserMatchup;
   runLocalEngine?: typeof runLocalTesseraEngineMatchup;
+  /** Machine-bound personal parity authorization; never serialized to reports. */
+  personalLocalAttestation?:
+    PersonalLocalParityAttestationContextV1 | null;
   runtimeIssue?: typeof runtimeRestartIssue;
+  /** Exact runtime-bundle provider; captured once for bundle-native rules. */
+  dataBundleProvider?: DataBundleProvider<RuntimeDataBundleShardDataV1>;
   recordTesseraServiceEvidence?: (
     input: RecordTesseraServiceEvidenceInput,
   ) => Promise<unknown>;
@@ -418,7 +649,7 @@ export async function getTesseraConnectionStatus(): Promise<
             {
               code: "TESSERA_LOCAL_ENGINE_EVALUATION_ONLY",
               message:
-                "The pinned local engine is available only by explicit selection; auto remains on the website until licensing and parity promotion gates pass.",
+                "The pinned local engine is available for explicit diagnostics; auto remains on the website until the current machine-local parity attestation and exact bridge-v3 gates pass.",
               severity: "warn",
             },
           ]
@@ -468,6 +699,8 @@ async function runTesseraViaAgent(
 type TesseraRosterPreparationOptions = NewRecruitDeliveryOptions & {
   simulationBackend?: TesseraSimulationBackend;
   profilePolicy?: ProfilePolicyV1 | null;
+  /** Internal immutable data context owned by the enclosing exact run. */
+  dataContext?: LocalTesseraEngineDataContext;
 };
 
 export async function prepareRosterForTessera(
@@ -738,6 +971,15 @@ export async function prepareRosterForTessera(
     enrichedRoszPath: enriched.written,
     sourceRoszSha256: sha256(sourceContent),
     enrichedRoszSha256: sha256(enrichedContent),
+    preparedArtifact: {
+      schemaVersion: 2,
+      kind: "new-recruit-enriched",
+      sourceRoszPath: source.written,
+      sourceRoszSha256: sha256(sourceContent),
+      enrichedRoszPath: enriched.written,
+      enrichedRoszSha256: sha256(enrichedContent),
+      connectorEvents: delivery.data.connectorEvents ?? [],
+    },
     summary: delivery.data.enrichedSummary,
     fingerprint: rosterExecutionFingerprint(roster),
     units: canonicalUnits(roster, "player"),
@@ -778,6 +1020,9 @@ export async function prepareRosterForTessera(
     },
   );
   prepared.catalogueProvenance = catalogueProvenance;
+  if (prepared.preparedArtifact?.kind === "new-recruit-enriched") {
+    prepared.preparedArtifact.catalogueProvenance = catalogueProvenance;
+  }
   const preparationWarnings = [...delivery.warnings];
   if (catalogueProvenance.status === "drift") {
     const mismatchSummary = catalogueProvenance.mismatches
@@ -1524,7 +1769,7 @@ async function inspectPreparedProfileRequirements(
       prepared.simulationInput?.kind ===
       "rosterpilot-local-engine-input"
     ) {
-      const localInput = verifyLocalTesseraEngineInput({
+      const localInput = verifyLocalTesseraEngineInputAnyVersion({
         content,
         expectedSha256: prepared.simulationInput.sha256,
         expectedBundleId: prepared.simulationInput.bundleId,
@@ -1953,7 +2198,7 @@ async function verifiedPreparedRosterReuse(
       prepared.simulationInput?.kind ===
       "rosterpilot-local-engine-input"
     ) {
-      const localInput = verifyLocalTesseraEngineInput({
+      const localInput = verifyLocalTesseraEngineInputAnyVersion({
         content: enriched,
         expectedSha256: prepared.simulationInput.sha256,
         expectedBundleId: prepared.simulationInput.bundleId,
@@ -2972,6 +3217,23 @@ function consolidateBrowserScenarios(
           warningRefs,
         };
       cell.values[metricField(metric)] = rawCell.metricValue;
+      if (rawCell.combatEnvelope) {
+        cell.combatEnvelope = {
+          ...(cell.combatEnvelope ?? {}),
+          [metric]: structuredClone(rawCell.combatEnvelope),
+        };
+        if (
+          rawCell.combatEnvelope.coverage.claimEligibility !==
+          "decision-grade"
+        ) {
+          cell.warningRefs = [
+            ...new Set([
+              ...cell.warningRefs,
+              `Local combat-rule coverage is ${rawCell.combatEnvelope.coverage.status}; this ${metric} envelope is ${rawCell.combatEnvelope.coverage.claimEligibility}.`,
+            ]),
+          ];
+        }
+      }
       cell.uncertainty = {
         ...(cell.uncertainty ?? {}),
         [metric]: rawCell.uncertainty ?? {
@@ -3720,6 +3982,34 @@ export async function analyzeRosterMatchup(
   options: TesseraAnalysisOptions = {},
   dependencies: TesseraDependencies = {},
 ): Promise<ResultEnvelope<TesseraMatchupReport>> {
+  let personalLocalAttestation =
+    dependencies.personalLocalAttestation;
+  if (personalLocalAttestation === undefined) {
+    try {
+      personalLocalAttestation =
+        await loadCurrentPersonalLocalParityAttestationContextV1({
+          providerIdentitySha256:
+            personalLocalProviderIdentitySha256(
+              LOCAL_TESSERA_ENGINE_IDENTITY,
+            ),
+          bundleId: playerRoster.sourceData.bundleId,
+        });
+    } catch {
+      // A malformed, stale, or unsafe personal store fails closed to Web.
+      personalLocalAttestation = null;
+    }
+  }
+  // Freeze the rules object/provider reference before any asynchronous
+  // preparation. A later refresh may affect future leases, never this run.
+  const capturedRuntimeDataset = activeRuntimeDataset;
+  const capturedRuntimeSourceData = currentRosterSourceData(
+    playerRoster.factionId,
+  );
+  const configuredDataBundleProvider =
+    dependencies.dataBundleProvider ??
+    (getConfiguredDataBundleProvider() as
+      | DataBundleProvider<RuntimeDataBundleShardDataV1>
+      | null);
   const outputDirectory = options.outputDirectory ?? "exports/tessera";
   const mutationRunId =
     options.sessionId ?? `tessera-exact-${crypto.randomUUID()}`;
@@ -3735,7 +4025,9 @@ export async function analyzeRosterMatchup(
       ? "local-engine"
       : requestedSimulationBackend === "website"
         ? "website"
-        : localTesseraEngineIsAutoSelectable()
+        : localTesseraEngineIsAutoSelectable(
+            personalLocalAttestation,
+          )
           ? "local-engine"
           : "website";
   let scenarioContract: TesseraFrozenScenarioContract[] | null = null;
@@ -3804,6 +4096,88 @@ export async function analyzeRosterMatchup(
       warnings: [],
     };
   }
+  let scenarioPolicyContractV2: TesseraScenarioPolicyContractV2 | null = null;
+  let scenarioPolicyContractV2Sha256: string | null = null;
+  let scenarioPolicyContractV3: TesseraScenarioPolicyContractV3 | null = null;
+  let scenarioPolicyContractV3Sha256: string | null = null;
+  try {
+    if (
+      options.scenarioPolicyContractV2 &&
+      plannedSimulationBackend !== "local-engine"
+    ) {
+      throw Object.assign(
+        new Error(
+          "The v2 combat scenario/policy contract is supported only by the bundle-native local engine.",
+        ),
+        { code: "TESSERA_SCENARIO_POLICY_PROVIDER_UNSUPPORTED" },
+      );
+    }
+    if (
+      simulationRequested &&
+      (plannedSimulationBackend === "local-engine" ||
+        options.providerParityCase)
+    ) {
+      scenarioPolicyContractV2 = options.scenarioPolicyContractV2
+        ? canonicalTesseraScenarioPolicyContractV2(
+            options.scenarioPolicyContractV2,
+          )
+        : scenarioContract
+          ? migrateTesseraScenarioContractV1ToV2(scenarioContract)
+          : selectedBaselineTesseraScenarioPolicyContractV2(
+              LOCAL_TESSERA_ENGINE_ITERATIONS,
+              configuration.phases,
+              configuration.metrics,
+            );
+      scenarioPolicyContractV2 =
+        assertTesseraScenarioPolicyContractV2Scope(
+          scenarioPolicyContractV2,
+          configuration.phases,
+          configuration.metrics,
+        );
+      if (scenarioContract && options.scenarioPolicyContractV2) {
+        const migrated = migrateTesseraScenarioContractV1ToV2(
+          scenarioContract,
+        );
+        if (
+          JSON.stringify(migrated.scenarios) !==
+          JSON.stringify(scenarioPolicyContractV2.scenarios)
+        ) {
+          throw Object.assign(
+            new Error(
+              "The v1 scenario settings and v2 combat context describe different engagements.",
+            ),
+            { code: "TESSERA_SCENARIO_POLICY_CONTRACT_MISMATCH" },
+          );
+        }
+      }
+      scenarioPolicyContractV2Sha256 =
+        tesseraScenarioPolicyContractV2Sha256(
+          scenarioPolicyContractV2,
+        );
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      violations: [
+        {
+          code:
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string"
+              ? error.code
+              : "TESSERA_SCENARIO_POLICY_CONTRACT_V2_INVALID",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The Tessera scenario/policy v2 contract is invalid.",
+          severity: "error",
+        },
+      ],
+      warnings: [],
+    };
+  }
   let profilePolicy: ProfilePolicyV1 | null;
   try {
     profilePolicy = await requestedAnalysisProfilePolicy(options);
@@ -3824,892 +4198,1378 @@ export async function analyzeRosterMatchup(
       warnings: [],
     };
   }
-  const playerValidation = validateRoster(playerRoster);
-  if (!playerValidation.ok) {
-    return {
-      ok: false,
-      data: null,
-      violations: playerValidation.violations,
-      warnings: playerValidation.warnings,
-    };
-  }
-  const opponentScopeIssue = exactOpponentScopeIssue(opponent);
-  if (opponentScopeIssue) {
-    return {
-      ok: false,
-      data: null,
-      violations: [opponentScopeIssue],
-      warnings: playerValidation.warnings,
-    };
-  }
-  if (opponent.kind === "roster") {
-    const opponentValidation = validateRoster(opponent.roster);
-    if (!opponentValidation.ok) {
+  let operationDataBundleLease:
+    | Awaited<
+        ReturnType<
+          DataBundleProvider<RuntimeDataBundleShardDataV1>["acquireSnapshot"]
+        >
+      >
+    | null = null;
+  let operationDataBundleSnapshot:
+    | DataBundleSnapshot<RuntimeDataBundleShardDataV1>
+    | null = null;
+  let operationLocalDataContext: LocalTesseraEngineDataContext | null = null;
+  try {
+    if (
+      plannedSimulationBackend === "local-engine" ||
+      options.providerParityCase
+    ) {
+      try {
+        if (configuredDataBundleProvider) {
+          const factionIds = new Set<string>([playerRoster.factionId]);
+          if (opponent.kind === "roster") {
+            factionIds.add(opponent.roster.factionId);
+          } else if (opponent.kind === "rosz") {
+            if (options.opponentRosterContext) {
+              factionIds.add(options.opponentRosterContext.factionId);
+            }
+          } else {
+            factionIds.add(opponent.factionId);
+          }
+          operationDataBundleLease =
+            await configuredDataBundleProvider.acquireSnapshot({
+              bundleId: playerRoster.sourceData.bundleId,
+              factionIds: [...factionIds].sort(),
+            });
+          const snapshot = operationDataBundleLease.snapshot;
+          operationDataBundleSnapshot = snapshot;
+          operationLocalDataContext = {
+            dataset: runtimeDatasetFromSnapshot(snapshot),
+            bundleId: snapshot.bundleId,
+            engineDataSchemaVersion:
+              snapshot.manifest.engineDataSchemaVersion,
+          };
+        } else {
+          operationLocalDataContext = {
+            dataset: capturedRuntimeDataset,
+            bundleId: capturedRuntimeSourceData.bundleId,
+            engineDataSchemaVersion:
+              capturedRuntimeSourceData.engineDataSchemaVersion,
+          };
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code:
+                error &&
+                typeof error === "object" &&
+                "code" in error &&
+                typeof error.code === "string"
+                  ? error.code
+                  : "TESSERA_DATA_BUNDLE_ACQUISITION_FAILED",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "The exact local-engine data snapshot could not be acquired.",
+              severity: "error",
+            },
+          ],
+          warnings: [],
+        };
+      }
+    }
+    const playerValidation = validateRoster(playerRoster);
+    if (!playerValidation.ok) {
       return {
         ok: false,
         data: null,
-        violations: opponentValidation.violations,
-        warnings: opponentValidation.warnings,
+        violations: playerValidation.violations,
+        warnings: playerValidation.warnings,
       };
     }
-    const compatibilityIssue = canonicalOpponentCompatibilityIssue(
-      playerRoster,
-      opponent.roster,
-    );
-    if (compatibilityIssue) {
+    const opponentScopeIssue = exactOpponentScopeIssue(opponent);
+    if (opponentScopeIssue) {
       return {
         ok: false,
         data: null,
-        violations: [compatibilityIssue],
-        warnings: [
-          ...playerValidation.warnings,
-          ...opponentValidation.warnings,
-        ],
+        violations: [opponentScopeIssue],
+        warnings: playerValidation.warnings,
       };
     }
-    const preflightPoints = pointsComparison(
-      playerRoster.totalPoints,
-      opponent.roster.totalPoints,
-      playerRoster.pointsLimit,
-      configuration.pointsTolerancePercent,
+    if (opponent.kind === "roster") {
+      const opponentValidation = validateRoster(opponent.roster);
+      if (!opponentValidation.ok) {
+        return {
+          ok: false,
+          data: null,
+          violations: opponentValidation.violations,
+          warnings: opponentValidation.warnings,
+        };
+      }
+      const compatibilityIssue = canonicalOpponentCompatibilityIssue(
+        playerRoster,
+        opponent.roster,
+      );
+      if (compatibilityIssue) {
+        return {
+          ok: false,
+          data: null,
+          violations: [compatibilityIssue],
+          warnings: [
+            ...playerValidation.warnings,
+            ...opponentValidation.warnings,
+          ],
+        };
+      }
+      const preflightPoints = pointsComparison(
+        playerRoster.totalPoints,
+        opponent.roster.totalPoints,
+        playerRoster.pointsLimit,
+        configuration.pointsTolerancePercent,
+      );
+      if (!preflightPoints.matched && !configuration.allowPointMismatch) {
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code: "TESSERA_POINTS_MISMATCH",
+              message: pointsMismatchMessage(preflightPoints),
+              severity: "error",
+            },
+          ],
+          warnings: [
+            ...playerValidation.warnings,
+            ...opponentValidation.warnings,
+          ],
+        };
+      }
+    }
+    let uploadedPreflight: UploadedRoszPreflight | null = null;
+    if (opponent.kind === "rosz") {
+      const inspected = await inspectUploadedRoszPreflight(
+        opponent.path,
+        playerRoster,
+        options.opponentRosterContext,
+        hasVerifiedUploadedArtifactCapability(
+          options.verifiedUploadedArtifactCapability,
+        ),
+        options.catalogueDriftMode,
+      );
+      if (!inspected.ok || !inspected.data) {
+        return {
+          ok: false,
+          data: null,
+          violations: inspected.violations,
+          warnings: inspected.warnings,
+        };
+      }
+      uploadedPreflight = inspected.data;
+      const preflightPoints = pointsComparison(
+        playerRoster.totalPoints,
+        uploadedPreflight.summary.totalPoints,
+        playerRoster.pointsLimit,
+        configuration.pointsTolerancePercent,
+      );
+      if (!preflightPoints.matched && !configuration.allowPointMismatch) {
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code: "TESSERA_POINTS_MISMATCH",
+              message: pointsMismatchMessage(preflightPoints),
+              severity: "error",
+            },
+          ],
+          warnings: [
+            ...playerValidation.warnings,
+            ...uploadedPreflight.warnings,
+          ],
+        };
+      }
+    }
+    let factionProxyItems: Array<
+      TesseraStressPortfolioItem & { roster: RosterDraftV1 }
+    > = [];
+    if (opponent.kind === "faction-archetypes") {
+      const generated = generateFactionStressPortfolio({
+        faction: opponent.factionId,
+        pointsLimit: playerRoster.pointsLimit,
+        suite: "core-3",
+        pointsTolerancePercent: configuration.pointsTolerancePercent,
+        allowLegends: false,
+      });
+      if (!generated.ok || !generated.data) {
+        return {
+          ok: false,
+          data: null,
+          violations: generated.violations,
+          warnings: generated.warnings,
+        };
+      }
+      const requested = new Set(
+        opponent.archetypes?.length
+          ? opponent.archetypes
+          : (Object.keys(ARCHETYPE_PREFERENCES) as TesseraArchetype[]),
+      );
+      factionProxyItems = generated.data.items.filter(
+        (
+          item,
+        ): item is TesseraStressPortfolioItem & {
+          roster: RosterDraftV1;
+        } =>
+          item.status === "ready" &&
+          item.roster !== null &&
+          requested.has(item.posture),
+      );
+      if (factionProxyItems.length === 0) {
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code: "NO_OPPONENTS_PREPARED",
+              message:
+                "The shared faction portfolio generator produced no requested, exportable opponent proxies.",
+              severity: "error",
+            },
+          ],
+          warnings: generated.warnings,
+        };
+      }
+    }
+    const profileRequirements = mergedProfileRequirements([
+      aggregateProfileRequirements([
+        playerRoster,
+        ...(opponent.kind === "roster" ? [opponent.roster] : []),
+        ...(opponent.kind === "rosz" && options.opponentRosterContext
+          ? [options.opponentRosterContext]
+          : []),
+        ...factionProxyItems.map((item) => item.roster),
+      ], operationLocalDataContext?.dataset),
+      uploadedPreflight?.profileRequirements ?? [],
+      options.frozenProfileRequirements ?? [],
+    ]);
+    const profileValidation = validateProfilePolicy(
+      profileRequirements,
+      profilePolicy,
     );
-    if (!preflightPoints.matched && !configuration.allowPointMismatch) {
+    const enforceProfilePolicy = simulationRequested;
+    if (enforceProfilePolicy && !profileValidation.valid) {
+      let scaffoldPath: string | null = null;
+      try {
+        scaffoldPath = await writeExportArtifact(
+          {
+            format: "roster-json",
+            filename: "profile-policy.scaffold.json",
+            mimeType: "application/json",
+            encoding: "utf8",
+            content: `${JSON.stringify(
+              profilePolicyScaffold(profileRequirements),
+              null,
+              2,
+            )}\n`,
+          },
+          path.join(outputDirectory, "profile-policy.scaffold.json"),
+          options,
+        );
+      } catch {
+        // The validation error remains actionable without a written scaffold.
+      }
+      const profileDetail = [
+        ...profileValidation.errors,
+        ...profileValidation.unresolved.map(
+          (requirement) =>
+            `${requirement.unit} / ${requirement.weaponGroup} / ${requirement.phase}: choose one of ${requirement.availableProfiles.join(", ")} for ${requirement.activeCount} active weapon(s).`,
+        ),
+      ].join(" ");
       return {
         ok: false,
         data: null,
         violations: [
           {
-            code: "TESSERA_POINTS_MISMATCH",
-            message: pointsMismatchMessage(preflightPoints),
+            code: "TESSERA_PROFILE_POLICY_REQUIRED",
+            message: `Explicit weapon-profile choices are required before New Recruit or Tessera activity.${
+              profileDetail ? ` ${profileDetail}` : ""
+            }${
+              scaffoldPath ? ` Complete ${scaffoldPath}.` : ""
+            }`,
             severity: "error",
           },
         ],
-        warnings: [
-          ...playerValidation.warnings,
-          ...opponentValidation.warnings,
-        ],
+        warnings: [],
       };
     }
-  }
-  let uploadedPreflight: UploadedRoszPreflight | null = null;
-  if (opponent.kind === "rosz") {
-    const inspected = await inspectUploadedRoszPreflight(
-      opponent.path,
-      playerRoster,
-      options.opponentRosterContext,
-      hasVerifiedUploadedArtifactCapability(
-        options.verifiedUploadedArtifactCapability,
-      ),
-      options.catalogueDriftMode,
-    );
-    if (!inspected.ok || !inspected.data) {
-      return {
-        ok: false,
-        data: null,
-        violations: inspected.violations,
-        warnings: inspected.warnings,
-      };
+    if (
+      simulationRequested &&
+      plannedSimulationBackend === "website" &&
+      !dependencies.runBrowser
+    ) {
+      const readiness = await getTesseraConnectionStatus();
+      if (!readiness.ok || !readiness.data?.available) {
+        return {
+          ok: false,
+          data: null,
+          violations: [
+            {
+              code: "TESSERA_READINESS_PROBE_FAILED",
+              message:
+                readiness.violations[0]?.message ??
+                readiness.warnings[0]?.message ??
+                "The local Tessera agent, browser, or premium credential is not ready. No New Recruit lists were created.",
+              severity: "error",
+            },
+          ],
+          warnings: readiness.warnings,
+        };
+      }
     }
-    uploadedPreflight = inspected.data;
-    const preflightPoints = pointsComparison(
-      playerRoster.totalPoints,
-      uploadedPreflight.summary.totalPoints,
-      playerRoster.pointsLimit,
-      configuration.pointsTolerancePercent,
-    );
-    if (!preflightPoints.matched && !configuration.allowPointMismatch) {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          {
-            code: "TESSERA_POINTS_MISMATCH",
-            message: pointsMismatchMessage(preflightPoints),
-            severity: "error",
-          },
-        ],
-        warnings: [
-          ...playerValidation.warnings,
-          ...uploadedPreflight.warnings,
-        ],
-      };
-    }
-  }
-  let factionProxyItems: Array<
-    TesseraStressPortfolioItem & { roster: RosterDraftV1 }
-  > = [];
-  if (opponent.kind === "faction-archetypes") {
-    const generated = generateFactionStressPortfolio({
-      faction: opponent.factionId,
-      pointsLimit: playerRoster.pointsLimit,
-      suite: "core-3",
-      pointsTolerancePercent: configuration.pointsTolerancePercent,
-      allowLegends: false,
-    });
-    if (!generated.ok || !generated.data) {
-      return {
-        ok: false,
-        data: null,
-        violations: generated.violations,
-        warnings: generated.warnings,
-      };
-    }
-    const requested = new Set(
-      opponent.archetypes?.length
-        ? opponent.archetypes
-        : (Object.keys(ARCHETYPE_PREFERENCES) as TesseraArchetype[]),
-    );
-    factionProxyItems = generated.data.items.filter(
-      (
-        item,
-      ): item is TesseraStressPortfolioItem & {
-        roster: RosterDraftV1;
-      } =>
-        item.status === "ready" &&
-        item.roster !== null &&
-        requested.has(item.posture),
-    );
-    if (factionProxyItems.length === 0) {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          {
-            code: "NO_OPPONENTS_PREPARED",
-            message:
-              "The shared faction portfolio generator produced no requested, exportable opponent proxies.",
-            severity: "error",
-          },
-        ],
-        warnings: generated.warnings,
-      };
-    }
-  }
-  const profileRequirements = mergedProfileRequirements([
-    aggregateProfileRequirements([
-      playerRoster,
-      ...(opponent.kind === "roster" ? [opponent.roster] : []),
-      ...(opponent.kind === "rosz" && options.opponentRosterContext
-        ? [options.opponentRosterContext]
-        : []),
-      ...factionProxyItems.map((item) => item.roster),
-    ]),
-    uploadedPreflight?.profileRequirements ?? [],
-    options.frozenProfileRequirements ?? [],
-  ]);
-  const profileValidation = validateProfilePolicy(
-    profileRequirements,
-    profilePolicy,
-  );
-  const enforceProfilePolicy = simulationRequested;
-  if (enforceProfilePolicy && !profileValidation.valid) {
-    let scaffoldPath: string | null = null;
     try {
-      scaffoldPath = await writeExportArtifact(
-        {
-          format: "roster-json",
-          filename: "profile-policy.scaffold.json",
-          mimeType: "application/json",
-          encoding: "utf8",
-          content: `${JSON.stringify(
-            profilePolicyScaffold(profileRequirements),
-            null,
-            2,
-          )}\n`,
-        },
-        path.join(outputDirectory, "profile-policy.scaffold.json"),
+      await resolveExportArtifactTargets(
+        [
+          {
+            format: "roster-json",
+            filename: `${basename}.json`,
+            mimeType: "application/json",
+            encoding: "utf8",
+            content: "",
+          },
+          {
+            format: "html",
+            filename: `${basename}.html`,
+            mimeType: "text/html; charset=utf-8",
+            encoding: "utf8",
+            content: "",
+          },
+          {
+            format: "roster-json",
+            filename: `${basename}.receipt.json`,
+            mimeType: "application/json",
+            encoding: "utf8",
+            content: "",
+          },
+          ...(options.fallbackMode === "baseline-damage-v1"
+            ? [
+                {
+                  format: "roster-json" as const,
+                  filename: baselineArtifactName,
+                  mimeType: "application/json",
+                  encoding: "utf8" as const,
+                  content: "",
+                },
+              ]
+            : []),
+        ],
+        outputDirectory,
         options,
       );
-    } catch {
-      // The validation error remains actionable without a written scaffold.
-    }
-    const profileDetail = [
-      ...profileValidation.errors,
-      ...profileValidation.unresolved.map(
-        (requirement) =>
-          `${requirement.unit} / ${requirement.weaponGroup} / ${requirement.phase}: choose one of ${requirement.availableProfiles.join(", ")} for ${requirement.activeCount} active weapon(s).`,
-      ),
-    ].join(" ");
-    return {
-      ok: false,
-      data: null,
-      violations: [
-        {
-          code: "TESSERA_PROFILE_POLICY_REQUIRED",
-          message: `Explicit weapon-profile choices are required before New Recruit or Tessera activity.${
-            profileDetail ? ` ${profileDetail}` : ""
-          }${
-            scaffoldPath ? ` Complete ${scaffoldPath}.` : ""
-          }`,
-          severity: "error",
-        },
-      ],
-      warnings: [],
-    };
-  }
-  if (
-    simulationRequested &&
-    plannedSimulationBackend === "website" &&
-    !dependencies.runBrowser
-  ) {
-    const readiness = await getTesseraConnectionStatus();
-    if (!readiness.ok || !readiness.data?.available) {
+    } catch (error) {
       return {
         ok: false,
         data: null,
         violations: [
           {
-            code: "TESSERA_READINESS_PROBE_FAILED",
+            code: "TESSERA_OUTPUT_RESERVATION_FAILED",
             message:
-              readiness.violations[0]?.message ??
-              readiness.warnings[0]?.message ??
-              "The local Tessera agent, browser, or premium credential is not ready. No New Recruit lists were created.",
-            severity: "error",
-          },
-        ],
-        warnings: readiness.warnings,
-      };
-    }
-  }
-  try {
-    await resolveExportArtifactTargets(
-      [
-        {
-          format: "roster-json",
-          filename: `${basename}.json`,
-          mimeType: "application/json",
-          encoding: "utf8",
-          content: "",
-        },
-        {
-          format: "html",
-          filename: `${basename}.html`,
-          mimeType: "text/html; charset=utf-8",
-          encoding: "utf8",
-          content: "",
-        },
-        {
-          format: "roster-json",
-          filename: `${basename}.receipt.json`,
-          mimeType: "application/json",
-          encoding: "utf8",
-          content: "",
-        },
-        ...(options.fallbackMode === "baseline-damage-v1"
-          ? [
-              {
-                format: "roster-json" as const,
-                filename: baselineArtifactName,
-                mimeType: "application/json",
-                encoding: "utf8" as const,
-                content: "",
-              },
-            ]
-          : []),
-      ],
-      outputDirectory,
-      options,
-    );
-  } catch (error) {
-    return {
-      ok: false,
-      data: null,
-      violations: [
-        {
-          code: "TESSERA_OUTPUT_RESERVATION_FAILED",
-          message:
-            error instanceof Error
-              ? error.message
-              : "The exact-matchup output paths could not be reserved before external activity.",
-          severity: "error",
-        },
-      ],
-      warnings: playerValidation.warnings,
-    };
-  }
-  let releaseOutputLease: (() => Promise<void>) | null = null;
-  try {
-    const resolvedOutputDirectory = path.resolve(
-      options.rootDir ?? process.cwd(),
-      outputDirectory,
-    );
-    releaseOutputLease = await acquireDirectoryLease(
-      path.join(
-        resolvedOutputDirectory,
-        `.${basename}.exact-output.lock`,
-      ),
-      0,
-    );
-  } catch (error) {
-    return {
-      ok: false,
-      data: null,
-      violations: [
-        {
-          code: "TESSERA_OUTPUT_LEASED",
-          message:
-            error instanceof Error
-              ? `Another exact run owns these output paths: ${error.message}`
-              : "Another exact run owns these output paths.",
-          severity: "error",
-        },
-      ],
-      warnings: playerValidation.warnings,
-    };
-  }
-  try {
-  let frozenUploadedSourcePath: string | null = null;
-  if (
-    opponent.kind === "rosz" &&
-    !options.preparedReuse?.opponent &&
-    !options.frozenOpponentReuse
-  ) {
-    if (!uploadedPreflight) {
-      return {
-        ok: false,
-        data: null,
-        violations: [
-          {
-            code: "TESSERA_ROSZ_PREFLIGHT_MISSING",
-            message:
-              "The uploaded opponent preflight was not retained before external activity.",
+              error instanceof Error
+                ? error.message
+                : "The exact-matchup output paths could not be reserved before external activity.",
             severity: "error",
           },
         ],
         warnings: playerValidation.warnings,
       };
     }
-    const frozen = await freezeUploadedRoszPreflight(
-      path.join(outputDirectory, "opponent"),
-      options,
-      uploadedPreflight,
-    );
-    if (!frozen.ok || !frozen.data) {
+    let releaseOutputLease: (() => Promise<void>) | null = null;
+    try {
+      const resolvedOutputDirectory = path.resolve(
+        options.rootDir ?? process.cwd(),
+        outputDirectory,
+      );
+      releaseOutputLease = await acquireDirectoryLease(
+        path.join(
+          resolvedOutputDirectory,
+          `.${basename}.exact-output.lock`,
+        ),
+        0,
+      );
+    } catch (error) {
       return {
         ok: false,
         data: null,
-        violations: frozen.violations,
-        warnings: frozen.warnings,
-      };
-    }
-    frozenUploadedSourcePath = frozen.data;
-  }
-  const player = options.preparedReuse
-      ? await verifiedPreparedRosterReuse(
-        options.preparedReuse.player,
-        playerRoster,
-        options.catalogueDriftMode,
-      )
-    : await prepareRosterForTessera(
-        playerRoster,
-        {
-          ...options,
-          profilePolicy,
-          mutationRunId,
-          outputDirectory: path.join(outputDirectory, "player"),
-        },
-        dependencies,
-      );
-  if (!player.ok || !player.data) {
-    let failedPlayer = player.data;
-    if (failedPlayer) {
-      try {
-        failedPlayer = await materializePreparedRosterArtifacts(
-          failedPlayer,
-          path.join(outputDirectory, "player"),
-          options,
-        );
-      } catch {
-        // The original verified paths and hashes remain visible in the failed
-        // report; the durable job layer will refuse an out-of-bundle path.
-      }
-    }
-    return {
-      ok: false,
-      data: failedPlayer
-        ? failedPreparationReport({
-            playerRoster,
-            player: failedPlayer,
-            simulationRequested,
-            configuration,
-            profilePolicy,
-            violations: player.violations,
-            warnings: player.warnings,
-          })
-        : null,
-      violations: player.violations,
-      warnings: player.warnings,
-    };
-  }
-  let preparedPlayer: TesseraPreparedRoster;
-  try {
-    preparedPlayer = await materializePreparedRosterArtifacts(
-      player.data,
-      path.join(outputDirectory, "player"),
-      options,
-    );
-    preparedPlayer.units = canonicalUnits(playerRoster, "player");
-  } catch (error) {
-    const violation: RosterIssue = {
-      code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
-      message:
-        error instanceof Error
-          ? error.message
-          : "The verified player archives could not be materialized into the exact run bundle.",
-      severity: "error",
-    };
-    return {
-      ok: false,
-      data: failedPreparationReport({
-        playerRoster,
-        player: player.data,
-        simulationRequested,
-        configuration,
-        profilePolicy,
-        violations: [violation],
-        warnings: player.warnings,
-      }),
-      violations: [violation],
-      warnings: player.warnings,
-    };
-  }
-
-  const opponents: TesseraMatchupReport["opponents"] = [];
-  const opponentDrafts: Array<RosterDraftV1 | null> = [];
-  const warnings: string[] = [
-    ...player.warnings,
-    ...(uploadedPreflight?.warnings ?? []),
-  ].map((warning) => warning.message);
-  if (opponent.kind === "roster") {
-    const prepared = options.preparedReuse?.opponent
-      ? await verifiedPreparedRosterReuse(
-          options.preparedReuse.opponent,
-          opponent.roster,
-          options.catalogueDriftMode,
-        )
-      : await prepareRosterForTessera(
-          opponent.roster,
-          {
-            ...options,
-            profilePolicy,
-            mutationRunId,
-            outputDirectory: path.join(outputDirectory, "opponent"),
-          },
-          dependencies,
-        );
-    if (!prepared.ok || !prepared.data) {
-      let failedOpponent = prepared.data;
-      if (failedOpponent) {
-        try {
-          failedOpponent = await materializePreparedRosterArtifacts(
-            failedOpponent,
-            path.join(outputDirectory, "opponent"),
-            options,
-          );
-        } catch {
-          // Preserve the verified paths in the failed report; the durable job
-          // layer still enforces confinement before checkpointing them.
-        }
-      }
-      const preparedOpponent = failedOpponent
-        ? [
-            {
-              kind: "roster" as const,
-              rosterName: failedOpponent.rosterName,
-              sourceRoszPath: failedOpponent.sourceRoszPath,
-              enrichedRoszPath: failedOpponent.enrichedRoszPath,
-              sourceRoszSha256:
-                failedOpponent.sourceRoszSha256,
-              enrichedRoszSha256:
-                failedOpponent.enrichedRoszSha256,
-              simulationInput: failedOpponent.simulationInput,
-              summary: failedOpponent.summary,
-              fingerprint: rosterExecutionFingerprint(opponent.roster),
-              units: canonicalUnits(opponent.roster, "opponent"),
-              cacheReused: failedOpponent.cacheReused,
-              connectorEvents: failedOpponent.connectorEvents,
-              catalogueProvenance: failedOpponent.catalogueProvenance,
-            },
-          ]
-        : [];
-      return {
-        ok: false,
-        data: failedPreparationReport({
-          playerRoster,
-          player: preparedPlayer,
-          opponents: preparedOpponent,
-          simulationRequested,
-          configuration,
-          profilePolicy,
-          violations: prepared.violations,
-          warnings: [...player.warnings, ...prepared.warnings],
-          opponentName:
-            prepared.data?.rosterName ?? opponent.roster.name,
-        }),
-        violations: prepared.violations,
-        warnings: [...player.warnings, ...prepared.warnings],
-      };
-    }
-    let materializedOpponent: TesseraPreparedRoster;
-    try {
-      materializedOpponent =
-        await materializePreparedRosterArtifacts(
-          prepared.data,
-          path.join(outputDirectory, "opponent"),
-          options,
-        );
-    } catch (error) {
-      const violation: RosterIssue = {
-        code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
-        message:
-          error instanceof Error
-            ? error.message
-            : "The verified opponent archives could not be materialized into the exact run bundle.",
-        severity: "error",
-      };
-      return {
-        ok: false,
-        data: failedPreparationReport({
-          playerRoster,
-          player: preparedPlayer,
-          simulationRequested,
-          configuration,
-          profilePolicy,
-          violations: [violation],
-          warnings: [...player.warnings, ...prepared.warnings],
-          opponentName: opponent.roster.name,
-        }),
-        violations: [violation],
-        warnings: [...player.warnings, ...prepared.warnings],
-      };
-    }
-    opponents.push({
-      kind: "roster",
-      rosterName: materializedOpponent.rosterName,
-      sourceRoszPath: materializedOpponent.sourceRoszPath,
-      enrichedRoszPath: materializedOpponent.enrichedRoszPath,
-      sourceRoszSha256:
-        materializedOpponent.sourceRoszSha256,
-      enrichedRoszSha256:
-        materializedOpponent.enrichedRoszSha256,
-      simulationInput: materializedOpponent.simulationInput,
-      summary: materializedOpponent.summary,
-      fingerprint: rosterExecutionFingerprint(opponent.roster),
-      units: canonicalUnits(opponent.roster, "opponent"),
-      cacheReused: materializedOpponent.cacheReused,
-      connectorEvents: materializedOpponent.connectorEvents,
-      catalogueProvenance:
-        materializedOpponent.catalogueProvenance,
-    });
-    opponentDrafts.push(opponent.roster);
-  } else if (opponent.kind === "rosz") {
-    if (!uploadedPreflight) {
-      throw new Error("Uploaded ROSZ preflight was not retained.");
-    }
-    const frozenOpponentReuse =
-      options.preparedReuse?.opponent ??
-      options.frozenOpponentReuse;
-    if (frozenOpponentReuse) {
-      const reused = await verifiedPreparedRosterReuse(
-        frozenOpponentReuse,
-        options.opponentRosterContext ?? null,
-        options.catalogueDriftMode,
-      );
-      if (!reused.ok || !reused.data) {
-        return {
-          ok: false,
-          data: failedPreparationReport({
-            playerRoster,
-            player: preparedPlayer,
-            opponents,
-            simulationRequested,
-            configuration,
-            profilePolicy,
-            violations: reused.violations,
-            warnings: [...player.warnings, ...reused.warnings],
-            opponentName: path.basename(opponent.path),
-          }),
-          violations: reused.violations,
-          warnings: [...player.warnings, ...reused.warnings],
-        };
-      }
-      let materializedOpponent: TesseraPreparedRoster;
-      try {
-        materializedOpponent =
-          await materializePreparedRosterArtifacts(
-            reused.data,
-            path.join(outputDirectory, "opponent"),
-            options,
-          );
-      } catch (error) {
-        const violation: RosterIssue = {
-          code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
-          message:
-            error instanceof Error
-              ? error.message
-              : "The verified uploaded opponent checkpoint could not be materialized into the exact run bundle.",
-          severity: "error",
-        };
-        return {
-          ok: false,
-          data: failedPreparationReport({
-            playerRoster,
-            player: preparedPlayer,
-            opponents,
-            simulationRequested,
-            configuration,
-            profilePolicy,
-            violations: [violation],
-            warnings: [...player.warnings, ...reused.warnings],
-            opponentName: reused.data.rosterName,
-          }),
-          violations: [violation],
-          warnings: [...player.warnings, ...reused.warnings],
-        };
-      }
-      opponents.push({
-        kind: "rosz",
-        rosterName: materializedOpponent.rosterName,
-        sourceRoszPath: materializedOpponent.sourceRoszPath,
-        enrichedRoszPath: materializedOpponent.enrichedRoszPath,
-        sourceRoszSha256:
-          materializedOpponent.sourceRoszSha256,
-        enrichedRoszSha256:
-          materializedOpponent.enrichedRoszSha256,
-        summary: materializedOpponent.summary,
-        fingerprint: materializedOpponent.fingerprint,
-        units:
-          materializedOpponent.units ??
-          enrichedUnits(materializedOpponent.summary, "opponent"),
-        cacheReused: true,
-        connectorEvents: [],
-        catalogueProvenance:
-          materializedOpponent.catalogueProvenance,
-      });
-      warnings.push(...reused.warnings.map((warning) => warning.message));
-      opponentDrafts.push(options.opponentRosterContext ?? null);
-    } else {
-    if (!frozenUploadedSourcePath) {
-      return {
-        ok: false,
-        data: failedPreparationReport({
-          playerRoster,
-          player: preparedPlayer,
-          opponents,
-          simulationRequested,
-          configuration,
-          profilePolicy,
-          violations: [
-            {
-              code: "TESSERA_ROSZ_FROZEN_SOURCE_MISSING",
-              message:
-                "The uploaded opponent was not frozen before New Recruit activity.",
-              severity: "error",
-            },
-          ],
-          warnings: player.warnings,
-          opponentName: path.basename(opponent.path),
-        }),
         violations: [
           {
-            code: "TESSERA_ROSZ_FROZEN_SOURCE_MISSING",
+            code: "TESSERA_OUTPUT_LEASED",
             message:
-              "The uploaded opponent was not frozen before New Recruit activity.",
+              error instanceof Error
+                ? `Another exact run owns these output paths: ${error.message}`
+                : "Another exact run owns these output paths.",
             severity: "error",
           },
         ],
-        warnings: player.warnings,
+        warnings: playerValidation.warnings,
       };
     }
-    const prepared = await prepareUploadedRosz(
-      frozenUploadedSourcePath,
-      path.join(outputDirectory, "opponent"),
-      options,
-      dependencies,
-      uploadedPreflight,
-      playerRoster,
-      options.opponentRosterContext,
-      mutationRunId,
-    );
-    if (!prepared.ok || !prepared.data) {
-      return {
-        ok: false,
-        data: failedPreparationReport({
-          playerRoster,
-          player: preparedPlayer,
-          opponents,
-          simulationRequested,
-          configuration,
-          profilePolicy,
-          violations: prepared.violations,
-          warnings: [...player.warnings, ...prepared.warnings],
-          opponentName: path.basename(opponent.path),
-        }),
-        violations: prepared.violations,
-        warnings: [...player.warnings, ...prepared.warnings],
-      };
-    }
-    let uploadedArtifact: TesseraPreparedRoster;
     try {
-      uploadedArtifact = await materializePreparedRosterArtifacts(
-        {
-          rosterId:
-            options.opponentRosterContext?.id ??
-            uploadedPreflight.gameplayFingerprint,
-          rosterName: prepared.data.rosterName,
-          factionId:
-            options.opponentRosterContext?.factionId ??
-            uploadedPreflight.factionId ??
-            undefined,
-          listUrl: prepared.data.listUrl,
-          sourceRoszPath: prepared.data.sourceRoszPath,
-          enrichedRoszPath: prepared.data.enrichedRoszPath,
-          summary: prepared.data.summary,
-          fingerprint:
-            options.opponentRosterContext
-              ? rosterExecutionFingerprint(
-                  options.opponentRosterContext,
+      let providerParityPreflight: {
+        opponentRoster: RosterDraftV1;
+        prepared: PreparedCombatBridgeInputV3;
+        bridge: CombatBridgeV3;
+      } | null = null;
+      if (options.providerParityCase) {
+        const parityOpponentRoster =
+          opponent.kind === "roster"
+            ? opponent.roster
+            : opponent.kind === "rosz"
+              ? options.opponentRosterContext ?? null
+              : null;
+        try {
+          if (
+            !simulationRequested ||
+            !operationDataBundleSnapshot ||
+            !operationLocalDataContext ||
+            !scenarioPolicyContractV2 ||
+            !parityOpponentRoster
+          ) {
+            throw Object.assign(
+              new Error(
+                "Exact provider parity requires simulate mode, one canonical opponent roster, and an immutable verified data-bundle snapshot.",
+              ),
+              { code: "TESSERA_PROVIDER_PARITY_V2_PREFLIGHT_INVALID" },
+            );
+          }
+          const unitScope = {
+            playerSelectionIds: playerRoster.units.map(
+              (unit) => unit.selectionId,
+            ),
+            opponentSelectionIds: parityOpponentRoster.units.map(
+              (unit) => unit.selectionId,
+            ),
+          };
+          scenarioPolicyContractV3 =
+            options.scenarioPolicyContractV3
+              ? canonicalTesseraScenarioPolicyContractV3(
+                  options.scenarioPolicyContractV3,
                 )
-              : uploadedPreflight.gameplayFingerprint,
-          units:
-            options.opponentRosterContext
-              ? canonicalUnits(
-                  options.opponentRosterContext,
-                  "opponent",
-                )
-              : enrichedUnits(
-                  prepared.data.summary,
-                  "opponent",
+              : selectedBaselineTesseraScenarioPolicyContractV3(
+                  scenarioPolicyContractV2.scenarios[0]?.iterations ??
+                    LOCAL_TESSERA_ENGINE_ITERATIONS,
+                  unitScope,
+                  configuration.phases,
+                  configuration.metrics,
+                );
+          scenarioPolicyContractV3 =
+            assertTesseraScenarioPolicyContractV3Scope(
+              scenarioPolicyContractV3,
+              configuration.phases,
+              configuration.metrics,
+              unitScope,
+            );
+          scenarioPolicyContractV3Sha256 =
+            tesseraScenarioPolicyContractV3Sha256(
+              scenarioPolicyContractV3,
+            );
+          const prepared =
+            await prepareCombatBridgeInputV3FromSnapshot({
+              snapshot: operationDataBundleSnapshot,
+              playerRoster,
+              opponentRoster: parityOpponentRoster,
+              scenarioPolicy: scenarioPolicyContractV3,
+              localInputs: {
+                player: compileRosterForLocalTesseraEngineV2(
+                  playerRoster,
+                  profilePolicy,
+                  operationLocalDataContext,
                 ),
-          cacheReused: prepared.data.cacheReused,
-          connectorEvents: prepared.data.connectorEvents,
-          catalogueProvenance:
-            prepared.data.catalogueProvenance,
-        },
-        path.join(outputDirectory, "opponent"),
-        options,
-      );
-    } catch (error) {
-      const violation: RosterIssue = {
-        code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
-        message:
-          error instanceof Error
-            ? error.message
-            : "The verified uploaded opponent archive could not be materialized into the exact run bundle.",
-        severity: "error",
-      };
-      return {
-        ok: false,
-        data: failedPreparationReport({
-          playerRoster,
-          player: preparedPlayer,
-          opponents,
-          simulationRequested,
-          configuration,
-          profilePolicy,
-          violations: [violation],
-          warnings: [...player.warnings, ...prepared.warnings],
-          opponentName: prepared.data.rosterName,
-        }),
-        violations: [violation],
-        warnings: [...player.warnings, ...prepared.warnings],
-      };
-    }
-    opponents.push({
-      kind: "rosz",
-      rosterName: prepared.data.rosterName,
-      sourceRoszPath: uploadedArtifact.sourceRoszPath,
-      enrichedRoszPath: uploadedArtifact.enrichedRoszPath,
-      sourceRoszSha256:
-        uploadedArtifact.sourceRoszSha256,
-      enrichedRoszSha256:
-        uploadedArtifact.enrichedRoszSha256,
-      simulationInput: uploadedArtifact.simulationInput,
-      summary: prepared.data.summary,
-      fingerprint: uploadedArtifact.fingerprint,
-      units: uploadedArtifact.units,
-      cacheReused: prepared.data.cacheReused,
-      connectorEvents: prepared.data.connectorEvents,
-      catalogueProvenance: prepared.data.catalogueProvenance,
-    });
-    opponentDrafts.push(options.opponentRosterContext ?? null);
-    }
-  } else {
-    for (const item of factionProxyItems) {
-      const prepared = await prepareRosterForTessera(
-        item.roster,
-        {
-          ...options,
-          profilePolicy,
-          mutationRunId,
-          outputDirectory: path.join(
-            outputDirectory,
-            "opponents",
-            item.templateId.replace(":", "-"),
-          ),
-        },
-        dependencies,
-      );
-      if (!prepared.ok || !prepared.data) {
-        const preparedOpponent = prepared.data
-          ? [
-              {
-                kind: "faction-archetype" as const,
-                archetype: item.posture,
-                rosterName: prepared.data.rosterName,
-                enrichedRoszPath: prepared.data.enrichedRoszPath,
-                simulationInput: prepared.data.simulationInput,
-                summary: prepared.data.summary,
-                fingerprint:
-                  item.simulationFingerprint ??
-                  rosterExecutionFingerprint(item.roster),
-                units: canonicalUnits(item.roster, "opponent"),
-                cacheReused: prepared.data.cacheReused,
-                connectorEvents: prepared.data.connectorEvents,
-                catalogueProvenance:
-                  prepared.data.catalogueProvenance,
+                opponent: compileRosterForLocalTesseraEngineV2(
+                  parityOpponentRoster,
+                  profilePolicy,
+                  operationLocalDataContext,
+                ),
               },
-            ]
-          : [];
+            });
+          providerParityPreflight = {
+            opponentRoster: parityOpponentRoster,
+            prepared,
+            bridge: await compileCombatBridgeV3(prepared.input),
+          };
+        } catch (error) {
+          let retainedReviewPaths: string[] = [];
+          if (
+            error instanceof CombatBridgeInputV3PreparationError &&
+            error.artifact
+          ) {
+            const prefix = [
+              "combat-corpus-review",
+              safeName(parityOpponentRoster?.name ?? "opponent") ||
+                "opponent",
+            ].join("-");
+            try {
+              retainedReviewPaths = await writeExportArtifacts(
+                [
+                  {
+                    format: "roster-json",
+                    filename: `${prefix}-inventory.json`,
+                    mimeType: "application/json",
+                    encoding: "utf8",
+                    content: `${JSON.stringify(error.artifact.inventory, null, 2)}\n`,
+                  },
+                  {
+                    format: "roster-json",
+                    filename: `${prefix}-overlay.json`,
+                    mimeType: "application/json",
+                    encoding: "utf8",
+                    content: `${JSON.stringify(error.artifact.overlay, null, 2)}\n`,
+                  },
+                  {
+                    format: "roster-json",
+                    filename: `${prefix}-report.json`,
+                    mimeType: "application/json",
+                    encoding: "utf8",
+                    content: `${JSON.stringify(error.artifact.report, null, 2)}\n`,
+                  },
+                ],
+                outputDirectory,
+                options,
+              );
+            } catch {
+              retainedReviewPaths = [];
+            }
+          }
+          const violation: RosterIssue = {
+            code:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "TESSERA_PROVIDER_PARITY_V2_PREFLIGHT_INVALID",
+            message: `${
+              error instanceof Error
+                ? error.message
+                : "Exact provider-parity preflight failed."
+            }${
+              retainedReviewPaths.length > 0
+                ? ` Review artifacts: ${retainedReviewPaths.join(", ")}.`
+                : ""
+            } No New Recruit or Tessera Web activity was started.`,
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: null,
+            violations: [violation],
+            warnings: playerValidation.warnings,
+          };
+        }
+      }
+      let frozenUploadedSourcePath: string | null = null;
+      if (
+        opponent.kind === "rosz" &&
+        !options.preparedReuse?.opponent &&
+        !options.frozenOpponentReuse
+      ) {
+        if (!uploadedPreflight) {
+          return {
+            ok: false,
+            data: null,
+            violations: [
+              {
+                code: "TESSERA_ROSZ_PREFLIGHT_MISSING",
+                message:
+                  "The uploaded opponent preflight was not retained before external activity.",
+                severity: "error",
+              },
+            ],
+            warnings: playerValidation.warnings,
+          };
+        }
+        const frozen = await freezeUploadedRoszPreflight(
+          path.join(outputDirectory, "opponent"),
+          options,
+          uploadedPreflight,
+        );
+        if (!frozen.ok || !frozen.data) {
+          return {
+            ok: false,
+            data: null,
+            violations: frozen.violations,
+            warnings: frozen.warnings,
+          };
+        }
+        frozenUploadedSourcePath = frozen.data;
+      }
+      const player = options.preparedReuse
+          ? await verifiedPreparedRosterReuse(
+            options.preparedReuse.player,
+            playerRoster,
+            options.catalogueDriftMode,
+          )
+        : await prepareRosterForTessera(
+            playerRoster,
+            {
+              ...options,
+              simulationBackend: plannedSimulationBackend,
+              profilePolicy,
+              dataContext: operationLocalDataContext ?? undefined,
+              mutationRunId,
+              outputDirectory: path.join(outputDirectory, "player"),
+            },
+            dependencies,
+          );
+      if (!player.ok || !player.data) {
+        let failedPlayer = player.data;
+        if (failedPlayer) {
+          try {
+            failedPlayer = await materializePreparedRosterArtifacts(
+              failedPlayer,
+              path.join(outputDirectory, "player"),
+              options,
+            );
+          } catch {
+            // The original verified paths and hashes remain visible in the failed
+            // report; the durable job layer will refuse an out-of-bundle path.
+          }
+        }
         return {
           ok: false,
-          data: failedPreparationReport({
-            playerRoster,
-            player: preparedPlayer,
-            opponents: [...opponents, ...preparedOpponent],
-            simulationRequested,
-            configuration,
-            profilePolicy,
-            violations: prepared.violations,
-            warnings: [...player.warnings, ...prepared.warnings],
-            opponentName:
-              prepared.data?.rosterName ?? item.roster.name,
-          }),
-          violations: prepared.violations,
-          warnings: [...player.warnings, ...prepared.warnings],
+          data: failedPlayer
+            ? failedPreparationReport({
+                playerRoster,
+                player: failedPlayer,
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: player.violations,
+                warnings: player.warnings,
+              })
+            : null,
+          violations: player.violations,
+          warnings: player.warnings,
         };
       }
-      let materializedOpponent: TesseraPreparedRoster;
+      let preparedPlayer: TesseraPreparedRoster;
       try {
-        materializedOpponent =
-          await materializePreparedRosterArtifacts(
-            prepared.data,
-            path.join(
-              outputDirectory,
-              "opponents",
-              item.templateId.replace(":", "-"),
-            ),
-            options,
-          );
+        preparedPlayer = await materializePreparedRosterArtifacts(
+          player.data,
+          path.join(outputDirectory, "player"),
+          options,
+        );
+        preparedPlayer.units = canonicalUnits(playerRoster, "player");
       } catch (error) {
         const violation: RosterIssue = {
           code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
           message:
             error instanceof Error
               ? error.message
-              : "A verified faction-proxy archive could not be materialized into the run bundle.",
+              : "The verified player archives could not be materialized into the exact run bundle.",
           severity: "error",
         };
+        return {
+          ok: false,
+          data: failedPreparationReport({
+            playerRoster,
+            player: player.data,
+            simulationRequested,
+            configuration,
+            profilePolicy,
+            violations: [violation],
+            warnings: player.warnings,
+          }),
+          violations: [violation],
+          warnings: player.warnings,
+        };
+      }
+
+      const opponents: TesseraMatchupReport["opponents"] = [];
+      const opponentDrafts: Array<RosterDraftV1 | null> = [];
+      const warnings: string[] = [
+        ...player.warnings,
+        ...(uploadedPreflight?.warnings ?? []),
+      ].map((warning) => warning.message);
+      if (opponent.kind === "roster") {
+        const prepared = options.preparedReuse?.opponent
+          ? await verifiedPreparedRosterReuse(
+              options.preparedReuse.opponent,
+              opponent.roster,
+              options.catalogueDriftMode,
+            )
+          : await prepareRosterForTessera(
+              opponent.roster,
+              {
+                ...options,
+                simulationBackend: plannedSimulationBackend,
+                profilePolicy,
+                dataContext: operationLocalDataContext ?? undefined,
+                mutationRunId,
+                outputDirectory: path.join(outputDirectory, "opponent"),
+              },
+              dependencies,
+            );
+        if (!prepared.ok || !prepared.data) {
+          let failedOpponent = prepared.data;
+          if (failedOpponent) {
+            try {
+              failedOpponent = await materializePreparedRosterArtifacts(
+                failedOpponent,
+                path.join(outputDirectory, "opponent"),
+                options,
+              );
+            } catch {
+              // Preserve the verified paths in the failed report; the durable job
+              // layer still enforces confinement before checkpointing them.
+            }
+          }
+          const preparedOpponent = failedOpponent
+            ? [
+                {
+                  kind: "roster" as const,
+                  rosterName: failedOpponent.rosterName,
+                  sourceRoszPath: failedOpponent.sourceRoszPath,
+                  enrichedRoszPath: failedOpponent.enrichedRoszPath,
+                  sourceRoszSha256:
+                    failedOpponent.sourceRoszSha256,
+                  enrichedRoszSha256:
+                    failedOpponent.enrichedRoszSha256,
+                  simulationInput: failedOpponent.simulationInput,
+                  summary: failedOpponent.summary,
+                  fingerprint: rosterExecutionFingerprint(opponent.roster),
+                  units: canonicalUnits(opponent.roster, "opponent"),
+                  cacheReused: failedOpponent.cacheReused,
+                  connectorEvents: failedOpponent.connectorEvents,
+                  catalogueProvenance: failedOpponent.catalogueProvenance,
+                },
+              ]
+            : [];
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents: preparedOpponent,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: prepared.violations,
+              warnings: [...player.warnings, ...prepared.warnings],
+              opponentName:
+                prepared.data?.rosterName ?? opponent.roster.name,
+            }),
+            violations: prepared.violations,
+            warnings: [...player.warnings, ...prepared.warnings],
+          };
+        }
+        let materializedOpponent: TesseraPreparedRoster;
+        try {
+          materializedOpponent =
+            await materializePreparedRosterArtifacts(
+              prepared.data,
+              path.join(outputDirectory, "opponent"),
+              options,
+            );
+        } catch (error) {
+          const violation: RosterIssue = {
+            code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The verified opponent archives could not be materialized into the exact run bundle.",
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [violation],
+              warnings: [...player.warnings, ...prepared.warnings],
+              opponentName: opponent.roster.name,
+            }),
+            violations: [violation],
+            warnings: [...player.warnings, ...prepared.warnings],
+          };
+        }
+        opponents.push({
+          kind: "roster",
+          rosterName: materializedOpponent.rosterName,
+          sourceRoszPath: materializedOpponent.sourceRoszPath,
+          enrichedRoszPath: materializedOpponent.enrichedRoszPath,
+          sourceRoszSha256:
+            materializedOpponent.sourceRoszSha256,
+          enrichedRoszSha256:
+            materializedOpponent.enrichedRoszSha256,
+          simulationInput: materializedOpponent.simulationInput,
+          summary: materializedOpponent.summary,
+          fingerprint: rosterExecutionFingerprint(opponent.roster),
+          units: canonicalUnits(opponent.roster, "opponent"),
+          cacheReused: materializedOpponent.cacheReused,
+          connectorEvents: materializedOpponent.connectorEvents,
+          catalogueProvenance:
+            materializedOpponent.catalogueProvenance,
+        });
+        opponentDrafts.push(opponent.roster);
+      } else if (opponent.kind === "rosz") {
+        if (!uploadedPreflight) {
+          throw new Error("Uploaded ROSZ preflight was not retained.");
+        }
+        if (plannedSimulationBackend === "local-engine") {
+          const opponentRosterContext = options.opponentRosterContext;
+          if (!opponentRosterContext) {
+            const violation: RosterIssue = {
+              code: "TESSERA_LOCAL_OPPONENT_CONTEXT_REQUIRED",
+              message:
+                "A bundle-native local simulation cannot derive authoritative rules from an uploaded ROSZ alone. Supply the matching canonical opponent roster context; New Recruit enrichment was not attempted.",
+              severity: "error",
+            };
+            return {
+              ok: false,
+              data: failedPreparationReport({
+                playerRoster,
+                player: preparedPlayer,
+                opponents,
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: [violation],
+                warnings: player.warnings,
+                opponentName: path.basename(opponent.path),
+              }),
+              violations: [violation],
+              warnings: player.warnings,
+            };
+          }
+          const prepared = await prepareRosterForTessera(
+            opponentRosterContext,
+            {
+              ...options,
+              simulationBackend: "local-engine",
+              profilePolicy,
+              dataContext: operationLocalDataContext ?? undefined,
+              mutationRunId,
+              outputDirectory: path.join(outputDirectory, "opponent"),
+            },
+            dependencies,
+          );
+          if (!prepared.ok || !prepared.data) {
+            return {
+              ok: false,
+              data: failedPreparationReport({
+                playerRoster,
+                player: preparedPlayer,
+                opponents,
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: prepared.violations,
+                warnings: [...player.warnings, ...prepared.warnings],
+                opponentName: opponentRosterContext.name,
+              }),
+              violations: prepared.violations,
+              warnings: [...player.warnings, ...prepared.warnings],
+            };
+          }
+          let materializedOpponent: TesseraPreparedRoster;
+          try {
+            materializedOpponent = await materializePreparedRosterArtifacts(
+              prepared.data,
+              path.join(outputDirectory, "opponent"),
+              options,
+            );
+          } catch (error) {
+            const violation: RosterIssue = {
+              code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "The bundle-native uploaded-opponent context could not be materialized.",
+              severity: "error",
+            };
+            return {
+              ok: false,
+              data: failedPreparationReport({
+                playerRoster,
+                player: preparedPlayer,
+                opponents,
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: [violation],
+                warnings: [...player.warnings, ...prepared.warnings],
+                opponentName: opponentRosterContext.name,
+              }),
+              violations: [violation],
+              warnings: [...player.warnings, ...prepared.warnings],
+            };
+          }
+          opponents.push({
+            kind: "rosz",
+            rosterName: materializedOpponent.rosterName,
+            sourceRoszPath: materializedOpponent.sourceRoszPath,
+            enrichedRoszPath: materializedOpponent.enrichedRoszPath,
+            sourceRoszSha256: materializedOpponent.sourceRoszSha256,
+            enrichedRoszSha256: materializedOpponent.enrichedRoszSha256,
+            simulationInput: materializedOpponent.simulationInput,
+            summary: materializedOpponent.summary,
+            fingerprint: rosterExecutionFingerprint(opponentRosterContext),
+            units: canonicalUnits(opponentRosterContext, "opponent"),
+            cacheReused: false,
+            connectorEvents: [],
+          });
+          opponentDrafts.push(opponentRosterContext);
+        } else {
+        const frozenOpponentReuse =
+          options.preparedReuse?.opponent ??
+          options.frozenOpponentReuse;
+        if (frozenOpponentReuse) {
+          const reused = await verifiedPreparedRosterReuse(
+            frozenOpponentReuse,
+            options.opponentRosterContext ?? null,
+            options.catalogueDriftMode,
+          );
+          if (!reused.ok || !reused.data) {
+            return {
+              ok: false,
+              data: failedPreparationReport({
+                playerRoster,
+                player: preparedPlayer,
+                opponents,
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: reused.violations,
+                warnings: [...player.warnings, ...reused.warnings],
+                opponentName: path.basename(opponent.path),
+              }),
+              violations: reused.violations,
+              warnings: [...player.warnings, ...reused.warnings],
+            };
+          }
+          let materializedOpponent: TesseraPreparedRoster;
+          try {
+            materializedOpponent =
+              await materializePreparedRosterArtifacts(
+                reused.data,
+                path.join(outputDirectory, "opponent"),
+                options,
+              );
+          } catch (error) {
+            const violation: RosterIssue = {
+              code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "The verified uploaded opponent checkpoint could not be materialized into the exact run bundle.",
+              severity: "error",
+            };
+            return {
+              ok: false,
+              data: failedPreparationReport({
+                playerRoster,
+                player: preparedPlayer,
+                opponents,
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: [violation],
+                warnings: [...player.warnings, ...reused.warnings],
+                opponentName: reused.data.rosterName,
+              }),
+              violations: [violation],
+              warnings: [...player.warnings, ...reused.warnings],
+            };
+          }
+          opponents.push({
+            kind: "rosz",
+            rosterName: materializedOpponent.rosterName,
+            sourceRoszPath: materializedOpponent.sourceRoszPath,
+            enrichedRoszPath: materializedOpponent.enrichedRoszPath,
+            sourceRoszSha256:
+              materializedOpponent.sourceRoszSha256,
+            enrichedRoszSha256:
+              materializedOpponent.enrichedRoszSha256,
+            summary: materializedOpponent.summary,
+            fingerprint: materializedOpponent.fingerprint,
+            units:
+              materializedOpponent.units ??
+              enrichedUnits(materializedOpponent.summary, "opponent"),
+            cacheReused: true,
+            connectorEvents: [],
+            catalogueProvenance:
+              materializedOpponent.catalogueProvenance,
+          });
+          warnings.push(...reused.warnings.map((warning) => warning.message));
+          opponentDrafts.push(options.opponentRosterContext ?? null);
+        } else {
+        if (!frozenUploadedSourcePath) {
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [
+                {
+                  code: "TESSERA_ROSZ_FROZEN_SOURCE_MISSING",
+                  message:
+                    "The uploaded opponent was not frozen before New Recruit activity.",
+                  severity: "error",
+                },
+              ],
+              warnings: player.warnings,
+              opponentName: path.basename(opponent.path),
+            }),
+            violations: [
+              {
+                code: "TESSERA_ROSZ_FROZEN_SOURCE_MISSING",
+                message:
+                  "The uploaded opponent was not frozen before New Recruit activity.",
+                severity: "error",
+              },
+            ],
+            warnings: player.warnings,
+          };
+        }
+        const prepared = await prepareUploadedRosz(
+          frozenUploadedSourcePath,
+          path.join(outputDirectory, "opponent"),
+          options,
+          dependencies,
+          uploadedPreflight,
+          playerRoster,
+          options.opponentRosterContext,
+          mutationRunId,
+        );
+        if (!prepared.ok || !prepared.data) {
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: prepared.violations,
+              warnings: [...player.warnings, ...prepared.warnings],
+              opponentName: path.basename(opponent.path),
+            }),
+            violations: prepared.violations,
+            warnings: [...player.warnings, ...prepared.warnings],
+          };
+        }
+        let uploadedArtifact: TesseraPreparedRoster;
+        try {
+          uploadedArtifact = await materializePreparedRosterArtifacts(
+            {
+              rosterId:
+                options.opponentRosterContext?.id ??
+                uploadedPreflight.gameplayFingerprint,
+              rosterName: prepared.data.rosterName,
+              factionId:
+                options.opponentRosterContext?.factionId ??
+                uploadedPreflight.factionId ??
+                undefined,
+              listUrl: prepared.data.listUrl,
+              sourceRoszPath: prepared.data.sourceRoszPath,
+              enrichedRoszPath: prepared.data.enrichedRoszPath,
+              summary: prepared.data.summary,
+              fingerprint:
+                options.opponentRosterContext
+                  ? rosterExecutionFingerprint(
+                      options.opponentRosterContext,
+                    )
+                  : uploadedPreflight.gameplayFingerprint,
+              units:
+                options.opponentRosterContext
+                  ? canonicalUnits(
+                      options.opponentRosterContext,
+                      "opponent",
+                    )
+                  : enrichedUnits(
+                      prepared.data.summary,
+                      "opponent",
+                    ),
+              cacheReused: prepared.data.cacheReused,
+              connectorEvents: prepared.data.connectorEvents,
+              catalogueProvenance:
+                prepared.data.catalogueProvenance,
+            },
+            path.join(outputDirectory, "opponent"),
+            options,
+          );
+        } catch (error) {
+          const violation: RosterIssue = {
+            code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The verified uploaded opponent archive could not be materialized into the exact run bundle.",
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [violation],
+              warnings: [...player.warnings, ...prepared.warnings],
+              opponentName: prepared.data.rosterName,
+            }),
+            violations: [violation],
+            warnings: [...player.warnings, ...prepared.warnings],
+          };
+        }
+        opponents.push({
+          kind: "rosz",
+          rosterName: prepared.data.rosterName,
+          sourceRoszPath: uploadedArtifact.sourceRoszPath,
+          enrichedRoszPath: uploadedArtifact.enrichedRoszPath,
+          sourceRoszSha256:
+            uploadedArtifact.sourceRoszSha256,
+          enrichedRoszSha256:
+            uploadedArtifact.enrichedRoszSha256,
+          simulationInput: uploadedArtifact.simulationInput,
+          summary: prepared.data.summary,
+          fingerprint: uploadedArtifact.fingerprint,
+          units: uploadedArtifact.units,
+          cacheReused: prepared.data.cacheReused,
+          connectorEvents: prepared.data.connectorEvents,
+          catalogueProvenance: prepared.data.catalogueProvenance,
+        });
+        opponentDrafts.push(options.opponentRosterContext ?? null);
+        }
+        }
+      } else {
+        for (const item of factionProxyItems) {
+          const prepared = await prepareRosterForTessera(
+            item.roster,
+            {
+              ...options,
+              simulationBackend: plannedSimulationBackend,
+              profilePolicy,
+              dataContext: operationLocalDataContext ?? undefined,
+              mutationRunId,
+              outputDirectory: path.join(
+                outputDirectory,
+                "opponents",
+                item.templateId.replace(":", "-"),
+              ),
+            },
+            dependencies,
+          );
+          if (!prepared.ok || !prepared.data) {
+            const preparedOpponent = prepared.data
+              ? [
+                  {
+                    kind: "faction-archetype" as const,
+                    archetype: item.posture,
+                    rosterName: prepared.data.rosterName,
+                    enrichedRoszPath: prepared.data.enrichedRoszPath,
+                    simulationInput: prepared.data.simulationInput,
+                    summary: prepared.data.summary,
+                    fingerprint:
+                      item.simulationFingerprint ??
+                      rosterExecutionFingerprint(item.roster),
+                    units: canonicalUnits(item.roster, "opponent"),
+                    cacheReused: prepared.data.cacheReused,
+                    connectorEvents: prepared.data.connectorEvents,
+                    catalogueProvenance:
+                      prepared.data.catalogueProvenance,
+                  },
+                ]
+              : [];
+            return {
+              ok: false,
+              data: failedPreparationReport({
+                playerRoster,
+                player: preparedPlayer,
+                opponents: [...opponents, ...preparedOpponent],
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: prepared.violations,
+                warnings: [...player.warnings, ...prepared.warnings],
+                opponentName:
+                  prepared.data?.rosterName ?? item.roster.name,
+              }),
+              violations: prepared.violations,
+              warnings: [...player.warnings, ...prepared.warnings],
+            };
+          }
+          let materializedOpponent: TesseraPreparedRoster;
+          try {
+            materializedOpponent =
+              await materializePreparedRosterArtifacts(
+                prepared.data,
+                path.join(
+                  outputDirectory,
+                  "opponents",
+                  item.templateId.replace(":", "-"),
+                ),
+                options,
+              );
+          } catch (error) {
+            const violation: RosterIssue = {
+              code: "TESSERA_ARTIFACT_MATERIALIZATION_FAILED",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "A verified faction-proxy archive could not be materialized into the run bundle.",
+              severity: "error",
+            };
+            return {
+              ok: false,
+              data: failedPreparationReport({
+                playerRoster,
+                player: preparedPlayer,
+                opponents,
+                simulationRequested,
+                configuration,
+                profilePolicy,
+                violations: [violation],
+                warnings: [...player.warnings, ...prepared.warnings],
+                opponentName: item.roster.name,
+              }),
+              violations: [violation],
+              warnings: [...player.warnings, ...prepared.warnings],
+            };
+          }
+          opponents.push({
+            kind: "faction-archetype",
+            archetype: item.posture,
+            rosterName: materializedOpponent.rosterName,
+            sourceRoszPath: materializedOpponent.sourceRoszPath,
+            enrichedRoszPath: materializedOpponent.enrichedRoszPath,
+            sourceRoszSha256:
+              materializedOpponent.sourceRoszSha256,
+            enrichedRoszSha256:
+              materializedOpponent.enrichedRoszSha256,
+            simulationInput: materializedOpponent.simulationInput,
+            summary: materializedOpponent.summary,
+            fingerprint:
+              item.simulationFingerprint ??
+              rosterExecutionFingerprint(item.roster),
+            units: canonicalUnits(item.roster, "opponent"),
+            cacheReused: materializedOpponent.cacheReused,
+            connectorEvents: materializedOpponent.connectorEvents,
+            catalogueProvenance:
+              materializedOpponent.catalogueProvenance,
+          });
+          opponentDrafts.push(item.roster);
+        }
+      }
+      if (opponents.length === 0) {
+        const violation: RosterIssue = {
+          code: "NO_OPPONENTS_PREPARED",
+          message: "No opponent roster could be prepared for Tessera.",
+          severity: "error",
+        };
+        return {
+          ok: false,
+          data: failedPreparationReport({
+            playerRoster,
+            player: preparedPlayer,
+            simulationRequested,
+            configuration,
+            profilePolicy,
+            violations: [violation],
+            warnings: player.warnings,
+          }),
+          violations: [violation],
+          warnings: player.warnings,
+        };
+      }
+
+      const pointsComparisons = opponents.map((prepared) =>
+        pointsComparison(
+          preparedPlayer.summary.totalPoints,
+          prepared.summary.totalPoints,
+          playerRoster.pointsLimit,
+          configuration.pointsTolerancePercent,
+        ),
+      );
+      const unmatchedIndexes = pointsComparisons
+        .map((comparison, index) => (comparison.matched ? -1 : index))
+        .filter((index) => index >= 0);
+      if (unmatchedIndexes.length && !configuration.allowPointMismatch) {
+        if (opponent.kind !== "faction-archetypes") {
+          const comparison = pointsComparisons[unmatchedIndexes[0]];
+          const violation: RosterIssue = {
+            code: "TESSERA_POINTS_MISMATCH",
+            message: pointsMismatchMessage(comparison),
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [violation],
+              warnings: player.warnings,
+              opponentName:
+                opponents[unmatchedIndexes[0]]?.rosterName ?? null,
+            }),
+            violations: [violation],
+            warnings: player.warnings,
+          };
+        }
+        for (const index of [...unmatchedIndexes].sort((a, b) => b - a)) {
+          warnings.push(
+            `${opponents[index].rosterName} was omitted because its ${opponents[index].summary.totalPoints}-point total is outside the ${configuration.pointsTolerancePercent}% tolerance.`,
+          );
+          opponents.splice(index, 1);
+          opponentDrafts.splice(index, 1);
+          pointsComparisons.splice(index, 1);
+        }
+        if (opponents.length === 0) {
+          const violation: RosterIssue = {
+            code: "TESSERA_POINTS_MISMATCH",
+            message:
+              "No generated faction archetype was within the matched-points tolerance.",
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [violation],
+              warnings: player.warnings,
+            }),
+            violations: [violation],
+            warnings: player.warnings,
+          };
+        }
+      }
+
+      const preparedProfileInspections = await Promise.all([
+        inspectPreparedProfileRequirements(
+          preparedPlayer,
+          playerRoster.factionId,
+        ),
+        ...opponents.map((prepared, index) =>
+          inspectPreparedProfileRequirements(
+            prepared,
+            opponentDrafts[index]?.factionId ??
+              factionIdentityForUploadedSummary(prepared.summary),
+          ),
+        ),
+      ]);
+      const failedProfileInspection = preparedProfileInspections.find(
+        (inspection) => !inspection.ok || !inspection.data,
+      );
+      if (failedProfileInspection) {
         return {
           ok: false,
           data: failedPreparationReport({
@@ -4719,1176 +5579,1987 @@ export async function analyzeRosterMatchup(
             simulationRequested,
             configuration,
             profilePolicy,
-            violations: [violation],
-            warnings: [...player.warnings, ...prepared.warnings],
-            opponentName: item.roster.name,
+            violations: failedProfileInspection.violations,
+            warnings: warnings.map((message) => ({
+              code: "TESSERA_WARNING",
+              message,
+              severity: "warn" as const,
+            })),
           }),
-          violations: [violation],
-          warnings: [...player.warnings, ...prepared.warnings],
+          violations: failedProfileInspection.violations,
+          warnings: [
+            ...player.warnings,
+            ...failedProfileInspection.warnings,
+          ],
         };
       }
-      opponents.push({
-        kind: "faction-archetype",
-        archetype: item.posture,
-        rosterName: materializedOpponent.rosterName,
-        sourceRoszPath: materializedOpponent.sourceRoszPath,
-        enrichedRoszPath: materializedOpponent.enrichedRoszPath,
-        sourceRoszSha256:
-          materializedOpponent.sourceRoszSha256,
-        enrichedRoszSha256:
-          materializedOpponent.enrichedRoszSha256,
-        simulationInput: materializedOpponent.simulationInput,
-        summary: materializedOpponent.summary,
-        fingerprint:
-          item.simulationFingerprint ??
-          rosterExecutionFingerprint(item.roster),
-        units: canonicalUnits(item.roster, "opponent"),
-        cacheReused: materializedOpponent.cacheReused,
-        connectorEvents: materializedOpponent.connectorEvents,
-        catalogueProvenance:
-          materializedOpponent.catalogueProvenance,
-      });
-      opponentDrafts.push(item.roster);
-    }
-  }
-  if (opponents.length === 0) {
-    const violation: RosterIssue = {
-      code: "NO_OPPONENTS_PREPARED",
-      message: "No opponent roster could be prepared for Tessera.",
-      severity: "error",
-    };
-    return {
-      ok: false,
-      data: failedPreparationReport({
-        playerRoster,
-        player: preparedPlayer,
-        simulationRequested,
-        configuration,
-        profilePolicy,
-        violations: [violation],
-        warnings: player.warnings,
-      }),
-      violations: [violation],
-      warnings: player.warnings,
-    };
-  }
-
-  const pointsComparisons = opponents.map((prepared) =>
-    pointsComparison(
-      preparedPlayer.summary.totalPoints,
-      prepared.summary.totalPoints,
-      playerRoster.pointsLimit,
-      configuration.pointsTolerancePercent,
-    ),
-  );
-  const unmatchedIndexes = pointsComparisons
-    .map((comparison, index) => (comparison.matched ? -1 : index))
-    .filter((index) => index >= 0);
-  if (unmatchedIndexes.length && !configuration.allowPointMismatch) {
-    if (opponent.kind !== "faction-archetypes") {
-      const comparison = pointsComparisons[unmatchedIndexes[0]];
-      const violation: RosterIssue = {
-        code: "TESSERA_POINTS_MISMATCH",
-        message: pointsMismatchMessage(comparison),
-        severity: "error",
-      };
-      return {
-        ok: false,
-        data: failedPreparationReport({
-          playerRoster,
-          player: preparedPlayer,
-          opponents,
-          simulationRequested,
-          configuration,
-          profilePolicy,
-          violations: [violation],
-          warnings: player.warnings,
-          opponentName:
-            opponents[unmatchedIndexes[0]]?.rosterName ?? null,
-        }),
-        violations: [violation],
-        warnings: player.warnings,
-      };
-    }
-    for (const index of [...unmatchedIndexes].sort((a, b) => b - a)) {
-      warnings.push(
-        `${opponents[index].rosterName} was omitted because its ${opponents[index].summary.totalPoints}-point total is outside the ${configuration.pointsTolerancePercent}% tolerance.`,
-      );
-      opponents.splice(index, 1);
-      opponentDrafts.splice(index, 1);
-      pointsComparisons.splice(index, 1);
-    }
-    if (opponents.length === 0) {
-      const violation: RosterIssue = {
-        code: "TESSERA_POINTS_MISMATCH",
-        message:
-          "No generated faction archetype was within the matched-points tolerance.",
-        severity: "error",
-      };
-      return {
-        ok: false,
-        data: failedPreparationReport({
-          playerRoster,
-          player: preparedPlayer,
-          simulationRequested,
-          configuration,
-          profilePolicy,
-          violations: [violation],
-          warnings: player.warnings,
-        }),
-        violations: [violation],
-        warnings: player.warnings,
-      };
-    }
-  }
-
-  const preparedProfileInspections = await Promise.all([
-    inspectPreparedProfileRequirements(
-      preparedPlayer,
-      playerRoster.factionId,
-    ),
-    ...opponents.map((prepared, index) =>
-      inspectPreparedProfileRequirements(
-        prepared,
-        opponentDrafts[index]?.factionId ??
-          factionIdentityForUploadedSummary(prepared.summary),
-      ),
-    ),
-  ]);
-  const failedProfileInspection = preparedProfileInspections.find(
-    (inspection) => !inspection.ok || !inspection.data,
-  );
-  if (failedProfileInspection) {
-    return {
-      ok: false,
-      data: failedPreparationReport({
-        playerRoster,
-        player: preparedPlayer,
-        opponents,
-        simulationRequested,
-        configuration,
-        profilePolicy,
-        violations: failedProfileInspection.violations,
-        warnings: warnings.map((message) => ({
-          code: "TESSERA_WARNING",
-          message,
-          severity: "warn" as const,
-        })),
-      }),
-      violations: failedProfileInspection.violations,
-      warnings: [
-        ...player.warnings,
-        ...failedProfileInspection.warnings,
-      ],
-    };
-  }
-  const enrichedProfileRequirements = mergedProfileRequirements([
-    profileRequirements,
-    ...preparedProfileInspections.map(
-      (inspection) => inspection.data ?? [],
-    ),
-  ]);
-  const enrichedProfileValidation = validateProfilePolicy(
-    enrichedProfileRequirements,
-    profilePolicy,
-  );
-  if (simulationRequested && !enrichedProfileValidation.valid) {
-    let scaffoldPath: string | null = null;
-    try {
-      scaffoldPath = await writeExportArtifact(
-        {
-          format: "roster-json",
-          filename: "profile-policy.enriched.scaffold.json",
-          mimeType: "application/json",
-          encoding: "utf8",
-          content: `${JSON.stringify(
-            profilePolicyScaffold(enrichedProfileRequirements),
-            null,
-            2,
-          )}\n`,
-        },
-        path.join(
-          outputDirectory,
-          "profile-policy.enriched.scaffold.json",
+      let enrichedProfileRequirements = mergedProfileRequirements([
+        profileRequirements,
+        ...preparedProfileInspections.map(
+          (inspection) => inspection.data ?? [],
         ),
-        options,
-      );
-    } catch {
-      // The prepared artifacts remain reusable even if scaffold writing fails.
-    }
-    const violation: RosterIssue = {
-      code: "TESSERA_PROFILE_POLICY_REQUIRED_AFTER_ENRICHMENT",
-      message:
-        `New Recruit exposed additional alternate weapon profiles. Tessera was not started; complete the expanded policy${
-          scaffoldPath ? ` at ${scaffoldPath}` : ""
-        }. The verified prepared archives can be reused.`,
-      severity: "error",
-    };
-    return {
-      ok: false,
-      data: failedPreparationReport({
-        playerRoster,
-        player: preparedPlayer,
-        opponents,
-        simulationRequested,
-        configuration,
+      ]);
+      const enrichedProfileValidation = validateProfilePolicy(
+        enrichedProfileRequirements,
         profilePolicy,
-        violations: [violation],
-        warnings: warnings.map((message) => ({
-          code: "TESSERA_WARNING",
-          message,
-          severity: "warn" as const,
-        })),
-      }),
-      violations: [violation],
-      warnings: player.warnings,
-    };
-  }
-
-  if (
-    plannedSimulationBackend !== "local-engine" &&
-    preparedPlayer.enrichedRoszSha256
-  ) {
-    preparedPlayer.simulationInput = {
-      kind: "new-recruit-enriched-rosz",
-      sha256: preparedPlayer.enrichedRoszSha256,
-    };
-  }
-  for (const prepared of opponents) {
-    if (
-      plannedSimulationBackend !== "local-engine" &&
-      prepared.enrichedRoszSha256
-    ) {
-      prepared.simulationInput = {
-        kind: "new-recruit-enriched-rosz",
-        sha256: prepared.enrichedRoszSha256,
-      };
-    }
-  }
-  const matrices: TesseraMatchupReport["simulation"]["matrices"] = [];
-  const scenarios: TesseraScenarioResult[] = [];
-  const settings: Record<string, string> = {};
-  const failures: NonNullable<TesseraMatchupReport["failures"]> = [];
-  const simulationConnectorEvents: ConnectorEvent[] = [];
-  const tesseraUiIdentities = new Set<string>();
-  let tesseraUiIdentityComplete = true;
-  const websiteProviderEvidenceCaptures: Array<{
-    opponentName: string;
-    evidence: TesseraWebsiteProviderEvidence;
-  }> = [];
-  let websiteProviderEvidenceComplete = true;
-  let selectedSimulationBackend: TesseraSimulationProvider =
-    plannedSimulationBackend;
-  let simulationProviderIdentity: TesseraSimulationProviderIdentity | null =
-    plannedSimulationBackend === "local-engine"
-      ? LOCAL_TESSERA_ENGINE_IDENTITY
-      : null;
-  let simulationFallback: TesseraSimulationFallbackReceipt | null = null;
-  let simulationProviderIdentityComplete = true;
-  let legacyProjection:
-    | NonNullable<
-        TesseraMatchupReport["simulation"]["legacyProjection"]
-      >
-    | undefined;
-  let captureIntegrityClean = true;
-  let profileResolutionClean = true;
-  if (simulationRequested) {
-    for (const [opponentIndex, prepared] of opponents.entries()) {
-      const profileDirectory = await mkdtemp(
-        path.join(os.tmpdir(), "rosterpilot-tessera-"),
       );
-      try {
-        const savedListReuse =
-          plannedSimulationBackend !== "local-engine" &&
-          preparedPlayer.enrichedRoszSha256 &&
-          preparedPlayer.fingerprint &&
-          prepared.enrichedRoszSha256 &&
-          prepared.fingerprint
-            ? createTesseraSavedListReuse({
-                runId: mutationRunId,
-                profilePolicy,
-                player: {
-                  enrichedRoszSha256:
-                    preparedPlayer.enrichedRoszSha256,
-                  rosterExecutionFingerprint:
-                    preparedPlayer.fingerprint,
-                  expectedUnitCount:
-                    preparedPlayer.summary.units.length,
-                },
-                opponent: {
-                  enrichedRoszSha256:
-                    prepared.enrichedRoszSha256,
-                  rosterExecutionFingerprint:
-                    prepared.fingerprint,
-                  expectedUnitCount:
-                    prepared.summary.units.length,
-                },
-                playerProfileRequirements:
-                  preparedProfileInspections[0]?.data ?? [],
-                opponentProfileRequirements:
-                  preparedProfileInspections[opponentIndex + 1]?.data ??
-                  [],
-              })
-            : null;
-        const simulationInput: Parameters<
-          typeof runTesseraBrowserMatchup
-        >[0] = {
-          profileDirectory,
-          playerRoszPath: preparedPlayer.enrichedRoszPath,
-          playerName: preparedPlayer.rosterName,
-          opponentRoszPath: prepared.enrichedRoszPath,
-          opponentName: prepared.rosterName,
-          playerSimulationInput: preparedPlayer.simulationInput,
-          opponentSimulationInput: prepared.simulationInput,
-          analysisMode: configuration.analysisMode,
-          phases: configuration.phases,
-          metrics: configuration.metrics,
-          profilePolicy,
-          frozenScenarioContract: scenarioContract,
-          savedListReuse,
-          sessionId: options.sessionId,
-        };
-        const websiteInputCompatible =
-          preparedPlayer.simulationInput?.kind ===
-            "new-recruit-enriched-rosz" &&
-          prepared.simulationInput?.kind ===
-            "new-recruit-enriched-rosz";
-        const routed = await routeTesseraSimulation({
-          requestedBackend: requestedSimulationBackend,
-          local: {
-            provider: createLocalTesseraEngineProvider(
-              dependencies.runLocalEngine ?? runLocalTesseraEngineMatchup,
-            ),
-            input: simulationInput,
-          },
-          // The website accepts only verified New Recruit-enriched ROSZ.
-          // A future promoted-local auto run must fail closed after a local
-          // runtime error instead of treating bundle-native JSON as ROSZ.
-          website: websiteInputCompatible
-            ? {
-                provider: createWebsiteTesseraProvider(
-                  dependencies.runBrowser ?? runTesseraViaAgent,
-                ),
-                input: simulationInput,
-              }
-            : undefined,
-        });
-        const result = routed.data as TesseraBrowserResult;
-        if (
-          routed.selection.selectedBackend !==
-          selectedSimulationBackend
-        ) {
-          if (
-            requestedSimulationBackend === "auto" &&
-            routed.fallback !== null &&
-            matrices.length === 0
-          ) {
-            selectedSimulationBackend = routed.selection.selectedBackend;
-          } else {
-            throw Object.assign(
-              new Error(
-                "The simulation provider changed within one exact run.",
-              ),
-              { code: "TESSERA_SIMULATION_PROVIDER_DRIFT" },
-            );
-          }
-        }
-        simulationFallback ??= routed.fallback;
-        simulationProviderIdentity = routed.identity;
-        Object.assign(settings, result.settings);
-        if (result.legacyProjection) {
-          legacyProjection =
-            !legacyProjection ||
-            (legacyProjection.status === "derived" &&
-              result.legacyProjection.status === "derived" &&
-              legacyProjection.phase === result.legacyProjection.phase &&
-              legacyProjection.metric === result.legacyProjection.metric)
-              ? {
-                  ...result.legacyProjection,
-                  scenarioIds: [
-                    ...new Set([
-                      ...(legacyProjection?.scenarioIds ?? []),
-                      ...result.legacyProjection.scenarioIds,
-                    ]),
-                  ],
-                }
-              : {
-                  status: "unavailable",
-                  phase: null,
-                  metric: null,
-                  scenarioIds: [],
-                };
-        }
-        if (selectedSimulationBackend === "website") {
-          if (result.uiIdentity) {
-            tesseraUiIdentities.add(result.uiIdentity);
-          } else {
-            tesseraUiIdentityComplete = false;
-          }
-          if (result.providerEvidence) {
-            websiteProviderEvidenceCaptures.push({
-              opponentName: prepared.rosterName,
-              evidence: structuredClone(result.providerEvidence),
-            });
-            if (
-              !result.providerEvidence.deployment.complete ||
-              !result.providerEvidence.importSemantics.complete
-            ) {
-              websiteProviderEvidenceComplete = false;
-              warnings.push(
-                `[TESSERA_PROVIDER_EVIDENCE_INCOMPLETE] Website provenance for ${prepared.rosterName} is incomplete (deployment=${result.providerEvidence.deployment.completeness}, importSemantics=${result.providerEvidence.importSemantics.completeness}, unresolvedEffects=${result.providerEvidence.importSemantics.unresolvedEffectCount}).`,
-              );
-            }
-          } else {
-            websiteProviderEvidenceComplete = false;
-            warnings.push(
-              `[TESSERA_PROVIDER_EVIDENCE_INCOMPLETE] Website provenance for ${prepared.rosterName} did not include deployment and imported-army semantic evidence.`,
-            );
-          }
-        }
-        warnings.push(...result.warnings);
-        const unresolvedAlternateProfiles = (result.importIssues ?? []).filter(
-          (issue) =>
-            issue.code === "alternate-profile" &&
-            !issue.resolvedByPolicy,
-        );
-        if (unresolvedAlternateProfiles.length > 0) {
-          profileResolutionClean = false;
-          failures.push({
-            stage: "simulation",
-            code: "TESSERA_PROFILE_POLICY_NOT_APPLIED",
-            message:
-              `Tessera reported ${unresolvedAlternateProfiles.length} unresolved alternate-profile choice(s). The captured matrices are retained, but cannot support matchup conclusions.`,
-            opponentName: prepared.rosterName,
-            retryable: false,
-          });
-        }
-        if ((result.integrityIssues?.length ?? 0) > 0) {
-          captureIntegrityClean = false;
-          for (const integrityIssue of result.integrityIssues ?? []) {
-            failures.push({
-              stage: "simulation",
-              code: integrityIssue.code,
-              message: integrityIssue.message,
-              opponentName: prepared.rosterName,
-              retryable: false,
-            });
-          }
-        }
-        matrices.push({
-          opponentName: prepared.rosterName,
-          cells: result.cells,
-        });
-        scenarios.push(
-          ...consolidateBrowserScenarios(
-            result,
-            preparedPlayer.units ?? canonicalUnits(playerRoster, "player"),
-            prepared.units ??
-              enrichedUnits(prepared.summary, "opponent"),
-            prepared.rosterName,
-            configuration,
-          ),
-        );
-        simulationConnectorEvents.push({
-          schemaVersion: 1,
-          eventId: crypto.randomUUID(),
-          recordedAt: new Date().toISOString(),
-          provider: "tessera",
-          simulationBackend: selectedSimulationBackend,
-          action: "simulate",
-          origin:
-            selectedSimulationBackend === "local-engine"
-              ? "in-memory"
-              : "new-remote",
-          outcome: "verified",
-          remoteId: null,
-          contentSha256: crypto
-            .createHash("sha256")
-            .update(
-              result.scenarios
-                .map((scenario) => scenario.matrixSha256 ?? "")
-                .join("|"),
-            )
-            .digest("hex"),
-        });
-      } catch (error) {
-        simulationProviderIdentityComplete = false;
-        const errorCode =
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          typeof error.code === "string"
-            ? error.code
-            : "TESSERA_COMPANION_FAILED";
-        warnings.push(
-          `[${errorCode}] Experimental Tessera analysis failed for ${prepared.rosterName}: ${
-            error instanceof Error ? error.message : "unknown browser failure"
-          }`,
-        );
-        failures.push({
-          stage: "simulation",
-          code: errorCode,
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unknown Tessera browser failure.",
-          opponentName: prepared.rosterName,
-          retryable:
-            /TIMEOUT|SESSION|NAVIGATION|STALE|LIST_SELECTION/.test(
-              errorCode,
-            ),
-        });
-        simulationConnectorEvents.push({
-          schemaVersion: 1,
-          eventId: crypto.randomUUID(),
-          recordedAt: new Date().toISOString(),
-          provider: "tessera",
-          simulationBackend: selectedSimulationBackend,
-          action: "simulate",
-          origin:
-            selectedSimulationBackend === "local-engine"
-              ? "in-memory"
-              : "new-remote",
-          outcome: "uncertain",
-          remoteId: null,
-          contentSha256: null,
-        });
-      } finally {
-        await rm(profileDirectory, { recursive: true, force: true });
-      }
-    }
-  }
-
-  const combinedTesseraUiIdentity =
-    tesseraUiIdentities.size === 0
-      ? null
-      : tesseraUiIdentities.size === 1
-        ? [...tesseraUiIdentities][0]
-        : crypto
-            .createHash("sha256")
-            .update([...tesseraUiIdentities].sort().join("|"))
-            .digest("hex");
-  if (selectedSimulationBackend === "website") {
-    simulationProviderIdentity = combinedTesseraUiIdentity
-      ? {
-          schemaVersion: 1,
-          provider: "website",
-          engine: "tessera-ui",
-          uiIdentity: combinedTesseraUiIdentity,
-          adapterVersion: TESSERA_WEBSITE_ADAPTER_VERSION,
-        }
-      : null;
-  }
-  const providerEvidence = aggregateWebsiteProviderEvidence(
-    websiteProviderEvidenceCaptures,
-  );
-  const allMatched = pointsComparisons.every((comparison) => comparison.matched);
-  const expectedScenarioCount =
-    opponents.length *
-    configuration.phases.length *
-    configuration.directions.length;
-  const scenariosComplete =
-    scenarios.length === expectedScenarioCount &&
-    scenarios.every((scenario) => scenario.status === "complete");
-  let observedScenarioContract: TesseraFrozenScenarioContract[] | null = null;
-  try {
-    if (simulationRequested && scenariosComplete) {
-      observedScenarioContract = observedTesseraScenarioContract(
-        scenarios,
-        configuration.phases,
-        configuration.metrics,
-      );
-    }
-  } catch (error) {
-    warnings.push(
-      `[TESSERA_SCENARIO_CONTRACT_MISMATCH] ${error instanceof Error ? error.message : "The observed scenario contract is invalid."}`,
-    );
-  }
-  const scenarioContractMatches =
-    scenarioContract === null ||
-    (
-      observedScenarioContract !== null &&
-      tesseraScenarioContractSha256(scenarioContract) ===
-        tesseraScenarioContractSha256(observedScenarioContract)
-    );
-  if (
-    scenarioContract !== null &&
-    observedScenarioContract !== null &&
-    !scenarioContractMatches
-  ) {
-    warnings.push(
-      "[TESSERA_SETTINGS_CHANGED] Tessera did not reproduce the exact frozen scenario settings and iteration counts.",
-    );
-  }
-  const reportScenarioContract =
-    scenarioContract ?? observedScenarioContract;
-  const reportScenarioContractSha256 = reportScenarioContract
-    ? tesseraScenarioContractSha256(reportScenarioContract)
-    : null;
-  const bundleTrust =
-    await captureProviderCompatibilityBundleTrustIdentity(
-      "bundleId" in playerRoster.sourceData
-        ? playerRoster.sourceData.bundleId
-        : null,
-    );
-  const providerCompatibilityEnvelopes =
-    buildMatchupProviderCompatibilityEnvelopes({
-      sourceData: playerRoster.sourceData,
-      bundleTrust,
-      player: preparedPlayer,
-      opponents,
-      providerIdentity: simulationProviderIdentity,
-      websiteEvidenceCaptures: websiteProviderEvidenceCaptures,
-      profilePolicyHash: profilePolicy
-        ? profilePolicyHash(profilePolicy)
-        : null,
-      scenarios,
-      scenarioContractSha256: reportScenarioContractSha256,
-    });
-  const simulationEvidenceComplete =
-    simulationRequested &&
-    matrices.length === opponents.length &&
-    captureIntegrityClean &&
-    profileResolutionClean &&
-    simulationProviderIdentityComplete &&
-    simulationProviderIdentity !== null &&
-    (selectedSimulationBackend !== "website" ||
-      (
-        tesseraUiIdentityComplete &&
-        (
-          configuration.providerCompatibilityMode !== "enforce" ||
-          (
-            websiteProviderEvidenceComplete &&
-            websiteProviderEvidenceCaptures.length === opponents.length
-          )
-        )
-      )) &&
-    scenariosComplete &&
-    observedScenarioContract !== null &&
-    scenarioContractMatches;
-  const providerEligibleForCoaching =
-    simulationProviderIdentity?.provider === "website" ||
-    (simulationProviderIdentity?.provider === "local-engine" &&
-      simulationProviderIdentity.promotion === "promoted" &&
-      simulationProviderIdentity.licenseState === "approved");
-  const analyticalClaimsAllowed =
-    simulationEvidenceComplete && providerEligibleForCoaching;
-  const findings = analyticalClaimsAllowed
-    ? structuredFindings(scenarios)
-    : [];
-  const legacy = legacyFindingText(findings);
-  if (simulationRequested && !simulationEvidenceComplete) {
-    warnings.push(
-      "Substantive matchup findings and roster-change candidates were suppressed because the required capture evidence was incomplete or failed matrix-integrity checks.",
-    );
-  } else if (simulationEvidenceComplete && !providerEligibleForCoaching) {
-    warnings.push(
-      "The local-engine matrices are retained as complete evaluation evidence, but substantive matchup findings and roster-change candidates are suppressed until the pinned provider satisfies its written-license and parity promotion gates.",
-    );
-  }
-  const proposedChanges =
-    analyticalClaimsAllowed &&
-    configuration.includeChangeCandidates &&
-    allMatched
-      ? await changeCandidates(playerRoster, findings)
-      : [];
-  const runId = crypto.randomUUID();
-  const supplementalAnalyses: NonNullable<
-    TesseraMatchupReport["supplementalAnalyses"]
-  > = [];
-  if (options.fallbackMode === "baseline-damage-v1") {
-    for (const [index, prepared] of opponents.entries()) {
-      const opponentDraft = opponentDrafts[index];
-      if (!opponentDraft) {
-        supplementalAnalyses.push({
-          engine: "baseline-damage-v1",
-          status: "unavailable",
-          opponentName: prepared.rosterName,
-          artifact: baselineArtifactName,
-          assumptions: {
-            scope: "unit-to-unit-expected-damage",
-            range:
-              "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
-            cover: false,
-            charge: true,
-            abilities:
-              "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
-            attachments:
-              "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
-            profilePolicyHash: profilePolicy
-              ? profilePolicyHash(profilePolicy)
-              : null,
-          },
-          cells: [],
-          warnings: [
-            "The baseline requires a canonical roster draft; an uploaded ROSZ alone is insufficient.",
-          ],
-        });
-        continue;
-      }
-      try {
-        const cells = baselineDamageCells(
-          playerRoster,
-          opponentDraft,
-          profilePolicy,
-        );
-        supplementalAnalyses.push({
-          engine: "baseline-damage-v1",
-          status: cells.length > 0 ? "complete" : "unavailable",
-          opponentName: prepared.rosterName,
-          artifact: baselineArtifactName,
-          assumptions: {
-            scope: "unit-to-unit-expected-damage",
-            range:
-              "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
-            cover: false,
-            charge: true,
-            abilities:
-              "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
-            attachments:
-              "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
-            profilePolicyHash: profilePolicy
-              ? profilePolicyHash(profilePolicy)
-              : null,
-          },
-          cells,
-          warnings:
-            cells.length > 0
-              ? []
-              : [
-                  "No canonical unit-to-unit damage cells could be resolved.",
-                ],
-        });
-      } catch (error) {
-        supplementalAnalyses.push({
-          engine: "baseline-damage-v1",
-          status: "unavailable",
-          opponentName: prepared.rosterName,
-          artifact: baselineArtifactName,
-          assumptions: {
-            scope: "unit-to-unit-expected-damage",
-            range:
-              "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
-            cover: false,
-            charge: true,
-            abilities:
-              "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
-            attachments:
-              "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
-            profilePolicyHash: profilePolicy
-              ? profilePolicyHash(profilePolicy)
-              : null,
-          },
-          cells: [],
-          warnings: [
-            error instanceof Error
-              ? error.message
-              : "The deterministic damage baseline failed.",
-          ],
-        });
-      }
-    }
-  }
-  const simulationStatus: NonNullable<
-    TesseraMatchupReport["simulation"]["status"]
-  > = !simulationRequested
-    ? "not-requested"
-    : simulationEvidenceComplete
-      ? "complete"
-      : matrices.length > 0
-        ? "partial"
-        : "failed";
-  if (
-    simulationRequested &&
-    !simulationEvidenceComplete &&
-    failures.length === 0
-  ) {
-    const preservedBrowserCode = warnings
-      .flatMap((warning) => [
-        warning.match(/\[(TESSERA_[A-Z0-9_]+)\]/)?.[1] ?? null,
-      ])
-      .find(
-        (code): code is string =>
-          code !== null &&
-          code !== "TESSERA_PROFILE_POLICY_APPLIED" &&
-          !(
-            code === "TESSERA_PROVIDER_EVIDENCE_INCOMPLETE" &&
-            configuration.providerCompatibilityMode !== "enforce"
-          ),
-      );
-    failures.push({
-      stage: "simulation",
-      code: preservedBrowserCode ?? "TESSERA_EVIDENCE_INCOMPLETE",
-      message:
-        "Tessera did not produce the complete trusted matrix and scenario set required for analytical findings.",
-      opponentName: null,
-      retryable: true,
-    });
-  }
-  const { remoteMutations, cacheReuses } =
-    preparationAccounting([preparedPlayer, ...opponents]);
-  const preparationConnectorEvents = [
-    ...(preparedPlayer.connectorEvents ?? []),
-    ...opponents.flatMap(
-      (prepared) => prepared.connectorEvents ?? [],
-    ),
-  ];
-  const report: TesseraMatchupReport = {
-    schemaVersion: 3,
-    runId,
-    generatedAt: new Date().toISOString(),
-    source: !simulationRequested
-      ? "prepare-only"
-      : matrices.length
-        ? selectedSimulationBackend === "local-engine"
-          ? "tessera-local-engine"
-          : "tessera-ui"
-        : selectedSimulationBackend === "local-engine"
-          ? "tessera-local-engine-failed"
-          : "tessera-ui-failed",
-    status: !simulationRequested
-      ? "prepared"
-      : simulationEvidenceComplete
-        ? "complete"
-        : matrices.length > 0
-          ? "inconclusive"
-          : "failed",
-    preparation: {
-      status: "complete",
-      source:
-        selectedSimulationBackend === "local-engine"
-          ? "rosterpilot-data-bundle"
-          : "new-recruit",
-      uniqueRosters: 1 + opponents.length,
-      remoteMutations:
-        selectedSimulationBackend === "local-engine"
-          ? 0
-          : remoteMutations,
-      cacheReuses:
-        selectedSimulationBackend === "local-engine"
-          ? 0
-          : cacheReuses,
-      connectorEvents: preparationConnectorEvents,
-    },
-    failures,
-    profilePolicyHash: profilePolicy
-      ? profilePolicyHash(profilePolicy)
-      : null,
-    scenarioContract: reportScenarioContract,
-    scenarioContractSha256: reportScenarioContractSha256,
-    frozenProfileRequirements: structuredClone(
-      enrichedProfileRequirements,
-    ),
-    runtime: getRuntimeProvenance(),
-    tesseraUiIdentity: combinedTesseraUiIdentity,
-    providerCompatibility:
-      providerCompatibilityEnvelopes.length === 1
-        ? providerCompatibilityEnvelopes[0]
-        : undefined,
-    providerCompatibilityEnvelopes,
-    connectorEvents: [
-      ...preparationConnectorEvents,
-      ...simulationConnectorEvents,
-    ],
-    pinnedData: playerRoster.sourceData,
-    comparisonClass: allMatched ? "matched" : "unmatched",
-    configuration,
-    pointsComparisons,
-    player: preparedPlayer,
-    opponents,
-    simulation: {
-      requested: simulationRequested,
-      executionMode: simulationRequested
-        ? "simulate"
-        : "prepare-only",
-      experimental: true,
-      status: simulationStatus,
-      requestedBackend: requestedSimulationBackend,
-      selectedBackend: selectedSimulationBackend,
-      providerIdentity: simulationProviderIdentity ?? undefined,
-      providerEvidence,
-      providerEvidenceCaptures:
-        websiteProviderEvidenceCaptures.length > 0
-          ? websiteProviderEvidenceCaptures
-          : undefined,
-      fallback: simulationFallback,
-      engine:
-        selectedSimulationBackend === "local-engine"
-          ? "tessera-engine"
-          : "tessera-ui",
-      settings,
-      legacyProjection:
-        legacyProjection ?? {
-          status: "unavailable",
-          phase: null,
-          metric: null,
-          scenarioIds: [],
-        },
-      matrices,
-      scenarios,
-    },
-    strengths: legacy.strengths,
-    weaknesses: legacy.weaknesses,
-    suggestions: legacy.suggestions,
-    findings,
-    changeCandidates: proposedChanges,
-    limitations: [
-      "This is directional combat math, not a game win probability.",
-      "Movement, terrain geometry, missions, scoring, deployment, sequencing, player decisions, and unmodeled stratagems are excluded.",
-      "Faction archetypes are deterministic proxies, not current tournament-meta lists.",
-    ],
-    warnings: [...new Set(warnings)],
-    supplementalAnalyses,
-    artifacts: [],
-  };
-  const websiteServiceEvidence =
-    selectedSimulationBackend === "website" &&
-    providerEvidence &&
-    preparedPlayer.enrichedRoszSha256
-      ? {
-          factionId: playerRoster.factionId,
-          enrichedRoszSha256: preparedPlayer.enrichedRoszSha256,
-          observedAt: report.generatedAt,
-          deploymentAssetSha256:
-            providerEvidence.deployment.identitySha256,
-          importedSemanticsSha256:
-            providerEvidence.importSemantics.playerSha256 ??
-            providerEvidence.importSemantics.combinedSha256,
-        }
-      : null;
-  const recordTesseraServiceEvidence =
-    dependencies.recordTesseraServiceEvidence ??
-    (
-      !dependencies.deliver &&
-      !dependencies.enrich &&
-      !dependencies.runBrowser &&
-      !dependencies.runLocalEngine
-        ? (input: RecordTesseraServiceEvidenceInput) =>
-            createServiceCompatibilityStore({
-              rootDirectory: path.join(
-                rosterPilotSupportDirectory(),
-                "data-bundles",
-              ),
-            }).recordTesseraEvidence(input)
-        : null
-    );
-  if (websiteServiceEvidence && recordTesseraServiceEvidence) {
-    try {
-      const recorded = await recordTesseraServiceEvidence(
-        websiteServiceEvidence,
-      );
-      if (recorded === null) {
-        report.warnings.push(
-          "The Tessera deployment evidence was captured, but no matching receipt-backed New Recruit observation was available to index it. No list was uploaded again.",
-        );
-      }
-    } catch (error) {
-      report.warnings.push(
-        `The Tessera report remains valid, but its deployment evidence could not be added to the local service-compatibility index: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-  try {
-    const resolvedOutputDirectory = path.resolve(
-      options.rootDir ?? process.cwd(),
-      outputDirectory,
-    );
-    const portablePath = (filename: string): string => {
-      const relative = path.relative(
-        resolvedOutputDirectory,
-        path.resolve(filename),
-      );
-      return relative === "" ||
-        relative === ".." ||
-        relative.startsWith(`..${path.sep}`) ||
-        path.isAbsolute(relative)
-        ? filename
-        : relative;
-    };
-    const portableArtifacts: TesseraMatchupReport["artifacts"] = [
-      {
-        format: "matchup-json",
-        written: `${basename}.json`,
-      },
-      {
-        format: "matchup-html",
-        written: `${basename}.html`,
-      },
-      ...(options.fallbackMode === "baseline-damage-v1"
-        ? [
+      if (simulationRequested && !enrichedProfileValidation.valid) {
+        let scaffoldPath: string | null = null;
+        try {
+          scaffoldPath = await writeExportArtifact(
             {
-              format: "baseline-json" as const,
-              written: baselineArtifactName,
-            },
-          ]
-        : []),
-      {
-        format: "matchup-receipt",
-        written: `${basename}.receipt.json`,
-      },
-    ];
-    const portableReport: TesseraMatchupReport = {
-      ...report,
-      player: {
-        ...report.player,
-        sourceRoszPath: portablePath(
-          report.player.sourceRoszPath,
-        ),
-        enrichedRoszPath: portablePath(
-          report.player.enrichedRoszPath,
-        ),
-        ...(report.player.simulationInput?.kind ===
-        "rosterpilot-local-engine-input"
-          ? {
-              simulationInput: {
-                ...report.player.simulationInput,
-                path: portablePath(
-                  report.player.simulationInput.path,
-                ),
-              },
-            }
-          : {}),
-      },
-      opponents: report.opponents.map((prepared) => ({
-        ...prepared,
-        ...(prepared.sourceRoszPath
-          ? {
-              sourceRoszPath: portablePath(
-                prepared.sourceRoszPath,
-              ),
-            }
-          : {}),
-        enrichedRoszPath: portablePath(
-          prepared.enrichedRoszPath,
-        ),
-        ...(prepared.simulationInput?.kind ===
-        "rosterpilot-local-engine-input"
-          ? {
-              simulationInput: {
-                ...prepared.simulationInput,
-                path: portablePath(
-                  prepared.simulationInput.path,
-                ),
-              },
-            }
-          : {}),
-      })),
-      artifacts: portableArtifacts,
-    };
-    const serializedPortableReport =
-      `${JSON.stringify(portableReport, null, 2)}\n`;
-    const artifacts: ExportArtifact[] = [
-      {
-        format: "roster-json",
-        filename: `${basename}.json`,
-        mimeType: "application/json",
-        encoding: "utf8",
-        content: serializedPortableReport,
-      },
-      {
-        format: "html",
-        filename: `${basename}.html`,
-        mimeType: "text/html; charset=utf-8",
-        encoding: "utf8",
-        content: renderTesseraMatchupReportHtml(portableReport),
-      },
-      ...(options.fallbackMode === "baseline-damage-v1"
-        ? [
-            {
-              format: "roster-json" as const,
-              filename: baselineArtifactName,
+              format: "roster-json",
+              filename: "profile-policy.enriched.scaffold.json",
               mimeType: "application/json",
-              encoding: "utf8" as const,
+              encoding: "utf8",
               content: `${JSON.stringify(
-                {
-                  schemaVersion: 1,
-                  engine: "baseline-damage-v1",
-                  runId,
-                  generatedAt: report.generatedAt,
-                  sourceData: playerRoster.sourceData,
-                  analyses: supplementalAnalyses,
-                  limitation:
-                    "Unit-to-unit expected damage only; this does not estimate game win probability.",
-                },
+                profilePolicyScaffold(enrichedProfileRequirements),
                 null,
                 2,
               )}\n`,
             },
-          ]
-        : []),
-    ];
-    const written = await writeExportArtifacts(
-      artifacts,
-      outputDirectory,
-      options,
-    );
-    const receipt = createExactReportReceipt(
-      written[0],
-      serializedPortableReport,
-      portableReport,
-    );
-    const receiptWritten = await writeExportArtifact(
-      {
-        format: "roster-json",
-        filename: `${basename}.receipt.json`,
-        mimeType: "application/json",
-        encoding: "utf8",
-        content: `${JSON.stringify(receipt, null, 2)}\n`,
-      },
-      path.join(outputDirectory, `${basename}.receipt.json`),
-      options,
-    );
-    if (websiteServiceEvidence && recordTesseraServiceEvidence) {
-      await recordTesseraServiceEvidence({
-        ...websiteServiceEvidence,
-        jobReceiptSha256: crypto
-          .createHash("sha256")
-          .update(JSON.stringify(receipt))
-          .digest("hex"),
-      }).catch(() => undefined);
-    }
-    report.artifacts = portableArtifacts.map((artifact, index) => ({
-      ...artifact,
-      written:
-        artifact.format === "matchup-receipt"
-          ? receiptWritten
-          : written[index],
-    }));
-  } catch (error) {
-    return {
-      ok: false,
-      data: report,
-      violations: [
-        {
-          code: "WRITE_FAILED",
-          message: error instanceof Error ? error.message : "Report write failed.",
+            path.join(
+              outputDirectory,
+              "profile-policy.enriched.scaffold.json",
+            ),
+            options,
+          );
+        } catch {
+          // The prepared artifacts remain reusable even if scaffold writing fails.
+        }
+        const violation: RosterIssue = {
+          code: "TESSERA_PROFILE_POLICY_REQUIRED_AFTER_ENRICHMENT",
+          message:
+            `New Recruit exposed additional alternate weapon profiles. Tessera was not started; complete the expanded policy${
+              scaffoldPath ? ` at ${scaffoldPath}` : ""
+            }. The verified prepared archives can be reused.`,
           severity: "error",
+        };
+        return {
+          ok: false,
+          data: failedPreparationReport({
+            playerRoster,
+            player: preparedPlayer,
+            opponents,
+            simulationRequested,
+            configuration,
+            profilePolicy,
+            violations: [violation],
+            warnings: warnings.map((message) => ({
+              code: "TESSERA_WARNING",
+              message,
+              severity: "warn" as const,
+            })),
+          }),
+          violations: [violation],
+          warnings: player.warnings,
+        };
+      }
+
+      if (simulationRequested && (options.scenarioPolicyContractV3 ||
+        options.providerParityCase ||
+        (
+          plannedSimulationBackend === "local-engine" &&
+          opponents.length === 1
+        ))) {
+        try {
+          if (opponents.length !== 1 || !opponentDrafts[0]) {
+            throw Object.assign(
+              new Error(
+                "A physical-state v3 contract requires exactly one canonical opponent roster.",
+              ),
+              {
+                code:
+                  "TESSERA_SCENARIO_POLICY_CONTRACT_V3_SCOPE_MISMATCH",
+              },
+            );
+          }
+          const unitScope = {
+            playerSelectionIds: playerRoster.units.map(
+              (unit) => unit.selectionId,
+            ),
+            opponentSelectionIds: opponentDrafts[0].units.map(
+              (unit) => unit.selectionId,
+            ),
+          };
+          scenarioPolicyContractV3 =
+            scenarioPolicyContractV3 ??
+            (options.scenarioPolicyContractV3
+              ? canonicalTesseraScenarioPolicyContractV3(
+                  options.scenarioPolicyContractV3,
+                )
+              : selectedBaselineTesseraScenarioPolicyContractV3(
+                  scenarioPolicyContractV2?.scenarios[0]?.iterations ??
+                    LOCAL_TESSERA_ENGINE_ITERATIONS,
+                  unitScope,
+                  configuration.phases,
+                  configuration.metrics,
+                ));
+          scenarioPolicyContractV3 =
+            assertTesseraScenarioPolicyContractV3Scope(
+              scenarioPolicyContractV3,
+              configuration.phases,
+              configuration.metrics,
+              unitScope,
+            );
+          scenarioPolicyContractV3Sha256 =
+            tesseraScenarioPolicyContractV3Sha256(
+              scenarioPolicyContractV3,
+            );
+        } catch (error) {
+          const violation: RosterIssue = {
+            code:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "TESSERA_SCENARIO_POLICY_CONTRACT_V3_INVALID",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The physical-state v3 scenario contract is invalid.",
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [violation],
+              warnings: warnings.map((message) => ({
+                code: "TESSERA_WARNING",
+                message,
+                severity: "warn" as const,
+              })),
+            }),
+            violations: [violation],
+            warnings: player.warnings,
+          };
+        }
+      }
+
+      let combatBridges: Array<CombatBridgeV2 | CombatBridgeV3> = [];
+      const combatBridgeReplayInputSha256s: Array<{
+        player: string;
+        opponent: string;
+      } | null> = [];
+      const combatBridgeV3Preparations: Array<
+        PreparedCombatBridgeInputV3 | null
+      > = [];
+      const combatCorpusReviewArtifacts: Array<{
+        opponentName: string;
+        artifact: CombatBridgeInputV3PreparationArtifact;
+      }> = [];
+      if (
+        simulationRequested &&
+        (plannedSimulationBackend === "local-engine" ||
+          options.providerParityCase)
+      ) {
+        const missingContextIndex = opponentDrafts.findIndex(
+          (draft) => draft === null,
+        );
+        if (!scenarioPolicyContractV2 || missingContextIndex >= 0) {
+          const violation: RosterIssue = {
+            code:
+              missingContextIndex >= 0
+                ? "TESSERA_LOCAL_OPPONENT_CONTEXT_REQUIRED"
+                : "TESSERA_SCENARIO_POLICY_CONTRACT_V2_REQUIRED",
+            message:
+              missingContextIndex >= 0
+                ? `The local rules compiler has no canonical context for ${opponents[missingContextIndex]?.rosterName ?? "the opponent"}; New Recruit enrichment was not attempted.`
+                : "The local rules compiler requires a frozen v2 scenario/policy contract.",
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [violation],
+              warnings: warnings.map((message) => ({
+                code: "TESSERA_WARNING",
+                message,
+                severity: "warn" as const,
+              })),
+            }),
+            violations: [violation],
+            warnings: player.warnings,
+          };
+        }
+        try {
+          const canonicalOpponents = opponentDrafts as RosterDraftV1[];
+          if (!operationLocalDataContext) {
+            throw Object.assign(
+              new Error(
+                "The exact local-engine Dataset was not captured before roster preparation.",
+              ),
+              { code: "TESSERA_DATA_BUNDLE_SNAPSHOT_MISSING" },
+            );
+          }
+          if (providerParityPreflight) {
+            if (
+              canonicalOpponents.length !== 1 ||
+              rosterExecutionFingerprint(canonicalOpponents[0]) !==
+                rosterExecutionFingerprint(
+                  providerParityPreflight.opponentRoster,
+                )
+            ) {
+              throw Object.assign(
+                new Error(
+                  "The prepared opponent changed after exact provider-parity preflight.",
+                ),
+                { code: "TESSERA_PROVIDER_PARITY_V2_PREFLIGHT_DRIFT" },
+              );
+            }
+            const replayInputSha256s =
+              providerParityPreflight.prepared.replayBindings
+                .localInputV2Sha256s;
+            if (
+              !replayInputSha256s?.player ||
+              !replayInputSha256s.opponent
+            ) {
+              throw new Error(
+                "The provider-parity preflight omitted exact local-input replay hashes.",
+              );
+            }
+            combatBridges.push(providerParityPreflight.bridge);
+            combatBridgeReplayInputSha256s.push({
+              player: replayInputSha256s.player,
+              opponent: replayInputSha256s.opponent,
+            });
+            combatBridgeV3Preparations.push(
+              providerParityPreflight.prepared,
+            );
+          } else if (
+            operationDataBundleSnapshot &&
+            scenarioPolicyContractV3
+          ) {
+            const playerLocalInput =
+              compileRosterForLocalTesseraEngineV2(
+                playerRoster,
+                profilePolicy,
+                operationLocalDataContext,
+              );
+            const decisionGradeLocalRequired =
+              localTesseraEngineIsAutoSelectable(
+                personalLocalAttestation,
+              );
+            for (const [index, opponentRoster] of
+              canonicalOpponents.entries()) {
+              try {
+                const prepared =
+                  await prepareCombatBridgeInputV3FromSnapshot({
+                    snapshot: operationDataBundleSnapshot,
+                    playerRoster,
+                    opponentRoster,
+                    scenarioPolicy: scenarioPolicyContractV3,
+                    localInputs: {
+                      player: playerLocalInput,
+                      opponent:
+                        compileRosterForLocalTesseraEngineV2(
+                          opponentRoster,
+                          profilePolicy,
+                          operationLocalDataContext,
+                        ),
+                    },
+                  });
+                const bridge = await compileCombatBridgeV3(
+                  prepared.input,
+                );
+                combatBridges.push(bridge);
+                const replayInputSha256s =
+                  prepared.replayBindings.localInputV2Sha256s;
+                if (
+                  !replayInputSha256s?.player ||
+                  !replayInputSha256s.opponent
+                ) {
+                  throw new Error(
+                    "The admitted bridge v3 omitted exact local-input replay hashes.",
+                  );
+                }
+                combatBridgeReplayInputSha256s.push({
+                  player: replayInputSha256s.player,
+                  opponent: replayInputSha256s.opponent,
+                });
+                combatBridgeV3Preparations.push(prepared);
+              } catch (error) {
+                if (
+                  !(error instanceof CombatBridgeInputV3PreparationError) ||
+                  error.code !== "COMBAT_CORPUS_REVIEW_REQUIRED" ||
+                  !error.artifact ||
+                  options.providerParityCase
+                ) {
+                  throw error;
+                }
+                combatCorpusReviewArtifacts.push({
+                  opponentName:
+                    opponents[index]?.rosterName ??
+                    `Opponent ${index + 1}`,
+                  artifact: error.artifact,
+                });
+                warnings.push(
+                  `[TESSERA_COMBAT_CORPUS_V3_INCOMPLETE] ${opponents[index]?.rosterName ?? `Opponent ${index + 1}`} requires reviewed combat-corpus mappings (report ${error.artifact.report.reportSha256}). Review artifacts were retained; a legacy bridge-v2 diagnostic may run, but it cannot establish scalar parity or activate the personal local provider.`,
+                );
+                const legacyInput =
+                  await compileCombatBridgeInputV2FromSnapshot({
+                    snapshot: operationDataBundleSnapshot,
+                    playerRoster,
+                    opponentRoster,
+                    scenarioPolicy: scenarioPolicyContractV2,
+                  });
+                combatBridges.push(
+                  await compileCombatBridgeV2(legacyInput),
+                );
+                combatBridgeReplayInputSha256s.push(null);
+                combatBridgeV3Preparations.push(null);
+                if (decisionGradeLocalRequired) {
+                  warnings.push(
+                    "[TESSERA_PERSONAL_LOCAL_V3_REQUIRED] The active personal-local path requires an admitted bridge-v3 corpus. Local preflight will fail closed so an explicitly authorized Web fallback can be considered.",
+                  );
+                }
+              }
+            }
+          } else if (operationDataBundleSnapshot) {
+            const compileInputs = await Promise.all(
+              canonicalOpponents.map((opponentRoster) =>
+                compileCombatBridgeInputV2FromSnapshot({
+                  snapshot: operationDataBundleSnapshot!,
+                  playerRoster,
+                  opponentRoster,
+                  scenarioPolicy: scenarioPolicyContractV2!,
+                }),
+              ),
+            );
+            combatBridges = await Promise.all(
+              compileInputs.map((input) => compileCombatBridgeV2(input)),
+            );
+            combatBridgeReplayInputSha256s.push(
+              ...combatBridges.map(() => null),
+            );
+            combatBridgeV3Preparations.push(
+              ...combatBridges.map(() => null),
+            );
+          } else {
+            const compileInputs = await Promise.all(
+              canonicalOpponents.map((opponentRoster) =>
+                compileCombatBridgeInputV2FromDataset({
+                  dataset: operationLocalDataContext!.dataset,
+                  playerRoster,
+                  opponentRoster,
+                  scenarioPolicy: scenarioPolicyContractV2!,
+                }),
+              ),
+            );
+            combatBridges = await Promise.all(
+              compileInputs.map((input) => compileCombatBridgeV2(input)),
+            );
+            combatBridgeReplayInputSha256s.push(
+              ...combatBridges.map(() => null),
+            );
+            combatBridgeV3Preparations.push(
+              ...combatBridges.map(() => null),
+            );
+          }
+          for (const [index, bridge] of combatBridges.entries()) {
+            if (bridge.coverage.status !== "complete") {
+              warnings.push(
+                `[TESSERA_COMBAT_COVERAGE_${bridge.coverage.status.toLocaleUpperCase()}] ${opponents[index]?.rosterName ?? `Opponent ${index + 1}`} combat coverage is ${bridge.coverage.status}/${bridge.coverage.claimEligibility}: ${bridge.coverage.omittedEffects} omitted and ${bridge.coverage.approximatedEffects} approximated effect(s).`,
+              );
+            }
+          }
+        } catch (error) {
+          const violation: RosterIssue = {
+            code:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "TESSERA_COMBAT_BRIDGE_COMPILATION_FAILED",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The bundle-native combat bridge could not be compiled.",
+            severity: "error",
+          };
+          return {
+            ok: false,
+            data: failedPreparationReport({
+              playerRoster,
+              player: preparedPlayer,
+              opponents,
+              simulationRequested,
+              configuration,
+              profilePolicy,
+              violations: [violation],
+              warnings: warnings.map((message) => ({
+                code: "TESSERA_WARNING",
+                message,
+                severity: "warn" as const,
+              })),
+            }),
+            violations: [violation],
+            warnings: player.warnings,
+          };
+        }
+      }
+
+      if (
+        plannedSimulationBackend !== "local-engine" &&
+        preparedPlayer.enrichedRoszSha256
+      ) {
+        preparedPlayer.simulationInput = {
+          kind: "new-recruit-enriched-rosz",
+          sha256: preparedPlayer.enrichedRoszSha256,
+        };
+      }
+      for (const prepared of opponents) {
+        if (
+          plannedSimulationBackend !== "local-engine" &&
+          prepared.enrichedRoszSha256
+        ) {
+          prepared.simulationInput = {
+            kind: "new-recruit-enriched-rosz",
+            sha256: prepared.enrichedRoszSha256,
+          };
+        }
+      }
+      const matrices: TesseraMatchupReport["simulation"]["matrices"] = [];
+      const scenarios: TesseraScenarioResult[] = [];
+      const settings: Record<string, string> = {};
+      const failures: NonNullable<TesseraMatchupReport["failures"]> = [];
+      const simulationConnectorEvents: ConnectorEvent[] = [];
+      const tesseraUiIdentities = new Set<string>();
+      let tesseraUiIdentityComplete = true;
+      const websiteProviderEvidenceCaptures: Array<{
+        opponentName: string;
+        evidence: TesseraWebsiteProviderEvidence;
+      }> = [];
+      let websiteProviderEvidenceComplete = true;
+      let selectedSimulationBackend: TesseraSimulationProvider =
+        plannedSimulationBackend;
+      let simulationProviderIdentity: TesseraSimulationProviderIdentity | null =
+        plannedSimulationBackend === "local-engine"
+          ? LOCAL_TESSERA_ENGINE_IDENTITY
+          : null;
+      let simulationFallback: TesseraSimulationFallbackReceipt | null = null;
+      let simulationProviderIdentityComplete = true;
+      let legacyProjection:
+        | NonNullable<
+            TesseraMatchupReport["simulation"]["legacyProjection"]
+          >
+        | undefined;
+      let captureIntegrityClean = true;
+      let profileResolutionClean = true;
+      if (simulationRequested) {
+        for (const [opponentIndex, prepared] of opponents.entries()) {
+          const profileDirectory = await mkdtemp(
+            path.join(os.tmpdir(), "rosterpilot-tessera-"),
+          );
+          try {
+            const savedListReuse =
+              plannedSimulationBackend !== "local-engine" &&
+              preparedPlayer.enrichedRoszSha256 &&
+              preparedPlayer.fingerprint &&
+              prepared.enrichedRoszSha256 &&
+              prepared.fingerprint
+                ? createTesseraSavedListReuse({
+                    runId: mutationRunId,
+                    profilePolicy,
+                    player: {
+                      enrichedRoszSha256:
+                        preparedPlayer.enrichedRoszSha256,
+                      rosterExecutionFingerprint:
+                        preparedPlayer.fingerprint,
+                      expectedUnitCount:
+                        preparedPlayer.summary.units.length,
+                    },
+                    opponent: {
+                      enrichedRoszSha256:
+                        prepared.enrichedRoszSha256,
+                      rosterExecutionFingerprint:
+                        prepared.fingerprint,
+                      expectedUnitCount:
+                        prepared.summary.units.length,
+                    },
+                    playerProfileRequirements:
+                      preparedProfileInspections[0]?.data ?? [],
+                    opponentProfileRequirements:
+                      preparedProfileInspections[opponentIndex + 1]?.data ??
+                      [],
+                  })
+                : null;
+            const simulationInput: Parameters<
+              typeof runTesseraBrowserMatchup
+            >[0] = {
+              profileDirectory,
+              playerRoszPath: preparedPlayer.enrichedRoszPath,
+              playerName: preparedPlayer.rosterName,
+              opponentRoszPath: prepared.enrichedRoszPath,
+              opponentName: prepared.rosterName,
+              playerSimulationInput: preparedPlayer.simulationInput,
+              opponentSimulationInput: prepared.simulationInput,
+              analysisMode: configuration.analysisMode,
+              phases: configuration.phases,
+              metrics: configuration.metrics,
+              profilePolicy,
+              frozenScenarioContract: scenarioContract,
+              scenarioPolicyContractV2:
+                plannedSimulationBackend === "local-engine"
+                  ? scenarioPolicyContractV2
+                  : null,
+              scenarioPolicyContractV3,
+              combatBridge:
+                plannedSimulationBackend === "local-engine"
+                  ? combatBridges[opponentIndex] ?? null
+                  : null,
+              combatCorpusTranslationLedger:
+                plannedSimulationBackend === "local-engine"
+                  ? combatBridgeV3Preparations[opponentIndex]
+                      ?.translationLedger ?? null
+                  : null,
+              savedListReuse,
+              sessionId: options.sessionId,
+            };
+            const websiteInputCompatible =
+              preparedPlayer.simulationInput?.kind ===
+                "new-recruit-enriched-rosz" &&
+              prepared.simulationInput?.kind ===
+                "new-recruit-enriched-rosz";
+            const simulationRequestSha256 = crypto
+              .createHash("sha256")
+              .update(
+                canonicalJson({
+                  schemaVersion: 1,
+                  action: "tessera-simulation",
+                  requestedSimulationBackend,
+                  plannedSimulationBackend,
+                  bundleId:
+                    "bundleId" in playerRoster.sourceData
+                      ? playerRoster.sourceData.bundleId
+                      : null,
+                  playerRosterFingerprint:
+                    preparedPlayer.fingerprint ??
+                    rosterExecutionFingerprint(playerRoster),
+                  opponentRosterFingerprint: prepared.fingerprint ?? null,
+                  playerSimulationInputSha256:
+                    preparedPlayer.simulationInput?.sha256 ?? null,
+                  opponentSimulationInputSha256:
+                    prepared.simulationInput?.sha256 ?? null,
+                  profilePolicySha256: profilePolicy
+                    ? profilePolicyHash(profilePolicy)
+                    : null,
+                  scenarioContractSha256: scenarioContract
+                    ? tesseraScenarioContractSha256(scenarioContract)
+                    : null,
+                  scenarioPolicyContractV2Sha256,
+                  scenarioPolicyContractV3Sha256,
+                  combatBridgeSha256:
+                    simulationInput.combatBridge?.bridgeSha256 ?? null,
+                  combatCorpusTranslationLedgerSha256:
+                    simulationInput.combatCorpusTranslationLedger
+                      ? crypto.createHash("sha256").update(
+                          canonicalJson(
+                            simulationInput
+                              .combatCorpusTranslationLedger,
+                          ),
+                        ).digest("hex")
+                      : null,
+                  personalCoverageSuiteSha256:
+                    personalLocalAttestation?.coveringSuite
+                      ?.suiteSha256 ?? null,
+                  phases: configuration.phases,
+                  metrics: configuration.metrics,
+                }),
+              )
+              .digest("hex");
+            const directWebsiteProvider = createWebsiteTesseraProvider(
+              dependencies.runBrowser ?? runTesseraViaAgent,
+            );
+            const lazyAuthorizedWebsiteFallbackProvider = {
+              backend: directWebsiteProvider.backend,
+              getStatus: directWebsiteProvider.getStatus,
+              // Authorization is checked by the router before this provider is
+              // preflighted or run. Preparation stays lazy so an unconfirmed or
+              // successful local attempt causes no New Recruit/browser activity.
+              preflight: async () => ({
+                ok: true,
+                reasonCodes: [],
+                warnings: [],
+              }),
+              run: async () => {
+                if (!dependencies.runBrowser) {
+                  const readiness = await getTesseraConnectionStatus();
+                  if (!readiness.ok || !readiness.data?.available) {
+                    throw Object.assign(
+                      new Error(
+                        readiness.violations[0]?.message ??
+                          readiness.warnings[0]?.message ??
+                          "The local Tessera agent, browser, or premium credential is not ready for the authorized Website fallback.",
+                      ),
+                      { code: "TESSERA_READINESS_PROBE_FAILED" },
+                    );
+                  }
+                }
+                const opponentRoster = opponentDrafts[opponentIndex];
+                if (!opponentRoster) {
+                  throw Object.assign(
+                    new Error(
+                      "The authorized Website fallback has no canonical opponent roster to prepare.",
+                    ),
+                    { code: "TESSERA_LOCAL_OPPONENT_CONTEXT_REQUIRED" },
+                  );
+                }
+                const fallbackRoot = path.join(
+                  outputDirectory,
+                  "website-fallback",
+                );
+                const fallbackPlayerResult = await prepareRosterForTessera(
+                  playerRoster,
+                  {
+                    ...options,
+                    simulationBackend: "website",
+                    profilePolicy,
+                    mutationRunId: `${mutationRunId}-website-fallback-player`,
+                    outputDirectory: path.join(fallbackRoot, "player"),
+                  },
+                  dependencies,
+                );
+                if (!fallbackPlayerResult.ok || !fallbackPlayerResult.data) {
+                  const issue = fallbackPlayerResult.violations[0];
+                  throw Object.assign(
+                    new Error(
+                      issue?.message ??
+                        "The authorized Website fallback could not prepare the verified player New Recruit artifact.",
+                    ),
+                    {
+                      code:
+                        issue?.code ??
+                        "TESSERA_WEBSITE_FALLBACK_PREPARATION_FAILED",
+                    },
+                  );
+                }
+                // Keep remote list mutations sequential. If player preparation
+                // fails, no opponent import is attempted.
+                const fallbackOpponentResult = await prepareRosterForTessera(
+                  opponentRoster,
+                  {
+                    ...options,
+                    simulationBackend: "website",
+                    profilePolicy,
+                    mutationRunId: `${mutationRunId}-website-fallback-opponent-${opponentIndex + 1}`,
+                    outputDirectory: path.join(
+                      fallbackRoot,
+                      `opponent-${opponentIndex + 1}`,
+                    ),
+                  },
+                  dependencies,
+                );
+                const failedPreparation = !fallbackOpponentResult.ok
+                  ? fallbackOpponentResult
+                  : null;
+                if (
+                  failedPreparation ||
+                  !fallbackOpponentResult.data
+                ) {
+                  const issue = failedPreparation?.violations[0];
+                  throw Object.assign(
+                    new Error(
+                      issue?.message ??
+                        "The authorized Website fallback could not prepare verified New Recruit artifacts.",
+                    ),
+                    {
+                      code:
+                        issue?.code ??
+                        "TESSERA_WEBSITE_FALLBACK_PREPARATION_FAILED",
+                    },
+                  );
+                }
+                const [fallbackPlayer, fallbackOpponent] = await Promise.all([
+                  materializePreparedRosterArtifacts(
+                    fallbackPlayerResult.data,
+                    path.join(fallbackRoot, "player"),
+                    options,
+                  ),
+                  materializePreparedRosterArtifacts(
+                    fallbackOpponentResult.data,
+                    path.join(
+                      fallbackRoot,
+                      `opponent-${opponentIndex + 1}`,
+                    ),
+                    options,
+                  ),
+                ]);
+                fallbackPlayer.units = canonicalUnits(
+                  playerRoster,
+                  "player",
+                );
+                fallbackOpponent.units = canonicalUnits(
+                  opponentRoster,
+                  "opponent",
+                );
+                if (
+                  !fallbackPlayer.enrichedRoszSha256 ||
+                  !fallbackOpponent.enrichedRoszSha256
+                ) {
+                  throw Object.assign(
+                    new Error(
+                      "The authorized Website fallback did not retain both enriched ROSZ hashes.",
+                    ),
+                    { code: "TESSERA_HANDOFF_INCOMPLETE" },
+                  );
+                }
+                fallbackPlayer.simulationInput = {
+                  kind: "new-recruit-enriched-rosz",
+                  sha256: fallbackPlayer.enrichedRoszSha256,
+                };
+                fallbackOpponent.simulationInput = {
+                  kind: "new-recruit-enriched-rosz",
+                  sha256: fallbackOpponent.enrichedRoszSha256,
+                };
+                const fallbackProfileInspections = await Promise.all([
+                  inspectPreparedProfileRequirements(
+                    fallbackPlayer,
+                    playerRoster.factionId,
+                  ),
+                  inspectPreparedProfileRequirements(
+                    fallbackOpponent,
+                    opponentRoster.factionId,
+                  ),
+                ]);
+                const failedInspection = fallbackProfileInspections.find(
+                  (inspection) => !inspection.ok || !inspection.data,
+                );
+                if (failedInspection) {
+                  const issue = failedInspection.violations[0];
+                  throw Object.assign(
+                    new Error(
+                      issue?.message ??
+                        "The authorized Website fallback artifacts could not be inspected.",
+                    ),
+                    {
+                      code:
+                        issue?.code ??
+                        "TESSERA_ENRICHED_PROFILE_INSPECTION_FAILED",
+                    },
+                  );
+                }
+                const fallbackEnrichedProfileRequirements =
+                  mergedProfileRequirements([
+                    profileRequirements,
+                    ...fallbackProfileInspections.map(
+                      (inspection) => inspection.data ?? [],
+                    ),
+                  ]);
+                const fallbackProfileValidation = validateProfilePolicy(
+                  fallbackEnrichedProfileRequirements,
+                  profilePolicy,
+                );
+                if (!fallbackProfileValidation.valid) {
+                  throw Object.assign(
+                    new Error(
+                      "The authorized Website fallback exposed weapon-profile choices that are not resolved by the frozen profile policy.",
+                    ),
+                    { code: "TESSERA_PROFILE_POLICY_CHANGED" },
+                  );
+                }
+                enrichedProfileRequirements =
+                  fallbackEnrichedProfileRequirements;
+                const fallbackInput: Parameters<
+                  typeof runTesseraBrowserMatchup
+                >[0] = {
+                  ...simulationInput,
+                  playerRoszPath: fallbackPlayer.enrichedRoszPath,
+                  playerName: fallbackPlayer.rosterName,
+                  opponentRoszPath: fallbackOpponent.enrichedRoszPath,
+                  opponentName: fallbackOpponent.rosterName,
+                  playerSimulationInput: fallbackPlayer.simulationInput,
+                  opponentSimulationInput: fallbackOpponent.simulationInput,
+                  scenarioPolicyContractV2: null,
+                  combatBridge: null,
+                  savedListReuse:
+                    fallbackPlayer.fingerprint &&
+                    fallbackOpponent.fingerprint
+                      ? createTesseraSavedListReuse({
+                          runId: `${mutationRunId}-website-fallback`,
+                          profilePolicy,
+                          player: {
+                            enrichedRoszSha256:
+                              fallbackPlayer.enrichedRoszSha256,
+                            rosterExecutionFingerprint:
+                              fallbackPlayer.fingerprint,
+                            expectedUnitCount:
+                              fallbackPlayer.summary.units.length,
+                          },
+                          opponent: {
+                            enrichedRoszSha256:
+                              fallbackOpponent.enrichedRoszSha256,
+                            rosterExecutionFingerprint:
+                              fallbackOpponent.fingerprint,
+                            expectedUnitCount:
+                              fallbackOpponent.summary.units.length,
+                          },
+                          playerProfileRequirements:
+                            fallbackProfileInspections[0]?.data ?? [],
+                          opponentProfileRequirements:
+                            fallbackProfileInspections[1]?.data ?? [],
+                        })
+                      : null,
+                };
+                preparedPlayer = fallbackPlayer;
+                opponents[opponentIndex] = {
+                  kind: "roster",
+                  rosterName: fallbackOpponent.rosterName,
+                  sourceRoszPath: fallbackOpponent.sourceRoszPath,
+                  enrichedRoszPath: fallbackOpponent.enrichedRoszPath,
+                  sourceRoszSha256: fallbackOpponent.sourceRoszSha256,
+                  enrichedRoszSha256:
+                    fallbackOpponent.enrichedRoszSha256,
+                  simulationInput: fallbackOpponent.simulationInput,
+                  summary: fallbackOpponent.summary,
+                  fingerprint: fallbackOpponent.fingerprint,
+                  units: fallbackOpponent.units,
+                  cacheReused: fallbackOpponent.cacheReused,
+                  connectorEvents: fallbackOpponent.connectorEvents,
+                  catalogueProvenance:
+                    fallbackOpponent.catalogueProvenance,
+                };
+                warnings.push(
+                  ...fallbackPlayerResult.warnings.map(
+                    (warning) => warning.message,
+                  ),
+                  ...fallbackOpponentResult.warnings.map(
+                    (warning) => warning.message,
+                  ),
+                );
+                return directWebsiteProvider.run(fallbackInput);
+              },
+            };
+            const routed = await routeTesseraSimulation({
+              requestedBackend: requestedSimulationBackend,
+              requestSha256: simulationRequestSha256,
+              websiteFallbackAuthorization:
+                options.websiteFallbackAuthorization,
+              local: {
+                provider: createLocalTesseraEngineProvider(
+                  dependencies.runLocalEngine ?? runLocalTesseraEngineMatchup,
+                  {
+                    personalAttestation: personalLocalAttestation,
+                  },
+                ),
+                input: simulationInput,
+              },
+              website: websiteInputCompatible
+                ? {
+                    provider: directWebsiteProvider,
+                    input: simulationInput,
+                  }
+                : requestedSimulationBackend === "auto" &&
+                    plannedSimulationBackend === "local-engine"
+                  ? {
+                      provider: lazyAuthorizedWebsiteFallbackProvider,
+                      input: simulationInput,
+                    }
+                  : undefined,
+            });
+            const result = routed.data as TesseraBrowserResult;
+            if (
+              routed.selection.selectedBackend !==
+              selectedSimulationBackend
+            ) {
+              if (
+                requestedSimulationBackend === "auto" &&
+                routed.fallback !== null &&
+                matrices.length === 0
+              ) {
+                selectedSimulationBackend = routed.selection.selectedBackend;
+              } else {
+                throw Object.assign(
+                  new Error(
+                    "The simulation provider changed within one exact run.",
+                  ),
+                  { code: "TESSERA_SIMULATION_PROVIDER_DRIFT" },
+                );
+              }
+            }
+            if (
+              routed.selection.selectedBackend === "local-engine" &&
+              simulationInput.combatBridge
+            ) {
+              assertLocalCombatBridgeExecutionEvidence(
+                result,
+                simulationInput.combatBridge,
+              );
+            }
+            simulationFallback ??= routed.fallback;
+            simulationProviderIdentity = routed.identity;
+            Object.assign(settings, result.settings);
+            if (result.legacyProjection) {
+              legacyProjection =
+                !legacyProjection ||
+                (legacyProjection.status === "derived" &&
+                  result.legacyProjection.status === "derived" &&
+                  legacyProjection.phase === result.legacyProjection.phase &&
+                  legacyProjection.metric === result.legacyProjection.metric)
+                  ? {
+                      ...result.legacyProjection,
+                      scenarioIds: [
+                        ...new Set([
+                          ...(legacyProjection?.scenarioIds ?? []),
+                          ...result.legacyProjection.scenarioIds,
+                        ]),
+                      ],
+                    }
+                  : {
+                      status: "unavailable",
+                      phase: null,
+                      metric: null,
+                      scenarioIds: [],
+                    };
+            }
+            if (selectedSimulationBackend === "website") {
+              if (result.uiIdentity) {
+                tesseraUiIdentities.add(result.uiIdentity);
+              } else {
+                tesseraUiIdentityComplete = false;
+              }
+              if (result.providerEvidence) {
+                websiteProviderEvidenceCaptures.push({
+                  opponentName: prepared.rosterName,
+                  evidence: structuredClone(result.providerEvidence),
+                });
+                if (
+                  !result.providerEvidence.deployment.complete ||
+                  !result.providerEvidence.importSemantics.complete
+                ) {
+                  websiteProviderEvidenceComplete = false;
+                  warnings.push(
+                    `[TESSERA_PROVIDER_EVIDENCE_INCOMPLETE] Website provenance for ${prepared.rosterName} is incomplete (deployment=${result.providerEvidence.deployment.completeness}, importSemantics=${result.providerEvidence.importSemantics.completeness}, unresolvedEffects=${result.providerEvidence.importSemantics.unresolvedEffectCount}).`,
+                  );
+                }
+              } else {
+                websiteProviderEvidenceComplete = false;
+                warnings.push(
+                  `[TESSERA_PROVIDER_EVIDENCE_INCOMPLETE] Website provenance for ${prepared.rosterName} did not include deployment and imported-army semantic evidence.`,
+                );
+              }
+            }
+            warnings.push(...result.warnings);
+            const unresolvedAlternateProfiles = (result.importIssues ?? []).filter(
+              (issue) =>
+                issue.code === "alternate-profile" &&
+                !issue.resolvedByPolicy,
+            );
+            if (unresolvedAlternateProfiles.length > 0) {
+              profileResolutionClean = false;
+              failures.push({
+                stage: "simulation",
+                code: "TESSERA_PROFILE_POLICY_NOT_APPLIED",
+                message:
+                  `Tessera reported ${unresolvedAlternateProfiles.length} unresolved alternate-profile choice(s). The captured matrices are retained, but cannot support matchup conclusions.`,
+                opponentName: prepared.rosterName,
+                retryable: false,
+              });
+            }
+            if ((result.integrityIssues?.length ?? 0) > 0) {
+              captureIntegrityClean = false;
+              for (const integrityIssue of result.integrityIssues ?? []) {
+                failures.push({
+                  stage: "simulation",
+                  code: integrityIssue.code,
+                  message: integrityIssue.message,
+                  opponentName: prepared.rosterName,
+                  retryable: false,
+                });
+              }
+            }
+            matrices.push({
+              opponentName: prepared.rosterName,
+              cells: result.cells,
+            });
+            scenarios.push(
+              ...consolidateBrowserScenarios(
+                result,
+                preparedPlayer.units ?? canonicalUnits(playerRoster, "player"),
+                prepared.units ??
+                  enrichedUnits(prepared.summary, "opponent"),
+                prepared.rosterName,
+                configuration,
+              ),
+            );
+            simulationConnectorEvents.push({
+              schemaVersion: 1,
+              eventId: crypto.randomUUID(),
+              recordedAt: new Date().toISOString(),
+              provider: "tessera",
+              simulationBackend: selectedSimulationBackend,
+              action: "simulate",
+              origin:
+                selectedSimulationBackend === "local-engine"
+                  ? "in-memory"
+                  : "new-remote",
+              outcome: "verified",
+              remoteId: null,
+              contentSha256: crypto
+                .createHash("sha256")
+                .update(
+                  result.scenarios
+                    .map((scenario) => scenario.matrixSha256 ?? "")
+                    .join("|"),
+                )
+                .digest("hex"),
+            });
+          } catch (error) {
+            simulationProviderIdentityComplete = false;
+            if (
+              error &&
+              typeof error === "object" &&
+              "fallbackOffer" in error &&
+              error.fallbackOffer &&
+              typeof error.fallbackOffer === "object"
+            ) {
+              simulationFallback ??=
+                error.fallbackOffer as TesseraSimulationFallbackReceipt;
+            }
+            const errorCode =
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "TESSERA_COMPANION_FAILED";
+            warnings.push(
+              `[${errorCode}] Experimental Tessera analysis failed for ${prepared.rosterName}: ${
+                error instanceof Error ? error.message : "unknown browser failure"
+              }`,
+            );
+            failures.push({
+              stage: "simulation",
+              code: errorCode,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Unknown Tessera browser failure.",
+              opponentName: prepared.rosterName,
+              retryable:
+                /TIMEOUT|SESSION|NAVIGATION|STALE|LIST_SELECTION/.test(
+                  errorCode,
+                ),
+            });
+            simulationConnectorEvents.push({
+              schemaVersion: 1,
+              eventId: crypto.randomUUID(),
+              recordedAt: new Date().toISOString(),
+              provider: "tessera",
+              simulationBackend: selectedSimulationBackend,
+              action: "simulate",
+              origin:
+                selectedSimulationBackend === "local-engine"
+                  ? "in-memory"
+                  : "new-remote",
+              outcome: "uncertain",
+              remoteId: null,
+              contentSha256: null,
+            });
+          } finally {
+            await rm(profileDirectory, { recursive: true, force: true });
+          }
+        }
+      }
+
+      const combinedTesseraUiIdentity =
+        tesseraUiIdentities.size === 0
+          ? null
+          : tesseraUiIdentities.size === 1
+            ? [...tesseraUiIdentities][0]
+            : crypto
+                .createHash("sha256")
+                .update([...tesseraUiIdentities].sort().join("|"))
+                .digest("hex");
+      if (selectedSimulationBackend === "website") {
+        simulationProviderIdentity = combinedTesseraUiIdentity
+          ? {
+              schemaVersion: 1,
+              provider: "website",
+              engine: "tessera-ui",
+              uiIdentity: combinedTesseraUiIdentity,
+              adapterVersion: TESSERA_WEBSITE_ADAPTER_VERSION,
+            }
+          : null;
+      }
+      const providerEvidence = aggregateWebsiteProviderEvidence(
+        websiteProviderEvidenceCaptures,
+      );
+      const allMatched = pointsComparisons.every((comparison) => comparison.matched);
+      const expectedScenarioCount =
+        opponents.length *
+        configuration.phases.length *
+        configuration.directions.length;
+      const scenariosComplete =
+        scenarios.length === expectedScenarioCount &&
+        scenarios.every((scenario) => scenario.status === "complete");
+      let observedScenarioContract: TesseraFrozenScenarioContract[] | null = null;
+      try {
+        if (simulationRequested && scenariosComplete) {
+          observedScenarioContract = observedTesseraScenarioContract(
+            scenarios,
+            configuration.phases,
+            configuration.metrics,
+          );
+        }
+      } catch (error) {
+        warnings.push(
+          `[TESSERA_SCENARIO_CONTRACT_MISMATCH] ${error instanceof Error ? error.message : "The observed scenario contract is invalid."}`,
+        );
+      }
+      const scenarioContractMatches =
+        scenarioContract === null ||
+        (
+          observedScenarioContract !== null &&
+          tesseraScenarioContractSha256(scenarioContract) ===
+            tesseraScenarioContractSha256(observedScenarioContract)
+        );
+      if (
+        scenarioContract !== null &&
+        observedScenarioContract !== null &&
+        !scenarioContractMatches
+      ) {
+        warnings.push(
+          "[TESSERA_SETTINGS_CHANGED] Tessera did not reproduce the exact frozen scenario settings and iteration counts.",
+        );
+      }
+      const reportScenarioContract =
+        scenarioContract ?? observedScenarioContract;
+      const reportScenarioContractSha256 = reportScenarioContract
+        ? tesseraScenarioContractSha256(reportScenarioContract)
+        : null;
+      const bundleTrust =
+        await captureProviderCompatibilityBundleTrustIdentity(
+          "bundleId" in playerRoster.sourceData
+            ? playerRoster.sourceData.bundleId
+            : null,
+        );
+      const providerCompatibilityEnvelopes =
+        buildMatchupProviderCompatibilityEnvelopes({
+          sourceData: playerRoster.sourceData,
+          bundleTrust,
+          player: preparedPlayer,
+          opponents,
+          providerIdentity: simulationProviderIdentity,
+          websiteEvidenceCaptures: websiteProviderEvidenceCaptures,
+          profilePolicyHash: profilePolicy
+            ? profilePolicyHash(profilePolicy)
+            : null,
+          scenarios,
+          scenarioContractSha256: reportScenarioContractSha256,
+        });
+      const simulationEvidenceComplete =
+        simulationRequested &&
+        matrices.length === opponents.length &&
+        captureIntegrityClean &&
+        profileResolutionClean &&
+        simulationProviderIdentityComplete &&
+        simulationProviderIdentity !== null &&
+        (selectedSimulationBackend !== "website" ||
+          (
+            tesseraUiIdentityComplete &&
+            (
+              configuration.providerCompatibilityMode !== "enforce" ||
+              (
+                websiteProviderEvidenceComplete &&
+                websiteProviderEvidenceCaptures.length === opponents.length
+              )
+            )
+          )) &&
+        scenariosComplete &&
+        observedScenarioContract !== null &&
+        scenarioContractMatches;
+      const localCombatClaimsEligible =
+        selectedSimulationBackend !== "local-engine" ||
+        (
+          combatBridges.length === opponents.length &&
+          combatBridges.every(
+            (bridge) =>
+              bridge.coverage.claimEligibility === "decision-grade",
+          ) &&
+          localCombatScenarioClaimsEligible(scenarios)
+        );
+      const providerEligibleForCoaching =
+        simulationProviderIdentity?.provider === "website" ||
+        (localTesseraProviderIdentityAllowsAnalyticalClaims(
+          simulationProviderIdentity,
+        ) &&
+          localCombatClaimsEligible);
+      const analyticalClaimsAllowed =
+        simulationEvidenceComplete && providerEligibleForCoaching;
+      const findings = analyticalClaimsAllowed
+        ? structuredFindings(scenarios)
+        : [];
+      const legacy = legacyFindingText(findings);
+      if (simulationRequested && !simulationEvidenceComplete) {
+        warnings.push(
+          "Substantive matchup findings and roster-change candidates were suppressed because the required capture evidence was incomplete or failed matrix-integrity checks.",
+        );
+      } else if (simulationEvidenceComplete) {
+        if (
+          selectedSimulationBackend === "local-engine" &&
+          !localCombatClaimsEligible
+        ) {
+          warnings.push(
+            "The local matrices retain bounded best-effort combat envelopes, but substantive findings are suppressed because at least one neutral bridge or provider projection is provisional or unusable.",
+          );
+        }
+        if (!providerEligibleForCoaching) {
+          warnings.push(
+            "The local-engine matrices are retained as diagnostic evidence, but substantive matchup findings and roster-change candidates require a current machine-local parity attestation and exact bridge-v3 scalar eligibility.",
+          );
+        }
+      }
+      const proposedChanges =
+        analyticalClaimsAllowed &&
+        configuration.includeChangeCandidates &&
+        allMatched
+          ? await changeCandidates(playerRoster, findings)
+          : [];
+      const runId = crypto.randomUUID();
+      const supplementalAnalyses: NonNullable<
+        TesseraMatchupReport["supplementalAnalyses"]
+      > = [];
+      if (options.fallbackMode === "baseline-damage-v1") {
+        for (const [index, prepared] of opponents.entries()) {
+          const opponentDraft = opponentDrafts[index];
+          if (!opponentDraft) {
+            supplementalAnalyses.push({
+              engine: "baseline-damage-v1",
+              status: "unavailable",
+              opponentName: prepared.rosterName,
+              artifact: baselineArtifactName,
+              assumptions: {
+                scope: "unit-to-unit-expected-damage",
+                range:
+                  "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
+                cover: false,
+                charge: true,
+                abilities:
+                  "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
+                attachments:
+                  "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
+                profilePolicyHash: profilePolicy
+                  ? profilePolicyHash(profilePolicy)
+                  : null,
+              },
+              cells: [],
+              warnings: [
+                "The baseline requires a canonical roster draft; an uploaded ROSZ alone is insufficient.",
+              ],
+            });
+            continue;
+          }
+          try {
+            const cells = baselineDamageCells(
+              playerRoster,
+              opponentDraft,
+              profilePolicy,
+            );
+            supplementalAnalyses.push({
+              engine: "baseline-damage-v1",
+              status: cells.length > 0 ? "complete" : "unavailable",
+              opponentName: prepared.rosterName,
+              artifact: baselineArtifactName,
+              assumptions: {
+                scope: "unit-to-unit-expected-damage",
+                range:
+                  "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
+                cover: false,
+                charge: true,
+                abilities:
+                  "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
+                attachments:
+                  "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
+                profilePolicyHash: profilePolicy
+                  ? profilePolicyHash(profilePolicy)
+                  : null,
+              },
+              cells,
+              warnings:
+                cells.length > 0
+                  ? []
+                  : [
+                      "No canonical unit-to-unit damage cells could be resolved.",
+                    ],
+            });
+          } catch (error) {
+            supplementalAnalyses.push({
+              engine: "baseline-damage-v1",
+              status: "unavailable",
+              opponentName: prepared.rosterName,
+              artifact: baselineArtifactName,
+              assumptions: {
+                scope: "unit-to-unit-expected-damage",
+                range:
+                  "Ranged attacks use 18 inches with half-range bonuses disabled; melee uses 1 inch.",
+                cover: false,
+                charge: true,
+                abilities:
+                  "Pinned faction, detachment, unit, and intrinsic weapon effects supported by the canonical engine.",
+                attachments:
+                  "Leaders, bodyguards, activatable resources, and stratagem timing are not modeled.",
+                profilePolicyHash: profilePolicy
+                  ? profilePolicyHash(profilePolicy)
+                  : null,
+              },
+              cells: [],
+              warnings: [
+                error instanceof Error
+                  ? error.message
+                  : "The deterministic damage baseline failed.",
+              ],
+            });
+          }
+        }
+      }
+      const simulationStatus: NonNullable<
+        TesseraMatchupReport["simulation"]["status"]
+      > = !simulationRequested
+        ? "not-requested"
+        : simulationEvidenceComplete
+          ? "complete"
+          : matrices.length > 0
+            ? "partial"
+            : "failed";
+      const playerLocalSimulationInput =
+        preparedPlayer.simulationInput?.kind ===
+          "rosterpilot-local-engine-input"
+          ? preparedPlayer.simulationInput
+          : null;
+      const combatBridgeEvidence =
+        combatBridges.length > 0
+          ? combatBridges.flatMap((bridge, index) => {
+              const preparedOpponent = opponents[index];
+              const opponentInput = preparedOpponent?.simulationInput;
+              const replayInputs =
+                combatBridgeReplayInputSha256s[index];
+              const exactInputSha256s = replayInputs ??
+                (playerLocalSimulationInput &&
+                    opponentInput?.kind ===
+                      "rosterpilot-local-engine-input"
+                  ? {
+                      player: playerLocalSimulationInput.sha256,
+                      opponent: opponentInput.sha256,
+                    }
+                  : null);
+              return preparedOpponent && exactInputSha256s &&
+                (bridge.schemaVersion === 3 ||
+                  scenarioPolicyContractV2Sha256 !== null)
+                ? [
+                    compactCombatBridgeEvidence({
+                      bridge,
+                      opponentName: preparedOpponent.rosterName,
+                      scenarioPolicyContractV2Sha256,
+                      scenarioPolicyContractV3Sha256,
+                      playerInputSha256:
+                        exactInputSha256s.player,
+                      opponentInputSha256:
+                        exactInputSha256s.opponent,
+                    }),
+                  ]
+                : [];
+            })
+          : [];
+      if (
+        simulationRequested &&
+        !simulationEvidenceComplete &&
+        failures.length === 0
+      ) {
+        const preservedBrowserCode = warnings
+          .flatMap((warning) => [
+            warning.match(/\[(TESSERA_[A-Z0-9_]+)\]/)?.[1] ?? null,
+          ])
+          .find(
+            (code): code is string =>
+              code !== null &&
+              code !== "TESSERA_PROFILE_POLICY_APPLIED" &&
+              !(
+                code === "TESSERA_PROVIDER_EVIDENCE_INCOMPLETE" &&
+                configuration.providerCompatibilityMode !== "enforce"
+              ),
+          );
+        failures.push({
+          stage: "simulation",
+          code: preservedBrowserCode ?? "TESSERA_EVIDENCE_INCOMPLETE",
+          message:
+            "Tessera did not produce the complete trusted matrix and scenario set required for analytical findings.",
+          opponentName: null,
+          retryable: true,
+        });
+      }
+      const { remoteMutations, cacheReuses } =
+        preparationAccounting([preparedPlayer, ...opponents]);
+      const preparationConnectorEvents = [
+        ...(preparedPlayer.connectorEvents ?? []),
+        ...opponents.flatMap(
+          (prepared) => prepared.connectorEvents ?? [],
+        ),
+      ];
+      const report: TesseraMatchupReport = {
+        schemaVersion: 3,
+        runId,
+        generatedAt: new Date().toISOString(),
+        source: !simulationRequested
+          ? "prepare-only"
+          : matrices.length
+            ? selectedSimulationBackend === "local-engine"
+              ? "tessera-local-engine"
+              : "tessera-ui"
+            : selectedSimulationBackend === "local-engine"
+              ? "tessera-local-engine-failed"
+              : "tessera-ui-failed",
+        status: !simulationRequested
+          ? "prepared"
+          : simulationEvidenceComplete
+            ? "complete"
+            : matrices.length > 0
+              ? "inconclusive"
+              : "failed",
+        preparation: {
+          status: "complete",
+          source:
+            selectedSimulationBackend === "local-engine"
+              ? "rosterpilot-data-bundle"
+              : "new-recruit",
+          uniqueRosters: 1 + opponents.length,
+          remoteMutations:
+            selectedSimulationBackend === "local-engine"
+              ? 0
+              : remoteMutations,
+          cacheReuses:
+            selectedSimulationBackend === "local-engine"
+              ? 0
+              : cacheReuses,
+          connectorEvents: preparationConnectorEvents,
         },
-      ],
-      warnings: player.warnings,
-    };
-  }
-  const successful = !simulationRequested || simulationEvidenceComplete;
-  return {
-    ok: successful,
-    data: report,
-    violations: successful
-      ? []
-      : failures.map((failure) => ({
-          code: failure.code,
-          message: failure.message,
-          severity: "error" as const,
+        failures,
+        profilePolicyHash: profilePolicy
+          ? profilePolicyHash(profilePolicy)
+          : null,
+        scenarioContract: reportScenarioContract,
+        scenarioContractSha256: reportScenarioContractSha256,
+        scenarioPolicyContractV2:
+          selectedSimulationBackend === "local-engine"
+            ? scenarioPolicyContractV2 as TesseraScenarioPolicyContractV2Snapshot | null
+            : null,
+        scenarioPolicyContractV2Sha256:
+          selectedSimulationBackend === "local-engine"
+            ? scenarioPolicyContractV2Sha256
+            : null,
+        scenarioPolicyContractV3:
+          scenarioPolicyContractV3 as
+            | TesseraScenarioPolicyContractV3Snapshot
+            | null,
+        scenarioPolicyContractV3Sha256,
+        frozenProfileRequirements: structuredClone(
+          enrichedProfileRequirements,
+        ),
+        runtime: getRuntimeProvenance(),
+        tesseraUiIdentity: combinedTesseraUiIdentity,
+        providerCompatibility:
+          providerCompatibilityEnvelopes.length === 1
+            ? providerCompatibilityEnvelopes[0]
+            : undefined,
+        providerCompatibilityEnvelopes,
+        connectorEvents: [
+          ...preparationConnectorEvents,
+          ...simulationConnectorEvents,
+        ],
+        pinnedData: playerRoster.sourceData,
+        comparisonClass: allMatched ? "matched" : "unmatched",
+        configuration,
+        pointsComparisons,
+        player: preparedPlayer,
+        opponents,
+        simulation: {
+          requested: simulationRequested,
+          executionMode: simulationRequested
+            ? "simulate"
+            : "prepare-only",
+          experimental: true,
+          status: simulationStatus,
+          requestedBackend: requestedSimulationBackend,
+          selectedBackend: selectedSimulationBackend,
+          providerIdentity: simulationProviderIdentity ?? undefined,
+          providerEvidence,
+          providerEvidenceCaptures:
+            websiteProviderEvidenceCaptures.length > 0
+              ? websiteProviderEvidenceCaptures
+              : undefined,
+          fallback: simulationFallback,
+          engine:
+            selectedSimulationBackend === "local-engine"
+              ? "tessera-engine"
+              : "tessera-ui",
+          settings,
+          combatBridgeEvidence:
+            combatBridgeEvidence.length > 0
+              ? combatBridgeEvidence
+              : undefined,
+          legacyProjection:
+            legacyProjection ?? {
+              status: "unavailable",
+              phase: null,
+              metric: null,
+              scenarioIds: [],
+            },
+          matrices,
+          scenarios,
+        },
+        strengths: legacy.strengths,
+        weaknesses: legacy.weaknesses,
+        suggestions: legacy.suggestions,
+        findings,
+        changeCandidates: proposedChanges,
+        limitations: [
+          "This is directional combat math, not a game win probability.",
+          "Movement, terrain geometry, missions, scoring, deployment, sequencing, player decisions, and unmodeled stratagems are excluded.",
+          "Faction archetypes are deterministic proxies, not current tournament-meta lists.",
+        ],
+        warnings: [...new Set(warnings)],
+        supplementalAnalyses,
+        artifacts: [],
+      };
+      let providerParityEvidenceComplete =
+        options.providerParityCase === undefined;
+      if (options.providerParityCase) {
+        try {
+          const exactBridgeEvidence = combatBridgeEvidence.find(
+            (candidate) => candidate.schemaVersion === 2,
+          );
+          const exactBridge = combatBridges.find(
+            (candidate): candidate is CombatBridgeV3 =>
+              candidate.schemaVersion === 3,
+          );
+          const exactPreparation = combatBridgeV3Preparations.find(
+            (candidate): candidate is PreparedCombatBridgeInputV3 =>
+              candidate !== null,
+          );
+          const opponentRoster = opponentDrafts[0];
+          const playerFingerprint =
+            preparedPlayer.fingerprint ??
+            rosterExecutionFingerprint(playerRoster);
+          const opponentFingerprint =
+            opponents[0]?.fingerprint ??
+            (opponentRoster
+              ? rosterExecutionFingerprint(opponentRoster)
+              : null);
+          if (
+            !scenarioPolicyContractV3 ||
+            !exactBridgeEvidence ||
+            !exactBridge ||
+            !exactPreparation ||
+            !opponentRoster ||
+            !opponentFingerprint
+          ) {
+            throw new Error(
+              "The completed report lacks an admitted bridge v3, canonical opponent, or exact roster fingerprint.",
+            );
+          }
+          report.simulation.providerParityEvidenceV2 =
+            buildTesseraProviderParityReportEvidenceV2({
+              report,
+              scenarioPolicyContractV3,
+              bridgeEvidence: exactBridgeEvidence,
+              bridge: exactBridge,
+              translationLedger:
+                exactPreparation.translationLedger,
+              coveringSuite:
+                options.providerParityCase.coveringSuite,
+              coveringCaseId:
+                options.providerParityCase.coveringCaseId,
+              playerFactionId: playerRoster.factionId,
+              opponentFactionId: opponentRoster.factionId,
+              playerRosterFingerprint: playerFingerprint,
+              opponentRosterFingerprint: opponentFingerprint,
+            });
+          providerParityEvidenceComplete = true;
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : "The exact provider-parity v2 evidence could not be sealed.";
+          failures.push({
+            stage: "simulation",
+            code: "TESSERA_PROVIDER_PARITY_V2_EVIDENCE_INVALID",
+            message,
+            opponentName: opponents[0]?.rosterName ?? null,
+            retryable: false,
+          });
+          report.status = matrices.length > 0
+            ? "inconclusive"
+            : "failed";
+          report.simulation.status = matrices.length > 0
+            ? "partial"
+            : "failed";
+          report.warnings.push(
+            `[TESSERA_PROVIDER_PARITY_V2_EVIDENCE_INVALID] ${message}`,
+          );
+        }
+      }
+      const websiteServiceEvidence =
+        selectedSimulationBackend === "website" &&
+        providerEvidence &&
+        preparedPlayer.enrichedRoszSha256
+          ? {
+              factionId: playerRoster.factionId,
+              enrichedRoszSha256: preparedPlayer.enrichedRoszSha256,
+              observedAt: report.generatedAt,
+              deploymentAssetSha256:
+                providerEvidence.deployment.identitySha256,
+              importedSemanticsSha256:
+                providerEvidence.importSemantics.playerSha256 ??
+                providerEvidence.importSemantics.combinedSha256,
+            }
+          : null;
+      const recordTesseraServiceEvidence =
+        dependencies.recordTesseraServiceEvidence ??
+        (
+          !dependencies.deliver &&
+          !dependencies.enrich &&
+          !dependencies.runBrowser &&
+          !dependencies.runLocalEngine
+            ? (input: RecordTesseraServiceEvidenceInput) =>
+                createServiceCompatibilityStore({
+                  rootDirectory: path.join(
+                    rosterPilotSupportDirectory(),
+                    "data-bundles",
+                  ),
+                }).recordTesseraEvidence(input)
+            : null
+        );
+      if (websiteServiceEvidence && recordTesseraServiceEvidence) {
+        try {
+          const recorded = await recordTesseraServiceEvidence(
+            websiteServiceEvidence,
+          );
+          if (recorded === null) {
+            report.warnings.push(
+              "The Tessera deployment evidence was captured, but no matching receipt-backed New Recruit observation was available to index it. No list was uploaded again.",
+            );
+          }
+        } catch (error) {
+          report.warnings.push(
+            `The Tessera report remains valid, but its deployment evidence could not be added to the local service-compatibility index: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      try {
+        const resolvedOutputDirectory = path.resolve(
+          options.rootDir ?? process.cwd(),
+          outputDirectory,
+        );
+        const portablePath = (filename: string): string => {
+          const relative = path.relative(
+            resolvedOutputDirectory,
+            path.resolve(filename),
+          );
+          return relative === "" ||
+            relative === ".." ||
+            relative.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relative)
+            ? filename
+            : relative;
+        };
+        const corpusArtifactDescriptors =
+          combatCorpusReviewArtifacts.flatMap(
+            ({ opponentName, artifact }, index) => {
+              const prefix = [
+                "combat-corpus-review",
+                String(index + 1),
+                safeName(opponentName) || "opponent",
+              ].join("-");
+              return [
+                {
+                  format: "combat-corpus-inventory" as const,
+                  filename: `${prefix}-inventory.json`,
+                  value: artifact.inventory,
+                },
+                {
+                  format: "combat-corpus-overlay" as const,
+                  filename: `${prefix}-overlay.json`,
+                  value: artifact.overlay,
+                },
+                {
+                  format: "combat-corpus-report" as const,
+                  filename: `${prefix}-report.json`,
+                  value: artifact.report,
+                },
+              ];
+            },
+          );
+        const admittedCorpusArtifactDescriptors =
+          combatBridgeV3Preparations.flatMap((prepared, index) => {
+            const bridge = combatBridges[index];
+            if (!prepared || bridge?.schemaVersion !== 3) return [];
+            const opponentName =
+              opponents[index]?.rosterName ?? `Opponent ${index + 1}`;
+            const prefix = [
+              "combat-corpus-admitted",
+              String(index + 1),
+              safeName(opponentName) || "opponent",
+            ].join("-");
+            return [
+              {
+                format: "combat-corpus-inventory" as const,
+                filename: `${prefix}-inventory.json`,
+                value: prepared.inventory,
+              },
+              {
+                format: "combat-corpus-overlay" as const,
+                filename: `${prefix}-overlay.json`,
+                value: prepared.overlay,
+              },
+              {
+                format: "combat-corpus-report" as const,
+                filename: `${prefix}-report.json`,
+                value: prepared.report,
+              },
+              {
+                format:
+                  "combat-corpus-translation-ledger" as const,
+                filename: `${prefix}-translation-ledger.json`,
+                value: prepared.translationLedger,
+              },
+              {
+                format: "provider-parity-suite-manifest" as const,
+                filename: `${prefix}-parity-suite-manifest.json`,
+                value: {
+                  schemaVersion: 1,
+                  kind: "rosterpilot-tessera-parity-suite-manifest",
+                  corpusInventorySha256:
+                    prepared.inventory.inventorySha256,
+                  combatBridgeV3Sha256: bridge.bridgeSha256,
+                  corpusConformanceReportSha256:
+                    prepared.report.reportSha256,
+                  factions:
+                    deriveTesseraParityFactionMechanicsV2({
+                      bridge,
+                      translationLedger:
+                        prepared.translationLedger,
+                    }),
+                },
+              },
+            ];
+          });
+        const retainedCorpusArtifactDescriptors = [
+          ...corpusArtifactDescriptors,
+          ...admittedCorpusArtifactDescriptors,
+        ];
+        const portableArtifacts: TesseraMatchupReport["artifacts"] = [
+          {
+            format: "matchup-json",
+            written: `${basename}.json`,
+          },
+          {
+            format: "matchup-html",
+            written: `${basename}.html`,
+          },
+          ...(options.fallbackMode === "baseline-damage-v1"
+            ? [
+                {
+                  format: "baseline-json" as const,
+                  written: baselineArtifactName,
+                },
+              ]
+            : []),
+          ...retainedCorpusArtifactDescriptors.map((artifact) => ({
+            format: artifact.format,
+            written: artifact.filename,
+          })),
+          {
+            format: "matchup-receipt",
+            written: `${basename}.receipt.json`,
+          },
+        ];
+        const portableReport: TesseraMatchupReport = {
+          ...report,
+          player: {
+            ...report.player,
+            sourceRoszPath: portablePath(
+              report.player.sourceRoszPath,
+            ),
+            enrichedRoszPath: portablePath(
+              report.player.enrichedRoszPath,
+            ),
+            ...(report.player.simulationInput?.kind ===
+            "rosterpilot-local-engine-input"
+              ? {
+                  simulationInput: {
+                    ...report.player.simulationInput,
+                    path: portablePath(
+                      report.player.simulationInput.path,
+                    ),
+                  },
+                }
+              : {}),
+          },
+          opponents: report.opponents.map((prepared) => ({
+            ...prepared,
+            ...(prepared.sourceRoszPath
+              ? {
+                  sourceRoszPath: portablePath(
+                    prepared.sourceRoszPath,
+                  ),
+                }
+              : {}),
+            enrichedRoszPath: portablePath(
+              prepared.enrichedRoszPath,
+            ),
+            ...(prepared.simulationInput?.kind ===
+            "rosterpilot-local-engine-input"
+              ? {
+                  simulationInput: {
+                    ...prepared.simulationInput,
+                    path: portablePath(
+                      prepared.simulationInput.path,
+                    ),
+                  },
+                }
+              : {}),
+          })),
+          artifacts: portableArtifacts,
+        };
+        const serializedPortableReport =
+          `${JSON.stringify(portableReport, null, 2)}\n`;
+        const artifacts: ExportArtifact[] = [
+          {
+            format: "roster-json",
+            filename: `${basename}.json`,
+            mimeType: "application/json",
+            encoding: "utf8",
+            content: serializedPortableReport,
+          },
+          {
+            format: "html",
+            filename: `${basename}.html`,
+            mimeType: "text/html; charset=utf-8",
+            encoding: "utf8",
+            content: renderTesseraMatchupReportHtml(portableReport),
+          },
+          ...(options.fallbackMode === "baseline-damage-v1"
+            ? [
+                {
+                  format: "roster-json" as const,
+                  filename: baselineArtifactName,
+                  mimeType: "application/json",
+                  encoding: "utf8" as const,
+                  content: `${JSON.stringify(
+                    {
+                      schemaVersion: 1,
+                      engine: "baseline-damage-v1",
+                      runId,
+                      generatedAt: report.generatedAt,
+                      sourceData: playerRoster.sourceData,
+                      analyses: supplementalAnalyses,
+                      limitation:
+                        "Unit-to-unit expected damage only; this does not estimate game win probability.",
+                    },
+                    null,
+                    2,
+                  )}\n`,
+                },
+              ]
+            : []),
+          ...retainedCorpusArtifactDescriptors.map((artifact) => ({
+            format: "roster-json" as const,
+            filename: artifact.filename,
+            mimeType: "application/json",
+            encoding: "utf8" as const,
+            content: `${JSON.stringify(artifact.value, null, 2)}\n`,
+          })),
+        ];
+        const written = await writeExportArtifacts(
+          artifacts,
+          outputDirectory,
+          options,
+        );
+        const receipt = createExactReportReceipt(
+          written[0],
+          serializedPortableReport,
+          portableReport,
+        );
+        const receiptWritten = await writeExportArtifact(
+          {
+            format: "roster-json",
+            filename: `${basename}.receipt.json`,
+            mimeType: "application/json",
+            encoding: "utf8",
+            content: `${JSON.stringify(receipt, null, 2)}\n`,
+          },
+          path.join(outputDirectory, `${basename}.receipt.json`),
+          options,
+        );
+        if (websiteServiceEvidence && recordTesseraServiceEvidence) {
+          await recordTesseraServiceEvidence({
+            ...websiteServiceEvidence,
+            jobReceiptSha256: crypto
+              .createHash("sha256")
+              .update(JSON.stringify(receipt))
+              .digest("hex"),
+          }).catch(() => undefined);
+        }
+        report.artifacts = portableArtifacts.map((artifact, index) => ({
+          ...artifact,
+          written:
+            artifact.format === "matchup-receipt"
+              ? receiptWritten
+              : written[index],
+        }));
+      } catch (error) {
+        return {
+          ok: false,
+          data: report,
+          violations: [
+            {
+              code: "WRITE_FAILED",
+              message: error instanceof Error ? error.message : "Report write failed.",
+              severity: "error",
+            },
+          ],
+          warnings: player.warnings,
+        };
+      }
+      const successful =
+        (!simulationRequested || simulationEvidenceComplete) &&
+        providerParityEvidenceComplete;
+      return {
+        ok: successful,
+        data: report,
+        violations: successful
+          ? []
+          : failures.map((failure) => ({
+              code: failure.code,
+              message: failure.message,
+              severity: "error" as const,
+            })),
+        warnings: report.warnings.map((message) => ({
+          code: "TESSERA_WARNING",
+          message,
+          severity: "warn",
         })),
-    warnings: report.warnings.map((message) => ({
-      code: "TESSERA_WARNING",
-      message,
-      severity: "warn",
-    })),
-  };
+      };
+    } finally {
+      await releaseOutputLease?.();
+    }
   } finally {
-    await releaseOutputLease?.();
+    await operationDataBundleLease?.release();
   }
 }
 
@@ -6526,8 +8197,9 @@ export async function compareRosterRevision(
   }
   if (
     baselineProviderIdentity.provider === "local-engine" &&
-    (baselineProviderIdentity.promotion !== "promoted" ||
-      baselineProviderIdentity.licenseState !== "approved")
+    !localTesseraProviderIdentityAllowsAnalyticalClaims(
+      baselineProviderIdentity,
+    )
   ) {
     return {
       ok: false,
@@ -6536,7 +8208,7 @@ export async function compareRosterRevision(
         {
           code: "TESSERA_LOCAL_ENGINE_EVALUATION_ONLY",
           message:
-            "The pinned local Tessera engine may produce evaluation and parity evidence, but paired revision conclusions remain disabled until its written-license and parity promotion gates are satisfied.",
+            "The pinned local Tessera engine may produce diagnostic and parity evidence, but paired revision conclusions require a current machine-local parity attestation and exact bridge-v3 scalar eligibility.",
           severity: "error",
         },
       ],

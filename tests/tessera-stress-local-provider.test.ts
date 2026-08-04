@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import {
   access,
-  chmod,
   mkdtemp,
-  readdir,
   readFile,
   rm,
   writeFile,
@@ -16,12 +14,16 @@ import {
   buildRoster,
   generateFactionStressPortfolio,
 } from "../lib/rosterpilot";
-import { verifyLocalTesseraEngineInput } from "../local/tessera/local-engine-input";
+import { verifyLocalTesseraEngineInputAnyVersion } from "../local/tessera/local-engine-input-v2";
 import { runRosterStressTest } from "../local/tessera/stress";
 import {
   localTesseraScenarioContract,
   tesseraScenarioContractSha256,
 } from "../local/tessera/scenario-contract";
+import {
+  tesseraScenarioPolicyContractV2Sha256,
+  type TesseraScenarioPolicyContractV2,
+} from "../local/tessera/scenario-contract-v2";
 import {
   buildCustodesVsAeldariSmokeRoster,
   resolvedProfilePolicy,
@@ -61,11 +63,23 @@ type StoredLocalStressManifest = {
     >;
   };
   stageContractsSha256: string;
+  stagePolicyContractsV2: {
+    screening: Record<string, TesseraScenarioPolicyContractV2>;
+    deepDive: Record<string, TesseraScenarioPolicyContractV2>;
+  };
+  stagePolicyContractsV2Sha256: string;
   preparedPlayer: StoredLocalPreparedRoster;
   preparedOpponents: Record<
     string,
     { prepared: StoredLocalPreparedRoster }
   >;
+  screening: Record<string, {
+    status: string;
+    reportPath: string | null;
+    reportSha256: string | null;
+    error: unknown;
+    attemptCount: number;
+  }>;
   finalArtifacts: unknown;
 };
 
@@ -91,6 +105,7 @@ test("local-engine stress preflight accepts a legal roster with blocking New Rec
       faction: "adepta-sororitas",
       pointsLimit: player.data.pointsLimit,
       suite: "core-3",
+      artifactMode: "canonical",
     });
     assert.ok(portfolio.ok && portfolio.data);
     const opponents = portfolio.data.items.flatMap((item) =>
@@ -156,6 +171,7 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       faction: "aeldari",
       pointsLimit: player.pointsLimit,
       suite: "core-3",
+      artifactMode: "canonical",
     });
     assert.ok(portfolio.ok && portfolio.data);
     const readyOpponents = portfolio.data.items.flatMap((item) =>
@@ -297,8 +313,9 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
     );
     assert.ok(
       result.data.warnings.some((warning) =>
-        /base-profile-evaluation mode/i.test(warning),
+        /hash-bound combat bridge/i.test(warning),
       ),
+      "stress simulations must execute the rules-aware combat bridge",
     );
     assert.ok(
       result.data.warnings.some((warning) =>
@@ -344,7 +361,7 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
     const manifest = JSON.parse(
       await readFile(manifestPath, "utf8"),
     ) as StoredLocalStressManifest;
-    assert.equal(manifest.schemaVersion, 7);
+    assert.equal(manifest.schemaVersion, 8);
     assert.equal(manifest.simulationBackend, "local-engine");
     assert.equal(manifest.selectedSimulationBackend, "local-engine");
     assert.deepEqual(
@@ -356,6 +373,10 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       tesseraScenarioContractSha256(scenarioContract),
     );
     assert.match(manifest.stageContractsSha256, /^[0-9a-f]{64}$/);
+    assert.match(
+      manifest.stagePolicyContractsV2Sha256,
+      /^[0-9a-f]{64}$/,
+    );
     assert.deepEqual(
       Object.keys(manifest.stageContracts.screening).sort(),
       portfolio.data.items.map((item) => item.templateId).sort(),
@@ -369,6 +390,20 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       true,
     );
     assert.deepEqual(manifest.stageContracts.deepDive, {});
+    assert.deepEqual(
+      Object.keys(manifest.stagePolicyContractsV2.screening).sort(),
+      portfolio.data.items.map((item) => item.templateId).sort(),
+    );
+    assert.equal(
+      Object.values(manifest.stagePolicyContractsV2.screening).every(
+        (contract) =>
+          contract.policy.modelingMode === "rules-aware" &&
+          contract.scenarios.length === 16 &&
+          contract.scenarios.every((entry) => entry.iterations === 64),
+      ),
+      true,
+    );
+    assert.deepEqual(manifest.stagePolicyContractsV2.deepDive, {});
     const resolveManifestPath = (filename: string): string =>
       path.isAbsolute(filename)
         ? filename
@@ -400,7 +435,7 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
         prepared.simulationInput.bundleId,
         player.sourceData.bundleId,
       );
-      verifyLocalTesseraEngineInput({
+      verifyLocalTesseraEngineInputAnyVersion({
         content: await readFile(
           resolveManifestPath(prepared.simulationInput.path),
         ),
@@ -419,67 +454,81 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
       "TesseraLocalResultCache",
       "v1",
     );
-    const cachedKeys = (
-      await readdir(path.join(localResultCache, "keys"), {
-        recursive: true,
-      })
-    ).filter((entry) => entry.endsWith(".json"));
-    const cachedReceipts = (
-      await readdir(path.join(localResultCache, "receipts"), {
-        recursive: true,
-      })
-    ).filter((entry) => entry.endsWith(".json"));
-    const cachedResults = (
-      await readdir(path.join(localResultCache, "results"), {
-        recursive: true,
-      })
-    ).filter((entry) => entry.endsWith(".json"));
-    assert.equal(cachedKeys.length, 3);
-    assert.equal(cachedReceipts.length, 3);
-    assert.equal(cachedResults.length, 3);
-
-    const tamperedCacheResult = path.join(
-      localResultCache,
-      "results",
-      cachedResults[0],
-    );
-    await chmod(tamperedCacheResult, 0o600);
-    await writeFile(tamperedCacheResult, "{\"tampered\":true}");
-    const cacheRejected = await runRosterStressTest(
-      player,
-      { kind: "faction", factionId: "aeldari" },
-      {
-        suite: "core-3",
-        analysisStrategy: "full-all",
-        simulationBackend: "local-engine",
-        executionMode: "simulate",
-        profilePolicyPath: policyPath,
-        scenarioContract,
-        outputDirectory: "stress-invalid-cache",
-        rootDir: directory,
-      },
-      dependencies,
-    );
-    assert.equal(cacheRejected.ok, false);
-    assert.ok(
-      cacheRejected.violations.some(
-        (violation) =>
-          violation.code === "LOCAL_ENGINE_RESULT_CACHE_INVALID",
-      ),
-      cacheRejected.violations.map((violation) => violation.message).join("\n"),
-    );
-    assert.equal(
-      cacheRejected.data?.simulation?.trustedMatrices,
-      0,
-    );
-    assert.equal(
-      cacheRejected.data?.failures?.some(
-        (failure) =>
-          failure.code === "LOCAL_ENGINE_POOL_BATCH_ABORTED",
-      ) ?? false,
-      true,
+    await assert.rejects(
+      access(localResultCache),
+      { code: "ENOENT" },
+      "rules-aware bridge results must not cross the legacy base-profile task-pool cache",
     );
 
+    for (const [templateId, entry] of Object.entries(
+      manifest.screening,
+    )) {
+      assert.ok(entry.reportPath);
+      const child = JSON.parse(
+        await readFile(resolveManifestPath(entry.reportPath), "utf8"),
+      ) as {
+        scenarioPolicyContractV2: TesseraScenarioPolicyContractV2;
+        scenarioPolicyContractV2Sha256: string;
+        simulation: {
+          combatBridges?: unknown;
+          combatBridgeEvidence?: Array<{
+            bridgeSha256: string;
+            replay: {
+              scenarioPolicyContractV2Sha256: string;
+            };
+          }>;
+          scenarios?: Array<{
+            metrics: string[];
+            cells: Array<{
+              combatEnvelope?: Record<string, { bridgeSha256: string }>;
+            }>;
+          }>;
+        };
+      };
+      const frozenPolicy =
+        manifest.stagePolicyContractsV2.screening[templateId];
+      const frozenPolicySha256 =
+        tesseraScenarioPolicyContractV2Sha256(frozenPolicy);
+      assert.equal(
+        child.scenarioPolicyContractV2.policy.modelingMode,
+        "rules-aware",
+      );
+      assert.equal(
+        child.scenarioPolicyContractV2Sha256,
+        frozenPolicySha256,
+      );
+      assert.equal(child.simulation.combatBridges, undefined);
+      assert.equal(child.simulation.combatBridgeEvidence?.length, 1);
+      assert.equal(
+        child.simulation.combatBridgeEvidence?.[0]?.replay
+          .scenarioPolicyContractV2Sha256,
+        frozenPolicySha256,
+      );
+      const bridgeSha256 =
+        child.simulation.combatBridgeEvidence?.[0]?.bridgeSha256;
+      assert.ok(bridgeSha256);
+      assert.equal(
+        (child.simulation.scenarios ?? []).every((scenario) =>
+          scenario.cells.every((cell) =>
+            scenario.metrics.every(
+              (metric) =>
+                cell.combatEnvelope?.[metric]?.bridgeSha256 ===
+                bridgeSha256,
+            ),
+          ),
+        ),
+        true,
+      );
+    }
+
+    const replayTemplateId = Object.keys(manifest.screening).sort()[0];
+    const replayPolicySha256 = tesseraScenarioPolicyContractV2Sha256(
+      manifest.stagePolicyContractsV2.screening[replayTemplateId],
+    );
+    manifest.screening[replayTemplateId].status = "pending";
+    manifest.screening[replayTemplateId].reportPath = null;
+    manifest.screening[replayTemplateId].reportSha256 = null;
+    manifest.screening[replayTemplateId].error = null;
     manifest.finalArtifacts = null;
     await writeFile(
       manifestPath,
@@ -514,6 +563,34 @@ test("local-engine stress runs avoid the New Recruit cache, retain deterministic
     const resumedManifest = JSON.parse(
       await readFile(manifestPath, "utf8"),
     ) as StoredLocalStressManifest;
+    assert.equal(
+      tesseraScenarioPolicyContractV2Sha256(
+        resumedManifest.stagePolicyContractsV2.screening[
+          replayTemplateId
+        ],
+      ),
+      replayPolicySha256,
+      "resume must preserve the exact rules-aware v2 policy identity",
+    );
+    const replayReportPath =
+      resumedManifest.screening[replayTemplateId].reportPath;
+    assert.ok(replayReportPath);
+    const replayReport = JSON.parse(
+      await readFile(resolveManifestPath(replayReportPath), "utf8"),
+    ) as {
+      scenarioPolicyContractV2: TesseraScenarioPolicyContractV2;
+      scenarioPolicyContractV2Sha256: string;
+      simulation: { combatBridgeEvidence?: unknown[] };
+    };
+    assert.equal(
+      replayReport.scenarioPolicyContractV2.policy.modelingMode,
+      "rules-aware",
+    );
+    assert.equal(
+      replayReport.scenarioPolicyContractV2Sha256,
+      replayPolicySha256,
+    );
+    assert.equal(replayReport.simulation.combatBridgeEvidence?.length, 1);
     assert.deepEqual(
       [
         resumedManifest.preparedPlayer,

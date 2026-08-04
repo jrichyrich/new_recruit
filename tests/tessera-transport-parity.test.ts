@@ -266,6 +266,7 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
           },
           executionMode: "simulate",
           simulationBackend: "website",
+          websiteFallbackConfirmationSha256: "a".repeat(64),
           scenarioContract: [{
             phase: "shooting",
             direction: "player-to-opponent",
@@ -289,6 +290,7 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
               roster: opponent.data,
             },
             executionMode: "simulate",
+            websiteFallbackConfirmationSha256: "b".repeat(64),
             verifiedCatalogueDriftDiagnostic: true,
           },
         },
@@ -331,6 +333,14 @@ test("MCP exact routes fail closed without opponent scope and accept an exact ro
       }
       assert.equal(request.opponent.roster.id, opponent.data.id);
       assert.equal(request.options?.executionMode, "simulate");
+      assert.deepEqual(
+        request.options?.websiteFallbackAuthorization,
+        {
+          action: "new-recruit-import-and-tessera-web",
+          requestSha256: (index === 0 ? "a" : "b").repeat(64),
+          source: "confirmed-fallback",
+        },
+      );
       if (index === 0) {
         assert.equal(
           request.options?.scenarioContract?.[0]?.iterations,

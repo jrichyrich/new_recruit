@@ -18,7 +18,7 @@ capabilities:
 | Printable HTML, text, roster JSON, New Recruit-shaped JSON | Every validated roster | RosterPilot serializers |
 | `.ros/.rosz` import | Any roster whose selected BSData configuration, units, models, and wargear are mapped without a blocking conflict | Generated, versioned catalogue references |
 | New Recruit import, enriched `.rosz`, and Pretty HTML automation | Same per-roster gate as `.rosz` | Local macOS companion |
-| Tessera handoff and simulated matchup matrix | Website: verified New Recruit-enriched rosters. Local engine: bundle-native, hash-bound JSON compiled from canonical rosters within the evaluation adapter's declared profile capability | Provider router over the retained isolated website adapter and an explicit evaluation-only pinned local engine; `experimental` is only a deprecated CLI alias for strict `executionMode: "simulate"` |
+| Tessera handoff and simulated matchup matrix | Website: verified New Recruit-enriched rosters. Local engine: bundle-native, hash-bound local-input v2, physical scenario v3, and corpus-admitted bridge v3 compiled from canonical rosters | Provider router over the retained isolated website adapter and a pinned local engine that remains diagnostic until a machine-bound personal parity attestation activates it; `experimental` is only a deprecated CLI alias for strict `executionMode: "simulate"` |
 | Known-faction stress testing | A validated player roster plus deterministic legal faction proxies within points tolerance; New Recruit exportability is evaluated only for the website provider | Shared provider-neutral portfolio and mission-readiness core followed by provider-specific preparation |
 | Exact-aware roster construction | A validated canonical opponent roster plus player build constraints and optional owned-model quantities | Shared roster engine, exact opponent threat profile, deterministic repair, and exact Tessera adapter |
 | Durable Tessera jobs | Exact, stress, build-and-stress, and build-and-analyze requests on local CLI or stdio MCP | Persistent job document, local-agent-owned detached worker, retained result bundle, and stress manifest where applicable |
@@ -284,9 +284,11 @@ separate, explicit input contracts:
   credential.
 
 Neither provider changes roster legality or the operation's immutable
-data-bundle lease. An exact opponent supplied only as an enriched `.rosz` can
-still use the legacy archive compiler, but canonical player, opponent, and
-generated-proxy rosters use bundle-native JSON when `local-engine` is selected.
+data-bundle lease. A bundle-native local run requires canonical context for
+both sides; an enriched opponent `.rosz` alone cannot prove the bundle rule,
+mapping, attachment, or selected-option identities. Canonical player,
+opponent, and generated-proxy rosters use bundle-native JSON when
+`local-engine` is selected.
 
 #### Fail-fast batch and execution topology
 
@@ -404,6 +406,23 @@ match the requested phase/metric scope and any explicitly selected provider.
 Stress runs project the same frozen contract across their child matchups, so a
 resume cannot change settings or sampling depth.
 
+The bundle-native decision path additionally freezes a physical scenario/policy
+contract v3. Each cell binds the actual player and opponent selections, battle
+round and timing, command points and faction resources, army and once-per-battle
+abilities, per-unit movement/combat/objective state, and one entry for every
+cross-side attacker/target pair. Pair state includes exact distance,
+visibility, indirect fire, target condition, and ordinary, Rapid Fire, Melta,
+and Conversion range state. Execution derives weapon eligibility from the
+exact numeric profile range and rejects a contradictory selected state.
+Leader/bodyguard/support selections are pooled as one physical formation.
+
+State, activation, and attachment policies may still enumerate bounded
+diagnostic variants, but a scalar roster conclusion is eligible only when all
+three dimensions are selected. Otherwise the contract is `envelope-only` and
+only minimum/median/maximum may be interpreted. A legacy v1/v2 contract
+migrates only when side ownership, resources, attachments, and physical state
+can be recovered without guessing.
+
 Local-versus-website parity is eligible only after both runs have the same
 bundle semantics, normalized roster scope, profile policy, scenario contract,
 model-capability envelope, and provider-neutral combat snapshot. The combat
@@ -437,25 +456,91 @@ model mismatch.
 
 Local preparation is content-addressed and bound to the roster execution
 fingerprint, exact `bundleId`, compiler version, and optional profile-policy
-hash. A durable worker activates the job's archived bundle before preparation;
-the compiler rejects a roster whose source bundle is not that active snapshot.
+hash. Schema-v2 local inputs additionally require exact unit, weapon,
+equipment, profile, bearer-selection, loadout-group, and range identities. A
+durable worker activates the job's archived bundle before preparation; the
+compiler rejects a roster whose source bundle is not that active snapshot.
 Preflight, execution, resume, and restart reparse the JSON and verify its
-schema, SHA-256, bundle identity, compiler version, and frozen roster identity.
-Missing profiles, unsupported characteristics, unresolved alternate profiles,
-or any identity mismatch fail closed. Refresh and rollback can affect future
-leases but cannot change an input already frozen for a durable run.
+schema, SHA-256, bundle identity, compiler version, frozen roster identity, and
+profile/range bindings. Missing profiles, unsupported characteristics,
+unresolved alternate profiles, duplicate or cross-bearer identities, or any
+identity mismatch fail closed. Refresh and rollback can affect future leases
+but cannot change an input already frozen for a durable run.
 
-The current local compiler is explicitly
-`base-profile-evaluation-v1`. It models unit and weapon profiles plus supported
-intrinsic weapon keywords. It does not apply army or detachment rules,
-datasheet abilities, enhancements, non-weapon wargear effects, stratagems, or
-attached-unit interactions, and it does not model range or distance-dependent
-effects such as Conversion. Its hashed input records those unmodeled systems,
-omitted abilities and wargear, unsupported weapon keywords, and every frozen
-alternate-profile, firing-set, melee-set, or mixed-defence decision.
-Preparation and simulation surface those records as warnings. The evidence
-remains evaluation-only and cannot silently become full-rules evidence,
-substantive coaching, or an optimizer decision.
+The rules/effects compiler emits a provider-neutral
+`rosterpilot-combat-bridge` v3 artifact. It acquires one immutable bundle
+snapshot for the operation and verifies each roster's bundle, roster-rules,
+faction-rules, selection-scoped mapping, and referenced-entity identities.
+Canonical selections are resolved to army and detachment rules, datasheet
+abilities, enhancements, stratagems, selected weapons and non-weapon wargear,
+and legal attached-unit plans. The bridge uses the pinned community
+`@alpaca-software/40kdc-data` `effectToBuffs` translator and `resolveBuffs`
+resolver; it is not a second hand-written rules source.
+
+Bridge v3 is admitted only after strict corpus conformance. The production
+preparer inventories every structured effect fragment and leaf, preserves its
+ancestry, binds the exact entity/effect/rule-source hashes, and checks the
+result against a hash-sealed reviewed overlay. Every leaf needs complete
+traversal, explicit phase evidence, and one reviewed disposition. Approximate,
+omitted, unresolved, stale, or unreviewed combat semantics fail closed and
+produce review evidence. A leaf reviewed as outside the directional attack
+calculator remains explicit and cannot silently become a zero-valued combat
+effect.
+
+An admitted execution publishes its inventory, overlay, conformance report,
+translation ledger, and a parity-suite builder manifest. The manifest binds the
+exact source-inventory, bridge-v3, and conformance hashes and projects the
+attacker/defender mechanic IDs exercised by each faction. `parity-suite build`
+uses its inventory identity and faction mechanics to produce the deterministic
+covering suite; `parity-suite verify` recomputes the suite, case order, and
+self-hash.
+
+The bridge stamps a `semanticAuthority` separately from its semantic hash
+values. `bundle-manifest-verified` means those hashes were recomputed from the
+leased immutable bundle manifest and matched to both rosters.
+`roster-asserted` is reserved for a captured Dataset whose rosters retain the
+hashes but whose bundle manifest was unavailable for independent verification.
+The latter remains deterministic and replayable, but the compiler injects
+partial coverage so it cannot become decision-grade evidence.
+
+The neutral effect vocabulary and the Tessera-engine projection are separate
+contracts. Bridge v3 binds the corpus report, source inventory, reviewed
+overlay, relevant leaf index, exact rule bindings, legacy bridge-v2 projection,
+scenario-v3 hash, and both local-input-v2 hashes. Each variant and cell is
+content-addressed, and the report retains the deterministic lower-nearest-rank
+median plus minimum, maximum, selected variant, coverage, and claim
+eligibility. The adapter hashes only the mechanics it consumes. Source variants
+with the same mechanics keep their distinct attachment/activation provenance
+but execute once; `variantCount` counts unique executions and
+`sourceVariantCount` records the pre-deduplication variants. Only strict corpus
+admission, complete adapter coverage, and selected physical state are
+decision-grade.
+
+Exact parity flags cause this local preparation to run even when `website` is
+the selected simulation provider. The parity preflight requires simulate mode,
+one canonical opponent, an immutable verified snapshot, a selected physical
+scenario, both local-input-v2 payloads, strict corpus admission, and a compiled
+bridge v3. It runs behind the output reservation/lease but before New Recruit
+preparation, Tessera credential access, or browser navigation. A failure may
+write review artifacts, then returns with an explicit zero-external-activity
+message.
+
+The covering suite and per-case evidence have separate identities. The suite's
+`corpusInventorySha256` freezes the mechanic inventory used for deterministic
+set-cover planning. A selected exact case separately derives
+`coverageWitnesses` from relevant bridge-v3 leaves and executable cells. Its
+case-evidence hash binds the case ID, bridge-v3 hash, conformance-report hash,
+and canonical witnesses. Report sealing rejects a declared mechanic without a
+relevant leaf, so suite membership or matching faction IDs are not sufficient
+evidence that the exact roster exercised that mechanic.
+
+The pinned local simulator remains diagnostic until its machine-local personal
+parity attestation is active. For this single-user path there is no independent
+written-license gate. A complete bridge alone still cannot enable substantive
+coaching, roster-change candidates, optimizer decisions, or automatic
+selection: the exact machine, provider identity, bundle, and bidirectional
+covering suite must have three consecutive passing `observe` rotations followed
+by one passing `enforce` rotation.
 
 Persisted prepared-roster schemas retain the legacy field names
 `sourceRoszPath`, `enrichedRoszPath`, and their SHA-256 fields so older reports
@@ -482,25 +567,61 @@ with its exact identity.
 - `auto` selects the local adapter only when that exact identity is marked
   promoted, available, and preflight-complete. Otherwise it selects the
   website and records why. If a promoted local execution starts and then
-  fails, the router discards all local evidence before one complete website
-  rerun and records an atomic fallback receipt.
+  fails, the router discards all local evidence and returns a fallback offer
+  bound to the complete frozen-request SHA-256. New Recruit and Tessera Web do
+  not start until the caller explicitly confirms that exact offer; stale or
+  mismatched confirmation fails closed. A confirmed retry records an atomic
+  fallback receipt. The public confirmation is deliberately exact-only:
+  `tessera analyze` or durable `start-run --run-kind exact` accepts the offer's
+  lowercase 64-character hash as
+  `websiteFallbackConfirmationSha256` (CLI:
+  `--website-fallback-confirmation-sha256`). Stress and build surfaces reject
+  it because their frozen-request scopes differ.
 
-The reviewed dependency is a development-only GitHub codeload archive pinned
-by commit, tree, SHA-256, lockfile integrity, package entry point, and licence
-metadata. `scripts/verify-tessera-engine-provenance.mjs` checks those fields and
-a fixed-seed public-API smoke result. The tracked provider identity remains
-`candidate` and `evaluation-only`; no runtime path can infer promotion merely
-from package availability.
+The reviewed dependency is a GitHub codeload archive pinned by commit, tree,
+SHA-256, lockfile integrity, package entry point, and licence metadata.
+`scripts/verify-tessera-engine-provenance.mjs` checks those fields and a
+fixed-seed public-API smoke result. Package availability never implies personal
+activation.
 
-Promotion requires an explicit written-licence decision and complete parity
-evidence for identical normalized inputs, profile policy, data bundle, and
-scenario contract. The parity comparator checks every cell with
-metric-specific Monte Carlo tolerances, requires at least 98% within tolerance
-for each metric, rejects any cell beyond twice its tolerance, and compares
-winner classifications outside uncertainty boundaries. Unit tests exercise
-this policy but are not live promotion evidence. Until promotion, `auto`
-continues to use the website and local-engine evidence is ineligible for
-substantive coaching, roster-change candidates, or optimizer decisions.
+The personal activation store is private, self-hashed, symlink-rejecting, and
+bound to a derived machine identity. Attestation creation takes the complete
+verified covering-suite-v2 artifact, not only its hash, proves that all four
+rotation records bind it, and retains an owner-only copy alongside the
+attestation. Status verifies the supplied current suite against that retained
+copy. A valid attestation contains exactly four chronological, receipt-verified
+records for the same provider, `local-source` bundle, covering suite, and
+machine: three passing `observe` rotations followed by one passing `enforce`
+rotation. A missing, malformed, stale, or mismatched retained suite deactivates
+it. The active attestation projects the pinned local provider as `promoted` with
+`personal-only` licence state for that machine only; it is not a distributable
+or hosted certification.
+
+Each rotation contains one exact local/Web comparison per covering-suite case,
+with matching normalized input, profile and range identities, physical
+scenario-v3 state, bridge-v3 exactness, and bidirectional case binding. The
+single-case comparison workflow may write the rotation directly. For a
+multi-case suite, the aggregate workflow requires exactly one complete passing
+comparison per case, rejects duplicate/missing/extra cases and provider or
+bundle drift, and hashes the sorted per-case exact receipts and parity results
+into one record. The parity comparator checks every cell with metric-specific
+Monte Carlo tolerances, requires at least 98% within tolerance for each metric,
+rejects any cell beyond twice its tolerance, and compares winner
+classifications outside uncertainty boundaries. Tessera Web remains the
+comparison authority until the four-record attestation is active. Offline
+verification never starts Web; a new Web comparison is always an explicit
+external operation. The operator sequence and invalidation rules are documented
+in [Personal local Tessera parity](personal-local-tessera-parity.md).
+
+Promotion is also narrowed at every local preflight. The provider derives all
+attacker/defender role and mechanic requirements executed by the current exact
+bridge and translation ledger, then requires that set to be a subset of the
+retained suite's declared requirements. The suite may be broader than one
+matchup, but a current bridge may never introduce an undeclared mechanic under
+an old attestation. Missing suite bytes, a non-v3 bridge, a missing ledger, or
+an undeclared requirement fails preflight. The broader mechanic set must be
+covered by a new suite and a fresh three-observe-plus-one-enforce rotation
+sequence before personal promotion can resume.
 
 Opponent scope selects one of three non-overlapping routes:
 
@@ -608,16 +729,21 @@ Tessera simulation requires `executionMode: "simulate"`; prepare-only returns
 verified handoffs with `status: prepared` and no inferred cells. The legacy
 `experimental` option is a deprecated compatibility alias.
 
-Stress report schema v3 and manifest schema v7 record the player fingerprint,
+Stress report schema v3 and manifest schema v8 record the player fingerprint,
 `bundleId`, scoped semantic roster identities, profile-policy hash, opponent
 faction, the complete frozen portfolio and its canonical SHA-256, requested
 and selected simulation backend, configuration,
 prepared-artifact hashes, representative selection, and every stage's status,
 attempt count and history, timestamps, structured error, retryability, next
-action, report path, and content hash. Resume revalidates identity, requested
-cells, provider selection, exact profile policy, and hashes. V1 through V6
-manifests are verified and rewritten as v7 on resume. V1 paired
-baselines without exact profile
+action, report path, and content hash. V8 additionally freezes a v2
+scenario/policy contract for every screening and deep-dive stage plus one
+aggregate hash. Resume revalidates identity, requested cells, provider
+selection, exact profile policy, stage policies, and hashes. V1 through V7
+manifests are verified before migration. Website and prepare-only manifests may
+be rewritten as v8, but a pre-v8 manifest that requested and selected a local
+simulation is rejected: synthesizing the missing rules-aware policy would
+change its combat semantics, so the operator must start a new stress run. V1
+paired baselines without exact profile
 provenance are rejected. Transient entries receive at most three automatic
 attempts with one- and three-second backoff and five lifetime attempts through
 explicit resume; terminal errors require an explicit forced retry within that
@@ -944,7 +1070,7 @@ flowchart LR
         tesseraCompanion["Tessera orchestrator"]
         tesseraRouter["Tessera provider router"]
         localCompiler["Bundle-native local-input compiler"]
-        localEngine["Pinned local engine candidate"]
+        localEngine["Pinned local engine: diagnostic or personally attested"]
         tesseraWorker["Session-scoped isolated Tessera worker"]
         broker["Native Swift Keychain broker"]
         keychain[("macOS login Keychain")]
@@ -990,7 +1116,7 @@ flowchart LR
     companion -->|"roster bytes over 0600 socket or 0700 file queue"| agent
     tesseraCompanion -->|"frozen provider request"| tesseraRouter
     tesseraRouter -->|"website request"| agent
-    tesseraRouter -->|"explicit candidate evaluation or promoted auto"| localEngine
+    tesseraRouter -->|"explicit diagnostic or personally attested auto"| localEngine
     localCompiler -->|"hash-bound JSON"| localEngine
     agent -->|"New Recruit job"| worker
     agent -->|"Tessera job"| tesseraWorker
@@ -1206,9 +1332,12 @@ Security invariants:
 | Reliability projection | Append hash-chained workflow evidence, reconcile sealed heads and identity bindings, aggregate execution/evidence/timing summaries, and run only allowlisted repair-verification plans | `local/reliability/` |
 | Tessera orchestrator | Exact matchups, matched-points policy, scenario consolidation, findings, candidates, and exact-list revision deltas | `local/tessera/companion.ts` |
 | Tessera provider router | Freeze explicit/automatic provider selection, enforce promotion and preflight gates, and make any automatic website fallback atomic | `local/tessera/simulation-provider.ts` |
-| Local Tessera input compiler | Compile canonical rosters from the active immutable bundle into schema-, hash-, roster-, bundle-, compiler-, and policy-bound evaluation JSON without a remote mutation | `local/tessera/local-engine-input.ts`, `local/tessera/local-engine-preparation.ts` |
-| Local Tessera evaluation adapter | Verify bundle-native JSON, retain the legacy enriched-ROSZ reader for compatible persisted inputs, invoke the pinned public engine contract, and emit deterministic scenario evidence plus limitation warnings | `local/tessera/local-engine.ts`, `local/tessera/tessera-engine-provenance.json` |
-| Tessera provider parity | Revalidate receipt-bound local and website evidence, normalize only explicitly mapped provider settings, compare completeness/metric/winner gates, and emit portable checksummed parity artifacts | `local/tessera/provider-parity.ts`, `local/tessera/provider-parity-report-adapter.ts`, `local/tessera/provider-parity-workflow.ts` |
+| Local Tessera input compiler | Compile canonical rosters from the active immutable bundle into schema-, hash-, roster-, bundle-, compiler-, policy-, exact-profile-, bearer-, loadout-, and range-bound JSON without a remote mutation | `local/tessera/local-engine-input.ts`, `local/tessera/local-engine-input-v2.ts`, `local/tessera/local-engine-preparation.ts` |
+| Physical Tessera scenario | Bind selections, formations, resources, unit state, pair distance/range/visibility, activations, and attachments; allow scalar claims only for fully selected state | `local/tessera/scenario-contract-v3.ts`, `local/tessera/scenario-v3-execution.ts` |
+| Provider-neutral combat bridge | Inventory the complete structured combat corpus; apply a hash-sealed conservative review overlay; fail closed on unresolved, stale, approximate, omitted, or unreviewed combat leaves; bind exact rule, scenario, and local-input identities; then project admitted mechanics | `lib/rosterpilot/combat-corpus-conformance.ts`, `lib/rosterpilot/combat-bridge-v3.ts`, `local/tessera/combat-corpus-reviewed-overlay.ts`, `local/tessera/combat-bridge-input-v3.ts` |
+| Local Tessera evaluation adapter | Verify bundle-native JSON and the combat-bridge identity, project only declared supported effects into the pinned public engine contract, retain deterministic variant envelopes, and emit explicit adapter omissions and limitation warnings | `local/tessera/combat-bridge-adapter.ts`, `local/tessera/local-engine.ts`, `local/tessera/tessera-engine-provenance.json` |
+| Tessera provider parity | Build and verify deterministic suites, revalidate receipt-bound local and visible website evidence, bind exact v3 combat states and per-case mechanic witnesses, compare completeness/metric/winner gates, emit portable checksummed artifacts, and aggregate one passing comparison per case | `local/tessera/provider-parity-v2.ts`, `local/tessera/provider-parity-covering-suite-v2.ts`, `local/tessera/provider-parity-workflow.ts`, `local/tessera/personal-parity-rotation-aggregate.ts` |
+| Personal local parity attestation | Verify and privately retain the complete covering suite; admit exactly three passing observe rotations plus one passing enforce rotation for the same machine, provider, bundle, and suite; require every current bridge mechanic to remain a declared subset before local preflight passes | `local/tessera/personal-local-attestation.ts`, `local/tessera/personal-local-attestation-store.ts`, `local/tessera/provider-parity-report-evidence-v2.ts` |
 | Exact-aware build loop | Validate an exact opponent, build and repair from its threat profile, enforce readiness, and invoke exact analysis | `local/tessera/exact-full-loop.ts`, `lib/rosterpilot/build-and-analyze.ts` |
 | Faction stress orchestrator | Preflight, delivery reuse, staged execution, resume manifests, robustness aggregation, and frozen paired revisions | `local/tessera/stress.ts`, `local/tessera/stress-analysis.ts` |
 | Combined Tessera validation | Freeze and preflight the diverse-nine, run and cache the bounded local pool, choose representative roles, and coordinate standard or exhaustive website validation | `local/tessera/batch-preflight.ts`, `local/tessera/local-engine-task-pool.ts`, `local/tessera/local-engine-result-cache.ts`, `local/tessera/validation-workflow.ts`, `local/tessera/validation-runtime.ts` |
@@ -1234,7 +1363,7 @@ Security invariants:
 | Personal ChatGPT/Codex plugin | Portable tracked package, generated per-user source, marker-protected standalone skill, and a Codex-created immutable cache version | Registry and cache are never edited directly; moving the checkout or Node requires `plugin:local:install` and a new task or app restart |
 | Hosted website, REST, and HTTP MCP | Validated Cloudflare-compatible build, signed bootstrap bundle, trusted public keys, signed-channel URL, and persistent bundle storage | Uses only credential-free core capabilities and never imports local automation modules into a hosted tool contract |
 | New Recruit and Tessera website automation | Per-user macOS LaunchAgent, installed broker, and one complete checkout | Setup records the exact checkout and Node executable; status verifies checkout, protocol, build provenance, and runtime freshness |
-| Local Tessera evaluation | Complete Git checkout, locked Node dependencies, and the exact archived runtime data bundle | Uses the local CLI or stdio MCP, performs no browser, Keychain, New Recruit, or Tessera website operation, and remains evaluation-only until promotion gates pass |
+| Local Tessera evaluation | Complete Git checkout, locked Node dependencies, and the exact archived runtime data bundle | Uses the local CLI or stdio MCP and performs no browser, Keychain, New Recruit, or Tessera website operation. It remains diagnostic until the current single-user machine has a matching personal parity attestation; no written-license record is required for that personal-only path |
 | Roster and report artifacts | Caller-selected directory | Writes stay inside the current directory by default and never overwrite without explicit approval |
 
 The LaunchAgent intentionally runs reviewed worker code from the checkout that

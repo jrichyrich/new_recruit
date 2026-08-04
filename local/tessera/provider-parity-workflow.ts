@@ -11,7 +11,9 @@ import { writeExportArtifacts } from "../../lib/rosterpilot/io";
 import { canonicalJson } from "../../lib/rosterpilot/semantic-hash";
 import {
   type ExactMatchupReportReceipt,
+  type ExactMatchupReportReceiptV2,
   exactReportReceiptPath,
+  parseExactReportReceipt,
   verifyExactReportReceipt,
 } from "./exact-report-integrity";
 import {
@@ -27,6 +29,91 @@ import {
 import {
   TESSERA_PROVIDER_NEUTRAL_SCENARIO_SETTINGS_VERSION,
 } from "./provider-parity-scenario-contract";
+import {
+  tesseraScenarioPolicyContractV3ConclusionStatus,
+  tesseraScenarioPolicyContractV3Sha256,
+} from "./scenario-contract-v3";
+import {
+  localTesseraProviderIdentityAllowsAnalyticalClaims,
+} from "./local-engine";
+import {
+  type PersonalLocalParityRotationRecordV1,
+  sealPersonalLocalParityRotationRecordV1,
+  writePersonalLocalParityRotationRecordV1,
+} from "./personal-local-attestation-store";
+import {
+  type TesseraParityCoveringSuiteV2,
+  verifyTesseraParityCoveringSuiteV2,
+} from "./provider-parity-covering-suite-v2";
+import {
+  compareTesseraProviderParityV2,
+  type TesseraProviderParityContractBindingV2,
+  type TesseraProviderParityResultV2,
+  type TesseraProviderParityRunV2,
+} from "./provider-parity-v2";
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+export type TesseraProviderParityCombatStateCellV2 = {
+  scenarioId: string;
+  attackerInstanceId: string;
+  targetInstanceId: string;
+  metric: string;
+  combatStateSha256: string;
+};
+
+export type TesseraProviderParityCoverageWitnessV2 = {
+  requirementId: string;
+  relevantLeafIds: string[];
+};
+
+/**
+ * Exact provider-parity bindings retained inside each source report. The
+ * exact-report receipt binds these bytes; the self-hash makes accidental
+ * partial rewrites fail before the v2 comparator sees them.
+ */
+export type TesseraProviderParityReportEvidenceV2 = {
+  schemaVersion: 2;
+  kind: "rosterpilot-provider-parity-report-evidence";
+  contractBinding: TesseraProviderParityContractBindingV2;
+  coveringSuite: TesseraParityCoveringSuiteV2;
+  coverageWitnesses: TesseraProviderParityCoverageWitnessV2[];
+  combatStates: TesseraProviderParityCombatStateCellV2[];
+  providerStateEvidenceSha256: string;
+  evidenceSha256: string;
+};
+
+export type TesseraProviderParityWorkflowV2Issue = {
+  code:
+    | "PARITY_V2_EXACT_RECEIPT_REQUIRED"
+    | "PARITY_V2_REPORT_EVIDENCE_MISSING"
+    | "PARITY_V2_REPORT_EVIDENCE_INVALID"
+    | "PARITY_V2_REPORT_EVIDENCE_HASH_INVALID"
+    | "PARITY_V2_SCENARIO_BINDING_MISMATCH"
+    | "PARITY_V2_BRIDGE_BINDING_MISMATCH"
+    | "PARITY_V2_COVERING_SUITE_INVALID"
+    | "PARITY_V2_COVERING_CASE_MISMATCH"
+    | "PARITY_V2_COMBAT_STATE_MISMATCH"
+    | "PARITY_V2_ROSTER_BINDING_MISMATCH"
+    | "PARITY_V2_PROVIDER_STATE_MISMATCH";
+  provider: TesseraParityProvider;
+  message: string;
+};
+
+export type TesseraProviderParityWorkflowExactV2 = {
+  schemaVersion: 2;
+  kind: "tessera-provider-parity-workflow-exact-binding";
+  status: "complete" | "unavailable" | "invalid";
+  personalAttestationEligible: boolean;
+  pairedExactReceiptsSha256: string;
+  reportEvidenceSha256: {
+    localEngine: string | null;
+    website: string | null;
+  };
+  issues: TesseraProviderParityWorkflowV2Issue[];
+  result: TesseraProviderParityResultV2 | null;
+  exactBindingSha256: string;
+};
 
 export type TesseraProviderParityWorkflowClassification =
   | "parity-pass"
@@ -92,6 +179,12 @@ export type TesseraProviderParityWorkflowArtifact = {
     local: { ok: boolean; issues: TesseraProviderParityReportAdapterIssue[] };
     website: { ok: boolean; issues: TesseraProviderParityReportAdapterIssue[] };
   };
+  /**
+   * Exact v2 admission is additive so schema-v1 certification readers can
+   * continue to rebuild `parity`. Legacy comparisons are diagnostic only and
+   * can never produce a personal-local attestation rotation.
+   */
+  exactParityV2: TesseraProviderParityWorkflowExactV2;
   parity: TesseraProviderParityResult | null;
   providerAssessment: {
     localEngine: { strengths: string[]; weaknesses: string[] };
@@ -117,11 +210,22 @@ export type RunTesseraProviderParityWorkflowOptions = {
   overwrite?: boolean;
   rootDir?: string;
   allowOutsideRoot?: boolean;
+  personalRotation?: {
+    machineIdSha256: string;
+    rotationId: string;
+    mode: "observe" | "enforce";
+    completedAt?: string;
+    verifiedAt?: string;
+    recordPath?: string;
+    overwrite?: boolean;
+  };
 };
 
 export type RunTesseraProviderParityWorkflowResult = {
   ok: boolean;
   data: TesseraProviderParityWorkflowArtifact;
+  personalRotationRecord?: PersonalLocalParityRotationRecordV1;
+  personalRotationRecordPath?: string;
   violations: Array<{ code: string; message: string; severity: "error" }>;
   warnings: Array<{ code: string; message: string; severity: "warn" }>;
 };
@@ -134,12 +238,317 @@ type VerifiedReport = {
   reportSha256: string;
   receiptSha256: string;
   receiptEvidenceSha256: string;
+  receipt: ExactMatchupReportReceipt;
   providerIdentity: TesseraSimulationProviderIdentity;
   report: TesseraMatchupReport;
 };
 
 function sha256(value: string | Uint8Array): string {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalSha256(value: unknown): string {
+  return sha256(canonicalJson(value));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  const sorted = [...expected].sort();
+  return actual.length === sorted.length &&
+    actual.every((key, index) => key === sorted[index]);
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function canonicalCombatStates(
+  states: readonly TesseraProviderParityCombatStateCellV2[],
+): TesseraProviderParityCombatStateCellV2[] {
+  return states.map((state) => ({ ...state })).sort((left, right) =>
+    compareStrings(
+      [
+        left.scenarioId,
+        left.metric,
+        left.attackerInstanceId,
+        left.targetInstanceId,
+      ].join("\u0000"),
+      [
+        right.scenarioId,
+        right.metric,
+        right.attackerInstanceId,
+        right.targetInstanceId,
+      ].join("\u0000"),
+    )
+  );
+}
+
+export function tesseraProviderParityCombatStateEvidenceSha256V2(
+  states: readonly TesseraProviderParityCombatStateCellV2[],
+): string {
+  return canonicalSha256({
+    schemaVersion: 2,
+    kind: "tessera-provider-parity-combat-state-evidence",
+    cells: canonicalCombatStates(states),
+  });
+}
+
+function canonicalCoverageWitnesses(
+  witnesses: readonly TesseraProviderParityCoverageWitnessV2[],
+): TesseraProviderParityCoverageWitnessV2[] {
+  return witnesses.map((witness) => ({
+    requirementId: witness.requirementId,
+    relevantLeafIds: [...new Set(witness.relevantLeafIds)].sort(
+      compareStrings,
+    ),
+  })).sort((left, right) =>
+    compareStrings(left.requirementId, right.requirementId)
+  );
+}
+
+export function tesseraProviderParityCoveringCaseEvidenceSha256V2(
+  input: {
+    coveringCaseId: string;
+    combatBridgeV3Sha256: string;
+    corpusConformanceReportSha256: string;
+    coverageWitnesses: readonly TesseraProviderParityCoverageWitnessV2[];
+  },
+): string {
+  return canonicalSha256({
+    schemaVersion: 2,
+    kind: "tessera-provider-parity-covering-case-evidence",
+    coveringCaseId: input.coveringCaseId,
+    combatBridgeV3Sha256: input.combatBridgeV3Sha256,
+    corpusConformanceReportSha256:
+      input.corpusConformanceReportSha256,
+    coverageWitnesses: canonicalCoverageWitnesses(
+      input.coverageWitnesses,
+    ),
+  });
+}
+
+/**
+ * Provider-specific execution state is derived only from fields already
+ * retained by (and therefore byte-bound to) the exact report receipt.
+ */
+export function tesseraProviderParityProviderStateEvidenceSha256V2(
+  report: TesseraMatchupReport,
+): string {
+  return canonicalSha256({
+    report: {
+      runId: report.runId,
+      source: report.source,
+      status: report.status,
+    },
+    provider: {
+      selectedBackend: report.simulation.selectedBackend ?? null,
+      engine: report.simulation.engine ?? null,
+      status: report.simulation.status ?? null,
+      identity: report.simulation.providerIdentity ?? null,
+      evidence: report.simulation.providerEvidence ?? null,
+      evidenceCaptures:
+        report.simulation.providerEvidenceCaptures ?? null,
+    },
+    scenarioPolicyContractV3Sha256:
+      report.scenarioPolicyContractV3Sha256 ?? null,
+    scenarios: (report.simulation.scenarios ?? []).map((scenario) => ({
+      scenarioId: scenario.scenarioId,
+      phase: scenario.phase,
+      direction: scenario.direction,
+      metrics: scenario.metrics,
+      status: scenario.status,
+      settings: scenario.settings,
+      metricRuns: scenario.metricRuns ?? null,
+      cells: scenario.cells.map((cell) => ({
+        attackerInstanceId: cell.attacker.instanceId,
+        targetInstanceId: cell.target.instanceId,
+        confidence: cell.confidence,
+        warningRefs: cell.warningRefs,
+        conclusionEligibility: Object.fromEntries(
+          Object.entries(cell.combatEnvelope ?? {}).map(
+            ([metric, envelope]) => [
+              metric,
+              envelope?.conclusionEligibility ?? null,
+            ],
+          ),
+        ),
+      })),
+    })),
+  });
+}
+
+export function sealTesseraProviderParityReportEvidenceV2(
+  input: Omit<TesseraProviderParityReportEvidenceV2, "evidenceSha256">,
+): TesseraProviderParityReportEvidenceV2 {
+  const core = {
+    ...input,
+    contractBinding: { ...input.contractBinding },
+    coveringSuite: structuredClone(input.coveringSuite),
+    coverageWitnesses: canonicalCoverageWitnesses(
+      input.coverageWitnesses,
+    ),
+    combatStates: canonicalCombatStates(input.combatStates),
+  };
+  return { ...core, evidenceSha256: canonicalSha256(core) };
+}
+
+function reportEvidenceCandidate(
+  report: TesseraMatchupReport,
+): unknown {
+  return (report.simulation as unknown as Record<string, unknown>)
+    .providerParityEvidenceV2;
+}
+
+function parseReportEvidenceV2(
+  value: unknown,
+): TesseraProviderParityReportEvidenceV2 | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "schemaVersion",
+      "kind",
+      "contractBinding",
+      "coveringSuite",
+      "coverageWitnesses",
+      "combatStates",
+      "providerStateEvidenceSha256",
+      "evidenceSha256",
+    ]) ||
+    value.schemaVersion !== 2 ||
+    value.kind !== "rosterpilot-provider-parity-report-evidence" ||
+    !isRecord(value.contractBinding) ||
+    !hasExactKeys(value.contractBinding, [
+      "scenarioPolicyContractV3Sha256",
+      "combatBridgeV3Sha256",
+      "corpusConformanceReportSha256",
+      "coveringSuiteSha256",
+      "coveringCaseId",
+      "coveringCaseEvidenceSha256",
+      "combatStateSha256",
+      "playerRosterFingerprint",
+      "opponentRosterFingerprint",
+    ]) ||
+    !Object.entries(value.contractBinding).every(([key, item]) =>
+      key === "coveringCaseId"
+        ? typeof item === "string" && item.length > 0
+        : key === "playerRosterFingerprint" ||
+            key === "opponentRosterFingerprint"
+          ? typeof item === "string" && item.length > 0
+          : typeof item === "string" && SHA256_PATTERN.test(item)
+    ) ||
+    !Array.isArray(value.coverageWitnesses) ||
+    !value.coverageWitnesses.every((witness) =>
+      isRecord(witness) &&
+      hasExactKeys(witness, ["requirementId", "relevantLeafIds"]) &&
+      typeof witness.requirementId === "string" &&
+      witness.requirementId.length > 0 &&
+      Array.isArray(witness.relevantLeafIds) &&
+      witness.relevantLeafIds.every(
+        (leafId) => typeof leafId === "string" && leafId.length > 0,
+      )
+    ) ||
+    !Array.isArray(value.combatStates) ||
+    !value.combatStates.every((state) =>
+      isRecord(state) &&
+      hasExactKeys(state, [
+        "scenarioId",
+        "attackerInstanceId",
+        "targetInstanceId",
+        "metric",
+        "combatStateSha256",
+      ]) &&
+      typeof state.scenarioId === "string" && state.scenarioId.length > 0 &&
+      typeof state.attackerInstanceId === "string" &&
+      state.attackerInstanceId.length > 0 &&
+      typeof state.targetInstanceId === "string" &&
+      state.targetInstanceId.length > 0 &&
+      typeof state.metric === "string" && state.metric.length > 0 &&
+      typeof state.combatStateSha256 === "string" &&
+      SHA256_PATTERN.test(state.combatStateSha256)
+    ) ||
+    typeof value.providerStateEvidenceSha256 !== "string" ||
+    !SHA256_PATTERN.test(value.providerStateEvidenceSha256) ||
+    typeof value.evidenceSha256 !== "string" ||
+    !SHA256_PATTERN.test(value.evidenceSha256) ||
+    !isRecord(value.coveringSuite)
+  ) {
+    return null;
+  }
+  return value as unknown as TesseraProviderParityReportEvidenceV2;
+}
+
+function v2Issue(
+  code: TesseraProviderParityWorkflowV2Issue["code"],
+  provider: TesseraParityProvider,
+  message: string,
+): TesseraProviderParityWorkflowV2Issue {
+  return { code, provider, message };
+}
+
+function reportRosterFingerprints(
+  report: TesseraMatchupReport,
+): { player: string | null; opponent: string | null } {
+  return {
+    player: report.player.fingerprint ?? null,
+    opponent: report.opponents.length === 1
+      ? report.opponents[0].fingerprint ?? null
+      : null,
+  };
+}
+
+function receiptV2(
+  report: VerifiedReport,
+): ExactMatchupReportReceiptV2 | null {
+  return report.receipt.schemaVersion === 2 ? report.receipt : null;
+}
+
+function reportBridgeEvidenceMatches(
+  report: VerifiedReport,
+  evidence: TesseraProviderParityReportEvidenceV2,
+): boolean {
+  const receipt = receiptV2(report);
+  if (!receipt) return false;
+  const candidates = report.report.simulation.combatBridgeEvidence ?? [];
+  return candidates.some((candidate) => {
+    const record = candidate as unknown as Record<string, unknown>;
+    const exactness = isRecord(record.exactness) ? record.exactness : null;
+    const corpus = exactness && isRecord(exactness.corpus)
+      ? exactness.corpus
+      : null;
+    const bridgeSha256 = record.combatBridgeV3Sha256 ?? record.bridgeSha256;
+    const corpusSha256 =
+      record.corpusConformanceReportSha256 ?? corpus?.reportSha256;
+    return (
+      bridgeSha256 === evidence.contractBinding.combatBridgeV3Sha256 &&
+      corpusSha256 ===
+        evidence.contractBinding.corpusConformanceReportSha256 &&
+      typeof record.evidenceSha256 === "string" &&
+      receipt.bindings.combatBridgeEvidence.evidenceSha256s.includes(
+        record.evidenceSha256,
+      )
+    );
+  });
+}
+
+function combatStateKey(
+  state: Pick<
+    TesseraProviderParityCombatStateCellV2,
+    "scenarioId" | "metric" | "attackerInstanceId" | "targetInstanceId"
+  >,
+): string {
+  return [
+    state.scenarioId,
+    state.metric,
+    state.attackerInstanceId,
+    state.targetInstanceId,
+  ].join("\u0000");
 }
 
 function reportShape(value: unknown): value is TesseraMatchupReport {
@@ -206,7 +615,7 @@ async function readVerifiedReport(
       `The ${expectedProvider} input report source is ${reportValue.source}; expected ${expectedSource}.`,
     );
   }
-  const receipt = receiptValue as ExactMatchupReportReceipt;
+  const receipt = parseExactReportReceipt(receiptValue);
   return {
     provider: expectedProvider,
     path: resolved,
@@ -215,6 +624,7 @@ async function readVerifiedReport(
     reportSha256: sha256(serialized),
     receiptSha256: sha256(receiptText),
     receiptEvidenceSha256: receipt.evidenceSha256,
+    receipt,
     providerIdentity: reportValue.simulation.providerIdentity,
     report: reportValue,
   };
@@ -226,6 +636,378 @@ function adaptationView(
   return result.ok
     ? { ok: true, issues: [] }
     : { ok: false, issues: result.issues };
+}
+
+function validateExactReportEvidenceV2(input: {
+  verified: VerifiedReport;
+  adapted: TesseraReportBoundProviderParityAdapterResult;
+}): {
+  evidence: TesseraProviderParityReportEvidenceV2 | null;
+  issues: TesseraProviderParityWorkflowV2Issue[];
+} {
+  const { verified, adapted } = input;
+  const provider = verified.provider;
+  const issues: TesseraProviderParityWorkflowV2Issue[] = [];
+  const receipt = receiptV2(verified);
+  if (!receipt) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_EXACT_RECEIPT_REQUIRED",
+        provider,
+        "Exact provider parity v2 requires a schema-v2 exact-report receipt.",
+      ),
+    );
+  }
+  const candidate = reportEvidenceCandidate(verified.report);
+  if (candidate === undefined || candidate === null) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_REPORT_EVIDENCE_MISSING",
+        provider,
+        "The report has no receipt-bound provider-parity v2 evidence.",
+      ),
+    );
+    return { evidence: null, issues };
+  }
+  const evidence = parseReportEvidenceV2(candidate);
+  if (!evidence) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_REPORT_EVIDENCE_INVALID",
+        provider,
+        "The receipt-bound provider-parity v2 evidence is malformed or has unknown fields.",
+      ),
+    );
+    return { evidence: null, issues };
+  }
+  const { evidenceSha256, ...evidenceCore } = evidence;
+  if (canonicalSha256(evidenceCore) !== evidenceSha256) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_REPORT_EVIDENCE_HASH_INVALID",
+        provider,
+        "The provider-parity v2 evidence self-hash does not match its canonical contents.",
+      ),
+    );
+  }
+
+  let suiteValid = false;
+  try {
+    suiteValid = verifyTesseraParityCoveringSuiteV2(
+      evidence.coveringSuite,
+    );
+  } catch {
+    suiteValid = false;
+  }
+  if (
+    !suiteValid ||
+    evidence.coveringSuite.suiteSha256 !==
+      evidence.contractBinding.coveringSuiteSha256
+  ) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_COVERING_SUITE_INVALID",
+        provider,
+        "The retained covering suite is invalid or does not match the exact contract binding.",
+      ),
+    );
+  }
+  const coveringCases = Array.isArray(evidence.coveringSuite.cases)
+    ? evidence.coveringSuite.cases
+    : [];
+  const coveringCase = coveringCases.find(
+    (entry) => entry.caseId === evidence.contractBinding.coveringCaseId,
+  );
+  const envelope = reportCompatibilityEnvelope(verified.report);
+  const playerFaction = envelope?.rosters.find(
+    (entry) => entry.side === "player" && entry.occurrence === 1,
+  )?.factionId ?? null;
+  const opponentFaction = envelope?.rosters.find(
+    (entry) => entry.side === "opponent" && entry.occurrence === 1,
+  )?.factionId ?? null;
+  if (
+    !coveringCase ||
+    !playerFaction ||
+    !opponentFaction ||
+    !(
+      (
+        coveringCase.attackerFactionId === playerFaction &&
+        coveringCase.defenderFactionId === opponentFaction
+      ) ||
+      (
+        coveringCase.attackerFactionId === opponentFaction &&
+        coveringCase.defenderFactionId === playerFaction
+      )
+    )
+  ) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_COVERING_CASE_MISMATCH",
+        provider,
+        "The covering case does not identify this report's exact player/opponent faction pairing.",
+      ),
+    );
+  }
+  const canonicalWitnesses = canonicalCoverageWitnesses(
+    evidence.coverageWitnesses,
+  );
+  const witnessRequirements = canonicalWitnesses.map(
+    (witness) => witness.requirementId,
+  );
+  const expectedRequirements = coveringCase
+    ? [...coveringCase.coveredRequirementIds].sort(compareStrings)
+    : [];
+  const witnessesComplete =
+    canonicalWitnesses.length === evidence.coverageWitnesses.length &&
+    new Set(witnessRequirements).size === witnessRequirements.length &&
+    canonicalJson(witnessRequirements) ===
+      canonicalJson(expectedRequirements) &&
+    canonicalWitnesses.every(
+      (witness) =>
+        !witness.requirementId.startsWith("mechanic:") ||
+        witness.relevantLeafIds.length > 0,
+    );
+  const coveringCaseEvidenceSha256 =
+    tesseraProviderParityCoveringCaseEvidenceSha256V2({
+      coveringCaseId: evidence.contractBinding.coveringCaseId,
+      combatBridgeV3Sha256:
+        evidence.contractBinding.combatBridgeV3Sha256,
+      corpusConformanceReportSha256:
+        evidence.contractBinding.corpusConformanceReportSha256,
+      coverageWitnesses: canonicalWitnesses,
+    });
+  if (
+    !witnessesComplete ||
+    coveringCaseEvidenceSha256 !==
+      evidence.contractBinding.coveringCaseEvidenceSha256
+  ) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_COVERING_CASE_MISMATCH",
+        provider,
+        "The exact roster/bridge does not provide one complete relevant-leaf witness for every declared covering-case mechanic.",
+      ),
+    );
+  }
+
+  const scenarioV3 = verified.report.scenarioPolicyContractV3;
+  const receiptScenarioV3 = receipt?.bindings.scenarioPolicies.filter(
+    (entry) => entry.schemaVersion === 3,
+  ) ?? [];
+  let scenarioSha256: string | null = null;
+  let scalarClaimsAllowed = false;
+  try {
+    scenarioSha256 = scenarioV3
+      ? tesseraScenarioPolicyContractV3Sha256(scenarioV3)
+      : null;
+    scalarClaimsAllowed = scenarioV3
+      ? tesseraScenarioPolicyContractV3ConclusionStatus(scenarioV3)
+          .scalarClaimsAllowed
+      : false;
+  } catch {
+    scenarioSha256 = null;
+  }
+  if (
+    scenarioSha256 === null ||
+    !scalarClaimsAllowed ||
+    receiptScenarioV3.length !== 1 ||
+    receiptScenarioV3[0].contractSha256 !== scenarioSha256 ||
+    verified.report.scenarioPolicyContractV3Sha256 !== scenarioSha256 ||
+    evidence.contractBinding.scenarioPolicyContractV3Sha256 !==
+      scenarioSha256
+  ) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_SCENARIO_BINDING_MISMATCH",
+        provider,
+        "Exact parity requires one selected-state scenario-policy v3 contract matching both report and receipt.",
+      ),
+    );
+  }
+
+  if (!reportBridgeEvidenceMatches(verified, evidence)) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_BRIDGE_BINDING_MISMATCH",
+        provider,
+        "No receipt-bound combat-bridge record matches the exact bridge-v3 and corpus-conformance identities.",
+      ),
+    );
+  }
+
+  const fingerprints = reportRosterFingerprints(verified.report);
+  const receiptRosters = receipt?.bindings.sourceArtifacts.rosters ?? [];
+  const receiptPlayer = receiptRosters.find(
+    (entry) => entry.side === "player" && entry.occurrence === 1,
+  );
+  const receiptOpponent = receiptRosters.find(
+    (entry) => entry.side === "opponent" && entry.occurrence === 1,
+  );
+  if (
+    verified.report.opponents.length !== 1 ||
+    fingerprints.player !==
+      evidence.contractBinding.playerRosterFingerprint ||
+    fingerprints.opponent !==
+      evidence.contractBinding.opponentRosterFingerprint ||
+    receiptPlayer?.fingerprint !== fingerprints.player ||
+    receiptOpponent?.fingerprint !== fingerprints.opponent
+  ) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_ROSTER_BINDING_MISMATCH",
+        provider,
+        "The exact player/opponent roster fingerprints do not match report and receipt bindings.",
+      ),
+    );
+  }
+
+  const canonicalStates = canonicalCombatStates(evidence.combatStates);
+  const stateKeys = canonicalStates.map(combatStateKey);
+  const expectedStateKeys = adapted.ok
+    ? adapted.run.cells.map(combatStateKey).sort(compareStrings)
+    : [];
+  const declaredStateSha256 =
+    tesseraProviderParityCombatStateEvidenceSha256V2(canonicalStates);
+  let envelopeMismatch = false;
+  for (const scenario of verified.report.simulation.scenarios ?? []) {
+    for (const cell of scenario.cells) {
+      for (const metric of scenario.metrics) {
+        const conclusion = cell.combatEnvelope?.[metric]
+          ?.conclusionEligibility;
+        if (!conclusion) continue;
+        const state = canonicalStates.find(
+          (entry) =>
+            entry.scenarioId === scenario.scenarioId &&
+            entry.metric === metric &&
+            entry.attackerInstanceId === cell.attacker.instanceId &&
+            entry.targetInstanceId === cell.target.instanceId,
+        );
+        if (
+          !state ||
+          conclusion.scalarClaimsAllowed !== true ||
+          conclusion.mode !== "selected" ||
+          conclusion.combatStateSha256 !== state.combatStateSha256 ||
+          conclusion.scenarioPolicyContractV3Sha256 !== scenarioSha256
+        ) {
+          envelopeMismatch = true;
+        }
+      }
+    }
+  }
+  if (
+    !adapted.ok ||
+    canonicalStates.length === 0 ||
+    new Set(stateKeys).size !== stateKeys.length ||
+    canonicalJson([...stateKeys].sort(compareStrings)) !==
+      canonicalJson(expectedStateKeys) ||
+    declaredStateSha256 !== evidence.contractBinding.combatStateSha256 ||
+    envelopeMismatch
+  ) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_COMBAT_STATE_MISMATCH",
+        provider,
+        "The exact per-cell combat-state inventory is incomplete, duplicated, or detached from the compared cells.",
+      ),
+    );
+  }
+
+  if (
+    tesseraProviderParityProviderStateEvidenceSha256V2(verified.report) !==
+      evidence.providerStateEvidenceSha256
+  ) {
+    issues.push(
+      v2Issue(
+        "PARITY_V2_PROVIDER_STATE_MISMATCH",
+        provider,
+        "The provider-state evidence digest does not match receipt-bound execution state.",
+      ),
+    );
+  }
+  return { evidence, issues };
+}
+
+function buildExactWorkflowV2(input: {
+  localReport: VerifiedReport;
+  websiteReport: VerifiedReport;
+  local: TesseraReportBoundProviderParityAdapterResult;
+  website: TesseraReportBoundProviderParityAdapterResult;
+}): TesseraProviderParityWorkflowExactV2 {
+  const local = validateExactReportEvidenceV2({
+    verified: input.localReport,
+    adapted: input.local,
+  });
+  const website = validateExactReportEvidenceV2({
+    verified: input.websiteReport,
+    adapted: input.website,
+  });
+  const issues = [...local.issues, ...website.issues].sort((left, right) =>
+    compareStrings(
+      `${left.provider}|${left.code}|${left.message}`,
+      `${right.provider}|${right.code}|${right.message}`,
+    )
+  );
+  let result: TesseraProviderParityResultV2 | null = null;
+  if (
+    issues.length === 0 &&
+    local.evidence &&
+    website.evidence &&
+    input.local.ok &&
+    input.website.ok
+  ) {
+    const localRun: TesseraProviderParityRunV2 = {
+      ...input.local.run,
+      schemaVersion: 2,
+      contractBinding: local.evidence.contractBinding,
+      exactReceiptSha256: input.localReport.receiptSha256,
+      providerStateEvidenceSha256:
+        local.evidence.providerStateEvidenceSha256,
+    };
+    const websiteRun: TesseraProviderParityRunV2 = {
+      ...input.website.run,
+      schemaVersion: 2,
+      contractBinding: website.evidence.contractBinding,
+      exactReceiptSha256: input.websiteReport.receiptSha256,
+      providerStateEvidenceSha256:
+        website.evidence.providerStateEvidenceSha256,
+    };
+    result = compareTesseraProviderParityV2(localRun, websiteRun);
+  }
+  const pairedExactReceiptsSha256 = canonicalSha256([
+    {
+      provider: input.localReport.provider,
+      receiptSha256: input.localReport.receiptSha256,
+    },
+    {
+      provider: input.websiteReport.provider,
+      receiptSha256: input.websiteReport.receiptSha256,
+    },
+  ]);
+  const anyEvidence =
+    reportEvidenceCandidate(input.localReport.report) != null ||
+    reportEvidenceCandidate(input.websiteReport.report) != null;
+  const status = result
+    ? "complete" as const
+    : anyEvidence
+      ? "invalid" as const
+      : "unavailable" as const;
+  const personalAttestationEligible = Boolean(
+    result?.eligible && result.complete && result.outcome === "pass",
+  );
+  const core = {
+    schemaVersion: 2 as const,
+    kind: "tessera-provider-parity-workflow-exact-binding" as const,
+    status,
+    personalAttestationEligible,
+    pairedExactReceiptsSha256,
+    reportEvidenceSha256: {
+      localEngine: local.evidence?.evidenceSha256 ?? null,
+      website: website.evidence?.evidenceSha256 ?? null,
+    },
+    issues,
+    result,
+  };
+  return { ...core, exactBindingSha256: canonicalSha256(core) };
 }
 
 export function classifyTesseraProviderParityWorkflow(
@@ -406,11 +1188,10 @@ function providerAssessment(input: {
   }
   if (
     localIdentity.provider === "local-engine" &&
-    (localIdentity.promotion !== "promoted" ||
-      localIdentity.licenseState !== "approved")
+    !localTesseraProviderIdentityAllowsAnalyticalClaims(localIdentity)
   ) {
     localWeaknesses.push(
-      `The pinned local engine is ${localIdentity.promotion} with ${localIdentity.licenseState} licensing; a parity result does not authorize production promotion.`,
+      `The pinned local engine is ${localIdentity.promotion} with ${localIdentity.licenseState} usage state; one comparison alone does not activate the machine-local provider.`,
     );
   }
 
@@ -514,6 +1295,12 @@ export async function runTesseraProviderParityWorkflow(
   const parity = local.ok && website.ok
     ? compareTesseraProviderParity(local.run, website.run)
     : null;
+  const exactParityV2 = buildExactWorkflowV2({
+    localReport,
+    websiteReport,
+    local,
+    website,
+  });
   const summary = findings({ local, website, parity });
   const perProvider = providerAssessment({
     localReport,
@@ -558,6 +1345,7 @@ export async function runTesseraProviderParityWorkflow(
     parity,
     local.ok && website.ok,
   );
+  const generatedAt = new Date().toISOString();
   const artifact: TesseraProviderParityWorkflowArtifact = {
     schemaVersion: 1,
     kind: "tessera-provider-parity-comparison",
@@ -566,7 +1354,7 @@ export async function runTesseraProviderParityWorkflow(
       kind: "reports-root-sha256-run-id",
       reportRootRequired: true,
     },
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     outcome: parity?.outcome ?? "ineligible",
     classification: comparisonClassification,
     sourceReports,
@@ -586,6 +1374,7 @@ export async function runTesseraProviderParityWorkflow(
       local: adaptationView(local),
       website: adaptationView(website),
     },
+    exactParityV2,
     parity,
     providerAssessment: perProvider,
     strengths: summary.strengths,
@@ -595,6 +1384,11 @@ export async function runTesseraProviderParityWorkflow(
       "This comparison measures directional combat-model parity, not game win probability.",
       "Movement, terrain geometry, missions, scoring, deployment, sequencing, player decisions, and mechanics outside the shared capability envelope remain out of scope.",
       "A pass applies only to the exact receipt-bound reports, data bundle, provider deployments, imported semantics, profile policy, and frozen scenario contract named here.",
+      ...(exactParityV2.personalAttestationEligible
+        ? []
+        : [
+            "This comparison is not eligible for a personal-local attestation rotation unless exact provider-parity v2 bindings are complete and passing.",
+          ]),
     ],
     artifacts: [
       { format: "provider-parity-json", written: filenames.json },
@@ -642,10 +1436,69 @@ export async function runTesseraProviderParityWorkflow(
     { format: "provider-parity-html", written: written[1] },
     { format: "provider-parity-sha256", written: written[2] },
   ];
+  let personalRotationRecord:
+    | PersonalLocalParityRotationRecordV1
+    | undefined;
+  let personalRotationRecordPath: string | undefined;
+  const workflowWarnings: RunTesseraProviderParityWorkflowResult["warnings"] = [];
+  if (options.personalRotation) {
+    const localExactEvidence = parseReportEvidenceV2(
+      reportEvidenceCandidate(localReport.report),
+    );
+    const oneCaseCoversSuite =
+      localExactEvidence?.coveringSuite.cases.length === 1;
+    if (
+      exactParityV2.personalAttestationEligible &&
+      exactParityV2.result &&
+      oneCaseCoversSuite
+    ) {
+      personalRotationRecord = sealPersonalLocalParityRotationRecordV1({
+        machineIdSha256: options.personalRotation.machineIdSha256,
+        providerIdentitySha256: sha256(
+          canonicalJson(localReport.providerIdentity),
+        ),
+        bundleId: local.run?.identity.dataBundleId ?? "",
+        rotation: {
+          rotationId: options.personalRotation.rotationId,
+          mode: options.personalRotation.mode,
+          outcome: "pass",
+          exactReceiptSha256:
+            exactParityV2.pairedExactReceiptsSha256,
+          coverageSuiteSha256:
+            exactParityV2.result.contractBinding!
+              .coveringSuiteSha256,
+          completedAt:
+            options.personalRotation.completedAt ?? generatedAt,
+        },
+        parityResultSha256: exactParityV2.result.resultSha256,
+        verifiedAt:
+          options.personalRotation.verifiedAt ?? generatedAt,
+      });
+      if (options.personalRotation.recordPath) {
+        personalRotationRecordPath =
+          await writePersonalLocalParityRotationRecordV1({
+            record: personalRotationRecord,
+            filename: options.personalRotation.recordPath,
+            overwrite: options.personalRotation.overwrite,
+          });
+      }
+    } else {
+      workflowWarnings.push({
+        code: "TESSERA_PERSONAL_PARITY_ROTATION_INELIGIBLE",
+        message:
+          "No personal parity rotation record was created because exact provider-parity v2 evidence was unavailable, invalid, incomplete, non-passing, or this comparison did not cover the complete bidirectional suite in one case.",
+        severity: "warn",
+      });
+    }
+  }
   const ok = parity?.outcome === "pass";
   return {
     ok,
     data: artifact,
+    ...(personalRotationRecord ? { personalRotationRecord } : {}),
+    ...(personalRotationRecordPath
+      ? { personalRotationRecordPath }
+      : {}),
     violations: ok
       ? []
       : [{
@@ -663,6 +1516,6 @@ export async function runTesseraProviderParityWorkflow(
                 : "The local and website reports did not establish eligible provider parity.",
           severity: "error",
         }],
-    warnings: [],
+    warnings: workflowWarnings,
   };
 }

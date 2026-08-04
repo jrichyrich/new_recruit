@@ -29,6 +29,9 @@ import {
 import {
   rebindTesseraScenarioContractProvider,
 } from "../local/tessera/provider-parity-scenario-contract";
+import type {
+  TesseraWebsiteFallbackAuthorization,
+} from "../local/tessera/simulation-provider";
 
 import {
   buildRoster,
@@ -217,6 +220,8 @@ type ServerOptions = {
         scenarioContract?: TesseraFrozenScenarioContract[];
         opponentRosterContext?: RosterDraftV1;
         catalogueDriftMode?: "reject" | "diagnostic";
+        websiteFallbackAuthorization?:
+          TesseraWebsiteFallbackAuthorization;
       },
     ) => Promise<ResultEnvelope<TesseraMatchupReport>>;
     compare?: (
@@ -3515,6 +3520,22 @@ export function createRosterPilotMcpServer(
       "local-engine",
       "website",
     ]);
+    const websiteFallbackConfirmationSha256Schema = z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .describe(
+        "Exact hash from a prior promoted-local fallback offer. Supplying it authorizes that one New Recruit import and Tessera Website fallback.",
+      );
+    const websiteFallbackAuthorization = (
+      requestSha256: string | undefined,
+    ): TesseraWebsiteFallbackAuthorization | undefined =>
+      requestSha256
+        ? {
+            action: "new-recruit-import-and-tessera-web",
+            requestSha256,
+            source: "confirmed-fallback",
+          }
+        : undefined;
     const tesseraMetricSchema = z.enum([
       "wipe-probability",
       "half-wipe-probability",
@@ -3546,6 +3567,8 @@ export function createRosterPilotMcpServer(
           overwrite: z.boolean().default(false),
           simulationBackend:
             tesseraSimulationBackendSchema.optional(),
+          websiteFallbackConfirmationSha256:
+            websiteFallbackConfirmationSha256Schema.optional(),
           executionMode: z
             .enum(["prepare-only", "simulate"])
             .optional(),
@@ -3577,6 +3600,7 @@ export function createRosterPilotMcpServer(
         outputDirectory,
         overwrite,
         simulationBackend,
+        websiteFallbackConfirmationSha256,
         executionMode,
         fallbackMode,
         profilePolicyPath,
@@ -3627,6 +3651,14 @@ export function createRosterPilotMcpServer(
                 outputDirectory,
                 overwrite,
                 simulationBackend,
+                ...(websiteFallbackConfirmationSha256
+                  ? {
+                      websiteFallbackAuthorization:
+                        websiteFallbackAuthorization(
+                          websiteFallbackConfirmationSha256,
+                        ),
+                    }
+                  : {}),
                 executionMode: "simulate",
                 fallbackMode,
                 profilePolicyPath,
@@ -3658,6 +3690,14 @@ export function createRosterPilotMcpServer(
               outputDirectory,
               overwrite,
               simulationBackend,
+              ...(websiteFallbackConfirmationSha256
+                ? {
+                    websiteFallbackAuthorization:
+                      websiteFallbackAuthorization(
+                        websiteFallbackConfirmationSha256,
+                      ),
+                  }
+                : {}),
               executionMode,
               fallbackMode,
               profilePolicyPath,
@@ -4659,6 +4699,13 @@ export function createRosterPilotMcpServer(
         executionMode: jobExecutionModeSchema,
         simulationBackend:
           jobSimulationBackendSchema.optional(),
+        websiteFallbackConfirmationSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .describe(
+            "Exact hash from a prior promoted-local fallback offer; exact runs only.",
+          )
+          .optional(),
         profilePolicyPath: z.string().min(1).optional(),
         analysisMode: z.enum(["quick", "full"]).default("full"),
         allowPointMismatch: z.boolean().default(false),
@@ -4794,6 +4841,16 @@ export function createRosterPilotMcpServer(
             options: {
               executionMode: request.executionMode,
               simulationBackend: request.simulationBackend,
+              websiteFallbackAuthorization:
+                request.websiteFallbackConfirmationSha256
+                  ? {
+                      action:
+                        "new-recruit-import-and-tessera-web",
+                      requestSha256:
+                        request.websiteFallbackConfirmationSha256,
+                      source: "confirmed-fallback",
+                    }
+                  : undefined,
               profilePolicyPath: request.profilePolicyPath,
               analysisMode: request.analysisMode,
               allowPointMismatch: request.allowPointMismatch,

@@ -1,18 +1,22 @@
-import path from "node:path";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import type {
   TesseraMatchupReport,
   TesseraPreparedRoster,
   TesseraUnitInstance,
 } from "../../lib/rosterpilot";
+import { canonicalJson } from "../../lib/rosterpilot/semantic-hash";
 import {
-  parseLocalTesseraEngineInput,
-  verifyLocalTesseraEngineInput,
-  type LocalEngineWeapon,
-  type LocalTesseraEngineInput,
-  type LocalTesseraEngineUnit,
-} from "./local-engine-input";
+  LOCAL_TESSERA_INPUT_V2_COMPILER_VERSION,
+  LOCAL_TESSERA_INPUT_V2_IDENTITY_CONTRACT,
+  parseLocalTesseraEngineInputV2,
+  verifyLocalTesseraEngineInputV2,
+  type LocalEngineWeaponV2,
+  type LocalTesseraEngineInputV2,
+  type LocalTesseraEngineUnitV2,
+} from "./local-engine-input-v2";
 import {
   TESSERA_PROVIDER_PARITY_MODELED_MECHANICS,
   TESSERA_PROVIDER_PARITY_OMITTED_MECHANICS,
@@ -28,7 +32,7 @@ import {
 } from "./provider-parity-evidence";
 
 export const TESSERA_PROVIDER_PARITY_COMBAT_MODEL_VERSION =
-  "rosterpilot-provider-neutral-combat-v1" as const;
+  "rosterpilot-provider-neutral-combat-v2" as const;
 
 export type TesseraLocalProviderParityEvidenceIssue = {
   code:
@@ -36,6 +40,7 @@ export type TesseraLocalProviderParityEvidenceIssue = {
     | "LOCAL_INPUT_REFERENCE_INVALID"
     | "LOCAL_INPUT_OUTSIDE_REPORT_BUNDLE"
     | "LOCAL_INPUT_UNREADABLE"
+    | "LOCAL_INPUT_SCHEMA_UNSUPPORTED"
     | "LOCAL_INPUT_IDENTITY_MISMATCH"
     | "LOCAL_UNIT_BINDING_MISSING"
     | "LOCAL_UNIT_BINDING_AMBIGUOUS"
@@ -102,7 +107,7 @@ async function readBoundLocalInput(input: {
   bundleId: string;
   side: "player" | "opponent";
   issues: TesseraLocalProviderParityEvidenceIssue[];
-}): Promise<LocalTesseraEngineInput | null> {
+}): Promise<LocalTesseraEngineInputV2 | null> {
   const reference = localSimulationInput(input.prepared);
   if (!reference) {
     input.issues.push(
@@ -110,6 +115,16 @@ async function readBoundLocalInput(input: {
         "LOCAL_INPUT_REFERENCE_INVALID",
         `${input.side}.simulationInput`,
         "The completed local report does not retain a local-engine input reference.",
+      ),
+    );
+    return null;
+  }
+  if (reference.compilerVersion !== LOCAL_TESSERA_INPUT_V2_COMPILER_VERSION) {
+    input.issues.push(
+      issue(
+        "LOCAL_INPUT_SCHEMA_UNSUPPORTED",
+        `${input.side}.simulationInput.compilerVersion`,
+        "Exact provider parity requires a retained rules-aware local input v2 compiler identity.",
       ),
     );
     return null;
@@ -139,7 +154,25 @@ async function readBoundLocalInput(input: {
     return null;
   }
   try {
-    return verifyLocalTesseraEngineInput({
+    let schemaVersion: unknown = null;
+    try {
+      schemaVersion = JSON.parse(
+        Buffer.from(content).toString("utf8"),
+      )?.schemaVersion;
+    } catch {
+      schemaVersion = null;
+    }
+    if (schemaVersion !== 2) {
+      input.issues.push(
+        issue(
+          "LOCAL_INPUT_SCHEMA_UNSUPPORTED",
+          `${input.side}.simulationInput`,
+          "Exact provider parity requires local input schema v2 so weapon range, profile, equipment, bearer, and loadout identities are all receipt-bound.",
+        ),
+      );
+      return null;
+    }
+    return verifyLocalTesseraEngineInputV2({
       content,
       expectedSha256: reference.sha256,
       expectedBundleId: input.bundleId,
@@ -149,7 +182,7 @@ async function readBoundLocalInput(input: {
     // Parse once only to distinguish malformed content in diagnostics; the
     // verifier remains the authority for all retained identities.
     try {
-      parseLocalTesseraEngineInput(content);
+      parseLocalTesseraEngineInputV2(content);
     } catch {
       // Keep the verifier's complete coded message below.
     }
@@ -166,11 +199,11 @@ async function readBoundLocalInput(input: {
   }
 }
 
-function weaponDisplayName(weapon: LocalEngineWeapon): string {
+function weaponDisplayName(weapon: LocalEngineWeaponV2): string {
   return normalizeTesseraProviderParityName(weapon.name);
 }
 
-function weaponIdentity(weapon: LocalEngineWeapon): {
+function weaponIdentity(weapon: LocalEngineWeaponV2): {
   weaponName: string;
   profile: string | null;
 } {
@@ -193,7 +226,7 @@ function attackProfiles(
   side: "player" | "opponent",
   unitName: string,
   unitOccurrence: number,
-  weapons: readonly LocalEngineWeapon[],
+  weapons: readonly LocalEngineWeaponV2[],
 ): TesseraProviderParityCombatAttackProfile[] {
   const occurrences = new Map<string, number>();
   return weapons.map((weapon) => {
@@ -214,6 +247,7 @@ function attackProfiles(
       }),
       name,
       phase,
+      rangeInches: weapon.rangeInches,
       equippedModelCount: weapon.count,
       attacks: String(weapon.A),
       skill: weapon.type === "ranged" ? weapon.BS ?? null : weapon.WS ?? null,
@@ -227,9 +261,28 @@ function attackProfiles(
   });
 }
 
+function localProfileSourceIdentitySha256(
+  unit: LocalTesseraEngineUnitV2,
+  weapon: LocalEngineWeaponV2,
+): string {
+  return createHash("sha256")
+    .update(canonicalJson({
+      identityContractVersion:
+        LOCAL_TESSERA_INPUT_V2_IDENTITY_CONTRACT,
+      unitId: unit.unitId,
+      weaponId: weapon.weaponId,
+      equipmentId: weapon.equipmentId,
+      profileId: weapon.profileId,
+      bearerSelectionId: weapon.bearerSelectionId,
+      loadoutGroupId: weapon.loadoutGroupId,
+      rangeInches: weapon.rangeInches,
+    }))
+    .digest("hex");
+}
+
 function omittedEffects(
-  input: LocalTesseraEngineInput,
-  unit: LocalTesseraEngineUnit,
+  input: LocalTesseraEngineInputV2,
+  unit: LocalTesseraEngineUnitV2,
   issues: TesseraLocalProviderParityEvidenceIssue[],
 ): string[] {
   const names = [
@@ -266,7 +319,7 @@ function omittedEffects(
 }
 
 function canonicalUnitFor(
-  local: LocalTesseraEngineUnit,
+  local: LocalTesseraEngineUnitV2,
   side: "player" | "opponent",
   units: readonly TesseraUnitInstance[],
   issues: TesseraLocalProviderParityEvidenceIssue[],
@@ -302,7 +355,7 @@ function canonicalUnitFor(
 }
 
 function combatUnits(input: {
-  localInput: LocalTesseraEngineInput;
+  localInput: LocalTesseraEngineInputV2;
   side: "player" | "opponent";
   units: readonly TesseraUnitInstance[];
   inputSha256: string;
@@ -354,7 +407,13 @@ function combatUnits(input: {
       omittedEffects: omittedEffects(input.localInput, local, input.issues),
       evidence: {
         status: "complete",
-        sourceRefs: [`rosterpilot-local-input:${input.inputSha256}`],
+        sourceRefs: [
+          `rosterpilot-local-input:${input.inputSha256}`,
+          ...local.weapons.map(
+            (weapon) =>
+              `rosterpilot-local-profile-identity:${localProfileSourceIdentitySha256(local, weapon)}`,
+          ),
+        ].sort((left, right) => left.localeCompare(right)),
         warningCodes: [],
       },
     });

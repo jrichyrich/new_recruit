@@ -7,12 +7,16 @@ import {
   aggregateProfileRequirements,
   profilePolicyScaffold,
 } from "../../local/tessera/profile-policy";
+import { dataset as activeRuntimeDataset } from "../../lib/rosterpilot/runtime-dataset";
 
-export function buildCustodesVsAeldariSmokeRoster(): RosterDraftV1 {
+function buildCustodesSmokeRoster(input: {
+  opponentFactionId: string;
+  name: string;
+}): RosterDraftV1 {
   const result = buildRoster({
     playerFaction: "adeptus-custodes",
     pointsLimit: 1_000,
-    name: "Golden Net vs Aeldari",
+    name: input.name,
     preferences: ["objective", "mobility", "durability"],
     legendsPolicy: "exclude",
     playContext: { kind: "matched-play" },
@@ -26,7 +30,7 @@ export function buildCustodesVsAeldariSmokeRoster(): RosterDraftV1 {
     detachmentId: "shield-host",
     opponentContext: {
       kind: "known-faction",
-      factionId: "aeldari",
+      factionId: input.opponentFactionId,
     },
     mixedThreatIntent: true,
   });
@@ -40,10 +44,27 @@ export function buildCustodesVsAeldariSmokeRoster(): RosterDraftV1 {
   return result.data;
 }
 
+export function buildCustodesVsAeldariSmokeRoster(): RosterDraftV1 {
+  return buildCustodesSmokeRoster({
+    opponentFactionId: "aeldari",
+    name: "Golden Net vs Aeldari",
+  });
+}
+
+export function buildCustodesVsWorldEatersSmokeRoster(): RosterDraftV1 {
+  return buildCustodesSmokeRoster({
+    opponentFactionId: "world-eaters",
+    name: "Golden Net vs World Eaters",
+  });
+}
+
 export function resolvedProfilePolicy(
   ...rosters: RosterDraftV1[]
 ): ProfilePolicyV1 {
-  const requirements = aggregateProfileRequirements(rosters);
+  const requirements = aggregateProfileRequirements(
+    rosters,
+    activeRuntimeDataset,
+  );
   const scaffold = profilePolicyScaffold(requirements);
   return {
     ...scaffold,

@@ -15,7 +15,7 @@ export const EXPECTED_TESSERA_ENGINE_PROVENANCE = Object.freeze({
   schemaVersion: 1,
   kind: "rosterpilot-tessera-engine-candidate",
   status: "evaluation-only",
-  promotionGate: "written-license-grant-required",
+  promotionGate: "personal-machine-parity-attestation-required",
   upstream: {
     repository: "https://github.com/Tessera-cmd/tessera-engine",
     commit: "16ab4365bbd97ef592b061c5a9babe5e44f00e80",
@@ -38,7 +38,7 @@ export const EXPECTED_TESSERA_ENGINE_PROVENANCE = Object.freeze({
   },
   integration: {
     dependencySection: "devDependencies",
-    allowedUsage: "explicit-local-evaluation-and-contract-tests-only",
+    allowedUsage: "explicit-local-and-attested-personal-runtime",
     explicitLocalRuntimeEnabled: true,
     productionRuntimeEnabled: false,
   },

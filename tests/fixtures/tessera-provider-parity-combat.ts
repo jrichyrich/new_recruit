@@ -2,6 +2,22 @@ import type {
   TesseraProviderParityModelCapabilityEnvelope,
   TesseraProviderParityNormalizedCombatSnapshot,
 } from "../../local/tessera/provider-parity";
+import {
+  tesseraProviderParityProfileId,
+} from "../../local/tessera/provider-parity-evidence";
+
+function profileId(input: {
+  side: "player" | "opponent";
+  unitName: string;
+  weaponName: string;
+}): string {
+  return tesseraProviderParityProfileId({
+    ...input,
+    unitOccurrence: 1,
+    profile: null,
+    weaponOccurrence: 1,
+  });
+}
 
 export function providerParityModelCapabilityFixture(): TesseraProviderParityModelCapabilityEnvelope {
   return {
@@ -14,6 +30,8 @@ export function providerParityModelCapabilityFixture(): TesseraProviderParityMod
       "attack-profile",
       "defense-profile",
       "phase-direction",
+      "semantic-weapon-profile-identity",
+      "weapon-range",
       "weapon-keywords",
     ],
     omittedMechanics: ["battle-shock", "stratagems"],
@@ -39,9 +57,14 @@ export function providerParityNamedCombatSnapshotFixture(): TesseraProviderParit
         },
         attackProfiles: [
           {
-            profileId: "witchseeker-flamer",
+            profileId: profileId({
+              side: "player",
+              unitName: "Witchseekers",
+              weaponName: "Witchseeker flamer",
+            }),
             name: "Witchseeker flamer",
             phase: "shooting",
+            rangeInches: 12,
             equippedModelCount: 5,
             attacks: "D6",
             skill: null,
@@ -73,9 +96,14 @@ export function providerParityNamedCombatSnapshotFixture(): TesseraProviderParit
         },
         attackProfiles: [
           {
-            profileId: "troupe-shuriken-pistol",
+            profileId: profileId({
+              side: "opponent",
+              unitName: "Troupe",
+              weaponName: "Shuriken pistol",
+            }),
             name: "Shuriken pistol",
             phase: "shooting",
+            rangeInches: 12,
             equippedModelCount: 5,
             attacks: "1",
             skill: 3,
@@ -107,9 +135,14 @@ export function providerParityNamedCombatSnapshotFixture(): TesseraProviderParit
         },
         attackProfiles: [
           {
-            profileId: "farseer-eldritch-storm",
+            profileId: profileId({
+              side: "opponent",
+              unitName: "Farseer",
+              weaponName: "Eldritch Storm",
+            }),
             name: "Eldritch Storm",
             phase: "shooting",
+            rangeInches: 24,
             equippedModelCount: 1,
             attacks: "D6",
             skill: 2,
@@ -141,9 +174,14 @@ export function providerParityNamedCombatSnapshotFixture(): TesseraProviderParit
         },
         attackProfiles: [
           {
-            profileId: "shroud-runner-scatter-laser",
+            profileId: profileId({
+              side: "opponent",
+              unitName: "Shroud Runners",
+              weaponName: "Scatter laser",
+            }),
             name: "Scatter laser",
             phase: "shooting",
+            rangeInches: 36,
             equippedModelCount: 3,
             attacks: "6",
             skill: 3,

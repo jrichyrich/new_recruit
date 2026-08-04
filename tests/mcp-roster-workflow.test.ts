@@ -203,7 +203,7 @@ test("hosted MCP returns a manual handoff when direct delivery is unavailable", 
   }
 });
 
-test("MCP optimize workflow starts a profile-rich paired baseline job", async () => {
+test("MCP optimize workflow keeps an omitted provider promotion-gated", async () => {
   const opponent = buildRoster({
     playerFaction: "aeldari",
     pointsLimit: 1000,
@@ -263,6 +263,9 @@ test("MCP optimize workflow starts a profile-rich paired baseline job", async ()
         optimization: {
           status: string;
           preparation: {
+            provider: string;
+            artifactIntent: string;
+            simulationInput: string;
             profileRichRosz: string;
             pairedBaseline: string;
           };
@@ -285,7 +288,19 @@ test("MCP optimize workflow starts a profile-rich paired baseline job", async ()
     );
     assert.equal(
       envelope.data.optimization.preparation.profileRichRosz,
-      "pending-new-recruit-enrichment",
+      "pending-provider-selection",
+    );
+    assert.equal(
+      envelope.data.optimization.preparation.provider,
+      "auto",
+    );
+    assert.equal(
+      envelope.data.optimization.preparation.artifactIntent,
+      "provider-deferred",
+    );
+    assert.equal(
+      envelope.data.optimization.preparation.simulationInput,
+      "pending-provider-selection",
     );
     assert.equal(
       envelope.data.execution.tesseraBaseline.status,

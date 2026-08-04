@@ -67,7 +67,43 @@ test("local exact analysis uses canonical rosters without a New Recruit handoff"
 
   assert.equal(result.ok, true);
   assert.equal(result.data?.analysis?.provider, "local-engine");
+  assert.deepEqual(result.data?.analysis?.providerPlan, {
+    requested: "local-engine",
+    selected: "local-engine",
+    reason: "explicit-local-engine",
+    artifactIntent: "bundle-native",
+    externalActionRequired: false,
+    omissionsPolicy: "best-effort-explicit",
+  });
   assert.equal(result.data?.analysis?.target.kind, "exact-opponent");
+  assert.equal(result.data?.newRecruit.handoff, null);
+});
+
+test("auto analysis remains promotion-gated and provider-deferred", async () => {
+  const opponent = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+  }).data;
+  assert.ok(opponent);
+  const result = await prepareRosterWorkflow({
+    intent: "analyze",
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    simulationBackend: "auto",
+    opponentContext: { kind: "known-roster", roster: opponent },
+    coachingMode: "none",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data?.analysis?.provider, "auto");
+  assert.deepEqual(result.data?.analysis?.providerPlan, {
+    requested: "auto",
+    selected: "auto",
+    reason: "promotion-gated-auto",
+    artifactIntent: "provider-deferred",
+    externalActionRequired: "provider-dependent",
+    omissionsPolicy: "provider-dependent",
+  });
   assert.equal(result.data?.newRecruit.handoff, null);
 });
 
@@ -251,9 +287,21 @@ test("roster workflow creates six archetype optimizer input", {
     "ready-for-tessera-baseline",
   );
   assert.deepEqual(result.data?.optimization?.preparation, {
-    sourceRosz: "pending-provider-preparation",
-    profileRichRosz: "pending-new-recruit-enrichment",
+    provider: "auto",
+    artifactIntent: "provider-deferred",
+    simulationInput: "pending-provider-selection",
+    sourceRosz: "pending-provider-selection",
+    profileRichRosz: "pending-provider-selection",
+    omissionsPolicy: "provider-dependent",
     pairedBaseline: "pending-tessera",
+  });
+  assert.deepEqual(result.data?.optimization?.providerPlan, {
+    requested: "auto",
+    selected: "auto",
+    reason: "promotion-gated-auto",
+    artifactIntent: "provider-deferred",
+    externalActionRequired: "provider-dependent",
+    omissionsPolicy: "provider-dependent",
   });
   assert.equal(result.data?.optimization?.mode, "guided");
   assert.equal(
@@ -269,6 +317,68 @@ test("roster workflow creates six archetype optimizer input", {
       6,
     );
   }
+});
+
+test("explicit local optimization uses bundle-native best-effort preparation", async () => {
+  const opponent = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+  }).data;
+  assert.ok(opponent);
+  const result = await prepareRosterWorkflow({
+    intent: "optimize",
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    simulationBackend: "local-engine",
+    opponentContext: { kind: "known-roster", roster: opponent },
+    coachingMode: "none",
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data?.optimization?.preparation, {
+    provider: "local-engine",
+    artifactIntent: "bundle-native",
+    simulationInput: "pending-bundle-native-compilation",
+    sourceRosz: "not-required",
+    profileRichRosz: "not-required",
+    omissionsPolicy: "best-effort-explicit",
+    pairedBaseline: "pending-tessera",
+  });
+});
+
+test("explicit website optimization retains New Recruit-enriched artifact intent", async () => {
+  const opponent = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1000,
+  }).data;
+  assert.ok(opponent);
+  const result = await prepareRosterWorkflow({
+    intent: "optimize",
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    simulationBackend: "website",
+    opponentContext: { kind: "known-roster", roster: opponent },
+    coachingMode: "none",
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data?.optimization?.providerPlan, {
+    requested: "website",
+    selected: "website",
+    reason: "explicit-website",
+    artifactIntent: "new-recruit-enriched",
+    externalActionRequired: true,
+    omissionsPolicy: "provider-verified",
+  });
+  assert.deepEqual(result.data?.optimization?.preparation, {
+    provider: "website",
+    artifactIntent: "new-recruit-enriched",
+    simulationInput: "pending-new-recruit-enrichment",
+    sourceRosz: "pending-provider-preparation",
+    profileRichRosz: "pending-new-recruit-enrichment",
+    omissionsPolicy: "provider-verified",
+    pairedBaseline: "pending-tessera",
+  });
 });
 
 test("roster workflow uses a named opponent faction instead of the generic portfolio", async () => {

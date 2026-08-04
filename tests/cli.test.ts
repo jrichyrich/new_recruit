@@ -34,6 +34,10 @@ test("CLI standard help flag describes independent workflows", async () => {
     stdout,
     /rosterpilot tessera compare-providers[^\n]*--local-report[^\n]*--website-report/,
   );
+  assert.match(
+    stdout,
+    /rosterpilot tessera personal-rotation aggregate[^\n]*--covering-suite[^\n]*--comparison[^\n]*--record/,
+  );
 });
 
 test("CLI distinguishes the active, verified, and upstream data bundles", async () => {

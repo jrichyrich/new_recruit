@@ -14,13 +14,18 @@ import {
   type WriteOptions,
 } from "../../lib/rosterpilot/io";
 import {
-  compileRosterForLocalTesseraEngine,
   localInputSha256,
-  serializeLocalTesseraEngineInput,
+  type LocalTesseraEngineDataContext,
 } from "./local-engine-input";
+import {
+  compileRosterForLocalTesseraEngineV2,
+  serializeLocalTesseraEngineInputV2,
+} from "./local-engine-input-v2";
 
 export type LocalEnginePreparationOptions = WriteOptions & {
   outputDirectory?: string;
+  /** Captured once by the owning operation; never reacquired here. */
+  dataContext?: LocalTesseraEngineDataContext;
 };
 
 function sha256(content: Uint8Array): string {
@@ -69,15 +74,16 @@ export async function prepareRosterForLocalTesseraEngine(
   }
 
   try {
-    const localInput = compileRosterForLocalTesseraEngine(
+    const localInput = compileRosterForLocalTesseraEngineV2(
       roster,
       policy,
+      options.dataContext ?? null,
     );
     const sourceContent = Buffer.from(
       `${JSON.stringify(roster, null, 2)}\n`,
       "utf8",
     );
-    const inputContent = serializeLocalTesseraEngineInput(localInput);
+    const inputContent = serializeLocalTesseraEngineInputV2(localInput);
     const sourceSha256 = sha256(sourceContent);
     const inputSha256 = localInputSha256(inputContent);
     const outputDirectory =
@@ -148,7 +154,7 @@ export async function prepareRosterForLocalTesseraEngine(
       {
         code: "TESSERA_LOCAL_BASE_PROFILE_EVALUATION",
         message:
-          `Compiled ${roster.name} directly from frozen bundle ${localInput.bundleId}. This evaluation models unit and weapon profiles plus supported intrinsic weapon keywords; army, detachment, datasheet, enhancement, non-weapon wargear, stratagem, and attachment effects are not applied.`,
+          `Compiled ${roster.name} directly from frozen bundle ${localInput.bundleId}. This base-profile payload models unit and weapon profiles plus supported intrinsic weapon keywords. Army, detachment, datasheet, enhancement, non-weapon wargear, stratagem, and attachment rules are delegated to the separately hashed combat bridge, which classifies them and applies supported effects during local simulation.`,
         severity: "warn",
       },
       ...(omittedAbilityCount > 0
@@ -156,7 +162,7 @@ export async function prepareRosterForLocalTesseraEngine(
             {
               code: "TESSERA_LOCAL_ABILITIES_OMITTED",
               message:
-                `${omittedAbilityCount} selected datasheet ability reference${omittedAbilityCount === 1 ? " was" : "s were"} recorded but not applied by base-profile evaluation.`,
+                `${omittedAbilityCount} selected datasheet ability reference${omittedAbilityCount === 1 ? " was" : "s were"} omitted from the base-profile payload and delegated to the combat bridge for classification and supported application.`,
               severity: "warn" as const,
             },
           ]
@@ -166,7 +172,7 @@ export async function prepareRosterForLocalTesseraEngine(
             {
               code: "TESSERA_LOCAL_ENHANCEMENTS_OMITTED",
               message:
-                `${localInput.limitations.omittedEnhancements.length} selected enhancement${localInput.limitations.omittedEnhancements.length === 1 ? " was" : "s were"} recorded but not applied by base-profile evaluation.`,
+                `${localInput.limitations.omittedEnhancements.length} selected enhancement${localInput.limitations.omittedEnhancements.length === 1 ? " was" : "s were"} omitted from the base-profile payload and delegated to the combat bridge for classification and supported application.`,
               severity: "warn" as const,
             },
           ]
@@ -176,7 +182,7 @@ export async function prepareRosterForLocalTesseraEngine(
             {
               code: "TESSERA_LOCAL_WARGEAR_EFFECTS_OMITTED",
               message:
-                `${localInput.limitations.omittedWargear.length} selected non-weapon wargear effect${localInput.limitations.omittedWargear.length === 1 ? " was" : "s were"} recorded but not applied by base-profile evaluation.`,
+                `${localInput.limitations.omittedWargear.length} selected non-weapon wargear effect${localInput.limitations.omittedWargear.length === 1 ? " was" : "s were"} omitted from the base-profile payload and delegated to the combat bridge for classification and supported application.`,
               severity: "warn" as const,
             },
           ]
@@ -186,7 +192,7 @@ export async function prepareRosterForLocalTesseraEngine(
             {
               code: "TESSERA_LOCAL_WEAPON_KEYWORDS_OMITTED",
               message:
-                `${localInput.limitations.unsupportedWeaponKeywords.length} intrinsic weapon keyword${localInput.limitations.unsupportedWeaponKeywords.length === 1 ? " was" : "s were"} recorded but not applied because the pinned adapter does not support it.`,
+                `${localInput.limitations.unsupportedWeaponKeywords.length} intrinsic weapon keyword${localInput.limitations.unsupportedWeaponKeywords.length === 1 ? " was" : "s were"} omitted from the base-profile payload because the pinned adapter does not support it; the combat bridge retains the omission classification for coverage reporting.`,
               severity: "warn" as const,
             },
           ]
@@ -216,6 +222,17 @@ export async function prepareRosterForLocalTesseraEngine(
         enrichedRoszPath: written[1],
         sourceRoszSha256: sourceSha256,
         enrichedRoszSha256: inputSha256,
+        preparedArtifact: {
+          schemaVersion: 2,
+          kind: "bundle-native",
+          sourceRosterPath: written[0],
+          sourceRosterSha256: sourceSha256,
+          engineInputPath: written[1],
+          engineInputSha256: inputSha256,
+          bundleId: localInput.bundleId,
+          compilerVersion: localInput.compilerVersion,
+          connectorEvents: [],
+        },
         simulationInput: {
           kind: "rosterpilot-local-engine-input",
           path: written[1],

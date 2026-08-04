@@ -24,6 +24,9 @@ import {
   providerParityModelCapabilityFixture,
   providerParityNamedCombatSnapshotFixture,
 } from "./fixtures/tessera-provider-parity-combat";
+import {
+  tesseraProviderParityProfileId,
+} from "../local/tessera/provider-parity-evidence";
 
 const NORMALIZED_INPUT_SHA256 = "a".repeat(64);
 const PROFILE_POLICY_HASH = "profile-policy-v1";
@@ -100,9 +103,17 @@ function genericCombatSnapshot(
       },
       attackProfiles: [
         {
-          profileId: `${instanceId}-profile`,
+          profileId: tesseraProviderParityProfileId({
+            side,
+            unitName: instanceId,
+            unitOccurrence: 1,
+            weaponName: "Fixture weapon",
+            profile: null,
+            weaponOccurrence: 1,
+          }),
           name: "Fixture weapon",
           phase: "shooting" as const,
+          rangeInches: 24,
           equippedModelCount: 1,
           attacks: "1",
           skill: 3,
@@ -696,6 +707,20 @@ test("combat snapshot diffs classify named unit-profile regressions", () => {
   assert.equal(
     compareTesseraProviderParityCombatSnapshots(local, troupe).diffs[0]
       .classification,
+    "attack-profile-mismatch",
+  );
+
+  const rangedProfile = structuredClone(local);
+  rangedProfile.units.find(
+    (unit) => unit.instanceId === "aeldari-troupe-1",
+  )!.attackProfiles[0].rangeInches = 18;
+  const rangeComparison = compareTesseraProviderParityCombatSnapshots(
+    local,
+    rangedProfile,
+  );
+  assert.equal(rangeComparison.status, "mismatch");
+  assert.equal(
+    rangeComparison.diffs[0].classification,
     "attack-profile-mismatch",
   );
 

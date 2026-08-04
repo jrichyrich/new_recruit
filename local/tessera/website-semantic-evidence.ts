@@ -70,6 +70,7 @@ const characteristicAliases = {
     "armor penetration",
   ]),
   damage: new Set(["d", "damage"]),
+  range: new Set(["range", "rng", "weapon range"]),
   phase: new Set(["phase", "type", "weapon type"]),
   keywords: new Set(["keyword", "keywords", "weapon keywords"]),
 } as const;
@@ -147,6 +148,68 @@ function activeWeapons(
   return unit.weapons.filter((weapon) => (weapon.count ?? 0) > 0);
 }
 
+/** Resolve only a phase that is explicit or unambiguous on the visible UI. */
+export function tesseraSemanticWeaponPhase(
+  weapon: TesseraImportedWeaponSemantic,
+): "shooting" | "fight" | null {
+  const explicit = tesseraSemanticCharacteristicValues(
+    weapon.visibleCharacteristics,
+    "phase",
+  );
+  if (explicit.length === 1) {
+    const shooting = /\b(?:shooting|ranged)\b/i.test(explicit[0]);
+    const fight = /\b(?:fight|melee)\b/i.test(explicit[0]);
+    if (shooting !== fight) return shooting ? "shooting" : "fight";
+    return null;
+  }
+  const ballisticSkillVisible = hasOneValue(
+    weapon.visibleCharacteristics,
+    "ballisticSkill",
+  );
+  const weaponSkillVisible = hasOneValue(
+    weapon.visibleCharacteristics,
+    "weaponSkill",
+  );
+  if (ballisticSkillVisible === weaponSkillVisible) return null;
+  return ballisticSkillVisible ? "shooting" : "fight";
+}
+
+/**
+ * Parse exact visible range semantics. `undefined` means the Web UI did not
+ * disclose one unambiguous, phase-appropriate value; callers must fail closed.
+ */
+export function tesseraSemanticWeaponRangeInches(
+  weapon: TesseraImportedWeaponSemantic,
+): number | null | undefined {
+  const phase = tesseraSemanticWeaponPhase(weapon);
+  if (phase === null) return undefined;
+  const values = tesseraSemanticCharacteristicValues(
+    weapon.visibleCharacteristics,
+    "range",
+  );
+  if (phase === "fight") {
+    if (values.length === 0) return null;
+    if (
+      values.length === 1 &&
+      /^(?:melee|fight|none|n\/a|not applicable|-|—)$/i.test(
+        values[0].trim(),
+      )
+    ) {
+      return null;
+    }
+    return undefined;
+  }
+  if (values.length !== 1) return undefined;
+  const match = values[0]
+    .trim()
+    .match(/^(\d+)(?:\s*(?:["″]|in(?:ch(?:es)?)?))?$/i);
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? parsed
+    : undefined;
+}
+
 function weaponCharacteristicReasons(
   weapon: TesseraImportedWeaponSemantic,
   unitPath: string,
@@ -196,6 +259,9 @@ function weaponCharacteristicReasons(
     if (!/\btorrent\b/i.test(keywords)) {
       reasons.push(`${path}:skill-not-visible`);
     }
+  }
+  if (tesseraSemanticWeaponRangeInches(weapon) === undefined) {
+    reasons.push(`${path}:range-not-visible-or-invalid`);
   }
   if (
     !hasResolvedEffectDisclosure(

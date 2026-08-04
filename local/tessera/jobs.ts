@@ -1261,7 +1261,10 @@ function parsedSimulationProviderIdentity(
     sha256Pattern.test(identity.sourceSha256) &&
     typeof identity.compilerVersion === "string" &&
     identity.compilerVersion.length > 0 &&
-    identity.inputSchemaVersion === 1 &&
+    (
+      identity.inputSchemaVersion === 1 ||
+      identity.inputSchemaVersion === 2
+    ) &&
     typeof identity.capabilityManifestSha256 === "string" &&
     sha256Pattern.test(identity.capabilityManifestSha256) &&
     (
@@ -1270,7 +1273,8 @@ function parsedSimulationProviderIdentity(
     ) &&
     (
       identity.licenseState === "evaluation-only" ||
-      identity.licenseState === "approved"
+      identity.licenseState === "approved" ||
+      identity.licenseState === "personal-only"
     )
   ) {
     return value as TesseraSimulationProviderIdentity;
@@ -2246,6 +2250,26 @@ function requestPreparedReuse(
     return request.options?.preparedReuse;
   }
   return undefined;
+}
+
+function assertExactWebsiteFallbackAuthorization(
+  request: TesseraRunRequest,
+): void {
+  if (request.kind !== "exact") return;
+  const authorization =
+    request.options?.websiteFallbackAuthorization;
+  if (!authorization) return;
+  if (
+    authorization.action !==
+      "new-recruit-import-and-tessera-web" ||
+    authorization.source !== "confirmed-fallback" ||
+    !sha256Pattern.test(authorization.requestSha256)
+  ) {
+    throw jobError(
+      "TESSERA_WEBSITE_FALLBACK_AUTHORIZATION_INVALID",
+      "An exact durable run requires a lowercase 64-hex Website fallback confirmation SHA-256 and the fixed confirmed-fallback authorization action.",
+    );
+  }
 }
 
 function stripSerializedAnalysisCapabilities(
@@ -4521,6 +4545,7 @@ export async function startTesseraRun(
       "Prepared exact-run checkpoints are created and verified by the durable coordinator; callers cannot inject them.",
     );
   }
+  assertExactWebsiteFallbackAuthorization(request);
   request = normalizeRequestScenarioContract(request);
   const runId = randomUUID();
   const rootDir = path.resolve(options.rootDir ?? process.cwd());

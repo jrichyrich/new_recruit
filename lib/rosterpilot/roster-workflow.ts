@@ -79,6 +79,61 @@ export type RosterWorkflowAnalysisTarget =
       portfolio: GeneralThreatPortfolio;
     };
 
+export type RosterWorkflowProviderPlan =
+  | {
+      requested: "local-engine";
+      selected: "local-engine";
+      reason: "explicit-local-engine";
+      artifactIntent: "bundle-native";
+      externalActionRequired: false;
+      omissionsPolicy: "best-effort-explicit";
+    }
+  | {
+      requested: "website";
+      selected: "website";
+      reason: "explicit-website";
+      artifactIntent: "new-recruit-enriched";
+      externalActionRequired: true;
+      omissionsPolicy: "provider-verified";
+    }
+  | {
+      requested: "auto";
+      selected: "auto";
+      reason: "promotion-gated-auto";
+      artifactIntent: "provider-deferred";
+      externalActionRequired: "provider-dependent";
+      omissionsPolicy: "provider-dependent";
+    };
+
+export type RosterWorkflowSimulationPreparation =
+  | {
+      provider: "local-engine";
+      artifactIntent: "bundle-native";
+      simulationInput: "pending-bundle-native-compilation";
+      sourceRosz: "not-required";
+      profileRichRosz: "not-required";
+      omissionsPolicy: "best-effort-explicit";
+      pairedBaseline: "pending-tessera";
+    }
+  | {
+      provider: "website";
+      artifactIntent: "new-recruit-enriched";
+      simulationInput: "pending-new-recruit-enrichment";
+      sourceRosz: "pending-provider-preparation";
+      profileRichRosz: "pending-new-recruit-enrichment";
+      omissionsPolicy: "provider-verified";
+      pairedBaseline: "pending-tessera";
+    }
+  | {
+      provider: "auto";
+      artifactIntent: "provider-deferred";
+      simulationInput: "pending-provider-selection";
+      sourceRosz: "pending-provider-selection";
+      profileRichRosz: "pending-provider-selection";
+      omissionsPolicy: "provider-dependent";
+      pairedBaseline: "pending-tessera";
+    };
+
 export type RosterWorkflowResult = {
   schemaVersion: 1;
   workflowKind: "roster-workflow";
@@ -98,6 +153,7 @@ export type RosterWorkflowResult = {
   analysis: {
     status: "baseline-pending";
     provider: TesseraSimulationBackend;
+    providerPlan: RosterWorkflowProviderPlan;
     target: RosterWorkflowAnalysisTarget;
   } | null;
   newRecruit: {
@@ -114,11 +170,8 @@ export type RosterWorkflowResult = {
   optimization: {
     mode: "guided" | "recommend-only";
     status: "baseline-pending";
-    preparation: {
-      sourceRosz: "pending-provider-preparation";
-      profileRichRosz: "pending-new-recruit-enrichment";
-      pairedBaseline: "pending-tessera";
-    };
+    providerPlan: RosterWorkflowProviderPlan;
+    preparation: RosterWorkflowSimulationPreparation;
     target: RosterWorkflowAnalysisTarget;
     pairedTestRequired: boolean;
     deliveryAfterWinnerApproval:
@@ -126,6 +179,78 @@ export type RosterWorkflowResult = {
       | "deliver-new-recruit";
   } | null;
 };
+
+function rosterWorkflowProviderPlan(
+  requested: TesseraSimulationBackend | undefined,
+): RosterWorkflowProviderPlan {
+  if (requested === "website") {
+    return {
+      requested: "website",
+      selected: "website",
+      reason: "explicit-website",
+      artifactIntent: "new-recruit-enriched",
+      externalActionRequired: true,
+      omissionsPolicy: "provider-verified",
+    };
+  }
+  if (requested === "local-engine") {
+    return {
+      requested: "local-engine",
+      selected: "local-engine",
+      reason: "explicit-local-engine",
+      artifactIntent: "bundle-native",
+      externalActionRequired: false,
+      omissionsPolicy: "best-effort-explicit",
+    };
+  }
+  // Provider availability and promotion are transport/runtime facts. The pure
+  // workflow keeps omitted/auto requests deferred instead of claiming that the
+  // local or website preparation path has already been selected.
+  return {
+    requested: "auto",
+    selected: "auto",
+    reason: "promotion-gated-auto",
+    artifactIntent: "provider-deferred",
+    externalActionRequired: "provider-dependent",
+    omissionsPolicy: "provider-dependent",
+  };
+}
+
+function simulationPreparation(
+  plan: RosterWorkflowProviderPlan,
+): RosterWorkflowSimulationPreparation {
+  if (plan.selected === "local-engine") {
+    return {
+      provider: "local-engine",
+      artifactIntent: "bundle-native",
+      simulationInput: "pending-bundle-native-compilation",
+      sourceRosz: "not-required",
+      profileRichRosz: "not-required",
+      omissionsPolicy: "best-effort-explicit",
+      pairedBaseline: "pending-tessera",
+    };
+  }
+  if (plan.selected === "website") {
+    return {
+      provider: "website",
+      artifactIntent: "new-recruit-enriched",
+      simulationInput: "pending-new-recruit-enrichment",
+      sourceRosz: "pending-provider-preparation",
+      profileRichRosz: "pending-new-recruit-enrichment",
+      omissionsPolicy: "provider-verified",
+      pairedBaseline: "pending-tessera",
+    };
+  }
+  return {
+    provider: "auto",
+    artifactIntent: "provider-deferred",
+    simulationInput: "pending-provider-selection",
+    sourceRosz: "pending-provider-selection",
+    profileRichRosz: "pending-provider-selection",
+    omissionsPolicy: "provider-dependent",
+    pairedBaseline: "pending-tessera",
+  };
+}
 
 function issue(
   code: string,
@@ -661,6 +786,9 @@ export async function prepareRosterWorkflow(
     };
   }
   const capability = getNewRecruitCapability(roster.factionId);
+  const providerPlan = rosterWorkflowProviderPlan(
+    input.simulationBackend,
+  );
   const needsHandoff =
     intent.artifactRequirement === "new-recruit-rosz";
   const handoff = needsHandoff
@@ -696,7 +824,7 @@ export async function prepareRosterWorkflow(
       ? await analysisTarget(
           roster,
           opponent.data ?? undefined,
-          input.simulationBackend ?? "auto",
+          providerPlan.selected,
         )
       : null;
   if (target && (!target.ok || !target.data)) {
@@ -728,13 +856,8 @@ export async function prepareRosterWorkflow(
       ? {
           mode: intent.optimizerMode,
           status: "baseline-pending" as const,
-          preparation: {
-            sourceRosz:
-              "pending-provider-preparation" as const,
-            profileRichRosz:
-              "pending-new-recruit-enrichment" as const,
-            pairedBaseline: "pending-tessera" as const,
-          },
+          providerPlan,
+          preparation: simulationPreparation(providerPlan),
           target: target.data,
           pairedTestRequired:
             intent.optimizerMode === "guided",
@@ -782,7 +905,8 @@ export async function prepareRosterWorkflow(
         target?.data && intent.intent === "analyze"
           ? {
               status: "baseline-pending" as const,
-              provider: input.simulationBackend ?? "auto",
+              provider: providerPlan.selected,
+              providerPlan,
               target: target.data,
             }
           : null,

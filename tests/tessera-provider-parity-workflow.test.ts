@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -22,9 +28,9 @@ import {
   exactReportReceiptPath,
 } from "../local/tessera/exact-report-integrity";
 import {
-  serializeLocalTesseraEngineInput,
-  type LocalTesseraEngineInput,
-} from "../local/tessera/local-engine-input";
+  serializeLocalTesseraEngineInputV2,
+  type LocalTesseraEngineInputV2,
+} from "../local/tessera/local-engine-input-v2";
 import {
   providerCompatibilityBundleTrustIdentitySha256,
   providerCompatibilityEnvelopeSha256,
@@ -35,8 +41,22 @@ import type { TesseraProviderParityResult } from "../local/tessera/provider-pari
 import {
   classifyTesseraProviderParityWorkflow,
   runTesseraProviderParityWorkflow,
+  sealTesseraProviderParityReportEvidenceV2,
+  tesseraProviderParityCombatStateEvidenceSha256V2,
+  tesseraProviderParityCoveringCaseEvidenceSha256V2,
+  tesseraProviderParityProviderStateEvidenceSha256V2,
 } from "../local/tessera/provider-parity-workflow";
+import {
+  buildTesseraParityCoveringSuiteV2,
+} from "../local/tessera/provider-parity-covering-suite-v2";
+import {
+  verifyPersonalLocalParityRotationRecordV1,
+} from "../local/tessera/personal-local-attestation-store";
 import { tesseraScenarioContractSha256 } from "../local/tessera/scenario-contract";
+import {
+  canonicalTesseraScenarioPolicyContractV3,
+  tesseraScenarioPolicyContractV3Sha256,
+} from "../local/tessera/scenario-contract-v3";
 import { createTesseraImportedArmySimulationStateBinding } from "../local/tessera/website-semantic-evidence";
 
 const BUNDLE = "b".repeat(64);
@@ -74,8 +94,8 @@ const localIdentity: TesseraSimulationProviderIdentity = {
   tree: "2".repeat(40),
   sourceSha256: "3".repeat(64),
   adapterVersion: "fixture-adapter-v1",
-  compilerVersion: "base-profile-evaluation-v1",
-  inputSchemaVersion: 1,
+  compilerVersion: "rules-aware-local-input-v2",
+  inputSchemaVersion: 2,
   capabilityManifestSha256: "4".repeat(64),
   promotion: "candidate",
   licenseState: "evaluation-only",
@@ -108,12 +128,13 @@ function unit(
 function localInput(
   side: "player" | "opponent",
   fingerprint: string,
-): LocalTesseraEngineInput {
+): LocalTesseraEngineInputV2 {
   const player = side === "player";
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "rosterpilot-local-engine-input",
-    compilerVersion: "base-profile-evaluation-v1",
+    compilerVersion: "rules-aware-local-input-v2",
+    identityContractVersion: "bundle-weapon-profile-bearer-v1",
     evaluationMode: "base-profile-evaluation",
     bundleId: BUNDLE,
     rosterId: `${side}-roster`,
@@ -127,6 +148,7 @@ function localInput(
     units: [{
       instanceId: player ? "a".repeat(24) : "b".repeat(24),
       selectionId: `${side}-selection`,
+      unitId: `${side}-unit-id`,
       occurrence: 1,
       label: player ? "Witchseekers" : "Troupe",
       name: player ? "Witchseekers" : "Troupe",
@@ -139,8 +161,14 @@ function localInput(
       points: player ? 50 : 75,
       keywords: [],
       weapons: [{
+        weaponId: `${side}-weapon-id`,
+        equipmentId: `${side}-equipment-id`,
+        profileId: `${side}-profile-id`,
+        bearerSelectionId: `${side}-selection`,
+        loadoutGroupId: `${side}-loadout-id`,
         name: player ? "Witchseeker flamer" : "Shuriken pistol",
         type: "ranged",
+        rangeInches: 12,
         count: 5,
         A: player ? "D6" : 1,
         ...(player ? {} : { BS: 3 }),
@@ -182,6 +210,7 @@ function semanticSnapshot(
         count: 5,
         visibleCharacteristics: [
           { name: "phase", value: "shooting" },
+          { name: "range", value: "12\"" },
           { name: "attacks", value: player ? "D6" : "1" },
           ...(player ? [] : [{ name: "ballistic skill", value: "3+" }]),
           { name: "strength", value: "4" },
@@ -550,19 +579,186 @@ const WEBSITE_SETTINGS = {
   "Indirect fire": "No",
 };
 
+function physicalState(selectionId: string) {
+  return {
+    selectionId,
+    movement: "stationary" as const,
+    chargedThisTurn: false,
+    wasChargedThisTurn: false,
+    inCover: false,
+    onObjective: false,
+    controlsObjective: false,
+    strength: "starting" as const,
+    damage: "healthy" as const,
+    battleShocked: false,
+    eligibleToFight: true,
+    hasFought: false,
+  };
+}
+
+function attachExactParityV2Evidence(
+  reports: readonly TesseraMatchupReport[],
+): void {
+  const scenarioPolicy = canonicalTesseraScenarioPolicyContractV3({
+    schemaVersion: 3,
+    kind: "tessera-scenario-policy-contract",
+    scenarios: [{
+      phase: "shooting",
+      direction: "player-to-opponent",
+      metric: "wipe-probability",
+      iterations: 10_000,
+      state: {
+        battleRound: 1,
+        timing: "main",
+        player: {
+          resources: { commandPoints: 0, factionResources: [] },
+          armyAbilities: [],
+          oncePerBattle: [],
+          units: [physicalState("player-selection")],
+        },
+        opponent: {
+          resources: { commandPoints: 0, factionResources: [] },
+          armyAbilities: [],
+          oncePerBattle: [],
+          units: [physicalState("opponent-selection")],
+        },
+        pairs: [{
+          attackerSide: "player",
+          attackerSelectionId: "player-selection",
+          targetSide: "opponent",
+          targetSelectionId: "opponent-selection",
+          distanceInches: 12,
+          withinRange: true,
+          withinRapidFireRange: false,
+          withinMeltaRange: false,
+          withinConversionRange: false,
+          targetVisible: true,
+          indirectFire: false,
+          targetCondition: false,
+        }],
+      },
+    }],
+    policy: {
+      modelingMode: "rules-aware",
+      stateResolution: { mode: "selected" },
+      activations: {
+        mode: "selected",
+        options: [],
+        groups: [],
+        selectedIds: [],
+      },
+      attachments: { mode: "selected", bindings: [] },
+      limits: { maxAttachmentPlans: 16, maxJointVariants: 64 },
+    },
+  });
+  const scenarioPolicyContractV3Sha256 =
+    tesseraScenarioPolicyContractV3Sha256(scenarioPolicy);
+  const combatBridgeV3Sha256 = "a".repeat(64);
+  const corpusConformanceReportSha256 = "c".repeat(64);
+  const bridgeCore = {
+    schemaVersion: 2,
+    kind: "rosterpilot-combat-bridge-v3-evidence",
+    combatBridgeV3Sha256,
+    corpusConformanceReportSha256,
+  };
+  const bridgeEvidence = {
+    ...bridgeCore,
+    evidenceSha256: digest(bridgeCore),
+  };
+  const suite = buildTesseraParityCoveringSuiteV2({
+    corpusInventorySha256: "d".repeat(64),
+    factions: [
+      {
+        factionId: "adeptus-custodes",
+        attackerMechanicIds: ["custodes-offense"],
+        defenderMechanicIds: ["custodes-defense"],
+      },
+      {
+        factionId: "aeldari",
+        attackerMechanicIds: ["aeldari-offense"],
+        defenderMechanicIds: ["aeldari-defense"],
+      },
+    ],
+  });
+  const coveringCase = suite.cases.find(
+    (entry) =>
+      entry.attackerFactionId === "adeptus-custodes" &&
+      entry.defenderFactionId === "aeldari",
+  );
+  assert.ok(coveringCase);
+  const combatStates = [{
+    scenarioId: "shooting:player-to-opponent",
+    attackerInstanceId: "player-unit-1",
+    targetInstanceId: "opponent-unit-1",
+    metric: "wipe-probability",
+    combatStateSha256: "e".repeat(64),
+  }];
+  const coverageWitnesses = coveringCase.coveredRequirementIds.map(
+    (requirementId) => ({
+      requirementId,
+      relevantLeafIds: requirementId.startsWith("mechanic:")
+        ? ["f".repeat(64)]
+        : [],
+    }),
+  );
+  for (const report of reports) {
+    report.scenarioPolicyContractV3 = scenarioPolicy;
+    report.scenarioPolicyContractV3Sha256 =
+      scenarioPolicyContractV3Sha256;
+    const simulation = report.simulation as unknown as Record<
+      string,
+      unknown
+    >;
+    simulation.combatBridgeEvidence = [bridgeEvidence];
+    const contractBinding = {
+      scenarioPolicyContractV3Sha256,
+      combatBridgeV3Sha256,
+      corpusConformanceReportSha256,
+      coveringSuiteSha256: suite.suiteSha256,
+      coveringCaseId: coveringCase.caseId,
+      coveringCaseEvidenceSha256:
+        tesseraProviderParityCoveringCaseEvidenceSha256V2({
+          coveringCaseId: coveringCase.caseId,
+          combatBridgeV3Sha256,
+          corpusConformanceReportSha256,
+          coverageWitnesses,
+        }),
+      combatStateSha256:
+        tesseraProviderParityCombatStateEvidenceSha256V2(combatStates),
+      playerRosterFingerprint: PLAYER_FINGERPRINT,
+      opponentRosterFingerprint: OPPONENT_FINGERPRINT,
+    };
+    simulation.providerParityEvidenceV2 =
+      sealTesseraProviderParityReportEvidenceV2({
+        schemaVersion: 2,
+        kind: "rosterpilot-provider-parity-report-evidence",
+        contractBinding,
+        coveringSuite: suite,
+        coverageWitnesses,
+        combatStates,
+        providerStateEvidenceSha256:
+          tesseraProviderParityProviderStateEvidenceSha256V2(report),
+      });
+  }
+}
+
 async function writePairedReports(
   directory: string,
-  options: { localValue?: number; websiteValue?: number } = {},
+  options: {
+    localValue?: number;
+    websiteValue?: number;
+    exactV2?: boolean;
+  } = {},
 ): Promise<{
   localPath: string;
   websitePath: string;
   localReport: TesseraMatchupReport;
   websiteReport: TesseraMatchupReport;
 }> {
-  const playerBytes = serializeLocalTesseraEngineInput(
+  const playerBytes = serializeLocalTesseraEngineInputV2(
     localInput("player", PLAYER_FINGERPRINT),
   );
-  const opponentBytes = serializeLocalTesseraEngineInput(
+  const opponentBytes = serializeLocalTesseraEngineInputV2(
     localInput("opponent", OPPONENT_FINGERPRINT),
   );
   const playerInputSha256 = digest(playerBytes);
@@ -597,14 +793,14 @@ async function writePairedReports(
       path: "player-input.json",
       sha256: playerInputSha256,
       bundleId: BUNDLE,
-      compilerVersion: "base-profile-evaluation-v1",
+      compilerVersion: "rules-aware-local-input-v2",
     },
     opponentInput: {
       kind: "rosterpilot-local-engine-input",
       path: "opponent-input.json",
       sha256: opponentInputSha256,
       bundleId: BUNDLE,
-      compilerVersion: "base-profile-evaluation-v1",
+      compilerVersion: "rules-aware-local-input-v2",
     },
     playerInputSha256,
     opponentInputSha256,
@@ -635,6 +831,9 @@ async function writePairedReports(
     evidence,
     value: options.websiteValue ?? 0.505,
   });
+  if (options.exactV2) {
+    attachExactParityV2Evidence([localReport, websiteReport]);
+  }
   const localPath = path.join(directory, "local.json");
   const websitePath = path.join(directory, "website.json");
   await Promise.all([
@@ -721,6 +920,192 @@ test("completed receipt-bound local and Web reports produce executable parity ar
   assert.match(html, /Local engine vs Tessera Web/);
   assert.match(html, /Provider-specific assessment/);
   assert.match(html, /not a game win probability/i);
+});
+
+test("legacy comparison remains available but cannot qualify a personal rotation", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "rp-parity-v1-only-"));
+  t.after(async () => {
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
+  });
+  const { localPath, websitePath } = await writePairedReports(directory);
+  const result = await runTesseraProviderParityWorkflow({
+    localReportPath: localPath,
+    websiteReportPath: websitePath,
+    outputDirectory: path.join(directory, "out"),
+    rootDir: directory,
+    allowOutsideRoot: true,
+    personalRotation: {
+      machineIdSha256: "f".repeat(64),
+      rotationId: "legacy-must-not-seal",
+      mode: "observe",
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.parity?.outcome, "pass");
+  assert.equal(result.data.exactParityV2.status, "unavailable");
+  assert.equal(
+    result.data.exactParityV2.personalAttestationEligible,
+    false,
+  );
+  assert.equal(result.personalRotationRecord, undefined);
+  assert.equal(
+    result.warnings[0]?.code,
+    "TESSERA_PERSONAL_PARITY_ROTATION_INELIGIBLE",
+  );
+});
+
+test("exact v2 bindings produce a self-hashed store-compatible personal rotation", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "rp-parity-v2-"));
+  await chmod(directory, 0o700);
+  t.after(async () => {
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
+  });
+  const { localPath, websitePath } = await writePairedReports(directory, {
+    exactV2: true,
+  });
+  const recordPath = path.join(directory, "rotation.json");
+  const result = await runTesseraProviderParityWorkflow({
+    localReportPath: localPath,
+    websiteReportPath: websitePath,
+    outputDirectory: path.join(directory, "out"),
+    rootDir: directory,
+    allowOutsideRoot: true,
+    personalRotation: {
+      machineIdSha256: "f".repeat(64),
+      rotationId: "rotation-observe-1",
+      mode: "observe",
+      completedAt: "2026-08-04T10:00:00.000Z",
+      verifiedAt: "2026-08-04T10:01:00.000Z",
+      recordPath,
+    },
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result.data, null, 2));
+  assert.equal(result.data.exactParityV2.status, "complete");
+  assert.equal(result.data.exactParityV2.result?.outcome, "pass");
+  assert.equal(
+    result.data.exactParityV2.personalAttestationEligible,
+    true,
+  );
+  assert.ok(result.personalRotationRecord);
+  assert.equal(
+    verifyPersonalLocalParityRotationRecordV1(
+      result.personalRotationRecord,
+    ),
+    true,
+  );
+  assert.equal(result.personalRotationRecordPath, recordPath);
+  assert.equal(
+    result.personalRotationRecord.rotation.coverageSuiteSha256,
+    result.data.exactParityV2.result?.contractBinding
+      ?.coveringSuiteSha256,
+  );
+  assert.equal(
+    result.personalRotationRecord.rotation.exactReceiptSha256,
+    result.data.exactParityV2.pairedExactReceiptsSha256,
+  );
+  assert.equal((await stat(recordPath)).mode & 0o077, 0);
+  assert.deepEqual(
+    JSON.parse(await readFile(recordPath, "utf8")),
+    result.personalRotationRecord,
+  );
+});
+
+test("tampered exact v2 state evidence falls back to diagnostic v1 parity", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "rp-parity-v2-state-"));
+  t.after(async () => {
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
+  });
+  const { localPath, websitePath, websiteReport } =
+    await writePairedReports(directory, { exactV2: true });
+  const evidence = (
+    websiteReport.simulation as unknown as Record<string, unknown>
+  ).providerParityEvidenceV2 as {
+    combatStates: Array<{ combatStateSha256: string }>;
+    evidenceSha256: string;
+  };
+  evidence.combatStates[0].combatStateSha256 = "0".repeat(64);
+  await writeReport(websitePath, websiteReport);
+
+  const result = await runTesseraProviderParityWorkflow({
+    localReportPath: localPath,
+    websiteReportPath: websitePath,
+    outputDirectory: path.join(directory, "out"),
+    rootDir: directory,
+    allowOutsideRoot: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.parity?.outcome, "pass");
+  assert.equal(result.data.exactParityV2.status, "invalid");
+  assert.equal(result.data.exactParityV2.result, null);
+  assert.ok(
+    result.data.exactParityV2.issues.some(
+      (issue) =>
+        issue.code === "PARITY_V2_REPORT_EVIDENCE_HASH_INVALID" &&
+        issue.provider === "website",
+    ),
+  );
+});
+
+test("individually valid but mismatched v2 state bindings are ineligible", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "rp-parity-v2-mismatch-"));
+  t.after(async () => {
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
+  });
+  const { localPath, websitePath, websiteReport } =
+    await writePairedReports(directory, { exactV2: true });
+  const simulation = websiteReport.simulation as unknown as Record<
+    string,
+    unknown
+  >;
+  const prior = simulation.providerParityEvidenceV2 as ReturnType<
+    typeof sealTesseraProviderParityReportEvidenceV2
+  >;
+  const combatStates = prior.combatStates.map((state) => ({
+    ...state,
+    combatStateSha256: "0".repeat(64),
+  }));
+  simulation.providerParityEvidenceV2 =
+    sealTesseraProviderParityReportEvidenceV2({
+      schemaVersion: 2,
+      kind: "rosterpilot-provider-parity-report-evidence",
+      contractBinding: {
+        ...prior.contractBinding,
+        combatStateSha256:
+          tesseraProviderParityCombatStateEvidenceSha256V2(combatStates),
+      },
+      coveringSuite: prior.coveringSuite,
+      coverageWitnesses: prior.coverageWitnesses,
+      combatStates,
+      providerStateEvidenceSha256: prior.providerStateEvidenceSha256,
+    });
+  await writeReport(websitePath, websiteReport);
+
+  const result = await runTesseraProviderParityWorkflow({
+    localReportPath: localPath,
+    websiteReportPath: websitePath,
+    outputDirectory: path.join(directory, "out"),
+    rootDir: directory,
+    allowOutsideRoot: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.parity?.outcome, "pass");
+  assert.equal(result.data.exactParityV2.status, "complete");
+  assert.equal(result.data.exactParityV2.result?.outcome, "ineligible");
+  assert.equal(
+    result.data.exactParityV2.personalAttestationEligible,
+    false,
+  );
+  assert.ok(
+    result.data.exactParityV2.result?.bindingIssues.some(
+      (issue) => issue.field === "combatStateSha256",
+    ),
+  );
 });
 
 test("workflow rejects a report changed after its exact receipt was written", async (t) => {

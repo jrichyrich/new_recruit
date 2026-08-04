@@ -2,6 +2,12 @@ import { z } from "zod";
 import type {
   DataBundleDeltaResult,
 } from "./semantic-hash";
+import type {
+  CombatBridgeV2,
+  CombatClaimEligibility,
+  CombatCoverageStatus,
+} from "./combat-bridge";
+import type { CombatBridgeV3 } from "./combat-bridge-v3";
 import {
   LegendsPolicyDecisionSchema,
   type LegendsPlayContext,
@@ -668,10 +674,10 @@ export type TesseraSimulationProviderIdentity =
       sourceSha256: string;
       adapterVersion: string;
       compilerVersion: string;
-      inputSchemaVersion: 1;
+      inputSchemaVersion: 1 | 2;
       capabilityManifestSha256: string;
       promotion: "candidate" | "promoted";
-      licenseState: "evaluation-only" | "approved";
+      licenseState: "evaluation-only" | "approved" | "personal-only";
     };
 
 export type TesseraProviderEvidenceCompleteness =
@@ -922,6 +928,8 @@ export type TesseraSimulationFallbackReceipt = {
   code: string;
   message: string;
   discardedLocalEvidence: true;
+  /** Present on offers that require separate, frozen-input authorization. */
+  requestSha256?: string | null;
 };
 
 export type TesseraMetric =
@@ -940,6 +948,22 @@ export type TesseraFrozenScenarioContract = {
   metric: TesseraMetric;
   settings: Record<string, string>;
   iterations: number | null;
+};
+
+/** Durable JSON shape for the provider-neutral scenario and option policy. */
+export type TesseraScenarioPolicyContractV2Snapshot = {
+  schemaVersion: 2;
+  kind: "tessera-scenario-policy-contract";
+  scenarios: unknown[];
+  policy: unknown;
+};
+
+/** Durable JSON shape for the physical-state-aware scenario policy. */
+export type TesseraScenarioPolicyContractV3Snapshot = {
+  schemaVersion: 3;
+  kind: "tessera-scenario-policy-contract";
+  scenarios: unknown[];
+  policy: unknown;
 };
 
 export type TesseraConfidence = "high" | "review" | "ambiguous";
@@ -971,6 +995,128 @@ export type TesseraCellUncertainty = {
   completeness: "complete" | "partial" | "unavailable";
 };
 
+/**
+ * Bounded rules-policy result for one scalar matrix cell. `median` is the
+ * provider's compatibility projection; min/max and the exact bridge binding
+ * remain available so optional rules are never collapsed invisibly.
+ */
+export type TesseraCombatEnvelope = {
+  schemaVersion: 1;
+  bridgeSha256: string;
+  bridgeCellId: string;
+  bridgeCellSha256: string;
+  bridgeScenarioSha256: string;
+  selectedVariantId: string;
+  selectedVariantSha256: string;
+  selectedProjectionSha256: string;
+  attachmentPlanId: string;
+  activationId: string;
+  /** Distinct Tessera mechanics executions used for the scalar envelope. */
+  variantCount: number;
+  /** Bridge variants retained for source provenance before deduplication. */
+  sourceVariantCount: number;
+  min: number;
+  median: number;
+  max: number;
+  coverage: {
+    status: CombatCoverageStatus;
+    claimEligibility: CombatClaimEligibility;
+    bridgeStatus: CombatCoverageStatus;
+    projectedBridgeEffects: number;
+    approximatedBridgeEffects: number;
+    adapterOmissions: number;
+    reasons: string[];
+  };
+  omittedEffectIds: string[];
+  approximatedEffectIds: string[];
+  /** Fresh v3 runs distinguish diagnostic envelopes from scalar conclusions. */
+  conclusionEligibility?: {
+    mode: "selected" | "envelope-only";
+    scalarClaimsAllowed: boolean;
+    unresolvedDimensions: Array<"state" | "activations" | "attachments">;
+    scenarioPolicyContractV3Sha256: string;
+    combatStateSha256: string;
+  };
+};
+
+/**
+ * Compact, replay-oriented evidence for a combat bridge consumed by a local
+ * Tessera run. Full per-cell/per-variant effects deliberately stay out of
+ * durable matchup and stress reports; the retained hashes bind a deterministic
+ * recompile to the exact bundle, compiler, policy, scenarios, and roster
+ * inputs that produced the scalar envelopes.
+ */
+export type TesseraCombatBridgeEvidenceV1 = {
+  schemaVersion: 1;
+  kind: "rosterpilot-combat-bridge-evidence";
+  opponentName: string;
+  bridgeSha256: string;
+  compiler: CombatBridgeV2["compiler"];
+  bundle: CombatBridgeV2["bundle"];
+  policySha256: string;
+  coverage: CombatBridgeV2["coverage"];
+  coverageUnit: CombatBridgeV2["coverageUnit"];
+  /** Requested metric/direction projection cells. */
+  cellCount: number;
+  /** Executable unique-mechanics cells after metric-alias deduplication. */
+  executableMechanicsCount: number;
+  /** Variant definitions across unique mechanics cells, not metric aliases. */
+  variantCount: number;
+  uniqueMechanicsCount: number;
+  cellIndexSha256: string;
+  variantIndexSha256: string;
+  diagnosticsSha256: string;
+  replay: {
+    mode: "deterministic-recompile";
+    scenarioPolicyContractV2Sha256: string;
+    playerInputSha256: string;
+    opponentInputSha256: string;
+  };
+  evidenceSha256: string;
+};
+
+/**
+ * Strict corpus-admitted bridge-v3 evidence. The legacy-compatible summary
+ * fields stay present so report renderers remain transport-agnostic, while
+ * the additional identities bind the complete reviewed source corpus.
+ */
+export type TesseraCombatBridgeEvidenceV2 = {
+  schemaVersion: 2;
+  kind: "rosterpilot-combat-bridge-evidence";
+  opponentName: string;
+  /** Compatibility alias; for schema v2 this is the bridge-v3 digest. */
+  bridgeSha256: string;
+  combatBridgeV3Sha256: string;
+  legacyBridgeV2Sha256: string;
+  corpusConformanceReportSha256: string;
+  corpusSourceInventorySha256: string;
+  corpusSemanticsOverlaySha256: string;
+  compiler: CombatBridgeV3["compiler"];
+  bundle: CombatBridgeV3["bundle"];
+  policySha256: string;
+  coverage: CombatBridgeV3["coverage"];
+  coverageUnit: CombatBridgeV3["coverageUnit"];
+  cellCount: number;
+  executableMechanicsCount: number;
+  variantCount: number;
+  uniqueMechanicsCount: number;
+  cellIndexSha256: string;
+  variantIndexSha256: string;
+  diagnosticsSha256: string;
+  replay: {
+    mode: "deterministic-recompile";
+    scenarioPolicyContractV2Sha256: string | null;
+    scenarioPolicyContractV3Sha256: string;
+    playerInputSha256: string;
+    opponentInputSha256: string;
+  };
+  evidenceSha256: string;
+};
+
+export type TesseraCombatBridgeEvidence =
+  | TesseraCombatBridgeEvidenceV1
+  | TesseraCombatBridgeEvidenceV2;
+
 export type TesseraScenarioCell = {
   attacker: TesseraUnitInstance;
   target: TesseraUnitInstance;
@@ -981,6 +1127,7 @@ export type TesseraScenarioCell = {
   >;
   confidence: TesseraConfidence;
   warningRefs: string[];
+  combatEnvelope?: Partial<Record<TesseraMetric, TesseraCombatEnvelope>>;
 };
 
 export type TesseraScenarioResult = {
@@ -1084,7 +1231,7 @@ export type TesseraConnectionStatus = {
       simulationReady: boolean;
       endToEndReady: boolean;
       promotion: "candidate" | "promoted";
-      licenseState: "evaluation-only" | "approved";
+      licenseState: "evaluation-only" | "approved" | "personal-only";
       identity: TesseraSimulationProviderIdentity | null;
       reason: string | null;
     };
@@ -1115,6 +1262,34 @@ export type TesseraConnectionStatus = {
   url: "https://playtessera.gg/";
 };
 
+/**
+ * Provider-specific preparation artifacts. New code should branch on `kind`
+ * instead of interpreting the legacy `sourceRoszPath`/`enrichedRoszPath`
+ * names, which are retained only for persisted-report compatibility.
+ */
+export type PreparedSimulationRosterV2 =
+  | {
+      schemaVersion: 2;
+      kind: "bundle-native";
+      sourceRosterPath: string;
+      sourceRosterSha256: string;
+      engineInputPath: string;
+      engineInputSha256: string;
+      bundleId: string;
+      compilerVersion: string;
+      connectorEvents: [];
+    }
+  | {
+      schemaVersion: 2;
+      kind: "new-recruit-enriched";
+      sourceRoszPath: string;
+      sourceRoszSha256: string;
+      enrichedRoszPath: string;
+      enrichedRoszSha256: string;
+      connectorEvents: ConnectorEvent[];
+      catalogueProvenance?: NewRecruitCatalogueProvenanceComparison;
+    };
+
 export type TesseraPreparedRoster = {
   rosterId: string;
   rosterName: string;
@@ -1124,6 +1299,7 @@ export type TesseraPreparedRoster = {
   enrichedRoszPath: string;
   sourceRoszSha256?: string;
   enrichedRoszSha256?: string;
+  preparedArtifact?: PreparedSimulationRosterV2;
   simulationInput?:
     | {
         kind: "new-recruit-enriched-rosz";
@@ -1183,6 +1359,10 @@ export type TesseraMatchupReport = {
   /** Canonical execution contract retained for deterministic replay. */
   scenarioContract?: TesseraFrozenScenarioContract[] | null;
   scenarioContractSha256?: string | null;
+  scenarioPolicyContractV2?: TesseraScenarioPolicyContractV2Snapshot | null;
+  scenarioPolicyContractV2Sha256?: string | null;
+  scenarioPolicyContractV3?: TesseraScenarioPolicyContractV3Snapshot | null;
+  scenarioPolicyContractV3Sha256?: string | null;
   /**
    * Complete profile inventory used to validate the frozen policy. Paired
    * revisions retain this inventory so removing a profiled unit does not
@@ -1235,6 +1415,15 @@ export type TesseraMatchupReport = {
     fallback?: TesseraSimulationFallbackReceipt | null;
     engine?: "tessera-ui" | "tessera-engine";
     settings: Record<string, string>;
+    /**
+     * @deprecated Legacy reports may contain full bridges. New reports retain
+     * only `combatBridgeEvidence` plus per-cell combat envelopes.
+     */
+    combatBridges?: CombatBridgeV2[];
+    /** Compact bundle/rules/replay bindings for local combat bridges. */
+    combatBridgeEvidence?: TesseraCombatBridgeEvidence[];
+    /** Strict receipt-bound provider-parity v2 evidence; parsed by the local workflow. */
+    providerParityEvidenceV2?: unknown;
     legacyProjection?: {
       status: "derived" | "unavailable";
       phase: TesseraPhase | null;
@@ -1284,7 +1473,12 @@ export type TesseraMatchupReport = {
       | "matchup-json"
       | "matchup-html"
       | "matchup-receipt"
-      | "baseline-json";
+      | "baseline-json"
+      | "combat-corpus-inventory"
+      | "combat-corpus-overlay"
+      | "combat-corpus-report"
+      | "combat-corpus-translation-ledger"
+      | "provider-parity-suite-manifest";
     written: string;
   }>;
 };
@@ -1941,6 +2135,12 @@ export type TesseraStressTestReport = {
     deepDive: Record<string, TesseraFrozenScenarioContract[]>;
   };
   stageScenarioContractsSha256?: string;
+  /** Rules-aware local scenario/option policies frozen per stress child. */
+  stageScenarioPolicyContractsV2?: {
+    screening: Record<string, TesseraScenarioPolicyContractV2Snapshot>;
+    deepDive: Record<string, TesseraScenarioPolicyContractV2Snapshot>;
+  };
+  stageScenarioPolicyContractsV2Sha256?: string;
   pinnedData?: {
     player: RosterDraftV2["sourceData"];
     opponents: RosterDraftV2["sourceData"][];

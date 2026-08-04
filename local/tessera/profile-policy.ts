@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 
+import type { Dataset } from "@alpaca-software/40kdc-data";
 import { z } from "zod";
 
 import {
   rosterProfileRequirements,
+  rosterProfileRequirementsFromDataset,
   type ProfilePolicyV1,
   type RosterDraftV1,
   type TesseraProfilePolicyEntry,
@@ -132,6 +134,7 @@ export function profilePolicyHash(policy: ProfilePolicyV1): string {
 
 export function aggregateProfileRequirements(
   rosters: RosterDraftV1[],
+  source?: Dataset,
 ): TesseraProfileRequirement[] {
   const grouped = new Map<string, TesseraProfileRequirement>();
   for (const roster of rosters) {
@@ -153,7 +156,10 @@ export function aggregateProfileRequirements(
         unitOccurrence,
       });
     }
-    for (const requirement of rosterProfileRequirements(roster)) {
+    const requirements = source
+      ? rosterProfileRequirementsFromDataset(roster, source)
+      : rosterProfileRequirements(roster);
+    for (const requirement of requirements) {
       const identity =
         requirement.selectionId === null
           ? undefined

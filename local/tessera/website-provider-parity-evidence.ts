@@ -27,6 +27,8 @@ import {
   tesseraImportedArmySemanticEvidenceIncompleteReasons,
   tesseraImportedArmySemanticSnapshotSha256,
   tesseraSemanticCharacteristicValues,
+  tesseraSemanticWeaponPhase,
+  tesseraSemanticWeaponRangeInches,
   type TesseraSemanticCharacteristicName,
 } from "./website-semantic-evidence";
 
@@ -134,24 +136,6 @@ function parsedKeywords(value: string | null): string[] | null {
   );
 }
 
-function phaseForWeapon(
-  weapon: TesseraImportedWeaponSemantic,
-): "shooting" | "fight" | null {
-  const explicit = oneValue(weapon.visibleCharacteristics, "phase");
-  if (explicit) {
-    const shooting = /\b(?:shooting|ranged)\b/i.test(explicit);
-    const fight = /\b(?:fight|melee)\b/i.test(explicit);
-    if (shooting !== fight) return shooting ? "shooting" : "fight";
-    return null;
-  }
-  const hasBallisticSkill =
-    oneValue(weapon.visibleCharacteristics, "ballisticSkill") !== null;
-  const hasWeaponSkill =
-    oneValue(weapon.visibleCharacteristics, "weaponSkill") !== null;
-  if (hasBallisticSkill === hasWeaponSkill) return null;
-  return hasBallisticSkill ? "shooting" : "fight";
-}
-
 function attackProfileName(
   weapon: TesseraImportedWeaponSemantic,
 ): string {
@@ -169,7 +153,8 @@ function attackProfile(
   issues: TesseraWebsiteProviderParityEvidenceIssue[],
 ): TesseraProviderParityCombatAttackProfile | null {
   const path = `${snapshot.side}.${unit.name}[${unit.occurrence}].${weapon.name}[${weapon.occurrence}]`;
-  const phase = phaseForWeapon(weapon);
+  const phase = tesseraSemanticWeaponPhase(weapon);
+  const rangeInches = tesseraSemanticWeaponRangeInches(weapon);
   const attacks = oneValue(weapon.visibleCharacteristics, "attacks");
   const strength = positiveIntegerValue(
     oneValue(weapon.visibleCharacteristics, "strength"),
@@ -194,6 +179,7 @@ function attackProfile(
   const skill = parsedSkill === undefined && torrent ? null : parsedSkill;
   if (
     phase === null ||
+    rangeInches === undefined ||
     weapon.count === null ||
     weapon.count <= 0 ||
     !attacks?.trim() ||
@@ -207,7 +193,7 @@ function attackProfile(
       issue(
         "WEBSITE_WEAPON_CHARACTERISTIC_INVALID",
         path,
-        "The active weapon does not expose one parseable phase, count, A, BS/WS (or TORRENT), S, AP, D, and keyword field.",
+        "The active weapon does not expose one parseable phase, phase-appropriate range, count, A, BS/WS (or TORRENT), S, AP, D, and keyword field.",
       ),
     );
     return null;
@@ -223,6 +209,7 @@ function attackProfile(
     }),
     name: attackProfileName(weapon),
     phase,
+    rangeInches,
     equippedModelCount: weapon.count,
     attacks: attacks.trim(),
     skill,

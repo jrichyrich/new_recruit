@@ -27,7 +27,7 @@ test("the Tessera engine candidate is immutable, development-only, and reproduci
   assert.equal(result.status, "evaluation-only");
   assert.equal(
     result.promotionGate,
-    "written-license-grant-required",
+    "personal-machine-parity-attestation-required",
   );
   assert.equal(
     result.commit,

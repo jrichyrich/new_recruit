@@ -28,6 +28,11 @@ type AnalysisOptions = {
   allowPointMismatch: boolean;
   includeChangeCandidates: boolean;
   catalogueDriftMode?: "reject" | "diagnostic";
+  websiteFallbackAuthorization?: {
+    action: "new-recruit-import-and-tessera-web";
+    requestSha256: string;
+    source: "confirmed-fallback";
+  };
 };
 
 type RevisionOptions = {
@@ -220,6 +225,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
             default?: unknown;
             enum?: string[];
             items?: { enum?: string[] };
+            pattern?: string;
           }
         >;
       }
@@ -232,6 +238,10 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       "website",
     ]);
     assert.equal(properties.simulationBackend.default, undefined);
+    assert.equal(
+      properties.websiteFallbackConfirmationSha256.pattern,
+      "^[0-9a-f]{64}$",
+    );
     assert.deepEqual(properties.phases.items?.enum, ["shooting", "fight"]);
     assert.deepEqual(properties.metrics.items?.enum, [
       "wipe-probability",
@@ -271,6 +281,13 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       "website",
     ]);
     assert.equal(stressProperties.simulationBackend.default, undefined);
+    assert.equal(
+      Object.hasOwn(
+        stressProperties,
+        "websiteFallbackConfirmationSha256",
+      ),
+      false,
+    );
     assert.equal(
       stressProperties.verifiedCatalogueDriftDiagnostic.default,
       false,
@@ -313,6 +330,7 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
         metrics: ["mean-damage"],
         allowPointMismatch: true,
         includeChangeCandidates: false,
+        websiteFallbackConfirmationSha256: "a".repeat(64),
         verifiedCatalogueDriftDiagnostic: true,
       },
     });
@@ -329,6 +347,11 @@ test("local MCP exposes Tessera analysis and stress-test schemas", async () => {
       metrics: ["mean-damage"],
       allowPointMismatch: true,
       includeChangeCandidates: false,
+      websiteFallbackAuthorization: {
+        action: "new-recruit-import-and-tessera-web",
+        requestSha256: "a".repeat(64),
+        source: "confirmed-fallback",
+      },
       catalogueDriftMode: "diagnostic",
     });
 
@@ -762,6 +785,10 @@ test("CLI help documents Tessera analysis and stress-test options", async () => 
   assert.match(stdout, /--no-change-candidates/);
   assert.match(
     stdout,
+    /--website-fallback-confirmation-sha256 lowercase-64-hex/,
+  );
+  assert.match(
+    stdout,
     /tessera compare-revision --baseline-report matchup\.json --revised-roster revised\.json/,
   );
   assert.match(
@@ -778,5 +805,30 @@ test("CLI help documents Tessera analysis and stress-test options", async () => 
   assert.match(
     stdout,
     /tessera compare-stress-revision --baseline-report stress-test\.json --revised-roster revised\.json/,
+  );
+});
+
+test("CLI rejects Website fallback confirmation outside exact analysis", async () => {
+  await assert.rejects(
+    run(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "cli/rosterpilot.ts",
+        "tessera",
+        "stress-test",
+        "--website-fallback-confirmation-sha256",
+        "a".repeat(64),
+      ],
+      { cwd: process.cwd() },
+    ),
+    (error: unknown) => {
+      assert.match(
+        (error as { stderr?: string }).stderr ?? "",
+        /available only for exact Tessera analysis; stress and build workflows produce distinct request hashes/,
+      );
+      return true;
+    },
   );
 });

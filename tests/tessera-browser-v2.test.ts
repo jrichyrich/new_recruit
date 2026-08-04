@@ -195,6 +195,7 @@ function importedSnapshot(
         count,
         visibleCharacteristics: [
           { name: "phase", value: "shooting" },
+          { name: "range", value: "24\"" },
           { name: "attacks", value: "2" },
           { name: "ballistic skill", value: "2+" },
           { name: "strength", value: "6" },

@@ -189,8 +189,11 @@ export function localTesseraBaselineSettings(
     phase,
     targetInCover: "false",
     charging: phase === "fight" ? "true" : "false",
-    withinRapidFireRange: "false",
-    withinMeltaRange: "false",
+    // Fresh local scalar runs use the universal point-blank physical
+    // baseline from scenario-policy v3. At zero inches every in-range Rapid
+    // Fire and Melta profile is also within half range.
+    withinRapidFireRange: "true",
+    withinMeltaRange: "true",
     remainedStationary: "false",
     indirectFire: "false",
   };

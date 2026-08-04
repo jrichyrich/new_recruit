@@ -121,8 +121,8 @@ import {
   validateProfilePolicy,
 } from "./profile-policy";
 import {
-  verifyLocalTesseraEngineInput,
-} from "./local-engine-input";
+  verifyLocalTesseraEngineInputAnyVersion,
+} from "./local-engine-input-v2";
 import {
   runTesseraBatchPreflight,
   verifyTesseraBatchPreflightManifest,
@@ -130,6 +130,7 @@ import {
 } from "./batch-preflight";
 import {
   localTesseraEngineIsAutoSelectable,
+  localTesseraProviderIdentityAllowsAnalyticalClaims,
   LOCAL_TESSERA_ADAPTER_VERSION,
   LOCAL_TESSERA_ENGINE_IDENTITY,
   LOCAL_TESSERA_ENGINE_ITERATIONS,
@@ -147,6 +148,15 @@ import type {
   TesseraBrowserInput,
   TesseraBrowserResult,
 } from "./browser";
+import type {
+  PersonalLocalParityAttestationContextV1,
+} from "./personal-local-attestation";
+import {
+  personalLocalProviderIdentitySha256,
+} from "./personal-local-attestation";
+import {
+  loadCurrentPersonalLocalParityAttestationContextV1,
+} from "./personal-local-attestation-store";
 import {
   assertTesseraScenarioContractProvider,
   assertTesseraScenarioContractScope,
@@ -157,6 +167,16 @@ import {
   TESSERA_SCENARIO_PHASES,
   tesseraScenarioContractSha256,
 } from "./scenario-contract";
+import {
+  assertTesseraScenarioPolicyContractV2Scope,
+  canonicalTesseraScenarioPolicyContractV2,
+  migrateTesseraScenarioContractV1ToV2,
+  selectedBaselineTesseraCombatPolicyV2,
+  selectedBaselineTesseraScenarioPolicyContractV2,
+  TesseraScenarioPolicyContractV2Schema,
+  tesseraScenarioPolicyContractV2Sha256,
+  type TesseraScenarioPolicyContractV2,
+} from "./scenario-contract-v2";
 import { effectiveProviderCompatibilityMode } from "./provider-compatibility";
 
 const SCREENING_METRICS: TesseraMetric[] = [
@@ -228,10 +248,12 @@ function requestedSimulationBackend(
 
 function selectedSimulationBackend(
   requested: TesseraSimulationBackend,
+  personalAttestation?:
+    PersonalLocalParityAttestationContextV1 | null,
 ): TesseraSimulationProvider {
   if (requested === "local-engine") return "local-engine";
   if (requested === "website") return "website";
-  return localTesseraEngineIsAutoSelectable()
+  return localTesseraEngineIsAutoSelectable(personalAttestation)
     ? "local-engine"
     : "website";
 }
@@ -241,11 +263,7 @@ function simulationProviderAllowsAnalyticalClaims(
   identity: TesseraSimulationProviderIdentity | undefined,
 ): boolean {
   if (selected !== "local-engine") return true;
-  return Boolean(
-    identity?.provider === "local-engine" &&
-      identity.promotion === "promoted" &&
-      identity.licenseState === "approved",
-  );
+  return localTesseraProviderIdentityAllowsAnalyticalClaims(identity);
 }
 
 export type TesseraStressDependencies = TesseraDependencies & {
@@ -294,8 +312,13 @@ type ManifestStageContracts = {
   deepDive: Record<string, TesseraFrozenScenarioContract[]>;
 };
 
+type ManifestStagePolicyContractsV2 = {
+  screening: Record<string, TesseraScenarioPolicyContractV2>;
+  deepDive: Record<string, TesseraScenarioPolicyContractV2>;
+};
+
 type TesseraStressManifest = {
-  schemaVersion: 7;
+  schemaVersion: 8;
   reportKind: "tessera-stress-manifest";
   runId: string;
   createdAt: string;
@@ -317,6 +340,9 @@ type TesseraStressManifest = {
   requestedScenarioContractSha256: string | null;
   stageContracts: ManifestStageContracts;
   stageContractsSha256: string;
+  /** Rules-aware local policy frozen before any child simulation starts. */
+  stagePolicyContractsV2: ManifestStagePolicyContractsV2;
+  stagePolicyContractsV2Sha256: string;
   warnings: string[];
   cachedLiveUpdateCheck: LiveDataFreshness | null;
   batchPreflight: {
@@ -440,11 +466,15 @@ const SimulationProviderIdentitySchema = z.discriminatedUnion(
       sourceSha256: z.string().regex(/^[0-9a-f]{64}$/),
       adapterVersion: z.string().min(1),
       compilerVersion: z.string().min(1),
-      inputSchemaVersion: z.literal(1),
+      inputSchemaVersion: z.union([z.literal(1), z.literal(2)]),
       capabilityManifestSha256:
         z.string().regex(/^[0-9a-f]{64}$/),
       promotion: z.enum(["candidate", "promoted"]),
-      licenseState: z.enum(["evaluation-only", "approved"]),
+      licenseState: z.enum([
+        "evaluation-only",
+        "approved",
+        "personal-only",
+      ]),
     }),
   ],
 );
@@ -873,6 +903,11 @@ const PerTemplateStageContractsSchema = z.object({
   deepDive: z.record(z.array(FrozenScenarioContractSchema)),
 });
 
+const PerTemplateStagePolicyContractsV2Schema = z.object({
+  screening: z.record(TesseraScenarioPolicyContractV2Schema),
+  deepDive: z.record(TesseraScenarioPolicyContractV2Schema),
+});
+
 const StressManifestSchema = z.object({
   schemaVersion: z.union([
     z.literal(1),
@@ -882,6 +917,7 @@ const StressManifestSchema = z.object({
     z.literal(5),
     z.literal(6),
     z.literal(7),
+    z.literal(8),
   ]),
   reportKind: z.literal("tessera-stress-manifest"),
   runId: z.string().min(1),
@@ -915,6 +951,10 @@ const StressManifestSchema = z.object({
     PerTemplateStageContractsSchema,
   ]).optional(),
   stageContractsSha256:
+    z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  stagePolicyContractsV2:
+    PerTemplateStagePolicyContractsV2Schema.optional(),
+  stagePolicyContractsV2Sha256:
     z.string().regex(/^[0-9a-f]{64}$/).optional(),
   warnings: z.array(z.string()),
   cachedLiveUpdateCheck: z.unknown().nullable().optional(),
@@ -1145,7 +1185,7 @@ const ScenarioResultSchema = z.object({
     ).optional(),
     confidence: z.enum(["high", "review", "ambiguous"]),
     warningRefs: z.array(z.string()),
-  })),
+  }).passthrough()),
   status: z.enum(["complete", "partial"]),
   warnings: z.array(z.string()),
 });
@@ -1235,7 +1275,7 @@ const MatchupReportSchema = z.object({
       cells: z.array(z.unknown()),
     })),
     scenarios: z.array(ScenarioResultSchema).optional(),
-  }),
+  }).passthrough(),
 }).passthrough();
 
 const StageProvenanceSchema = z.object({
@@ -2518,6 +2558,14 @@ function stageContractFor(
   return contract?.length ? contract : null;
 }
 
+function stagePolicyContractV2For(
+  manifest: TesseraStressManifest,
+  stage: "screening" | "deepDive",
+  templateId: string,
+): TesseraScenarioPolicyContractV2 | null {
+  return manifest.stagePolicyContractsV2[stage][templateId] ?? null;
+}
+
 function cloneStageContractMap(
   contracts: Record<string, TesseraFrozenScenarioContract[]>,
 ): Record<string, TesseraFrozenScenarioContract[]> {
@@ -2547,6 +2595,186 @@ function stageContractsSha256(
     .createHash("sha256")
     .update(canonicalJson(cloneStageContracts(contracts)))
     .digest("hex");
+}
+
+function rulesAwarePolicyContractFromV1(
+  contract: TesseraFrozenScenarioContract[],
+): TesseraScenarioPolicyContractV2 {
+  const migrated = migrateTesseraScenarioContractV1ToV2(contract);
+  return canonicalTesseraScenarioPolicyContractV2({
+    ...migrated,
+    policy: selectedBaselineTesseraCombatPolicyV2(),
+  });
+}
+
+function cloneStagePolicyContractMapV2(
+  contracts: Record<string, TesseraScenarioPolicyContractV2>,
+): Record<string, TesseraScenarioPolicyContractV2> {
+  return Object.fromEntries(
+    Object.entries(contracts)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([templateId, contract]) => [
+        templateId,
+        canonicalTesseraScenarioPolicyContractV2(contract),
+      ]),
+  );
+}
+
+function cloneStagePolicyContractsV2(
+  contracts: ManifestStagePolicyContractsV2,
+): ManifestStagePolicyContractsV2 {
+  return {
+    screening: cloneStagePolicyContractMapV2(contracts.screening),
+    deepDive: cloneStagePolicyContractMapV2(contracts.deepDive),
+  };
+}
+
+function stagePolicyContractsV2Sha256(
+  contracts: ManifestStagePolicyContractsV2,
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(canonicalJson(cloneStagePolicyContractsV2(contracts)))
+    .digest("hex");
+}
+
+function projectedStagePolicyContractsV2(input: {
+  portfolio: TesseraStressPortfolio;
+  configuration: TesseraStressConfiguration;
+  stageContracts: ManifestStageContracts;
+  simulationRequested: boolean;
+  selectedBackend: TesseraSimulationProvider;
+}): ManifestStagePolicyContractsV2 {
+  if (
+    !input.simulationRequested ||
+    input.selectedBackend !== "local-engine"
+  ) {
+    return { screening: {}, deepDive: {} };
+  }
+  const templateIds = input.portfolio.items
+    .filter((item) => item.status === "ready" && item.roster !== null)
+    .map((item) => item.templateId)
+    .sort();
+  const screeningMetrics =
+    input.configuration.analysisStrategy === "full-all"
+      ? FULL_METRICS
+      : SCREENING_METRICS;
+  const stageContract = (
+    stage: "screening" | "deepDive",
+    templateId: string,
+    metrics: TesseraMetric[],
+  ): TesseraScenarioPolicyContractV2 => {
+    const frozenV1 = input.stageContracts[stage][templateId];
+    return frozenV1?.length
+      ? rulesAwarePolicyContractFromV1(frozenV1)
+      : selectedBaselineTesseraScenarioPolicyContractV2(
+          LOCAL_TESSERA_ENGINE_ITERATIONS,
+          TESSERA_SCENARIO_PHASES,
+          metrics,
+        );
+  };
+  return {
+    screening: Object.fromEntries(
+      templateIds.map((templateId) => [
+        templateId,
+        stageContract("screening", templateId, screeningMetrics),
+      ]),
+    ),
+    deepDive:
+      input.configuration.analysisStrategy === "full-all"
+        ? {}
+        : Object.fromEntries(
+            templateIds.map((templateId) => [
+              templateId,
+              stageContract("deepDive", templateId, DEEP_DIVE_METRICS),
+            ]),
+          ),
+  };
+}
+
+function assertStagePolicyContractsV2(input: {
+  contracts: ManifestStagePolicyContractsV2;
+  portfolio: TesseraStressPortfolio;
+  configuration: TesseraStressConfiguration;
+  stageContracts: ManifestStageContracts;
+  simulationRequested: boolean;
+  selectedBackend: TesseraSimulationProvider;
+}): ManifestStagePolicyContractsV2 {
+  const contracts = cloneStagePolicyContractsV2(input.contracts);
+  if (
+    !input.simulationRequested ||
+    input.selectedBackend !== "local-engine"
+  ) {
+    if (
+      Object.keys(contracts.screening).length > 0 ||
+      Object.keys(contracts.deepDive).length > 0
+    ) {
+      throw new Error(
+        "Only a simulated local-engine stress run may retain v2 stage-policy contracts.",
+      );
+    }
+    return contracts;
+  }
+
+  const readyTemplateIds = input.portfolio.items
+    .filter((item) => item.status === "ready" && item.roster !== null)
+    .map((item) => item.templateId)
+    .sort();
+  const expectedByStage = {
+    screening: readyTemplateIds,
+    deepDive:
+      input.configuration.analysisStrategy === "full-all"
+        ? []
+        : readyTemplateIds,
+  };
+  const metricsByStage = {
+    screening:
+      input.configuration.analysisStrategy === "full-all"
+        ? FULL_METRICS
+        : SCREENING_METRICS,
+    deepDive: DEEP_DIVE_METRICS,
+  };
+  for (const stage of ["screening", "deepDive"] as const) {
+    const observedTemplateIds = Object.keys(contracts[stage]).sort();
+    if (
+      canonicalJson(observedTemplateIds) !==
+      canonicalJson(expectedByStage[stage])
+    ) {
+      throw new Error(
+        `The ${stage} v2 stage-policy contracts do not cover exactly the frozen ready opponent templates.`,
+      );
+    }
+    for (const templateId of observedTemplateIds) {
+      const contract = assertTesseraScenarioPolicyContractV2Scope(
+        contracts[stage][templateId],
+        TESSERA_SCENARIO_PHASES,
+        metricsByStage[stage],
+      );
+      if (contract.policy.modelingMode !== "rules-aware") {
+        throw new Error(
+          `The ${stage}/${templateId} v2 stage-policy contract is not rules-aware.`,
+        );
+      }
+      const frozenV1 = input.stageContracts[stage][templateId];
+      const expectedScenarios = frozenV1?.length
+        ? migrateTesseraScenarioContractV1ToV2(frozenV1).scenarios
+        : selectedBaselineTesseraScenarioPolicyContractV2(
+            LOCAL_TESSERA_ENGINE_ITERATIONS,
+            TESSERA_SCENARIO_PHASES,
+            metricsByStage[stage],
+          ).scenarios;
+      if (
+        canonicalJson(contract.scenarios) !==
+        canonicalJson(expectedScenarios)
+      ) {
+        throw new Error(
+          `The ${stage}/${templateId} v2 stage-policy scenarios do not match the frozen v1 engagement and iteration settings.`,
+        );
+      }
+      contracts[stage][templateId] = contract;
+    }
+  }
+  return contracts;
 }
 
 function projectedStageContracts(
@@ -2607,6 +2835,11 @@ function stageEvidenceIsReusable(
     (
       !manifest.simulationRequested ||
       stageContractFor(manifest, stage, templateId) !== null
+    ) &&
+    (
+      !manifest.simulationRequested ||
+      manifest.selectedSimulationBackend !== "local-engine" ||
+      stagePolicyContractV2For(manifest, stage, templateId) !== null
     )
   );
 }
@@ -2655,6 +2888,8 @@ function newManifest(
   runId = crypto.randomUUID(),
   cachedLiveUpdateCheck: LiveDataFreshness | null = null,
   requestedScenarioContract: TesseraFrozenScenarioContract[] | null = null,
+  personalAttestation?:
+    PersonalLocalParityAttestationContextV1 | null,
 ): TesseraStressManifest {
   const now = new Date().toISOString();
   const canonicalRequestedContract = requestedScenarioContract
@@ -2665,8 +2900,17 @@ function newManifest(
     configuration,
     canonicalRequestedContract,
   );
+  const frozenSelectedSimulationBackend =
+    selectedSimulationBackend(simulationBackend, personalAttestation);
+  const stagePolicyContractsV2 = projectedStagePolicyContractsV2({
+    portfolio,
+    configuration,
+    stageContracts,
+    simulationRequested,
+    selectedBackend: frozenSelectedSimulationBackend,
+  });
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     reportKind: "tessera-stress-manifest",
     runId,
     createdAt: now,
@@ -2680,8 +2924,7 @@ function newManifest(
     outputDirectory: path.resolve(outputDirectory),
     simulationRequested,
     simulationBackend,
-    selectedSimulationBackend:
-      selectedSimulationBackend(simulationBackend),
+    selectedSimulationBackend: frozenSelectedSimulationBackend,
     profilePolicy,
     profilePolicyHash:
       profilePolicy === null ? null : profilePolicyHash(profilePolicy),
@@ -2692,6 +2935,9 @@ function newManifest(
       : null,
     stageContracts,
     stageContractsSha256: stageContractsSha256(stageContracts),
+    stagePolicyContractsV2,
+    stagePolicyContractsV2Sha256:
+      stagePolicyContractsV2Sha256(stagePolicyContractsV2),
     warnings,
     cachedLiveUpdateCheck,
     batchPreflight: null,
@@ -2985,6 +3231,55 @@ async function readManifest(
       "The resume manifest's projected stage contracts do not match their SHA-256.",
     );
   }
+  if (
+    data.schemaVersion >= 8 &&
+    (
+      data.stagePolicyContractsV2 === undefined ||
+      data.stagePolicyContractsV2Sha256 === undefined
+    )
+  ) {
+    throw new Error(
+      "The v8 resume manifest does not contain its required v2 stage-policy provenance.",
+    );
+  }
+  if (
+    data.schemaVersion < 8 &&
+    data.simulationRequested &&
+    migratedSelectedSimulationBackend === "local-engine"
+  ) {
+    throw new Error(
+      "This legacy local-engine stress manifest predates frozen v2 stage-policy provenance and cannot be resumed without changing its combat semantics. Start a new stress run to establish a rules-aware v2 replay contract.",
+    );
+  }
+  const unverifiedStagePolicyContractsV2 =
+    data.stagePolicyContractsV2 === undefined
+      ? projectedStagePolicyContractsV2({
+          portfolio: normalizedPortfolio,
+          configuration: data.configuration,
+          stageContracts,
+          simulationRequested: data.simulationRequested,
+          selectedBackend: migratedSelectedSimulationBackend,
+        })
+      : data.stagePolicyContractsV2;
+  const stagePolicyContractsV2 = assertStagePolicyContractsV2({
+    contracts: unverifiedStagePolicyContractsV2,
+    portfolio: normalizedPortfolio,
+    configuration: data.configuration,
+    stageContracts,
+    simulationRequested: data.simulationRequested,
+    selectedBackend: migratedSelectedSimulationBackend,
+  });
+  const computedStagePolicyContractsV2Sha256 =
+    stagePolicyContractsV2Sha256(stagePolicyContractsV2);
+  if (
+    data.schemaVersion >= 8 &&
+    data.stagePolicyContractsV2Sha256 !==
+      computedStagePolicyContractsV2Sha256
+  ) {
+    throw new Error(
+      "The resume manifest's v2 stage-policy contracts do not match their SHA-256.",
+    );
+  }
   if (requestedScenarioContract) {
     assertTesseraScenarioContractProvider(
       requestedScenarioContract,
@@ -3000,7 +3295,7 @@ async function readManifest(
     );
   const manifest = {
     ...data,
-    schemaVersion: 7,
+    schemaVersion: 8,
     simulationBackend: migratedSimulationBackend,
     selectedSimulationBackend:
       migratedSelectedSimulationBackend,
@@ -3017,6 +3312,9 @@ async function readManifest(
     requestedScenarioContractSha256,
     stageContracts,
     stageContractsSha256: stageContractsSha256(stageContracts),
+    stagePolicyContractsV2,
+    stagePolicyContractsV2Sha256:
+      computedStagePolicyContractsV2Sha256,
     warnings: unique([
       ...data.warnings,
       ...(repairedLegacyIterationFailures.length === 0
@@ -3094,6 +3392,25 @@ async function writeManifest(
       "The requested Tessera scenario contract changed after its manifest hash was established.",
     );
   }
+  const verifiedStagePolicyContractsV2 = assertStagePolicyContractsV2({
+    contracts: manifest.stagePolicyContractsV2,
+    portfolio: manifest.portfolio,
+    configuration: manifest.configuration,
+    stageContracts: manifest.stageContracts,
+    simulationRequested: manifest.simulationRequested,
+    selectedBackend: manifest.selectedSimulationBackend,
+  });
+  const currentStagePolicyContractsV2Sha256 =
+    stagePolicyContractsV2Sha256(verifiedStagePolicyContractsV2);
+  if (
+    currentStagePolicyContractsV2Sha256 !==
+      manifest.stagePolicyContractsV2Sha256
+  ) {
+    throw new Error(
+      "The frozen v2 stage-policy contracts changed after their manifest hash was established.",
+    );
+  }
+  manifest.stagePolicyContractsV2 = verifiedStagePolicyContractsV2;
   manifest.stageContractsSha256 = stageContractsSha256(
     manifest.stageContracts,
   );
@@ -5177,6 +5494,79 @@ function freezeOrValidateStageContract(
   return { changed: false, code: null, message: null };
 }
 
+function validateStagePolicyContractV2(
+  manifest: TesseraStressManifest,
+  stage: "screening" | "deepDive",
+  templateId: string,
+  report: TesseraMatchupReport,
+): { code: string | null; message: string | null } {
+  if (
+    !manifest.simulationRequested ||
+    manifest.selectedSimulationBackend !== "local-engine"
+  ) {
+    return { code: null, message: null };
+  }
+  const expected = stagePolicyContractV2For(
+    manifest,
+    stage,
+    templateId,
+  );
+  if (!expected) {
+    return {
+      code: "TESSERA_STRESS_SCENARIO_POLICY_V2_MISSING",
+      message:
+        `The frozen rules-aware v2 stage-policy contract for ${stage}/${templateId} is missing.`,
+    };
+  }
+  const expectedSha256 =
+    tesseraScenarioPolicyContractV2Sha256(expected);
+  if (
+    report.scenarioPolicyContractV2Sha256 !== expectedSha256 ||
+    !report.scenarioPolicyContractV2
+  ) {
+    return {
+      code: "TESSERA_STRESS_SCENARIO_POLICY_V2_MISMATCH",
+      message:
+        `The ${stage}/${templateId} child report does not bind to its frozen rules-aware v2 stage-policy contract.`,
+    };
+  }
+  try {
+    const observed = canonicalTesseraScenarioPolicyContractV2(
+      report.scenarioPolicyContractV2,
+    );
+    if (
+      tesseraScenarioPolicyContractV2Sha256(observed) !==
+        expectedSha256 ||
+      observed.policy.modelingMode !== "rules-aware"
+    ) {
+      throw new Error("policy identity changed");
+    }
+  } catch {
+    return {
+      code: "TESSERA_STRESS_SCENARIO_POLICY_V2_MISMATCH",
+      message:
+        `The ${stage}/${templateId} child report's v2 policy payload does not match its frozen identity.`,
+    };
+  }
+  const bridgeEvidence =
+    report.simulation.combatBridgeEvidence ?? [];
+  if (
+    bridgeEvidence.length === 0 ||
+    bridgeEvidence.some(
+      (evidence) =>
+        evidence.replay.scenarioPolicyContractV2Sha256 !==
+        expectedSha256,
+    )
+  ) {
+    return {
+      code: "TESSERA_COMBAT_BRIDGE_EVIDENCE_MISSING",
+      message:
+        `The ${stage}/${templateId} child report does not retain compact evidence for the executed v2 combat bridge.`,
+    };
+  }
+  return { code: null, message: null };
+}
+
 async function precomputeLocalEngineStage(
   input: StressExecutionInput,
   stage: "screening" | "deepDive",
@@ -5185,6 +5575,15 @@ async function precomputeLocalEngineStage(
   mode: "quick" | "full",
 ): Promise<Map<string, TesseraBrowserResult>> {
   const results = new Map<string, TesseraBrowserResult>();
+  if (
+    input.manifest.simulationRequested &&
+    input.manifest.selectedSimulationBackend === "local-engine"
+  ) {
+    // The legacy task pool accepts only base-profile browser inputs. A
+    // rules-aware bridge is compiled from one leased bundle inside each exact
+    // child run and intentionally never serialized through this cache.
+    return results;
+  }
   if (
     !input.manifest.simulationRequested ||
     input.manifest.selectedSimulationBackend !== "local-engine" ||
@@ -5503,6 +5902,21 @@ async function runStage(
             input.manifest.preparedOpponents[item.templateId]
               ?.prepared.enrichedRoszPath,
         });
+        const policyContract = validateStagePolicyContractV2(
+          input.manifest,
+          stage,
+          item.templateId,
+          report,
+        );
+        if (policyContract.code) {
+          throw Object.assign(
+            new Error(
+              policyContract.message ??
+                "The stored child report does not match the frozen v2 stage policy.",
+            ),
+            { code: policyContract.code },
+          );
+        }
         const contract = freezeOrValidateStageContract(
           input.manifest,
           stage,
@@ -5603,6 +6017,27 @@ async function runStage(
         sourceAttempt: 1,
       };
     })();
+    const frozenStageScenarioContract = stageContractFor(
+      input.manifest,
+      stage,
+      item.templateId,
+    );
+    const frozenStagePolicyContractV2 =
+      stagePolicyContractV2For(
+        input.manifest,
+        stage,
+        item.templateId,
+      );
+    if (
+      input.manifest.simulationRequested &&
+      input.manifest.selectedSimulationBackend === "local-engine" &&
+      frozenStagePolicyContractV2 === null
+    ) {
+      throw artifactMaterializationError(
+        "TESSERA_STRESS_SCENARIO_POLICY_V2_MISSING",
+        `The frozen rules-aware v2 stage-policy contract for ${stage}/${item.templateId} is missing.`,
+      );
+    }
     let result: Awaited<ReturnType<typeof analyzeRosterMatchup>> | null = null;
     let lastCode: string | null = null;
     let attemptWithinTurn = 0;
@@ -5683,13 +6118,10 @@ async function runStage(
           ),
           opponentRosterContext: item.roster,
           scenarioContract: undefined,
+          scenarioPolicyContractV2:
+            frozenStagePolicyContractV2 ?? undefined,
           ...(preparedReuse ? { preparedReuse } : {}),
-          frozenScenarioContract:
-            stageContractFor(
-              input.manifest,
-              stage,
-              item.templateId,
-            ),
+          frozenScenarioContract: frozenStageScenarioContract,
           sessionId: input.manifest.runId,
           allowPointMismatch: false,
           includeChangeCandidates: stage === "screening",
@@ -5719,6 +6151,17 @@ async function runStage(
               code: null,
               message: null,
             };
+      const policyContract =
+        result.ok &&
+        result.data &&
+        result.data.status === "complete"
+          ? validateStagePolicyContractV2(
+              input.manifest,
+              stage,
+              item.templateId,
+              result.data,
+            )
+          : { code: null, message: null };
       if (contract.changed) {
         await writeManifest(
           input.manifest,
@@ -5739,6 +6182,7 @@ async function runStage(
           warningCode !== "TESSERA_PROFILE_POLICY_APPLIED",
       );
       const code =
+        policyContract.code ??
         contract.code ??
         (result.ok &&
         result.data &&
@@ -5760,7 +6204,8 @@ async function runStage(
       const attemptMessage =
         code === null
           ? null
-          : contract.message ??
+          : policyContract.message ??
+            contract.message ??
             result.violations[0]?.message ??
             result.data?.warnings.find((warning) =>
               warning.includes(`[${code}]`),
@@ -6503,7 +6948,7 @@ async function preparedProfileInventory(
       prepared.simulationInput?.kind ===
         "rosterpilot-local-engine-input"
     ) {
-      return verifyLocalTesseraEngineInput({
+      return verifyLocalTesseraEngineInputAnyVersion({
         content,
         expectedSha256: prepared.simulationInput.sha256,
         expectedBundleId: prepared.simulationInput.bundleId,
@@ -7904,6 +8349,12 @@ async function executeStressTest(
     ),
     stageScenarioContractsSha256:
       input.manifest.stageContractsSha256,
+    stageScenarioPolicyContractsV2:
+      cloneStagePolicyContractsV2(
+        input.manifest.stagePolicyContractsV2,
+      ),
+    stageScenarioPolicyContractsV2Sha256:
+      input.manifest.stagePolicyContractsV2Sha256,
     pinnedData: {
       player: input.playerRoster.sourceData,
       opponents: unique(
@@ -8210,6 +8661,26 @@ export async function runRosterStressTest(
       warnings: validation.warnings,
     };
   }
+  if (dependencies.personalLocalAttestation === undefined) {
+    try {
+      dependencies = {
+        ...dependencies,
+        personalLocalAttestation:
+          await loadCurrentPersonalLocalParityAttestationContextV1({
+            providerIdentitySha256:
+              personalLocalProviderIdentitySha256(
+                LOCAL_TESSERA_ENGINE_IDENTITY,
+              ),
+            bundleId: playerRoster.sourceData.bundleId,
+          }),
+      };
+    } catch {
+      dependencies = {
+        ...dependencies,
+        personalLocalAttestation: null,
+      };
+    }
+  }
   const freshnessAtEntry =
     getCachedDataFreshnessResult();
   const freshnessWarningMessages =
@@ -8284,7 +8755,10 @@ export async function runRosterStressTest(
         );
       assertTesseraScenarioContractProvider(
         requestedScenarioContract,
-        selectedSimulationBackend(simulationBackend),
+        selectedSimulationBackend(
+          simulationBackend,
+          dependencies.personalLocalAttestation,
+        ),
       );
     }
   } catch (error) {
@@ -8409,7 +8883,10 @@ export async function runRosterStressTest(
       if (requestedScenarioContract) {
         assertTesseraScenarioContractProvider(
           requestedScenarioContract,
-          selectedSimulationBackend(simulationBackend),
+          selectedSimulationBackend(
+            simulationBackend,
+            dependencies.personalLocalAttestation,
+          ),
         );
       }
     } catch (error) {
@@ -8528,7 +9005,10 @@ export async function runRosterStressTest(
         simulationRequested ||
       manifest.simulationBackend !== simulationBackend ||
       manifest.selectedSimulationBackend !==
-        selectedSimulationBackend(simulationBackend) ||
+        selectedSimulationBackend(
+          simulationBackend,
+          dependencies.personalLocalAttestation,
+        ) ||
       manifest.requestedScenarioContractSha256 !==
         (requestedScenarioContract
           ? tesseraScenarioContractSha256(
@@ -8857,6 +9337,7 @@ export async function runRosterStressTest(
         freshnessAtEntry?.data ??
           sourceManifest.cachedLiveUpdateCheck,
         sourceManifest.requestedScenarioContract,
+        dependencies.personalLocalAttestation,
       );
       restartedManifest.preparedPlayer =
         sourceManifest.preparedPlayer;
@@ -8969,6 +9450,14 @@ export async function runRosterStressTest(
           pointsTolerancePercent:
             configuration.pointsTolerancePercent,
           allowLegends: false,
+          artifactMode:
+            selectedSimulationBackend(
+              simulationBackend,
+              dependencies.personalLocalAttestation,
+            ) ===
+            "local-engine"
+              ? "canonical"
+              : "new-recruit",
         });
     if (!generated.ok || !generated.data) {
       return {
@@ -8981,7 +9470,10 @@ export async function runRosterStressTest(
     const preflight = await preflightPortfolio(
       playerRoster,
       generated.data,
-      selectedSimulationBackend(simulationBackend) !==
+      selectedSimulationBackend(
+        simulationBackend,
+        dependencies.personalLocalAttestation,
+      ) !==
         "local-engine",
     );
     if (!preflight.ok || !preflight.data) {
@@ -9074,6 +9566,7 @@ export async function runRosterStressTest(
       prospectiveRunId,
       freshnessAtEntry?.data ?? null,
       requestedScenarioContract,
+      dependencies.personalLocalAttestation,
     );
     try {
       await resolveExportArtifactTargets(
@@ -9929,6 +10422,7 @@ export async function compareRosterStressRevision(
     revisionRunId,
     null,
     baselineManifest.requestedScenarioContract,
+    dependencies.personalLocalAttestation,
   );
   const revisionRunDirectory = path.join(
     outputDirectory,

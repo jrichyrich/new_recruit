@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import type {
   ProfilePolicyV1,
   TesseraCellUncertainty,
+  TesseraCombatEnvelope,
   TesseraFrozenScenarioContract,
   TesseraImportedArmySemanticSnapshot,
   TesseraImportedArmySimulationStateBinding,
@@ -19,6 +20,13 @@ import type {
   TesseraPreparedRoster,
   TesseraWebsiteProviderEvidence,
 } from "../../lib/rosterpilot";
+import type { CombatBridgeV2 } from "../../lib/rosterpilot/combat-bridge";
+import type { CombatBridgeV3 } from "../../lib/rosterpilot/combat-bridge-v3";
+import type { TesseraScenarioPolicyContractV2 } from "./scenario-contract-v2";
+import type { TesseraScenarioPolicyContractV3 } from "./scenario-contract-v3";
+import type {
+  CombatCorpusTranslationLedgerEntryV1,
+} from "./combat-bridge-input-v3";
 import {
   normalizeProfileIdentity,
 } from "./profile-policy";
@@ -146,6 +154,7 @@ export type TesseraScenarioCell = TesseraMatrixCell & {
   metricValue: number;
   seed?: number;
   executionSha256?: string;
+  combatEnvelope?: TesseraCombatEnvelope;
 };
 
 export type TesseraScenario = {
@@ -490,6 +499,15 @@ export type TesseraBrowserInput = {
   metrics?: readonly TesseraMetric[];
   profilePolicy?: ProfilePolicyV1 | null;
   frozenScenarioContract?: TesseraFrozenScenarioContract[] | null;
+  /** Rules-aware local scenario/policy contract. Website adapters ignore it. */
+  scenarioPolicyContractV2?: TesseraScenarioPolicyContractV2 | null;
+  /** Provider-neutral physical combat state. Website adapters retain it as evidence. */
+  scenarioPolicyContractV3?: TesseraScenarioPolicyContractV3 | null;
+  /** Bundle-native rule compiler output. Website adapters ignore it. */
+  combatBridge?: CombatBridgeV2 | CombatBridgeV3 | null;
+  /** Exact source-leaf mechanics used to scope personal parity promotion. */
+  combatCorpusTranslationLedger?:
+    readonly CombatCorpusTranslationLedgerEntryV1[] | null;
   savedListReuse?: TesseraSavedListReuse | null;
   /** Local-agent-owned evidence store; never sent to Tessera. */
   semanticSnapshotCacheDirectory?: string | null;

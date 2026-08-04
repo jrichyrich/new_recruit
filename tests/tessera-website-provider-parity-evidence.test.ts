@@ -13,10 +13,14 @@ import {
 import {
   createTesseraImportedArmySimulationStateBinding,
   tesseraImportedArmySemanticSnapshotIncompleteReasons,
+  tesseraSemanticWeaponRangeInches,
 } from "../local/tessera/website-semantic-evidence";
 import {
   deriveTesseraWebsiteProviderParityEvidence,
 } from "../local/tessera/website-provider-parity-evidence";
+import {
+  tesseraProviderParityProfileId,
+} from "../local/tessera/provider-parity-evidence";
 
 type UnitFixture = {
   name: string;
@@ -27,6 +31,7 @@ type UnitFixture = {
   invulnerable: number | null;
   weapon: {
     name: string;
+    range: number;
     attacks: string;
     skill: string;
     strength: number;
@@ -47,6 +52,7 @@ const namedUnits: Record<string, UnitFixture> = {
     invulnerable: 5,
     weapon: {
       name: "Witchseeker flamer",
+      range: 12,
       attacks: "D6",
       skill: "none",
       strength: 4,
@@ -68,6 +74,7 @@ const namedUnits: Record<string, UnitFixture> = {
     invulnerable: 4,
     weapon: {
       name: "Shuriken pistol",
+      range: 12,
       attacks: "1",
       skill: "3+",
       strength: 4,
@@ -85,6 +92,7 @@ const namedUnits: Record<string, UnitFixture> = {
     invulnerable: 4,
     weapon: {
       name: "Eldritch Storm",
+      range: 24,
       attacks: "D6",
       skill: "2+",
       strength: 6,
@@ -103,6 +111,7 @@ const namedUnits: Record<string, UnitFixture> = {
     invulnerable: null,
     weapon: {
       name: "Scatter laser",
+      range: 36,
       attacks: "6",
       skill: "3+",
       strength: 5,
@@ -135,6 +144,7 @@ function snapshot(
         count: fixture.models,
         visibleCharacteristics: [
           { name: "phase", value: "shooting" },
+          { name: "range", value: `${fixture.weapon.range}\"` },
           { name: "attacks", value: fixture.weapon.attacks },
           { name: "ballistic skill", value: fixture.weapon.skill },
           { name: "strength", value: String(fixture.weapon.strength) },
@@ -245,6 +255,28 @@ function completeEvidence(): {
   };
 }
 
+test("visible Web range values normalize to exact phase-appropriate inches", () => {
+  const ranged = structuredClone(
+    snapshot("player", [namedUnits.Witchseekers]).units[0].weapons[0],
+  );
+  assert.equal(tesseraSemanticWeaponRangeInches(ranged), 12);
+
+  const melee = structuredClone(ranged);
+  melee.visibleCharacteristics = melee.visibleCharacteristics
+    .filter((entry) =>
+      !["phase", "range", "ballistic skill"].includes(entry.name),
+    )
+    .concat([
+      { name: "phase", value: "fight" },
+      { name: "range", value: "Melee" },
+      { name: "weapon skill", value: "2+" },
+    ]);
+  assert.equal(tesseraSemanticWeaponRangeInches(melee), null);
+
+  ranged.visibleCharacteristics.push({ name: "weapon range", value: "18\"" });
+  assert.equal(tesseraSemanticWeaponRangeInches(ranged), undefined);
+});
+
 test("Web semantic derivation produces neutral named-unit combat evidence without hidden effects", () => {
   const fixture = completeEvidence();
   const result = deriveTesseraWebsiteProviderParityEvidence(
@@ -268,6 +300,18 @@ test("Web semantic derivation produces neutral named-unit combat evidence withou
   );
   assert.deepEqual(witchseekers?.modeledEffects, ["torrent-auto-hit"]);
   assert.deepEqual(witchseekers?.omittedEffects, ["battle-shock-trigger"]);
+  assert.equal(witchseekers?.attackProfiles[0]?.rangeInches, 12);
+  assert.equal(
+    witchseekers?.attackProfiles[0]?.profileId,
+    tesseraProviderParityProfileId({
+      side: "player",
+      unitName: "Witchseekers",
+      unitOccurrence: 1,
+      weaponName: "Witchseeker flamer",
+      profile: null,
+      weaponOccurrence: 1,
+    }),
+  );
   assert.deepEqual(
     result.combatSnapshot.units.find(
       (unit) => unit.normalizedName === "Troupe",
@@ -279,6 +323,53 @@ test("Web semantic derivation produces neutral named-unit combat evidence withou
       unit.evidence.sourceRefs.some((ref) =>
         ref.startsWith("tessera-web:state:"),
       ),
+    ),
+  );
+});
+
+test("a ranged Web profile without one exact visible range fails closed", () => {
+  const fixture = completeEvidence();
+  const player = structuredClone(
+    fixture.evidence.importSemantics.playerSnapshot,
+  ) as TesseraImportedArmySemanticSnapshot;
+  const opponent = structuredClone(
+    fixture.evidence.importSemantics.opponentSnapshot,
+  ) as TesseraImportedArmySemanticSnapshot;
+  player.units[0].weapons[0].visibleCharacteristics =
+    player.units[0].weapons[0].visibleCharacteristics.filter(
+      (entry) => entry.name !== "range",
+    );
+  const importSemantics = tesseraImportSemanticEvidenceFromSnapshots(
+    player,
+    opponent,
+    { player: binding(player), opponent: binding(opponent) },
+  );
+  assert.equal(importSemantics.complete, false);
+  assert.ok(
+    importSemantics.incompleteReasons.some((reason) =>
+      reason.includes("range-not-visible-or-invalid"),
+    ),
+  );
+  const result = deriveTesseraWebsiteProviderParityEvidence(
+    {
+      ...fixture.evidence,
+      importSemantics,
+    },
+    {
+      units: fixture.units,
+      rulesEdition: "warhammer-40000-11e",
+      rulesPackageVersion: "matched-play-fixture-v1",
+      engineDataSchemaVersion: 1,
+      combatModelVersion: "base-profile-monte-carlo-v1",
+    },
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.ok(
+    result.issues.some(
+      (entry) =>
+        entry.code === "WEBSITE_IMPORT_EVIDENCE_INCOMPLETE" &&
+        entry.message.includes("range-not-visible-or-invalid"),
     ),
   );
 });

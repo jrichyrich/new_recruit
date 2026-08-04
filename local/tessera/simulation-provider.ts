@@ -36,6 +36,17 @@ export type TesseraSimulationProviderExecution<TOutput> = {
   data: TOutput;
 };
 
+export type TesseraWebsiteFallbackAuthorization = {
+  action: "new-recruit-import-and-tessera-web";
+  requestSha256: string;
+  source: "confirmed-fallback";
+};
+
+export type TesseraWebsiteFallbackOffer =
+  TesseraSimulationFallbackReceipt & {
+    requestSha256: string | null;
+  };
+
 export interface TesseraSimulationProviderAdapter<TInput, TOutput> {
   readonly backend: TesseraSelectedSimulationBackend;
   getStatus():
@@ -89,13 +100,14 @@ export type RoutedTesseraSimulationResult<TLocalOutput, TWebsiteOutput> =
         { provider: "website" }
       >;
       data: TWebsiteOutput;
-      fallback: TesseraSimulationFallbackReceipt | null;
+      fallback: TesseraWebsiteFallbackOffer | null;
     };
 
 export class TesseraSimulationProviderError extends Error {
   readonly code: string;
   readonly backend: TesseraSelectedSimulationBackend | null;
   readonly retryable: boolean;
+  readonly fallbackOffer: TesseraWebsiteFallbackOffer | null;
 
   constructor(
     code: string,
@@ -104,6 +116,7 @@ export class TesseraSimulationProviderError extends Error {
       backend?: TesseraSelectedSimulationBackend | null;
       retryable?: boolean;
       cause?: unknown;
+      fallbackOffer?: TesseraWebsiteFallbackOffer | null;
     } = {},
   ) {
     super(message, { cause: options.cause });
@@ -111,6 +124,7 @@ export class TesseraSimulationProviderError extends Error {
     this.code = code;
     this.backend = options.backend ?? null;
     this.retryable = options.retryable ?? false;
+    this.fallbackOffer = options.fallbackOffer ?? null;
   }
 }
 
@@ -128,7 +142,16 @@ export type TesseraSimulationRouterRequest<
   requestedBackend: TesseraSimulationBackend;
   local?: ProviderRoute<TLocalInput, TLocalOutput>;
   website?: ProviderRoute<TWebsiteInput, TWebsiteOutput>;
+  /**
+   * Stable hash of the complete frozen request. Required before an automatic
+   * local attempt may be followed by a Web attempt.
+   */
+  requestSha256?: string;
+  /** Explicit, hash-bound permission for the external New Recruit/Web step. */
+  websiteFallbackAuthorization?: TesseraWebsiteFallbackAuthorization;
 };
+
+const SHA256 = /^[0-9a-f]{64}$/;
 
 function errorCode(error: unknown): string {
   return error &&
@@ -143,6 +166,65 @@ function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "The local Tessera engine failed without a structured error.";
+}
+
+function fallbackOffer(
+  requestSha256: string | undefined,
+  error: unknown,
+): TesseraWebsiteFallbackOffer {
+  return {
+    from: "local-engine",
+    to: "website",
+    code: errorCode(error),
+    message: errorMessage(error),
+    discardedLocalEvidence: true,
+    requestSha256:
+      requestSha256 && SHA256.test(requestSha256)
+        ? requestSha256
+        : null,
+  };
+}
+
+function requireWebsiteFallbackAuthorization(
+  request: Pick<
+    TesseraSimulationRouterRequest<unknown, unknown, unknown, unknown>,
+    "requestSha256" | "websiteFallbackAuthorization"
+  >,
+  error: unknown,
+): TesseraWebsiteFallbackOffer {
+  const offer = fallbackOffer(request.requestSha256, error);
+  const authorization = request.websiteFallbackAuthorization;
+  if (!authorization) {
+    throw new TesseraSimulationProviderError(
+      "TESSERA_WEBSITE_FALLBACK_REQUIRES_CONFIRMATION",
+      `The local simulation could not complete. Tessera Web was not opened; confirm the hash-bound fallback before New Recruit or browser activity begins.${
+        offer.requestSha256
+          ? ` Confirmation request SHA-256: ${offer.requestSha256}.`
+          : " The caller must first freeze and hash the complete request."
+      }`,
+      {
+        backend: "website",
+        fallbackOffer: offer,
+      },
+    );
+  }
+  if (
+    !request.requestSha256 ||
+    !SHA256.test(request.requestSha256) ||
+    authorization.action !== "new-recruit-import-and-tessera-web" ||
+    authorization.source !== "confirmed-fallback" ||
+    authorization.requestSha256 !== request.requestSha256
+  ) {
+    throw new TesseraSimulationProviderError(
+      "TESSERA_WEBSITE_FALLBACK_AUTHORIZATION_INVALID",
+      "The Tessera Web fallback authorization does not match the complete frozen simulation request.",
+      {
+        backend: "website",
+        fallbackOffer: offer,
+      },
+    );
+  }
+  return offer;
 }
 
 function assertProviderIdentity(
@@ -306,6 +388,41 @@ export async function routeTesseraSimulation<
       );
       if (!localPreflight.ok) {
         autoReason = "local-preflight-failed";
+        const preflightError = new TesseraSimulationProviderError(
+          "TESSERA_PROVIDER_PREFLIGHT_FAILED",
+          `The local-engine Tessera provider rejected the complete input${
+            localPreflight.reasonCodes.length > 0
+              ? ` (${localPreflight.reasonCodes.join(", ")})`
+              : ""
+          }.`,
+          { backend: "local-engine" },
+        );
+        const offer = requireWebsiteFallbackAuthorization(
+          request,
+          preflightError,
+        );
+        const website = await requireRunnableRoute(
+          request.website,
+          "website",
+        );
+        const execution = await executeRoute(
+          website.route,
+          website.status,
+        );
+        return {
+          selection: {
+            requestedBackend: "auto",
+            selectedBackend: "website",
+            reason: autoReason,
+          },
+          providerStatus: execution.providerStatus,
+          identity: execution.identity as Extract<
+            TesseraSimulationProviderIdentity,
+            { provider: "website" }
+          >,
+          data: execution.data,
+          fallback: offer,
+        };
       } else {
         try {
           const execution = await executeRoute(
@@ -327,7 +444,10 @@ export async function routeTesseraSimulation<
             fallback: null,
           };
         } catch (error) {
-          if (!request.website) throw error;
+          const offer = requireWebsiteFallbackAuthorization(
+            request,
+            error,
+          );
           const website = await requireRunnableRoute(
             request.website,
             "website",
@@ -348,13 +468,7 @@ export async function routeTesseraSimulation<
               { provider: "website" }
             >,
             data: execution.data,
-            fallback: {
-              from: "local-engine",
-              to: "website",
-              code: errorCode(error),
-              message: errorMessage(error),
-              discardedLocalEvidence: true,
-            },
+            fallback: offer,
           };
         }
       }

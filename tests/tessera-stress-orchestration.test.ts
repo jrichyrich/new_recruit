@@ -596,7 +596,7 @@ test("default stress outputs are unique and recovery paths fail closed", async (
         }>;
       };
     };
-    assert.equal(seededManifest.schemaVersion, 7);
+    assert.equal(seededManifest.schemaVersion, 8);
     assert.equal(seededManifest.simulationBackend, "auto");
     assert.equal(
       seededManifest.selectedSimulationBackend,
@@ -679,11 +679,38 @@ test("default stress outputs are unique and recovery paths fail closed", async (
     const migratedLocal = JSON.parse(
       await readFile(legacyLocalPath, "utf8"),
     );
-    assert.equal(migratedLocal.schemaVersion, 7);
+    assert.equal(migratedLocal.schemaVersion, 8);
     assert.equal(migratedLocal.simulationBackend, "local-engine");
     assert.equal(
       migratedLocal.selectedSimulationBackend,
       "local-engine",
+    );
+
+    const legacySimulatedLocalPath = path.join(
+      reservedDirectory,
+      "legacy-simulated-local-manifest.json",
+    );
+    const legacySimulatedLocal = structuredClone(seededManifest) as
+      typeof seededManifest & {
+        simulationRequested: boolean;
+        stagePolicyContractsV2?: unknown;
+        stagePolicyContractsV2Sha256?: string;
+      };
+    legacySimulatedLocal.schemaVersion = 7;
+    legacySimulatedLocal.simulationBackend = "local-engine";
+    legacySimulatedLocal.selectedSimulationBackend = "local-engine";
+    legacySimulatedLocal.simulationRequested = true;
+    delete legacySimulatedLocal.stagePolicyContractsV2;
+    delete legacySimulatedLocal.stagePolicyContractsV2Sha256;
+    await writeFile(
+      legacySimulatedLocalPath,
+      `${JSON.stringify(legacySimulatedLocal, null, 2)}\n`,
+    );
+    await assert.rejects(
+      verifyAndMigrateTesseraStressManifest(
+        legacySimulatedLocalPath,
+      ),
+      /predates frozen v2 stage-policy provenance.*Start a new stress run/i,
     );
 
     const attemptsBeforePolicyChange = deliveryAttempts;
@@ -1188,7 +1215,7 @@ test("durable jobs adopt verified stress manifests v1 through v4", async () => {
     const migrated = JSON.parse(
       await readFile(adopted, "utf8"),
     );
-    assert.equal(migrated.schemaVersion, 7);
+    assert.equal(migrated.schemaVersion, 8);
     assert.equal(
       migrated.configuration.catalogueDriftMode,
       "reject",
@@ -1790,7 +1817,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const adoptedLegacyManifestJson = JSON.parse(
       await readFile(adoptedLegacyManifest, "utf8"),
     );
-    assert.equal(adoptedLegacyManifestJson.schemaVersion, 7);
+    assert.equal(adoptedLegacyManifestJson.schemaVersion, 8);
     assert.match(
       adoptedLegacyManifestJson.portfolioSha256,
       /^[0-9a-f]{64}$/,
@@ -1821,7 +1848,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const rewrittenManifest = JSON.parse(
       await readFile(legacyManifestPath, "utf8"),
     );
-    assert.equal(rewrittenManifest.schemaVersion, 7);
+    assert.equal(rewrittenManifest.schemaVersion, 8);
     assert.equal(
       rewrittenManifest.portfolioSha256,
       portfolioContentHash(rewrittenManifest.portfolio),
@@ -1905,7 +1932,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     assert.equal(
       JSON.parse(await readFile(adoptedV2Manifest, "utf8"))
         .schemaVersion,
-      7,
+      8,
     );
     const migratedV2Resume = await runRosterStressTest(
       player,
@@ -1927,7 +1954,7 @@ test("runs, resumes, and pairs a staged faction stress test without duplicate li
     const rewrittenV2Manifest = JSON.parse(
       await readFile(legacyV2ManifestPath, "utf8"),
     );
-    assert.equal(rewrittenV2Manifest.schemaVersion, 7);
+    assert.equal(rewrittenV2Manifest.schemaVersion, 8);
     assert.equal(
       rewrittenV2Manifest.portfolioSha256,
       portfolioContentHash(rewrittenV2Manifest.portfolio),
@@ -2617,7 +2644,7 @@ test("freezes Tessera iteration contracts per stress template", async () => {
     const manifest = JSON.parse(
       await readFile(manifestPath, "utf8"),
     );
-    assert.equal(manifest.schemaVersion, 7);
+    assert.equal(manifest.schemaVersion, 8);
 
     const expectedIterationsByTemplate = new Map<string, number>();
     for (const item of baseline.data.portfolio.items) {
@@ -2868,7 +2895,7 @@ test("freezes Tessera iteration contracts per stress template", async () => {
     const migratedReplayManifest = JSON.parse(
       await readFile(legacyReplayPath, "utf8"),
     );
-    assert.equal(migratedReplayManifest.schemaVersion, 7);
+    assert.equal(migratedReplayManifest.schemaVersion, 8);
     assert.deepEqual(
       new Set(
         migratedReplayManifest.stageContracts.screening[
@@ -2910,7 +2937,7 @@ test("freezes Tessera iteration contracts per stress template", async () => {
     const migratedGenericManifest = JSON.parse(
       await readFile(genericReplayPath, "utf8"),
     );
-    assert.equal(migratedGenericManifest.schemaVersion, 7);
+    assert.equal(migratedGenericManifest.schemaVersion, 8);
     assert.deepEqual(
       migratedGenericManifest.screening[retryTemplateId].error,
       genericReplayFailure.screening[retryTemplateId].error,

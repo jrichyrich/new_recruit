@@ -131,6 +131,9 @@ import {
   initializeLocalDataBundleProvider,
 } from "../local/data-bundles/configure";
 import {
+  getActiveDataBundleManifest,
+} from "../lib/rosterpilot/active-data-context";
+import {
   assertTesseraScenarioContractProvider,
   assertTesseraScenarioContractScope,
   canonicalTesseraScenarioContract,
@@ -139,8 +142,34 @@ import {
   TESSERA_SCENARIO_PHASES,
 } from "../local/tessera/scenario-contract";
 import {
+  canonicalTesseraScenarioPolicyContractV3,
+  type TesseraScenarioPolicyContractV3,
+} from "../local/tessera/scenario-contract-v3";
+import {
   runTesseraProviderParityWorkflow,
 } from "../local/tessera/provider-parity-workflow";
+import {
+  buildTesseraParityCoveringSuiteV2,
+  verifyTesseraParityCoveringSuiteV2,
+  type TesseraParityFactionMechanicsV2,
+  type TesseraParityCoveringSuiteV2,
+} from "../local/tessera/provider-parity-covering-suite-v2";
+import {
+  LOCAL_TESSERA_ENGINE_IDENTITY,
+} from "../local/tessera/local-engine";
+import {
+  evaluatePersonalLocalParityAttestationV1,
+  personalLocalProviderIdentitySha256,
+} from "../local/tessera/personal-local-attestation";
+import {
+  createStoredPersonalLocalParityAttestationV1,
+  inspectPersonalLocalParityAttestationStoreV1,
+  loadPersonalLocalParityAttestationContextV1,
+  personalLocalMachineIdSha256V1,
+} from "../local/tessera/personal-local-attestation-store";
+import {
+  createPersonalLocalParityRotationFromFilesV1,
+} from "../local/tessera/personal-parity-rotation-aggregate";
 import {
   associatePendingRepairVerificationCommits,
   associateRepairVerificationCommit,
@@ -275,6 +304,119 @@ async function requestedScenarioContract(
   );
   assertTesseraScenarioContractProvider(contract, backend);
   return contract;
+}
+
+async function requestedScenarioPolicyContractV3(
+  args: Args,
+  executionMode: string | undefined,
+): Promise<TesseraScenarioPolicyContractV3 | undefined> {
+  const filename = value(args, "scenario-policy-contract-v3");
+  if (args["scenario-policy-contract-v3"] === undefined) {
+    return undefined;
+  }
+  if (!filename) {
+    throw new Error(
+      "--scenario-policy-contract-v3 requires a JSON file path.",
+    );
+  }
+  if (
+    executionMode !== "simulate" &&
+    !flag(args, "experimental")
+  ) {
+    throw new Error(
+      "--scenario-policy-contract-v3 requires --execution-mode simulate.",
+    );
+  }
+  try {
+    return canonicalTesseraScenarioPolicyContractV3(
+      JSON.parse(await readFile(path.resolve(filename), "utf8")),
+    );
+  } catch (error) {
+    throw new Error(
+      `The Tessera v3 scenario-policy contract could not be read: ${
+        error instanceof Error ? error.message : "invalid JSON"
+      }.`,
+    );
+  }
+}
+
+async function requestedProviderParityCase(
+  args: Args,
+  executionMode: string | undefined,
+): Promise<
+  | {
+      coveringSuite: TesseraParityCoveringSuiteV2;
+      coveringCaseId: string;
+    }
+  | undefined
+> {
+  const suitePath = value(args, "provider-parity-suite");
+  const coveringCaseId = value(args, "provider-parity-case");
+  if (!suitePath && !coveringCaseId) return undefined;
+  if (!suitePath || !coveringCaseId) {
+    throw new Error(
+      "Exact provider parity requires both --provider-parity-suite and --provider-parity-case.",
+    );
+  }
+  if (
+    executionMode !== "simulate" &&
+    !flag(args, "experimental")
+  ) {
+    throw new Error(
+      "Exact provider parity requires --execution-mode simulate.",
+    );
+  }
+  let coveringSuite: TesseraParityCoveringSuiteV2;
+  try {
+    coveringSuite = JSON.parse(
+      await readFile(path.resolve(suitePath), "utf8"),
+    ) as TesseraParityCoveringSuiteV2;
+  } catch (error) {
+    throw new Error(
+      `The provider-parity covering suite could not be read: ${
+        error instanceof Error ? error.message : "invalid JSON"
+      }.`,
+    );
+  }
+  if (!verifyTesseraParityCoveringSuiteV2(coveringSuite)) {
+    throw new Error(
+      "The provider-parity covering suite is invalid or its hash is stale.",
+    );
+  }
+  if (
+    !coveringSuite.cases.some(
+      (candidate) => candidate.caseId === coveringCaseId,
+    )
+  ) {
+    throw new Error(
+      `The provider-parity suite has no case ${JSON.stringify(coveringCaseId)}.`,
+    );
+  }
+  return { coveringSuite, coveringCaseId };
+}
+
+async function readVerifiedTesseraParityCoveringSuite(
+  filename: string,
+  purpose: string,
+): Promise<TesseraParityCoveringSuiteV2> {
+  let coveringSuite: TesseraParityCoveringSuiteV2;
+  try {
+    coveringSuite = JSON.parse(
+      await readFile(path.resolve(filename), "utf8"),
+    ) as TesseraParityCoveringSuiteV2;
+  } catch (error) {
+    throw new Error(
+      `${purpose} could not be read: ${
+        error instanceof Error ? error.message : "invalid JSON"
+      }.`,
+    );
+  }
+  if (!verifyTesseraParityCoveringSuiteV2(coveringSuite)) {
+    throw new Error(
+      `${purpose} is invalid or its hash is stale.`,
+    );
+  }
+  return coveringSuite;
 }
 
 function optimizerStatePath(args: Args): string {
@@ -469,6 +611,44 @@ function requestedSimulationBackend(
     );
   }
   return requested;
+}
+
+function requestedWebsiteFallbackAuthorization(args: Args) {
+  const requestSha256 = value(
+    args,
+    "website-fallback-confirmation-sha256",
+  );
+  if (requestSha256 === undefined) return undefined;
+  if (!/^[0-9a-f]{64}$/.test(requestSha256)) {
+    throw new Error(
+      "--website-fallback-confirmation-sha256 requires exactly 64 lowercase hexadecimal characters.",
+    );
+  }
+  return {
+    action: "new-recruit-import-and-tessera-web" as const,
+    requestSha256,
+    source: "confirmed-fallback" as const,
+  };
+}
+
+const websiteFallbackConfirmationScopeError =
+  "--website-fallback-confirmation-sha256 is available only for exact Tessera analysis; stress and build workflows produce distinct request hashes.";
+
+function rejectWebsiteFallbackConfirmationOutsideExactAnalysis(
+  args: Args,
+  action: string,
+): void {
+  if (
+    value(args, "website-fallback-confirmation-sha256") !==
+      undefined &&
+    action !== "analyze" &&
+    !(
+      action === "start-run" &&
+      value(args, "run-kind") === "exact"
+    )
+  ) {
+    throw new Error(websiteFallbackConfirmationScopeError);
+  }
 }
 
 function printStartedTesseraRun(
@@ -833,7 +1013,7 @@ Usage:
   rosterpilot tessera configure
   rosterpilot tessera forget
   rosterpilot tessera prepare --file roster.json [--out-dir exports/tessera] [--verified-catalogue-drift-diagnostic]
-  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
+  rosterpilot tessera analyze --file roster.json (--opponent-file army.rosz [--opponent-context enemy.json] | --opponent-roster enemy.json) [--simulation-backend auto|local-engine|website] [--website-fallback-confirmation-sha256 lowercase-64-hex] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--scenario-policy-contract-v3 physical-state.json] [--provider-parity-suite suite.json --provider-parity-case case-id] [--fallback none|baseline-damage-v1] [--profile-policy profiles.json] [--analysis-mode quick|full] [--phases shooting,fight] [--metrics wipe-probability,half-wipe-probability,mean-kills,mean-damage] [--allow-point-mismatch] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--no-change-candidates]
   rosterpilot tessera stress-test --file roster.json --against-faction aeldari [--suite core-3|diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--analysis staged|full-all] [--profile-policy profiles.json] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--force-retry] [--full-json] [--out-dir exports/tessera] [--overwrite]
   rosterpilot tessera preview-portfolio --against-faction aeldari [--points 1000] [--suite core-3|diverse-9] [--full-json]
   rosterpilot tessera build-and-stress --prompt "Build a mobile, durable 1,000 point Custodes army" --player-faction adeptus-custodes --against-faction aeldari [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--required-unit farseer] [--exclude-unit warlock-skyrunners] [--required-warlord farseer-skyrunner] [--suite diverse-9] [--simulation-backend auto|local-engine|website] [--execution-mode prepare-only|simulate] [--scenario-contract contract.json | --iterations positive-int] [--analysis staged] [--profile-policy profiles.json] [--enforce-provider-compatibility] [--verified-catalogue-drift-diagnostic] [--resume [manifest.json] | --restart-from manifest.json] [--allow-readiness-warnings] [--full-json]
@@ -843,14 +1023,19 @@ Usage:
   rosterpilot tessera validation-advance --workflow <workflow-id>
   rosterpilot tessera validation-confirm-remaining-six --workflow <workflow-id> --expected-sequence <n>
   rosterpilot tessera validation-confirm-successor --workflow <workflow-id> --failed-job <job-id> --expected-sequence <n>
-  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--simulation-backend auto|local-engine|website] [--scenario-contract contract.json | --iterations positive-int] [--enforce-provider-compatibility] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
+  rosterpilot tessera start-run --run-kind exact|stress|build-and-stress|build-and-analyze [workflow options] [--simulation-backend auto|local-engine|website] [--website-fallback-confirmation-sha256 lowercase-64-hex (exact only)] [--scenario-contract contract.json | --iterations positive-int] [--enforce-provider-compatibility] [--legends-policy auto|allow|exclude] [--play-context unspecified|open-play|casual|narrative|matched-play] [--include-legends] [--portfolio-preview preview.json] [--verified-catalogue-drift-diagnostic]
   rosterpilot tessera run-status --job exports/tessera/runs/run-.../tessera-run.json [--full-json]
   rosterpilot tessera run-resume --job exports/tessera/runs/run-.../tessera-run.json [--restart-from] [--out-dir exports/tessera]
   rosterpilot tessera resolve-profiles --job ... --profile-policy profiles.json
   rosterpilot tessera run-cancel --job exports/tessera/runs/run-.../tessera-run.json
   rosterpilot tessera compare-revision --baseline-report matchup.json --revised-roster revised.json [--profile-policy profiles.json] [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera]
   rosterpilot tessera compare-stress-revision --baseline-report stress-test.json --revised-roster revised.json [--verified-catalogue-drift-diagnostic] [--out-dir exports/tessera] [--overwrite]
-  rosterpilot tessera compare-providers --local-report local-matchup.json --website-report website-matchup.json [--out-dir exports/tessera/parity] [--overwrite]
+  rosterpilot tessera compare-providers --local-report local-matchup.json --website-report website-matchup.json [--out-dir exports/tessera/parity] [--personal-rotation-id id --personal-rotation-mode observe|enforce --personal-rotation-record rotation.json] [--overwrite]
+  rosterpilot tessera parity-suite build --manifest faction-mechanics.json --out covering-suite.json [--overwrite]
+  rosterpilot tessera parity-suite verify --suite covering-suite.json
+  rosterpilot tessera personal-rotation aggregate --covering-suite covering-suite-v2.json --comparison case-1/tessera-provider-parity.json [--comparison case-2/tessera-provider-parity.json ...] --rotation-id id --mode observe|enforce --record rotation.json [--completed-at ISO-8601 --verified-at ISO-8601] [--overwrite]
+  rosterpilot tessera personal-attestation create --rotation rotation-1.json --rotation rotation-2.json --rotation rotation-3.json --rotation rotation-4.json --covering-suite covering-suite-v2.json [--overwrite]
+  rosterpilot tessera personal-attestation status [--covering-suite covering-suite-v2.json]
   rosterpilot tessera optimizer-start --baseline-report matchup.json --file roster.json [--mode guided|recommend-only] [--profile-policy profiles.json] [--out-dir exports/tessera/optimizers]
   rosterpilot tessera optimizer-status --optimizer exports/tessera/optimizers/optimizer-.../tessera-optimizer.json
   rosterpilot tessera optimizer-approve-candidates --optimizer ... --expected-revision 0 --candidate candidate-id [--candidate another-id] --approval-id approval-id --approved-by name
@@ -1295,6 +1480,318 @@ async function main(): Promise<void> {
   }
   if (command === "tessera") {
     const action = positionals[0] ?? "status";
+    rejectWebsiteFallbackConfirmationOutsideExactAnalysis(
+      args,
+      action,
+    );
+    if (action === "parity-suite") {
+      const operation = positionals[1] ?? "verify";
+      if (operation === "build") {
+        const manifestPath = value(args, "manifest");
+        const outputPath = value(args, "out");
+        if (!manifestPath || !outputPath) {
+          throw new Error(
+            "Tessera parity-suite build requires --manifest and --out.",
+          );
+        }
+        const manifest = JSON.parse(
+          await readFile(path.resolve(manifestPath), "utf8"),
+        ) as {
+          corpusInventorySha256?: unknown;
+          factions?: unknown;
+          allowMirrorCases?: unknown;
+        };
+        if (
+          typeof manifest.corpusInventorySha256 !== "string" ||
+          !Array.isArray(manifest.factions)
+        ) {
+          throw new Error(
+            "The parity-suite manifest requires corpusInventorySha256 and a factions array.",
+          );
+        }
+        const coveringSuite = buildTesseraParityCoveringSuiteV2({
+          corpusInventorySha256: manifest.corpusInventorySha256,
+          factions:
+            manifest.factions as TesseraParityFactionMechanicsV2[],
+          allowMirrorCases: manifest.allowMirrorCases === true,
+        });
+        const written = await writeExportArtifact(
+          {
+            format: "roster-json",
+            filename: path.basename(outputPath),
+            mimeType: "application/json",
+            encoding: "utf8",
+            content: `${JSON.stringify(coveringSuite, null, 2)}\n`,
+          },
+          path.resolve(outputPath),
+          {
+            overwrite: flag(args, "overwrite"),
+            allowOutsideRoot: flag(args, "allow-outside-root"),
+          },
+        );
+        print({
+          ok: true,
+          data: { coveringSuite, written },
+          violations: [],
+          warnings: [],
+        });
+        return;
+      }
+      if (operation === "verify") {
+        const suitePath = value(args, "suite");
+        if (!suitePath) {
+          throw new Error(
+            "Tessera parity-suite verify requires --suite.",
+          );
+        }
+        const coveringSuite = JSON.parse(
+          await readFile(path.resolve(suitePath), "utf8"),
+        ) as TesseraParityCoveringSuiteV2;
+        const valid = verifyTesseraParityCoveringSuiteV2(
+          coveringSuite,
+        );
+        print({
+          ok: valid,
+          data: {
+            valid,
+            suiteSha256: valid
+              ? coveringSuite.suiteSha256
+              : null,
+            caseIds: valid
+              ? coveringSuite.cases.map((entry) => entry.caseId)
+              : [],
+          },
+          violations: valid
+            ? []
+            : [{
+                code: "TESSERA_PARITY_COVERING_SUITE_INVALID",
+                message:
+                  "The covering suite is invalid or its hash is stale.",
+                severity: "error" as const,
+              }],
+          warnings: [],
+        });
+        if (!valid) process.exitCode = 2;
+        return;
+      }
+      throw new Error(
+        `Unknown tessera parity-suite command "${operation}".`,
+      );
+    }
+    if (action === "personal-rotation") {
+      const operation = positionals[1] ?? "aggregate";
+      if (operation !== "aggregate") {
+        throw new Error(
+          `Unknown tessera personal-rotation command "${operation}".`,
+        );
+      }
+      const coveringSuitePath = value(args, "covering-suite");
+      const comparisonPaths = list(args, "comparison");
+      const rotationId = value(args, "rotation-id");
+      const mode = value(args, "mode");
+      const recordPath = value(args, "record");
+      if (
+        !coveringSuitePath ||
+        comparisonPaths.length === 0 ||
+        !rotationId ||
+        (mode !== "observe" && mode !== "enforce") ||
+        !recordPath
+      ) {
+        throw new Error(
+          "Tessera personal-rotation aggregate requires --covering-suite, one or more --comparison artifacts, --rotation-id, --mode observe|enforce, and --record.",
+        );
+      }
+      const machineIdSha256 =
+        await personalLocalMachineIdSha256V1({ create: true });
+      if (!machineIdSha256) {
+        throw new Error(
+          "The personal parity machine binding could not be initialized.",
+        );
+      }
+      const created =
+        await createPersonalLocalParityRotationFromFilesV1({
+          coveringSuitePath: path.resolve(coveringSuitePath),
+          comparisonPaths: comparisonPaths.map((filename) =>
+            path.resolve(filename)
+          ),
+          machineIdSha256,
+          rotationId,
+          mode,
+          recordPath: path.resolve(recordPath),
+          completedAt: value(args, "completed-at"),
+          verifiedAt: value(args, "verified-at"),
+          overwrite: flag(args, "overwrite"),
+        });
+      print({
+        ok: true,
+        data: {
+          recordPath: created.recordPath,
+          rotationId: created.record.rotation.rotationId,
+          mode: created.record.rotation.mode,
+          coveringSuiteSha256: created.coveringSuiteSha256,
+          coveredCaseIds: created.caseIds,
+          aggregateExactReceiptSha256:
+            created.aggregateExactReceiptSha256,
+          aggregateParityResultSha256:
+            created.aggregateParityResultSha256,
+          providerIdentitySha256:
+            created.localProviderIdentitySha256,
+          websiteProviderIdentitySha256:
+            created.websiteProviderIdentitySha256,
+          bundleId: created.bundleId,
+          recordSha256: created.record.recordSha256,
+        },
+        violations: [],
+        warnings: [],
+      });
+      return;
+    }
+    if (action === "personal-attestation") {
+      const operation = positionals[1] ?? "status";
+      if (operation === "create") {
+        const rotationRecordPaths = list(args, "rotation");
+        const coveringSuitePath = value(args, "covering-suite");
+        if (rotationRecordPaths.length !== 4) {
+          throw new Error(
+            "Tessera personal-attestation create requires exactly four --rotation record paths.",
+          );
+        }
+        if (!coveringSuitePath) {
+          throw new Error(
+            "Tessera personal-attestation create requires --covering-suite with the verified covering-suite-v2 artifact.",
+          );
+        }
+        const coveringSuite =
+          await readVerifiedTesseraParityCoveringSuite(
+            coveringSuitePath,
+            "The personal-attestation covering suite",
+          );
+        const activeManifest = getActiveDataBundleManifest();
+        if (!activeManifest?.bundleId) {
+          throw new Error(
+            "Tessera personal-attestation create requires one active verified data bundle.",
+          );
+        }
+        const providerIdentitySha256 =
+          personalLocalProviderIdentitySha256(
+            LOCAL_TESSERA_ENGINE_IDENTITY,
+          );
+        const created =
+          await createStoredPersonalLocalParityAttestationV1({
+            rotationRecordPaths: rotationRecordPaths.map((filename) =>
+              path.resolve(filename),
+            ),
+            coveringSuite,
+            overwrite: flag(args, "overwrite"),
+            createdAt: value(args, "created-at"),
+            expectedBindings: {
+              providerIdentitySha256,
+              bundleId: activeManifest.bundleId,
+              coverageSuiteSha256: coveringSuite.suiteSha256,
+            },
+          });
+        print({
+          ok: true,
+          data: {
+            present: true,
+            active: created.evaluation.active,
+            reasonCodes: created.evaluation.reasonCodes,
+            attestationPath: created.path,
+            attestationSha256:
+              created.attestation.attestationSha256,
+            providerIdentitySha256:
+              created.attestation.providerIdentitySha256,
+            bundleId: created.attestation.bundleId,
+            coverageSuiteSha256:
+              created.attestation.rotations[0]
+                ?.coverageSuiteSha256 ?? null,
+            coveringSuitePath: created.coveringSuitePath,
+            rotations: created.attestation.rotations.map(
+              (rotation) => ({
+                rotationId: rotation.rotationId,
+                mode: rotation.mode,
+                completedAt: rotation.completedAt,
+              }),
+            ),
+          },
+          violations: [],
+          warnings: [],
+        });
+        return;
+      }
+      if (operation === "status") {
+        const stored =
+          await inspectPersonalLocalParityAttestationStoreV1();
+        const coveringSuitePath = value(args, "covering-suite");
+        const coveringSuite = coveringSuitePath
+          ? await readVerifiedTesseraParityCoveringSuite(
+              coveringSuitePath,
+              "The current personal-attestation covering suite",
+            )
+          : null;
+        const activeManifest = getActiveDataBundleManifest();
+        const providerIdentitySha256 =
+          personalLocalProviderIdentitySha256(
+            LOCAL_TESSERA_ENGINE_IDENTITY,
+          );
+        let active = false;
+        let reasonCodes: string[] = [];
+        if (!stored.present) {
+          reasonCodes = ["PERSONAL_LOCAL_ATTESTATION_MISSING"];
+        } else if (!coveringSuite) {
+          reasonCodes = [
+            "PERSONAL_LOCAL_ATTESTATION_CURRENT_SUITE_REQUIRED",
+          ];
+        } else if (!activeManifest?.bundleId) {
+          reasonCodes = [
+            "PERSONAL_LOCAL_ATTESTATION_CURRENT_BUNDLE_REQUIRED",
+          ];
+        } else {
+          const context =
+            await loadPersonalLocalParityAttestationContextV1({
+              providerIdentitySha256,
+              bundleId: activeManifest.bundleId,
+              coverageSuiteSha256: coveringSuite.suiteSha256,
+            });
+          const evaluation = evaluatePersonalLocalParityAttestationV1({
+            attestation: context?.attestation,
+            machineIdSha256:
+              context?.machineIdSha256 ?? "0".repeat(64),
+            providerIdentitySha256,
+            bundleId: activeManifest.bundleId,
+            coverageSuiteSha256: coveringSuite.suiteSha256,
+            coveringSuite: context?.coveringSuite,
+            coveringSuiteIssueCode:
+              context?.coveringSuiteIssueCode,
+          });
+          active = evaluation.active;
+          reasonCodes = evaluation.reasonCodes;
+        }
+        print({
+          ok: true,
+          data: {
+            ...stored,
+            active,
+            reasonCodes,
+            currentBindings: {
+              providerIdentitySha256,
+              bundleId: activeManifest?.bundleId ?? null,
+              coverageSuiteSha256:
+                coveringSuite?.suiteSha256 ?? null,
+              complete: Boolean(
+                activeManifest?.bundleId && coveringSuite,
+              ),
+            },
+          },
+          violations: [],
+          warnings: [],
+        });
+        return;
+      }
+      throw new Error(
+        `Unknown tessera personal-attestation command "${operation}".`,
+      );
+    }
     if (action === "configure") {
       const result = await configureTesseraCredentials();
       print(result);
@@ -1890,6 +2387,43 @@ async function main(): Promise<void> {
           "Tessera compare-providers requires --local-report and --website-report.",
         );
       }
+      const personalRotationId = value(
+        args,
+        "personal-rotation-id",
+      );
+      const personalRotationMode = value(
+        args,
+        "personal-rotation-mode",
+      );
+      const personalRotationRecord = value(
+        args,
+        "personal-rotation-record",
+      );
+      if (
+        [
+          personalRotationId,
+          personalRotationMode,
+          personalRotationRecord,
+        ].some(Boolean) &&
+        !(
+          personalRotationId &&
+          (personalRotationMode === "observe" ||
+            personalRotationMode === "enforce") &&
+          personalRotationRecord
+        )
+      ) {
+        throw new Error(
+          "A personal parity rotation requires --personal-rotation-id, --personal-rotation-mode observe|enforce, and --personal-rotation-record.",
+        );
+      }
+      const machineIdSha256 = personalRotationId
+        ? await personalLocalMachineIdSha256V1({ create: true })
+        : null;
+      if (personalRotationId && !machineIdSha256) {
+        throw new Error(
+          "The personal parity machine binding could not be initialized.",
+        );
+      }
       const result = await runTesseraProviderParityWorkflow({
         localReportPath: path.resolve(localReportPath),
         websiteReportPath: path.resolve(websiteReportPath),
@@ -1897,6 +2431,21 @@ async function main(): Promise<void> {
           value(args, "out-dir") ?? "exports/tessera/parity",
         overwrite: flag(args, "overwrite"),
         allowOutsideRoot: flag(args, "allow-outside-root"),
+        ...(personalRotationId &&
+        machineIdSha256 &&
+        personalRotationRecord
+          ? {
+              personalRotation: {
+                machineIdSha256,
+                rotationId: personalRotationId,
+                mode: personalRotationMode as "observe" | "enforce",
+                completedAt: value(args, "completed-at"),
+                verifiedAt: value(args, "verified-at"),
+                recordPath: path.resolve(personalRotationRecord),
+                overwrite: flag(args, "overwrite"),
+              },
+            }
+          : {}),
       });
       print(result);
       if (!result.ok) process.exitCode = 2;
@@ -1956,6 +2505,10 @@ async function main(): Promise<void> {
         );
       }
       let request: TesseraRunRequest;
+      const websiteFallbackAuthorization =
+        runKind === "exact"
+          ? requestedWebsiteFallbackAuthorization(args)
+          : undefined;
       if (runKind === "exact") {
         const playerFile = value(args, "file");
         const opponentRosterFile = value(args, "opponent-roster");
@@ -2008,6 +2561,8 @@ async function main(): Promise<void> {
               },
           options: {
             simulationBackend: requestedSimulationBackend(args),
+            websiteFallbackAuthorization:
+              websiteFallbackAuthorization,
             executionMode: executionMode as
               | "prepare-only"
               | "simulate"
@@ -2017,6 +2572,11 @@ async function main(): Promise<void> {
               args,
               { executionMode },
             ),
+            scenarioPolicyContractV3:
+              await requestedScenarioPolicyContractV3(
+                args,
+                executionMode,
+              ),
             opponentRosterContext: opponentContextFile
               ? await readRosterDraft(
                   path.resolve(opponentContextFile),
@@ -2999,6 +3559,13 @@ async function main(): Promise<void> {
           metrics: effectiveMetrics,
         },
       );
+      const scenarioPolicyContractV3 =
+        await requestedScenarioPolicyContractV3(
+          args,
+          executionMode,
+        );
+      const providerParityCase =
+        await requestedProviderParityCase(args, executionMode);
       const opponentRosterContext = opponentContextFile
         ? await readRosterDraft(path.resolve(opponentContextFile))
         : undefined;
@@ -3007,6 +3574,8 @@ async function main(): Promise<void> {
         overwrite: flag(args, "overwrite"),
         allowOutsideRoot: flag(args, "allow-outside-root"),
         simulationBackend: requestedSimulationBackend(args),
+        websiteFallbackAuthorization:
+          requestedWebsiteFallbackAuthorization(args),
         executionMode: executionMode as
           | "prepare-only"
           | "simulate"
@@ -3027,6 +3596,8 @@ async function main(): Promise<void> {
             >)
           : undefined,
         scenarioContract,
+        scenarioPolicyContractV3,
+        providerParityCase,
         providerCompatibilityMode:
           requestedProviderCompatibilityMode(args),
         allowPointMismatch: flag(args, "allow-point-mismatch"),

@@ -10,6 +10,7 @@ import {
   wargearPoints,
 } from "@alpaca-software/40kdc-data";
 import type {
+  Dataset,
   Roster,
   RosterUnit,
   UnitView,
@@ -871,6 +872,48 @@ export function resolveFactionUnit(
   return resolveUnit(unitId, factionId);
 }
 
+function datasetFactionAncestryForResolution(
+  source: Dataset,
+  factionId: string,
+): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  let current = source.factions.get(factionId);
+  while (current && !seen.has(current.id)) {
+    ids.push(current.id);
+    seen.add(current.id);
+    const parentId = current.raw.parent_faction_id;
+    current = parentId ? source.factions.get(parentId) : undefined;
+  }
+  return ids;
+}
+
+/**
+ * Resolve a faction-scoped unit from an explicitly captured Dataset. This is
+ * the snapshot-safe counterpart to resolveFactionUnit for operations that
+ * already hold a data-bundle lease.
+ */
+export function resolveFactionUnitFromDataset(
+  source: Dataset,
+  unitId: string,
+  factionId: string,
+): UnitView | undefined {
+  for (const sourceFactionId of datasetFactionAncestryForResolution(
+    source,
+    factionId,
+  )) {
+    const factionUnit = source.units
+      .byFaction(sourceFactionId)
+      .find(
+        (unit) =>
+          unit.id === unitId ||
+          normalizeName(unit.name) === normalizeName(unitId),
+      );
+    if (factionUnit) return factionUnit;
+  }
+  return undefined;
+}
+
 /**
  * Returns only weapon groups that require an explicit same-phase profile
  * choice. A weapon with one shooting and one melee profile is not ambiguous.
@@ -878,15 +921,31 @@ export function resolveFactionUnit(
 export function rosterProfileRequirements(
   roster: RosterDraftV1,
 ): TesseraProfileRequirement[] {
+  return rosterProfileRequirementsFromDataset(roster, dataset);
+}
+
+/**
+ * Discover alternate weapon-profile requirements from one captured Dataset.
+ * This prevents a leased operation from mixing its snapshot with a later
+ * process-global activation while it freezes profile choices.
+ */
+export function rosterProfileRequirementsFromDataset(
+  roster: RosterDraftV1,
+  source: Dataset,
+): TesseraProfileRequirement[] {
   const requirements: TesseraProfileRequirement[] = [];
   for (const selection of roster.units) {
-    const unit = resolveUnit(selection.unitId, roster.factionId);
+    const unit = resolveFactionUnitFromDataset(
+      source,
+      selection.unitId,
+      roster.factionId,
+    );
     if (!unit) continue;
     for (const equipment of selection.equipment) {
       if (equipment.count <= 0) continue;
       const weapon =
         unit.weapons.find((candidate) => candidate.id === equipment.itemId) ??
-        dataset.weapons.all.find(
+        source.weapons.all.find(
           (candidate) =>
             candidate.id === equipment.itemId &&
             candidate.raw.faction_id === unit.raw.faction_id,

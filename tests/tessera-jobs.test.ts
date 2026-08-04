@@ -203,6 +203,90 @@ test("durable Tessera runtime admission rejects stale or mismatched launchers", 
   );
 });
 
+test("durable exact jobs retain a validated Website fallback confirmation authorization", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "rosterpilot-tessera-fallback-auth-"),
+  );
+  try {
+    const player = buildRoster({
+      faction: "adeptus-custodes",
+      pointsLimit: 1_000,
+      name: "Fallback authorization player",
+    });
+    const opponent = buildRoster({
+      faction: "world-eaters",
+      pointsLimit: 1_000,
+      name: "Fallback authorization opponent",
+    });
+    assert.ok(player.ok && player.data);
+    assert.ok(opponent.ok && opponent.data);
+    const requestSha256 = "a".repeat(64);
+    const job = await startTesseraRun(
+      {
+        kind: "exact",
+        playerRoster: player.data,
+        opponent: { kind: "roster", roster: opponent.data },
+        options: {
+          executionMode: "prepare-only",
+          simulationBackend: "auto",
+          websiteFallbackAuthorization: {
+            action: "new-recruit-import-and-tessera-web",
+            requestSha256,
+            source: "confirmed-fallback",
+          },
+        },
+      },
+      {
+        outputDirectory: path.join(root, "runs"),
+        rootDir: root,
+        launch: false,
+      },
+    );
+    const document = await readJobDocument(job.requestPath);
+    assert.equal(document.request.kind, "exact");
+    if (document.request.kind !== "exact") {
+      throw new Error("Expected an exact durable request.");
+    }
+    assert.deepEqual(
+      document.request.options?.websiteFallbackAuthorization,
+      {
+        action: "new-recruit-import-and-tessera-web",
+        requestSha256,
+        source: "confirmed-fallback",
+      },
+    );
+    assert.notEqual(document.requestSha256, requestSha256);
+
+    await assert.rejects(
+      startTesseraRun(
+        {
+          kind: "exact",
+          playerRoster: player.data,
+          opponent: { kind: "roster", roster: opponent.data },
+          options: {
+            executionMode: "prepare-only",
+            websiteFallbackAuthorization: {
+              action: "new-recruit-import-and-tessera-web",
+              requestSha256: "A".repeat(64),
+              source: "confirmed-fallback",
+            },
+          },
+        },
+        {
+          outputDirectory: path.join(root, "invalid-runs"),
+          rootDir: root,
+          launch: false,
+        },
+      ),
+      hasErrorCode(
+        "TESSERA_WEBSITE_FALLBACK_AUTHORIZATION_INVALID",
+      ),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("durable Tessera jobs reserve isolated bundles and retain guided recovery state", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "rosterpilot-tessera-job-"),

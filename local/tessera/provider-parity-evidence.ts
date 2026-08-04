@@ -31,9 +31,16 @@ export type TesseraProviderParityCombatDefense = {
 };
 
 export type TesseraProviderParityCombatAttackProfile = {
+  /**
+   * Stable provider-neutral identity derived from side, unit occurrence,
+   * visible weapon/profile names, and weapon occurrence. Provider-native
+   * record IDs remain provider-specific evidence and are not compared.
+   */
   profileId: string;
   name: string;
   phase: TesseraPhase;
+  /** Exact profile range for shooting; null for fight profiles. */
+  rangeInches: number | null;
   equippedModelCount: number;
   attacks: string;
   skill: number | null;
@@ -116,6 +123,8 @@ export const TESSERA_PROVIDER_PARITY_MODELED_MECHANICS = [
   "defense-profile",
   "explicit-effect-state",
   "phase-direction",
+  "semantic-weapon-profile-identity",
+  "weapon-range",
   "weapon-keywords",
 ] as const;
 
@@ -294,6 +303,7 @@ function canonicalAttackProfile(
     profileId: profile.profileId,
     name: profile.name,
     phase: profile.phase,
+    rangeInches: profile.rangeInches,
     equippedModelCount: profile.equippedModelCount,
     attacks: profile.attacks,
     skill: profile.skill,
@@ -369,10 +379,16 @@ function validAttackProfile(
 ): boolean {
   return (
     typeof profile.profileId === "string" &&
-    profile.profileId.trim().length > 0 &&
+    /^[0-9a-f]{24}$/.test(profile.profileId) &&
     typeof profile.name === "string" &&
     profile.name.trim().length > 0 &&
     (profile.phase === "shooting" || profile.phase === "fight") &&
+    (
+      (profile.phase === "shooting" &&
+        Number.isSafeInteger(profile.rangeInches) &&
+        Number(profile.rangeInches) > 0) ||
+      (profile.phase === "fight" && profile.rangeInches === null)
+    ) &&
     Number.isInteger(profile.equippedModelCount) &&
     profile.equippedModelCount > 0 &&
     typeof profile.attacks === "string" &&

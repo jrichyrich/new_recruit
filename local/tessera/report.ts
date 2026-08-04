@@ -33,6 +33,19 @@ type DisplayCell = {
       completeness: string;
     } | null
   >;
+  combatEnvelope: Record<
+    DisplayMetric,
+    {
+      min: number;
+      median: number;
+      max: number;
+      variantCount: number;
+      sourceVariantCount: number;
+      coverage: string;
+      claimEligibility: string;
+      reasons: string[];
+    } | null
+  >;
   warnings: string[];
 };
 
@@ -227,6 +240,43 @@ function metricUncertainty(
   };
 }
 
+function metricCombatEnvelope(
+  cell: TesseraScenarioCell,
+): DisplayCell["combatEnvelope"] {
+  const normalized = (
+    metric:
+      | "wipe-probability"
+      | "half-wipe-probability"
+      | "mean-kills"
+      | "mean-damage",
+  ) => {
+    const envelope = cell.combatEnvelope?.[metric];
+    return envelope
+      ? {
+          min: envelope.min,
+          median: envelope.median,
+          max: envelope.max,
+          variantCount: envelope.variantCount,
+          sourceVariantCount: envelope.sourceVariantCount,
+          coverage: safeText(envelope.coverage.status),
+          claimEligibility: safeText(
+            envelope.coverage.claimEligibility,
+          ),
+          reasons: envelope.coverage.reasons.map((reason) =>
+            safeText(reason),
+          ),
+        }
+      : null;
+  };
+  return {
+    "wipe-probability": normalized("wipe-probability"),
+    "half-wipe-probability": normalized("half-wipe-probability"),
+    "mean-kills": normalized("mean-kills"),
+    "mean-damage": normalized("mean-damage"),
+    "damage-per-100-points": null,
+  };
+}
+
 function scenarioCell(
   cell: TesseraScenarioCell,
   opponent: string,
@@ -244,6 +294,7 @@ function scenarioCell(
     targetLabel: safeText(cell.target.label, cell.target.name),
     values: metricValues(cell.values),
     uncertainty: metricUncertainty(cell),
+    combatEnvelope: metricCombatEnvelope(cell),
     warnings: cell.warningRefs.map((warning) => safeText(warning)),
   };
 }
@@ -267,6 +318,13 @@ function legacyCells(report: TesseraMatchupReport): DisplayCell[] {
         "damage-per-100-points": safeNumber(cell.damagePer100Points),
       },
       uncertainty: {
+        "wipe-probability": null,
+        "half-wipe-probability": null,
+        "mean-kills": null,
+        "mean-damage": null,
+        "damage-per-100-points": null,
+      },
+      combatEnvelope: {
         "wipe-probability": null,
         "half-wipe-probability": null,
         "mean-kills": null,
@@ -507,6 +565,59 @@ function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
       label: "Scenario contract SHA-256",
       value: safeText(report.scenarioContractSha256),
     });
+  }
+  if (report.scenarioPolicyContractV2Sha256) {
+    pairs.push({
+      label: "Scenario/policy v2 SHA-256",
+      value: safeText(report.scenarioPolicyContractV2Sha256),
+    });
+  }
+  const compactBridgeEvidence =
+    report.simulation.combatBridgeEvidence ?? [];
+  for (const [index, bridge] of compactBridgeEvidence.entries()) {
+    pairs.push(
+      {
+        label: `${safeText(
+          bridge.opponentName,
+          opponentNameAt(report, index),
+        )} combat bridge SHA-256`,
+        value: safeText(bridge.bridgeSha256),
+      },
+      {
+        label: `${safeText(
+          bridge.opponentName,
+          opponentNameAt(report, index),
+        )} combat coverage`,
+        value: `${safeText(bridge.coverage.status)} · ${safeText(
+          bridge.coverage.claimEligibility,
+        )} · ${bridge.coverage.omittedEffects} omitted · ${bridge.uniqueMechanicsCount}/${bridge.cellCount} unique mechanics`,
+      },
+      {
+        label: `${safeText(
+          bridge.opponentName,
+          opponentNameAt(report, index),
+        )} combat evidence SHA-256`,
+        value: safeText(bridge.evidenceSha256),
+      },
+    );
+  }
+  if (compactBridgeEvidence.length === 0) {
+    for (const [index, bridge] of (
+      report.simulation.combatBridges ?? []
+    ).entries()) {
+      pairs.push(
+        {
+          label: `${opponentNameAt(report, index)} combat bridge SHA-256`,
+          value: safeText(bridge.bridgeSha256),
+        },
+        {
+          label: `${opponentNameAt(report, index)} combat coverage`,
+          value: `${safeText(bridge.coverage.status)} · ${safeText(
+            bridge.coverage.claimEligibility,
+          )} · ${bridge.coverage.omittedEffects} omitted`,
+        },
+      );
+    }
   }
   compatibilityEnvelopes.forEach((envelope, index) => {
     const opponent = opponentNameAt(report, index);
@@ -870,6 +981,15 @@ function commonScript(): string {
     parts.push(value.completeness || "unavailable");
     return parts.join(" · ");
   };
+  const formatEnvelope = (metric, value) => {
+    if (!value || typeof value !== "object") return "";
+    return "rules envelope " + formatValue(metric, value.min) + " / " +
+      formatValue(metric, value.median) + " / " + formatValue(metric, value.max) +
+      " · " + value.variantCount + " execution" + (value.variantCount === 1 ? "" : "s") +
+      " from " + value.sourceVariantCount + " source variant" +
+      (value.sourceVariantCount === 1 ? "" : "s") +
+      " · " + value.coverage + " · " + value.claimEligibility;
+  };
   const heat = (metric, value) => {
     if (value === null || typeof value !== "number") return "";
     const ratio = metric.includes("probability")
@@ -924,9 +1044,11 @@ function commonScript(): string {
         td.style.background = heat(metric, value);
         if (cell) {
           const uncertainty = cell.uncertainty ? cell.uncertainty[metric] : null;
-          const detail = make("small", cell.confidence + " · " + formatUncertainty(uncertainty));
+          const envelope = cell.combatEnvelope ? cell.combatEnvelope[metric] : null;
+          const envelopeText = formatEnvelope(metric, envelope);
+          const detail = make("small", [cell.confidence, formatUncertainty(uncertainty), envelopeText].filter(Boolean).join(" · "));
           td.append(detail);
-          td.title = [cell.phase, cell.direction, formatUncertainty(uncertainty), ...cell.warnings].filter(Boolean).join(" · ");
+          td.title = [cell.phase, cell.direction, formatUncertainty(uncertainty), envelopeText, ...(envelope && Array.isArray(envelope.reasons) ? envelope.reasons : []), ...cell.warnings].filter(Boolean).join(" · ");
         }
         row.append(td);
       }

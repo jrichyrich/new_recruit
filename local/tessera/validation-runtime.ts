@@ -737,7 +737,7 @@ function manifestSupportsTrustedLocalReport(
     finalArtifacts?: { jsonSha256?: unknown };
   };
   return (
-    manifest.schemaVersion === 7 &&
+    manifest.schemaVersion === 8 &&
     manifest.reportKind === "tessera-stress-manifest" &&
     manifest.runId === report.runId &&
     manifest.portfolioSha256 === report.portfolioSha256 &&

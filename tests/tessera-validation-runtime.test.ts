@@ -388,7 +388,7 @@ async function runtimeHarness(root: string) {
   await writeFile(
     manifestPath,
     `${JSON.stringify({
-      schemaVersion: 7,
+      schemaVersion: 8,
       reportKind: "tessera-stress-manifest",
       runId: stress.runId,
       portfolioSha256: stress.portfolioSha256,

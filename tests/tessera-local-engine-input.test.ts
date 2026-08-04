@@ -4,6 +4,10 @@ import test from "node:test";
 
 import { buildRoster } from "../lib/rosterpilot";
 import {
+  createRuntimeDataset,
+  serializeRuntimeRulesData,
+} from "../lib/rosterpilot/runtime-dataset";
+import {
   compileRosterForLocalTesseraEngine,
   localInputSha256,
   serializeLocalTesseraEngineInput,
@@ -19,6 +23,60 @@ import {
   buildCustodesVsAeldariSmokeRoster,
   resolvedProfilePolicy,
 } from "./helpers/tessera-local-bundle";
+
+test("explicit data context, not the process-global Dataset, drives local profiles", () => {
+  const result = buildRoster({
+    playerFaction: "aeldari",
+    pointsLimit: 1_000,
+    requiredUnitIds: ["fire-prism"],
+    legendsPolicy: "exclude",
+    playContext: { kind: "matched-play" },
+  });
+  assert.ok(result.ok && result.data);
+  const roster = result.data;
+  const firePrism = roster.units.find(
+    (selection) => selection.unitId === "fire-prism",
+  );
+  assert.ok(firePrism);
+  const selectedEquipmentIds = new Set(
+    firePrism.equipment
+      .filter((equipment) => equipment.count > 0)
+      .map((equipment) => equipment.itemId),
+  );
+  const capturedRules = structuredClone(serializeRuntimeRulesData());
+  const capturedWeapon = capturedRules.weapons.find(
+    (weapon) =>
+      weapon.faction_id === roster.factionId &&
+      selectedEquipmentIds.has(weapon.id),
+  );
+  assert.ok(capturedWeapon);
+  for (const profile of capturedWeapon.profiles) {
+    profile.stats.S = 99;
+  }
+  const policy = resolvedProfilePolicy(roster);
+  const globalInput = compileRosterForLocalTesseraEngine(roster, policy);
+  const capturedInput = compileRosterForLocalTesseraEngine(
+    roster,
+    policy,
+    {
+      dataset: createRuntimeDataset(capturedRules),
+      bundleId: roster.sourceData.bundleId,
+      engineDataSchemaVersion:
+        roster.sourceData.engineDataSchemaVersion,
+    },
+  );
+  const strengths = (input: typeof capturedInput) =>
+    input.units
+      .find((unit) => unit.selectionId === firePrism.selectionId)
+      ?.weapons
+      .filter((weapon) =>
+        weapon.name.startsWith(capturedWeapon.name),
+      )
+      .map((weapon) => weapon.S) ?? [];
+  assert.ok(strengths(globalInput).every((strength) => strength !== 99));
+  assert.ok(strengths(capturedInput).length > 0);
+  assert.ok(strengths(capturedInput).every((strength) => strength === 99));
+});
 
 test("bundle-native compiler preserves hybrid phases and replacement weapon counts", () => {
   const result = buildRoster({

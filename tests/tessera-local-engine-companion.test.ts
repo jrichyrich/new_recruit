@@ -7,28 +7,129 @@ import test from "node:test";
 import {
   buildRoster,
   rosterExecutionFingerprint,
+  type DataBundleSnapshot,
+  type DataBundleProvider,
 } from "../lib/rosterpilot";
+import type {
+  RuntimeDataBundleShardDataV1,
+} from "../lib/rosterpilot/runtime-data-bundle";
+import {
+  serializeRuntimeRulesData,
+} from "../lib/rosterpilot/runtime-dataset";
 import {
   analyzeRosterMatchup,
+  localCombatScenarioClaimsEligible,
   prepareRosterForTessera,
 } from "../local/tessera/companion";
-import { verifyLocalTesseraEngineInput } from "../local/tessera/local-engine-input";
+import { verifyLocalTesseraEngineInputAnyVersion } from "../local/tessera/local-engine-input-v2";
+import { runLocalTesseraEngineMatchup } from "../local/tessera/local-engine";
 import {
-  buildCustodesVsAeldariSmokeRoster,
+  localTesseraScenarioPolicyContractV2,
+  selectedBaselineTesseraCombatPolicyV2,
+} from "../local/tessera/scenario-contract-v2";
+import {
+  buildCustodesVsWorldEatersSmokeRoster,
   resolvedProfilePolicy,
 } from "./helpers/tessera-local-bundle";
+import {
+  buildTesseraParityCoveringSuiteV2,
+} from "../local/tessera/provider-parity-covering-suite-v2";
 
-test("exact local-engine matchup bypasses New Recruit and verifies bundle-native inputs for both armies", { timeout: 60_000 }, async () => {
+test("local coaching eligibility requires decision-grade adapter coverage on every requested envelope", () => {
+  const scenarios = [{
+    metrics: ["mean-damage"],
+    cells: [{
+      combatEnvelope: {
+        "mean-damage": {
+          coverage: { claimEligibility: "decision-grade" },
+          conclusionEligibility: {
+            mode: "selected",
+            scalarClaimsAllowed: true,
+            unresolvedDimensions: [],
+            scenarioPolicyContractV3Sha256: "1".repeat(64),
+            combatStateSha256: "2".repeat(64),
+          },
+        },
+      },
+    }],
+  }] as unknown as Parameters<
+    typeof localCombatScenarioClaimsEligible
+  >[0];
+  assert.equal(localCombatScenarioClaimsEligible(scenarios), true);
+
+  const missingConclusion = structuredClone(scenarios);
+  delete missingConclusion[0].cells[0].combatEnvelope?.[
+    "mean-damage"
+  ]?.conclusionEligibility;
+  assert.equal(
+    localCombatScenarioClaimsEligible(missingConclusion),
+    false,
+  );
+
+  const projectedPartial = structuredClone(scenarios);
+  const envelope = projectedPartial[0].cells[0].combatEnvelope?.[
+    "mean-damage"
+  ];
+  assert.ok(envelope);
+  envelope.coverage.claimEligibility = "provisional";
+  assert.equal(
+    localCombatScenarioClaimsEligible(projectedPartial),
+    false,
+  );
+
+  const missingProjection = structuredClone(scenarios);
+  delete missingProjection[0].cells[0].combatEnvelope;
+  assert.equal(
+    localCombatScenarioClaimsEligible(missingProjection),
+    false,
+  );
+});
+
+function providerSnapshot(
+  playerRoster: ReturnType<typeof buildCustodesVsWorldEatersSmokeRoster>,
+  opponentRoster: NonNullable<ReturnType<typeof buildRoster>["data"]>,
+): DataBundleSnapshot<RuntimeDataBundleShardDataV1> {
+  const shard = {
+    shardId: "global",
+    data: {
+      rulesData: serializeRuntimeRulesData(),
+    },
+  };
+  const shards = new Map([["global", shard]]);
+  const semantic = (roster: typeof playerRoster) => ({
+    factionRulesHash: roster.sourceData.factionRulesHash,
+    mappingHash: roster.sourceData.mappingHash,
+    portfolioHash: "d".repeat(64),
+    conflictHash: "e".repeat(64),
+    entityHashes: { ...roster.sourceData.entityHashes },
+  });
+  return {
+    bundleId: playerRoster.sourceData.bundleId,
+    manifest: {
+      engineDataSchemaVersion:
+        playerRoster.sourceData.engineDataSchemaVersion,
+      semanticHashes: {
+        factions: {
+          [playerRoster.factionId]: semantic(playerRoster),
+          [opponentRoster.factionId]: semantic(opponentRoster),
+        },
+      },
+    },
+    shards,
+  } as unknown as DataBundleSnapshot<RuntimeDataBundleShardDataV1>;
+}
+
+test("exact Custodes versus World Eaters local matchup stays bundle-native and rules-aware", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "rosterpilot-local-engine-companion-"),
   );
   try {
-    const player = buildCustodesVsAeldariSmokeRoster();
+    const player = buildCustodesVsWorldEatersSmokeRoster();
     const opponent = buildRoster({
-      playerFaction: "aeldari",
+      playerFaction: "world-eaters",
       pointsLimit: 1_000,
-      name: "Aeldari local opponent",
-      preferences: ["objective", "mobility", "shooting"],
+      name: "World Eaters local opponent",
+      preferences: ["objective", "durability", "melee"],
       legendsPolicy: "exclude",
       playContext: { kind: "matched-play" },
       opponentContext: {
@@ -39,7 +140,36 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
     });
     assert.ok(opponent.ok && opponent.data);
     const opponentRoster = opponent.data;
+    const snapshot = providerSnapshot(player, opponentRoster);
     const policy = resolvedProfilePolicy(player, opponentRoster);
+    let acquired = 0;
+    let released = 0;
+    let acquireOptions: unknown = null;
+    const dataBundleProvider: DataBundleProvider<
+      RuntimeDataBundleShardDataV1
+    > = {
+      acquireSnapshot: async (options) => {
+        acquired += 1;
+        acquireOptions = options;
+        return {
+          leaseId: "local-engine-operation-lease",
+          snapshot,
+          released: false,
+          release: async () => {
+            released += 1;
+          },
+        };
+      },
+      getStatus: async () => {
+        throw new Error("not used");
+      },
+      refresh: async () => {
+        throw new Error("not used");
+      },
+      rollback: async () => {
+        throw new Error("not used");
+      },
+    };
     const calls = {
       delivery: 0,
       enrichment: 0,
@@ -53,7 +183,12 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
         executionMode: "simulate",
         analysisMode: "quick",
         phases: ["shooting"],
-        metrics: ["mean-damage"],
+        metrics: [
+          "wipe-probability",
+          "half-wipe-probability",
+          "mean-kills",
+          "mean-damage",
+        ],
         profilePolicy: policy,
         outputDirectory: path.join(directory, "report"),
         allowOutsideRoot: true,
@@ -71,6 +206,7 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
           calls.website += 1;
           throw new Error("website provider must not run");
         },
+        dataBundleProvider,
       },
     );
 
@@ -91,6 +227,12 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
       enrichment: 0,
       website: 0,
     });
+    assert.equal(acquired, 1);
+    assert.equal(released, 1);
+    assert.deepEqual(acquireOptions, {
+      bundleId: player.sourceData.bundleId,
+      factionIds: ["adeptus-custodes", "world-eaters"],
+    });
     assert.equal(result.data.source, "tessera-local-engine");
     assert.equal(result.data.status, "complete");
     assert.deepEqual(result.data.preparation, {
@@ -107,6 +249,19 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
     assert.equal(result.data.simulation.fallback, null);
     assert.equal(result.data.simulation.providerIdentity?.provider, "local-engine");
     assert.equal(result.data.simulation.scenarios?.length, 2);
+    assert.equal(result.data.scenarioPolicyContractV3?.schemaVersion, 3);
+    assert.match(
+      result.data.scenarioPolicyContractV3Sha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.ok(result.data.simulation.scenarios?.every((scenario) =>
+      scenario.cells.every((cell) =>
+        scenario.metrics.every((metric) =>
+          cell.combatEnvelope?.[metric]?.conclusionEligibility
+            ?.scalarClaimsAllowed === false
+        )
+      )
+    ));
     const preparedArmies = [
       { prepared: result.data.player, sourceRoster: player },
       {
@@ -142,7 +297,7 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
         prepared.simulationInput.bundleId,
         sourceRoster.sourceData.bundleId,
       );
-      const parsed = verifyLocalTesseraEngineInput({
+      const parsed = verifyLocalTesseraEngineInputAnyVersion({
         content: await readFile(prepared.simulationInput.path),
         expectedSha256: prepared.simulationInput.sha256,
         expectedBundleId: sourceRoster.sourceData.bundleId,
@@ -160,7 +315,7 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
     ) {
       assert.fail("Expected a frozen bundle-native player input.");
     }
-    const playerInput = verifyLocalTesseraEngineInput({
+    const playerInput = verifyLocalTesseraEngineInputAnyVersion({
       content: await readFile(playerSimulationInput.path),
       expectedSha256: playerSimulationInput.sha256,
       expectedBundleId: player.sourceData.bundleId,
@@ -176,7 +331,7 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
       })),
       [
         { modelCount: 10, occurrence: 1 },
-        { modelCount: 6, occurrence: 2 },
+        { modelCount: 9, occurrence: 2 },
       ],
     );
     assert.equal(
@@ -204,19 +359,78 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
     assert.equal(result.data.changeCandidates?.length, 0);
     assert.ok(
       result.data.warnings.some((warning) =>
-        /written-license and parity promotion gates/i.test(warning),
+        /machine-local parity attestation.*bridge-v3/i.test(warning),
       ),
     );
     assert.ok(
       result.data.warnings.some((warning) =>
-        /base-profile evaluation/i.test(warning),
+        /TESSERA_COMBAT_CORPUS_V3_INCOMPLETE/.test(warning),
       ),
+    );
+    assert.match(
+      result.data.scenarioPolicyContractV2Sha256 ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.equal(result.data.simulation.combatBridges, undefined);
+    assert.equal(
+      result.data.simulation.combatBridgeEvidence?.length,
+      1,
+    );
+    const bridgeEvidence =
+      result.data.simulation.combatBridgeEvidence?.[0];
+    assert.ok(bridgeEvidence);
+    assert.equal(bridgeEvidence.schemaVersion, 1);
+    assert.match(
+      bridgeEvidence.bridgeSha256,
+      /^[0-9a-f]{64}$/,
+    );
+    assert.match(bridgeEvidence.evidenceSha256, /^[0-9a-f]{64}$/);
+    assert.equal(
+      bridgeEvidence.coverageUnit,
+      "unique-mechanics-cell",
     );
     assert.ok(
-      result.data.warnings.some((warning) =>
-        /datasheet abilit(?:y|ies).*(?:not applied|omitted)/i.test(warning),
-      ),
+      bridgeEvidence.uniqueMechanicsCount < bridgeEvidence.cellCount,
+      `Expected four metric projections to share mechanics, got ${bridgeEvidence.uniqueMechanicsCount}/${bridgeEvidence.cellCount}.`,
     );
+    assert.equal(
+      bridgeEvidence.replay.playerInputSha256,
+      playerSimulationInput.sha256,
+    );
+    assert.equal(
+      result.data.simulation.scenarios?.every((scenario) =>
+        scenario.cells.every(
+          (cell) => cell.combatEnvelope?.["mean-damage"] !== undefined,
+        ),
+      ),
+      true,
+    );
+    assert.deepEqual(
+      result.data.artifacts
+        .filter((artifact) => artifact.format.startsWith("combat-corpus-"))
+        .map((artifact) => artifact.format)
+        .sort(),
+      [
+        "combat-corpus-inventory",
+        "combat-corpus-overlay",
+        "combat-corpus-report",
+      ],
+    );
+    const matchupJson = result.data.artifacts.find(
+      (artifact) => artifact.format === "matchup-json",
+    );
+    assert.ok(matchupJson);
+    const serializedReport = await readFile(matchupJson.written, "utf8");
+    const persisted = JSON.parse(serializedReport) as NonNullable<
+      typeof result.data
+    >;
+    assert.equal(persisted.simulation.combatBridges, undefined);
+    assert.equal(
+      persisted.simulation.combatBridgeEvidence?.[0]
+        ?.evidenceSha256,
+      bridgeEvidence.evidenceSha256,
+    );
+    assert.doesNotMatch(serializedReport, /"combatBridges"\s*:/);
     assert.ok(
       result.data.connectorEvents?.some(
         (event) =>
@@ -224,6 +438,110 @@ test("exact local-engine matchup bypasses New Recruit and verifies bundle-native
           event.simulationBackend === "local-engine" &&
           event.origin === "in-memory",
       ) === true,
+    );
+
+    const paritySuite = buildTesseraParityCoveringSuiteV2({
+      corpusInventorySha256: "8".repeat(64),
+      factions: [
+        {
+          factionId: "adeptus-custodes",
+          attackerMechanicIds: [],
+          defenderMechanicIds: [],
+        },
+        {
+          factionId: "world-eaters",
+          attackerMechanicIds: [],
+          defenderMechanicIds: [],
+        },
+      ],
+    });
+    const parityPreflight = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponentRoster },
+      {
+        simulationBackend: "website",
+        executionMode: "simulate",
+        analysisMode: "quick",
+        phases: ["shooting"],
+        metrics: ["mean-damage"],
+        profilePolicy: policy,
+        providerParityCase: {
+          coveringSuite: paritySuite,
+          coveringCaseId: paritySuite.cases[0].caseId,
+        },
+        outputDirectory: path.join(directory, "parity-preflight"),
+        allowOutsideRoot: true,
+      },
+      {
+        dataBundleProvider,
+        deliver: async () => {
+          calls.delivery += 1;
+          throw new Error("New Recruit must not run before corpus admission");
+        },
+        enrich: async () => {
+          calls.enrichment += 1;
+          throw new Error("New Recruit must not run before corpus admission");
+        },
+        runBrowser: async () => {
+          calls.website += 1;
+          throw new Error("Tessera Web must not run before corpus admission");
+        },
+      },
+    );
+    assert.equal(parityPreflight.ok, false);
+    assert.equal(
+      parityPreflight.violations[0]?.code,
+      "COMBAT_CORPUS_REVIEW_REQUIRED",
+    );
+    assert.match(
+      parityPreflight.violations[0]?.message ?? "",
+      /No New Recruit or Tessera Web activity was started/,
+    );
+    assert.deepEqual(calls, {
+      delivery: 0,
+      enrichment: 0,
+      website: 0,
+    });
+
+    const rejectedInjection = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponentRoster },
+      {
+        simulationBackend: "local-engine",
+        executionMode: "simulate",
+        analysisMode: "quick",
+        phases: ["shooting"],
+        metrics: ["mean-damage"],
+        scenarioPolicyContractV2:
+          localTesseraScenarioPolicyContractV2(
+            8,
+            ["shooting"],
+            ["mean-damage"],
+            selectedBaselineTesseraCombatPolicyV2(),
+          ),
+        profilePolicy: policy,
+        outputDirectory: path.join(directory, "rejected-injection"),
+        allowOutsideRoot: true,
+      },
+      {
+        dataBundleProvider,
+        runLocalEngine: async (input) => {
+          const injected = await runLocalTesseraEngineMatchup(input);
+          delete injected.scenarios[0]?.cells[0]?.combatEnvelope;
+          return injected;
+        },
+      },
+    );
+    assert.equal(rejectedInjection.ok, false);
+    assert.equal(
+      [
+        ...rejectedInjection.violations.map((issue) => issue.code),
+        ...(rejectedInjection.data?.failures ?? []).map(
+          (failure) => failure.code,
+        ),
+      ].includes("TESSERA_COMBAT_BRIDGE_EVIDENCE_MISSING"),
+      true,
+      "an injected base-profile or stripped local result must not be accepted as rules-aware evidence",
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

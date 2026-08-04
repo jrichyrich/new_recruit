@@ -1284,7 +1284,7 @@ function providerIdentityEvidenceComplete(
       SHA256_PATTERN.test(identity.sourceSha256) &&
       identity.adapterVersion === LOCAL_TESSERA_ADAPTER_VERSION &&
       identity.compilerVersion === LOCAL_TESSERA_COMPILER_VERSION &&
-      identity.inputSchemaVersion === 1 &&
+      identity.inputSchemaVersion === 2 &&
       SHA256_PATTERN.test(identity.capabilityManifestSha256)
     );
   }

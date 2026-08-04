@@ -22,7 +22,7 @@ plan are documented in
 | Compare known armies and collect Tessera simulations | `tessera` | Local CLI or stdio MCP; macOS for the website provider | `website` creates verified New Recruit copies; explicit `local-engine` compiles bundle-native JSON with zero remote mutations. Simulation still requires `--execution-mode simulate` |
 | Test a roster against an unknown list from a known faction | `tessera` | Local CLI or stdio MCP; macOS for the website provider | `website` creates the required verified list copies; explicit `local-engine` compiles the player and frozen proxies locally and creates no remote lists |
 | Build and analyze against one exact known roster | `tessera` | Local CLI or stdio MCP; macOS for the website provider | Builds locally first; provider preparation starts only after validation and readiness gates pass. Local-engine preparation has no web side effect |
-| Approval-gated roster optimization | `tessera` | macOS | Starts only from a complete paired baseline; website comparisons retain explicit enrichment side effects, and candidate local-engine evidence is not eligible for optimizer decisions |
+| Approval-gated roster optimization | `tessera` | macOS | Starts only from a complete paired baseline; website comparisons retain explicit enrichment side effects, and local-engine evidence is eligible only under an active matching personal parity attestation |
 
 The macOS limitation belongs only to credential-backed browser automation. The
 deterministic engine, web app, CLI, local MCP, validation, and file exports are
@@ -53,7 +53,7 @@ npm run setup -- --profile tessera
 
 `new-recruit` includes `core` and local MCP readiness. `tessera` includes the
 browser-backed New Recruit and Tessera website prerequisites as well as the
-pinned local evaluation engine. The website provider needs profile-rich
+pinned local engine. The website provider needs profile-rich
 `.rosz` files; the explicit local provider does not. Installing a profile does
 not run a delivery, local compilation, or simulation.
 
@@ -264,9 +264,10 @@ IDs and manifest paths. A failed client wait does not erase those jobs. A
 website-provider source `.rosz` is not described as profile-rich: that job must
 still complete New Recruit enrichment and Tessera before it is eligible to
 become an optimizer baseline. An explicit local-engine job instead freezes
-bundle-native JSON and its limitation warnings. While the local provider is
-`candidate` and `evaluation-only`, its evidence remains ineligible for optimizer
-decisions even when the run itself completes.
+bundle-native JSON and its limitation warnings. Until the current machine has
+an active personal parity attestation for the exact provider, bundle, and
+covering suite, its evidence remains ineligible for optimizer decisions even
+when the run itself completes.
 
 With an exact opponent, the target is that frozen roster. With only a known
 faction, it uses the existing frozen faction stress portfolio. When no opponent
@@ -523,11 +524,13 @@ npm run rosterpilot -- tessera analyze \
   --out-dir exports/tessera-local-quick
 ```
 
-This flag is deliberate: while the local provider remains an unpromoted
-candidate, `--simulation-backend auto` selects the website path. An exact
-opponent supplied only as an already enriched `.rosz` uses the compatible
-legacy archive reader; supply a canonical opponent roster when the goal is a
-fully bundle-native run.
+This flag is deliberate: before the personal parity attestation is active,
+`--simulation-backend auto` selects the website path. An exact opponent supplied
+only as an already enriched `.rosz` uses the compatible legacy archive reader;
+supply a canonical opponent roster when the goal is a fully bundle-native run.
+Offline verification never interprets `auto` as permission to launch a browser:
+New Recruit or Tessera Web is entered only by an explicitly simulated Web
+workflow or a separately confirmed hash-bound fallback.
 
 Use the default `full` mode for both phases, all four metrics, and both attack
 directions. The output directory contains preserved handoff files, a
@@ -560,16 +563,179 @@ source roster; change candidates remain suggestions until a revised roster is
 explicitly saved and compared. `--experimental` remains a deprecated
 compatibility alias for simulation.
 
-Local results are explicitly `base-profile-evaluation-v1`. They model unit and
-weapon profiles and supported intrinsic weapon keywords, but not army or
-detachment rules, datasheet abilities, enhancements, non-weapon wargear,
-stratagems, attached-unit interactions, or range and distance-dependent effects
-such as Conversion. The JSON and report warnings list
-omitted abilities and wargear, unsupported keywords, and frozen alternate
-profile, pistol/non-pistol, melee-set, and mixed-defence choices. Treat these as
-directional profile math, not full-rules evidence; they remain ineligible for
-substantive coaching and optimizer decisions while the provider is
-evaluation-only.
+Local execution uses schema-v2 roster inputs. Every selected weapon carries its
+exact weapon, equipment, profile, bearer-selection, loadout-group, and numeric
+range identity; melee profiles must have no ranged distance. Duplicate or
+cross-bearer identities, missing ranges, and mismatched input hashes stop before
+execution. The separately hashed `rosterpilot-combat-bridge` v3 resolves army
+and detachment rules, datasheet abilities, enhancements, stratagems, selected
+wargear, attachments, and state from the same immutable bundle snapshot.
+
+Before bridge v3 is admitted, the production corpus preparer traverses every
+structured effect leaf and checks it against the hash-sealed reviewed overlay.
+Each leaf needs complete ancestry, an explicit phase, a reviewed disposition,
+and an exact mapping. Approximation, omission, an unresolved community rule,
+a stale exact binding, or a new unreviewed shape fails closed with a review
+artifact. A reviewed out-of-calculator effect remains visible but does not
+alter directional damage. A combat-relevant leaf is never declared modeled
+merely to make the bridge compile.
+
+The v3 bridge binds the corpus inventory/report/overlay, relevant leaves, exact
+rule sources, legacy bridge projection, scenario-v3 contract, and both local
+input hashes. This makes a data refresh, review edit, roster edit, profile
+choice, or physical-state change a new evidence identity.
+
+An admitted run retains five reusable corpus artifacts: inventory, overlay,
+conformance report, translation ledger, and
+`combat-corpus-admitted-<n>-<opponent>-parity-suite-manifest.json`. The suite
+manifest includes the exact inventory, bridge, and conformance hashes plus the
+attacker/defender faction mechanics derived from the admitted bridge.
+
+Within each combat envelope, `sourceVariantCount` records every bounded bridge
+variant retained for attachment and activation provenance. Variants that
+project to identical Tessera mechanics share one `executionSha256` and are
+simulated once; `variantCount` is that unique-execution count. Minimum, median,
+and maximum therefore give mechanically distinct executions equal weight
+instead of weighting a result by duplicate provenance paths.
+
+Check the bridge's `semanticAuthority` before interpreting that coverage.
+`bundle-manifest-verified` means the operation recomputed the semantic hashes
+from its leased immutable bundle manifest. `roster-asserted` means the hashes
+came from two rosters in a captured Dataset without a manifest available for
+independent verification; the bridge can still be replayed, but it is forced
+provisional and is never decision-grade.
+
+### Physical scenario v3
+
+Decision-grade local execution requires a selected scenario/policy v3
+contract. Each scenario names the actual player and opponent selections and
+binds battle round, timing, command points and faction resources, army and
+once-per-battle abilities, movement, charge, cover, objective, strength,
+damage, Battle-shock, fight eligibility, and every cross-side combat pair.
+Pair state includes distance, visibility, indirect fire, target condition, and
+ordinary, Rapid Fire, Melta, and Conversion range state. Exact profile range
+decides which shooting weapons can execute; a selected range flag that
+contradicts the physical distance is rejected. Attached leaders and bodyguards
+are pooled as one physical formation for attacks and defenses.
+
+All state, activation, and attachment dimensions must be selected for a scalar
+roster conclusion. An unresolved dimension switches the scenario to
+`envelope-only`; minimum, median, and maximum remain inspectable, but the median
+cannot authorize coaching or optimization. A v1/v2 migration succeeds only
+when physical ownership, resources, and state are unambiguous.
+
+### Personal parity activation
+
+The personal path has no written-license gate. It is deliberately scoped to one
+user on one machine and activates only after four consecutive passing
+bidirectional parity rotations for the same local provider identity, active
+data bundle, combat-corpus inventory, and covering suite: three in `observe`
+mode, then one in `enforce` mode. Until then, Tessera Web remains the comparison
+authority and `auto` stays on Web; explicit local results are diagnostic and
+cannot create matchup findings or change candidates.
+
+Build and verify the deterministic suite from the admitted-run manifest:
+
+```bash
+npm run rosterpilot -- tessera parity-suite build \
+  --manifest combat-corpus-admitted-1-opponent-parity-suite-manifest.json \
+  --out covering-suite.json
+
+npm run rosterpilot -- tessera parity-suite verify \
+  --suite covering-suite.json
+```
+
+The build input requires `corpusInventorySha256` and a `factions` array; it may
+also set `allowMirrorCases`. Verification recomputes the suite and reports its
+hash and ordered case IDs.
+
+For every suite case, run both providers with
+`--provider-parity-suite covering-suite.json --provider-parity-case <case-id>`.
+The flags are accepted only together and require simulate mode. The case ID
+must exist in the verified suite. Website selection does not bypass local
+exactness: before any New Recruit or Tessera Web activity, RosterPilot acquires
+the immutable bundle, validates one canonical opponent and the physical state,
+compiles both exact local inputs, admits the corpus, and compiles bridge v3. A
+failure retains the local review artifacts and reports zero external activity.
+
+Each finished local/Web pair must retain the same suite case, v3 physical
+scenario and combat-state hashes, local-input-v2 profile/range identities,
+bridge-v3 exactness bindings, complete cells and uncertainty, and verified
+receipts. The Web half is derived only from visible deployment, import,
+list-selection, unit, weapon, effect, profile, and range evidence. Missing Web
+semantics are not backfilled from the local roster.
+
+The suite corpus hash freezes the mechanic inventory used to plan the suite;
+per-case witnesses prove the exact roster actually exercises its declared
+requirements. Each role needs an executable cell, each mechanic needs a
+relevant bridge-v3 leaf, and the case-evidence hash binds those witnesses to
+the case ID, bridge, and conformance report.
+
+For a suite with one case, create each rotation record while comparing reports,
+using `--personal-rotation-id`, `--personal-rotation-mode observe|enforce`, and
+`--personal-rotation-record`. The direct flow is preserved only when that one
+comparison covers the complete suite.
+
+For a multi-case suite, compare each local/Web case first, then aggregate the
+complete set:
+
+```bash
+npm run rosterpilot -- tessera personal-rotation aggregate \
+  --covering-suite covering-suite.json \
+  --comparison case-1/tessera-provider-parity.json \
+  --comparison case-2/tessera-provider-parity.json \
+  --rotation-id rotation-1 \
+  --mode observe \
+  --record rotation-1.json
+```
+
+The aggregator accepts exactly one complete passing comparison per suite case,
+rejects missing, duplicate, and extra cases, and requires one suite, bundle,
+local provider identity, and Web provider identity. It hashes the sorted case
+IDs, paired exact receipts, and parity results into one rotation. The command
+also accepts a one-case suite.
+
+Repeat the entire suite three times in `observe` mode and once in `enforce`
+mode. Then create and inspect the private attestation:
+
+```bash
+npm run rosterpilot -- tessera personal-attestation create \
+  --rotation rotation-1.json \
+  --rotation rotation-2.json \
+  --rotation rotation-3.json \
+  --rotation rotation-4.json \
+  --covering-suite covering-suite.json
+
+npm run rosterpilot -- tessera personal-attestation status \
+  --covering-suite covering-suite.json
+```
+
+The deterministic greedy covering suite includes both attack directions for
+each selected faction pairing and binds the exact corpus inventory. Any machine,
+provider, bundle, suite, chronology, receipt, or self-hash mismatch deactivates
+the attestation. Creation verifies the suite bytes against the four rotations
+and retains a private owner-only copy; supplying only a suite hash is not
+sufficient. Status re-verifies the current supplied artifact and retained copy.
+
+Before every promoted local run, preflight derives the roles and mechanics in
+the current bridge and requires that set to be a subset of the retained suite's
+declared requirements. A newly executed or previously undeclared mechanic fails
+closed before local simulation. Build a replacement suite and complete three
+new `observe` rotations plus one new `enforce` rotation; the old attestation
+cannot authorize the broader bridge. Local verification remains credential-free
+and never launches Tessera Web; collecting a new Web rotation is a separate
+explicit operation.
+See [Personal local Tessera parity](personal-local-tessera-parity.md) for the
+complete evidence and review contract.
+
+If a future promoted `auto` local execution returns
+`TESSERA_WEBSITE_FALLBACK_REQUIRES_CONFIRMATION`, copy the offer's lowercase
+64-character `requestSha256` and rerun the otherwise identical exact command
+with `--website-fallback-confirmation-sha256 <offer.requestSha256>`. This flag
+is accepted only by `tessera analyze` and durable
+`tessera start-run --run-kind exact` (with the matching exact-only MCP field).
+Stress and build workflows reject it. No New Recruit import or Tessera Web
+navigation occurs before the hash-bound confirmation.
 
 For an explicitly requested live-deployment diagnostic, pass
 `--verified-catalogue-drift-diagnostic`. This is not a general drift override:
@@ -832,8 +998,13 @@ suite, strategy, and simulation setting must match; the report also records
 settings and iteration counts
 against each exact phase/metric/direction scenario. The frozen profile-policy
 hash and the manifest's SHA-256 over the complete frozen portfolio must also
-match. Schema-v1 through schema-v6 manifests are verified and upgraded to
-schema v7 when resumed; completed predecessor jobs are never rewritten.
+match. Schema v8 also freezes each screening and deep-dive stage's v2
+scenario/policy contract and an aggregate SHA-256. Schema-v1 through schema-v7
+manifests are verified before migration. Legacy website and prepare-only
+manifests may be upgraded to v8, but a pre-v8 manifest that requested and
+selected local-engine simulation fails closed because reconstructing the
+missing rules-aware policy would change its combat semantics. Start a new
+stress run for that case; completed predecessor jobs are never rewritten.
 Stages preserve attempts, timestamps, structured error codes,
 retryability, and next action. Transient work gets three automatic
 attempts and up to five lifetime attempts through explicit resume; terminal
@@ -1220,10 +1391,12 @@ recorded repaired source state.
   fingerprint, selected profile, unit, weapon, or required characteristic does
   not verify stops before simulation. Explicit local-engine execution does not
   invoke New Recruit or use website fallback to repair it.
-- `TESSERA_LOCAL_BASE_PROFILE_EVALUATION`, omitted-ability or wargear warnings,
-  unsupported-keyword warnings, and frozen-choice warnings describe modeled
-  limits. They are retained with the result and never promoted to full-rules
-  evidence.
+- `TESSERA_LOCAL_BASE_PROFILE_EVALUATION`, unsupported-keyword warnings, and
+  frozen-choice warnings describe the compact base payload. Bridge v3 separately
+  requires strict corpus review and complete adapter projection; an approximate,
+  omitted, unresolved, stale, or unreviewed combat leaf cannot become
+  decision-grade. Before the matching personal attestation is active, local
+  evidence remains diagnostic and cannot enable substantive claims.
 - Older prepared-roster documents keep the field names `sourceRoszPath` and
   `enrichedRoszPath`. When `simulationInput.kind` is
   `rosterpilot-local-engine-input`, those fields point to source and compiled

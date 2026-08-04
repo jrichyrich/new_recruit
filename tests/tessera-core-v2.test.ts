@@ -48,6 +48,7 @@ import {
   analyzeRosterMatchup,
   compareRosterRevision,
 } from "../local/tessera/companion";
+import { LOCAL_TESSERA_ENGINE_IDENTITY } from "../local/tessera/local-engine";
 import {
   aggregateProfileRequirements,
   ProfilePolicySchema,
@@ -2119,6 +2120,239 @@ test(
     }
   },
 );
+
+test("local uploaded ROSZ without canonical opponent context stops before enrichment, delivery, or either simulator", async () => {
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Local Context Player",
+  );
+  const opponent = roster(
+    "world-eaters",
+    1_000,
+    "Local Context Opponent",
+  );
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-local-opponent-context-"),
+  );
+  const uploadedPath = path.join(directory, "opponent.rosz");
+  await writeFile(
+    uploadedPath,
+    await canonicalEnrichedRoszFixture(opponent, 1),
+  );
+  let enrichments = 0;
+  let deliveries = 0;
+  let websiteRuns = 0;
+  let localRuns = 0;
+  try {
+    const analyzed = await analyzeRosterMatchup(
+      player,
+      { kind: "rosz", path: uploadedPath },
+      {
+        simulationBackend: "local-engine",
+        executionMode: "simulate",
+        catalogueDriftMode: "diagnostic",
+        profilePolicy: profilePolicyFor(player),
+        outputDirectory: path.join(directory, "report"),
+        allowOutsideRoot: true,
+      },
+      {
+        enrich: async () => {
+          enrichments += 1;
+          throw new Error("New Recruit enrichment must not start.");
+        },
+        deliver: async () => {
+          deliveries += 1;
+          throw new Error("New Recruit delivery must not start.");
+        },
+        runBrowser: async () => {
+          websiteRuns += 1;
+          throw new Error("The website simulator must not start.");
+        },
+        runLocalEngine: async () => {
+          localRuns += 1;
+          throw new Error("The local simulator must not start.");
+        },
+      },
+    );
+
+    assert.equal(analyzed.ok, false);
+    assert.equal(
+      analyzed.violations[0]?.code,
+      "TESSERA_LOCAL_OPPONENT_CONTEXT_REQUIRED",
+      JSON.stringify(analyzed.violations),
+    );
+    assert.equal(enrichments, 0);
+    assert.equal(deliveries, 0);
+    assert.equal(websiteRuns, 0);
+    assert.equal(localRuns, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("authorized promoted-local auto fallback lazily prepares Website artifacts against the frozen request hash", { timeout: 120_000 }, async () => {
+  const player = roster(
+    "adeptus-custodes",
+    1_000,
+    "Authorized Fallback Player",
+  );
+  const opponent = roster(
+    "world-eaters",
+    1_000,
+    "Authorized Fallback Opponent",
+  );
+  const profilePolicy = profilePolicyFor(player, opponent);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "tessera-authorized-web-fallback-"),
+  );
+  const deliveryFixture = artifactDeliveryDependency(directory);
+  const calls = {
+    delivery: 0,
+    local: 0,
+    website: 0,
+  };
+  const deliver = async (
+    candidate: RosterDraftV1,
+    deliveryOptions: NewRecruitDeliveryOptions = {},
+  ) => {
+    calls.delivery += 1;
+    return deliveryFixture(candidate, deliveryOptions);
+  };
+  const runLocalEngine = async () => {
+    calls.local += 1;
+    throw Object.assign(
+      new Error("Promoted local fixture failed after preflight."),
+      { code: "TESSERA_LOCAL_ENGINE_FAILED" },
+    );
+  };
+  const browserInputs: TesseraBrowserInput[] = [];
+  const runBrowser = async (input: TesseraBrowserInput) => {
+    calls.website += 1;
+    browserInputs.push(input);
+    const result = fullBrowserResult(player, opponent);
+    result.scenarios = result.scenarios.filter(
+      (scenario) =>
+        input.phases?.includes(scenario.phase) &&
+        input.metrics?.includes(scenario.metric),
+    );
+    result.cells = result.scenarios[0]?.cells ?? [];
+    return result;
+  };
+  const mutableIdentity = LOCAL_TESSERA_ENGINE_IDENTITY as typeof LOCAL_TESSERA_ENGINE_IDENTITY & {
+    promotion: "candidate" | "promoted";
+    licenseState: "evaluation-only" | "approved";
+  };
+  const originalPromotion = mutableIdentity.promotion;
+  const originalLicenseState = mutableIdentity.licenseState;
+  mutableIdentity.promotion = "promoted";
+  mutableIdentity.licenseState = "approved";
+
+  try {
+    const first = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        simulationBackend: "auto",
+        executionMode: "simulate",
+        analysisMode: "quick",
+        phases: ["shooting"],
+        metrics: ["mean-damage"],
+        profilePolicy,
+        outputDirectory: path.join(directory, "unconfirmed"),
+        allowOutsideRoot: true,
+      },
+      { deliver, runBrowser, runLocalEngine },
+    );
+    const requestSha256 =
+      first.data?.simulation.fallback?.requestSha256;
+    assert.match(requestSha256 ?? "", /^[0-9a-f]{64}$/);
+    assert.equal(
+      first.data?.failures?.some(
+        (failure) =>
+          failure.code ===
+          "TESSERA_WEBSITE_FALLBACK_REQUIRES_CONFIRMATION",
+      ),
+      true,
+    );
+    assert.deepEqual(calls, {
+      delivery: 0,
+      local: 1,
+      website: 0,
+    });
+
+    const confirmed = await analyzeRosterMatchup(
+      player,
+      { kind: "roster", roster: opponent },
+      {
+        simulationBackend: "auto",
+        executionMode: "simulate",
+        analysisMode: "quick",
+        phases: ["shooting"],
+        metrics: ["mean-damage"],
+        profilePolicy,
+        websiteFallbackAuthorization: {
+          action: "new-recruit-import-and-tessera-web",
+          requestSha256: requestSha256!,
+          source: "confirmed-fallback",
+        },
+        outputDirectory: path.join(directory, "confirmed"),
+        allowOutsideRoot: true,
+      },
+      { deliver, runBrowser, runLocalEngine },
+    );
+
+    assert.equal(
+      confirmed.ok,
+      true,
+      JSON.stringify(confirmed.violations),
+    );
+    assert.ok(confirmed.data);
+    assert.equal(confirmed.data.simulation.requestedBackend, "auto");
+    assert.equal(confirmed.data.simulation.selectedBackend, "website");
+    assert.equal(confirmed.data.simulation.combatBridges, undefined);
+    assert.equal(
+      confirmed.data.simulation.combatBridgeEvidence,
+      undefined,
+    );
+    assert.equal(confirmed.data.scenarioPolicyContractV2, null);
+    assert.equal(
+      confirmed.data.scenarioPolicyContractV2Sha256,
+      null,
+    );
+    assert.equal(
+      confirmed.data.simulation.fallback?.requestSha256,
+      requestSha256,
+    );
+    assert.deepEqual(calls, {
+      delivery: 2,
+      local: 2,
+      website: 1,
+    });
+    assert.equal(browserInputs.length, 1);
+    assert.match(browserInputs[0].playerRoszPath, /\.rosz$/);
+    assert.match(browserInputs[0].opponentRoszPath, /\.rosz$/);
+    assert.equal(
+      browserInputs[0].playerSimulationInput?.kind,
+      "new-recruit-enriched-rosz",
+    );
+    assert.equal(
+      browserInputs[0].opponentSimulationInput?.kind,
+      "new-recruit-enriched-rosz",
+    );
+    assert.equal(browserInputs[0].combatBridge, null);
+    assert.equal(browserInputs[0].scenarioPolicyContractV2, null);
+    assert.match(confirmed.data.player.enrichedRoszPath, /\.rosz$/);
+    assert.match(
+      confirmed.data.opponents[0].enrichedRoszPath,
+      /\.rosz$/,
+    );
+  } finally {
+    mutableIdentity.promotion = originalPromotion;
+    mutableIdentity.licenseState = originalLicenseState;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test(
   "raw uploaded ROSZ without verifiable provenance stops before player delivery",

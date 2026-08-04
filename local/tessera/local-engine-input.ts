@@ -1,11 +1,15 @@
 import crypto from "node:crypto";
 
-import { groupLoadout } from "@alpaca-software/40kdc-data";
+import {
+  groupLoadout,
+  type Dataset,
+  type UnitView,
+} from "@alpaca-software/40kdc-data";
 import { z } from "zod";
 
 import {
   currentRosterSourceData,
-  resolveFactionUnit,
+  resolveFactionUnitFromDataset,
   rosterExecutionFingerprint,
   type ProfilePolicyV1,
   type RosterDraftV1,
@@ -24,11 +28,30 @@ import {
 export const LOCAL_TESSERA_COMPILER_VERSION =
   "base-profile-evaluation-v1" as const;
 
+/** Exact data identity captured for one local compilation operation. */
+export type LocalTesseraEngineDataContext = Readonly<{
+  dataset: Dataset;
+  bundleId: string;
+  engineDataSchemaVersion: number;
+}>;
+
 export type LocalEngineValue = number | string;
 
 export type LocalEngineWeapon = {
+  /** Stable bundle-native weapon record identity. */
+  weaponId?: string;
+  /** Exact selected roster-equipment identity that supplied this profile. */
+  equipmentId?: string;
+  /** Stable profile identity within the leased weapon record. */
+  profileId?: string;
+  /** Roster selection that bears this weapon profile. */
+  bearerSelectionId?: string;
+  /** Stable aggregate loadout identity for deterministic firing-set mapping. */
+  loadoutGroupId?: string;
   name: string;
   type: "ranged" | "melee";
+  /** Numeric range for ranged profiles; null for melee profiles. */
+  rangeInches?: number | null;
   count: number;
   A: LocalEngineValue;
   BS?: number;
@@ -70,6 +93,8 @@ export type LocalEngineUnit = {
 export type LocalTesseraEngineUnit = LocalEngineUnit & {
   instanceId: string;
   selectionId: string;
+  /** Present on bundle-native v1 inputs; absent only on legacy fixtures. */
+  unitId?: string;
   occurrence: number;
   label: string;
 };
@@ -85,6 +110,10 @@ export type LocalTesseraEngineInput = {
   rosterName: string;
   factionId: string;
   factionName: string;
+  /** Optional in schema v1 for compatibility; always emitted by the compiler. */
+  rosterRulesHash?: string;
+  factionRulesHash?: string;
+  mappingHash?: string;
   totalPoints: number;
   profilePolicySha256: string | null;
   profileRequirements: TesseraProfileRequirement[];
@@ -137,8 +166,14 @@ const EngineValueSchema = z.union([
   z.string().regex(/^\d*D\d+(?:[+-]\d+)?$/i),
 ]);
 const EngineWeaponSchema = z.object({
+  weaponId: z.string().min(1).optional(),
+  equipmentId: z.string().min(1).optional(),
+  profileId: z.string().min(1).optional(),
+  bearerSelectionId: z.string().min(1).optional(),
+  loadoutGroupId: z.string().min(1).optional(),
   name: z.string().min(1),
   type: z.enum(["ranged", "melee"]),
+  rangeInches: z.number().int().nonnegative().nullable().optional(),
   count: z.number().int().positive(),
   A: EngineValueSchema,
   BS: z.number().int().positive().optional(),
@@ -150,6 +185,13 @@ const EngineWeaponSchema = z.object({
 }).strict().superRefine((weapon, context) => {
   const torrent = weapon.keywords.includes("TORRENT");
   if (weapon.type === "ranged") {
+    if (weapon.rangeInches === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["rangeInches"],
+        message: "A ranged weapon cannot declare a null range.",
+      });
+    }
     if (weapon.WS !== undefined) {
       context.addIssue({
         code: "custom",
@@ -166,6 +208,16 @@ const EngineWeaponSchema = z.object({
       });
     }
   } else {
+    if (
+      weapon.rangeInches !== undefined &&
+      weapon.rangeInches !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["rangeInches"],
+        message: "A melee weapon cannot declare a numeric range.",
+      });
+    }
     if (weapon.BS !== undefined) {
       context.addIssue({
         code: "custom",
@@ -215,6 +267,7 @@ const DefensiveProfileSchema = z.object({
 const EngineUnitSchema = z.object({
   instanceId: z.string().regex(/^[0-9a-f]{24}$/),
   selectionId: z.string().min(1),
+  unitId: z.string().min(1).optional(),
   occurrence: z.number().int().positive(),
   label: z.string().min(1),
   name: z.string().min(1),
@@ -281,6 +334,9 @@ const LocalInputSchema = z.object({
   rosterName: z.string().min(1),
   factionId: z.string().min(1),
   factionName: z.string().min(1),
+  rosterRulesHash: z.string().regex(SHA256).optional(),
+  factionRulesHash: z.string().regex(SHA256).optional(),
+  mappingHash: z.string().regex(SHA256).optional(),
   totalPoints: z.number().int().nonnegative(),
   profilePolicySha256: z.string().regex(SHA256).nullable(),
   profileRequirements: z.array(ProfileRequirementSchema),
@@ -494,7 +550,8 @@ function selectedAlternateProfile(input: {
 function defensiveProfiles(input: {
   roster: RosterDraftV1;
   selection: RosterDraftV1["units"][number];
-  unit: NonNullable<ReturnType<typeof resolveFactionUnit>>;
+  unit: UnitView;
+  dataset: Dataset;
   choices: LocalTesseraEngineInput["limitations"]["frozenChoices"];
 }): {
   base: Omit<LocalEngineDefensiveProfile, "count" | "name">;
@@ -524,7 +581,7 @@ function defensiveProfiles(input: {
     return { base: toBaseEngine(profiles[0]), extras: [] };
   }
 
-  const composition = dataset.unitCompositionOf(input.unit.raw);
+  const composition = input.dataset.unitCompositionOf(input.unit.raw);
   if (!composition) {
     throw codedError(
       "TESSERA_LOCAL_MIXED_DEFENSIVE_PROFILE_UNRESOLVED",
@@ -690,15 +747,27 @@ function contentSha256(content: Uint8Array): string {
 export function compileRosterForLocalTesseraEngine(
   roster: RosterDraftV1,
   policy: ProfilePolicyV1 | null = null,
+  dataContext: LocalTesseraEngineDataContext | null = null,
 ): LocalTesseraEngineInput {
-  const active = currentRosterSourceData(roster.factionId);
-  if (active.bundleId !== roster.sourceData.bundleId) {
+  const active = dataContext ?? {
+    dataset,
+    ...currentRosterSourceData(roster.factionId),
+  };
+  if (
+    active.bundleId !== roster.sourceData.bundleId ||
+    active.engineDataSchemaVersion !==
+      roster.sourceData.engineDataSchemaVersion
+  ) {
     throw codedError(
       "TESSERA_LOCAL_BUNDLE_MISMATCH",
-      `Roster ${roster.name} is pinned to bundle ${roster.sourceData.bundleId}, but bundle ${active.bundleId} is active. Rebase or restore the frozen bundle before local compilation.`,
+      `Roster ${roster.name} is pinned to bundle ${roster.sourceData.bundleId} schema ${roster.sourceData.engineDataSchemaVersion}, but compilation captured bundle ${active.bundleId} schema ${active.engineDataSchemaVersion}. Rebase or restore the frozen bundle before local compilation.`,
     );
   }
-  const profileRequirements = aggregateProfileRequirements([roster]);
+  const compilationDataset = active.dataset;
+  const profileRequirements = aggregateProfileRequirements(
+    [roster],
+    compilationDataset,
+  );
   const scopedPolicy: ProfilePolicyV1 | null = policy
     ? {
         ...policy,
@@ -739,7 +808,11 @@ export function compileRosterForLocalTesseraEngine(
   const occurrenceByUnitSize = new Map<string, number>();
 
   const units = roster.units.map((selection) => {
-    const unit = resolveFactionUnit(selection.unitId, roster.factionId);
+    const unit = resolveFactionUnitFromDataset(
+      compilationDataset,
+      selection.unitId,
+      roster.factionId,
+    );
     if (!unit) {
       throw codedError(
         "TESSERA_LOCAL_UNIT_PROFILE_MISSING",
@@ -758,6 +831,7 @@ export function compileRosterForLocalTesseraEngine(
       roster,
       selection,
       unit,
+      dataset: compilationDataset,
       choices: frozenChoices,
     });
     const resolvedAbilityIds = new Set(
@@ -797,12 +871,18 @@ export function compileRosterForLocalTesseraEngine(
       if (equipment.count <= 0) continue;
       const weapon =
         unit.weapons.find((candidate) => candidate.id === equipment.itemId) ??
-        dataset.weapons.getInFaction(equipment.itemId, unit.raw.faction_id) ??
-        dataset.weapons.getAny(equipment.itemId);
+        compilationDataset.weapons.getInFaction(
+          equipment.itemId,
+          unit.raw.faction_id,
+        ) ??
+        compilationDataset.weapons.getAny(equipment.itemId);
       if (!weapon) {
         const wargear =
-          dataset.wargear.getInFaction(equipment.itemId, unit.raw.faction_id) ??
-          dataset.wargear.getAny(equipment.itemId);
+          compilationDataset.wargear.getInFaction(
+            equipment.itemId,
+            unit.raw.faction_id,
+          ) ??
+          compilationDataset.wargear.getAny(equipment.itemId);
         if (!wargear) {
           throw codedError(
             "TESSERA_LOCAL_WEAPON_PROFILE_MISSING",
@@ -864,7 +944,9 @@ export function compileRosterForLocalTesseraEngine(
         for (const profile of selectedProfiles) {
         const keywords: string[] = [];
         for (const reference of profile.keywords ?? []) {
-          const definition = dataset.weaponKeywords.get(reference.keyword_id);
+          const definition = compilationDataset.weaponKeywords.get(
+            reference.keyword_id,
+          );
           if (!definition) {
             throw codedError(
               "TESSERA_LOCAL_KEYWORD_MISSING",
@@ -888,6 +970,13 @@ export function compileRosterForLocalTesseraEngine(
           }
         }
         const melee = phase === "fight";
+        const profileIndex = weapon.raw.profiles.indexOf(profile);
+        if (profileIndex < 0) {
+          throw codedError(
+            "TESSERA_LOCAL_WEAPON_PROFILE_IDENTITY_MISSING",
+            `${selection.name} / ${profile.name} is not retained by its leased weapon record.`,
+          );
+        }
         const ballisticSkill = profile.stats.BS;
         if (
           !melee &&
@@ -900,6 +989,12 @@ export function compileRosterForLocalTesseraEngine(
           );
         }
         const engineWeapon: LocalEngineWeapon = {
+          weaponId: weapon.id,
+          equipmentId: equipment.itemId,
+          profileId: `${weapon.id}:profile:${profileIndex}`,
+          bearerSelectionId: selection.selectionId,
+          loadoutGroupId:
+            `${selection.selectionId}:equipment:${equipment.itemId}`,
           name:
             weapon.raw.profiles.length > 1
               ? `${weapon.name} — ${
@@ -915,6 +1010,12 @@ export function compileRosterForLocalTesseraEngine(
                 }`
               : weapon.name,
           type: melee ? "melee" : "ranged",
+          rangeInches: melee
+            ? null
+            : fixedInteger(
+                profile.range,
+                `${selection.name} / ${profile.name} Range`,
+              ),
           count: equipment.count,
           A: engineValue(profile.stats.A, `${selection.name} / ${profile.name} A`),
           ...(melee
@@ -972,8 +1073,8 @@ export function compileRosterForLocalTesseraEngine(
         const loadoutGroups = groupLoadout(
           unit.raw,
           selection.modelCount,
-          dataset.wargearOptionsOf(unit.raw),
-          dataset.unitCompositionOf(unit.raw)?.models,
+          compilationDataset.wargearOptionsOf(unit.raw),
+          compilationDataset.unitCompositionOf(unit.raw)?.models,
           equipmentCounts,
         );
         if (
@@ -1114,6 +1215,7 @@ export function compileRosterForLocalTesseraEngine(
     return {
       instanceId,
       selectionId: selection.selectionId,
+      unitId: selection.unitId,
       occurrence,
       label: selection.name,
       name: selection.name,
@@ -1144,6 +1246,9 @@ export function compileRosterForLocalTesseraEngine(
     rosterName: roster.name,
     factionId: roster.factionId,
     factionName: roster.factionName,
+    rosterRulesHash: roster.sourceData.rosterRulesHash,
+    factionRulesHash: roster.sourceData.factionRulesHash,
+    mappingHash: roster.sourceData.mappingHash,
     totalPoints: roster.totalPoints,
     profilePolicySha256: scopedPolicy
       ? profilePolicyHash(scopedPolicy)
@@ -1157,7 +1262,6 @@ export function compileRosterForLocalTesseraEngine(
         "datasheet abilities",
         "enhancements",
         "non-weapon wargear effects",
-        "range and distance-dependent effects",
         "stratagems",
         "attached-unit interactions",
       ],
