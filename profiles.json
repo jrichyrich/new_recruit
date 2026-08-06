@@ -4,16 +4,6 @@
   "entries": [
     {
       "faction": "world-eaters",
-      "unit": "Daemon Prince of Khorne with Wings",
-      "unitOccurrence": 1,
-      "modelCount": 1,
-      "weaponGroup": "Hellforged weapons",
-      "phase": "fight",
-      "selectedProfile": "Strike",
-      "activeCount": 1
-    },
-    {
-      "faction": "world-eaters",
       "unit": "Daemon Prince of Khorne",
       "unitOccurrence": 1,
       "modelCount": 1,

@@ -1765,10 +1765,12 @@ export async function startLocalAgent(
     });
     const previousUmask = process.umask(0o177);
     try {
+      console.log(`[AGENT START] Attempting to listen on socketPath: ${socketPath}`);
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
         server.listen(socketPath, () => {
           server.off("error", reject);
+          console.log(`[AGENT START] Successfully bound to ${socketPath}`);
           resolve();
         });
       });
@@ -1818,9 +1820,4 @@ async function main() {
   process.on("SIGTERM", shutdown);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
-  await main();
-}
+await main();
