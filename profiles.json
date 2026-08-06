@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "policyKind": "tessera-profile-policy",
+  "entries": [
+    {
+      "faction": "world-eaters",
+      "unit": "Daemon Prince of Khorne with Wings",
+      "unitOccurrence": 1,
+      "modelCount": 1,
+      "weaponGroup": "Hellforged weapons",
+      "phase": "fight",
+      "selectedProfile": "Strike",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Daemon Prince of Khorne",
+      "unitOccurrence": 1,
+      "modelCount": 1,
+      "weaponGroup": "Hellforged weapons",
+      "phase": "fight",
+      "selectedProfile": "Strike",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Defiler",
+      "unitOccurrence": 1,
+      "modelCount": 1,
+      "weaponGroup": "Heavy missile launcher",
+      "phase": "shooting",
+      "selectedProfile": "Krak",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Defiler",
+      "unitOccurrence": 2,
+      "modelCount": 1,
+      "weaponGroup": "Heavy missile launcher",
+      "phase": "shooting",
+      "selectedProfile": "Krak",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Defiler",
+      "unitOccurrence": 1,
+      "modelCount": 1,
+      "weaponGroup": "Shearing claws",
+      "phase": "fight",
+      "selectedProfile": "Strike",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Defiler",
+      "unitOccurrence": 2,
+      "modelCount": 1,
+      "weaponGroup": "Shearing claws",
+      "phase": "fight",
+      "selectedProfile": "Strike",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Helbrute",
+      "unitOccurrence": 1,
+      "modelCount": 1,
+      "weaponGroup": "Missile launcher",
+      "phase": "shooting",
+      "selectedProfile": "Krak",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Khorne Lord of Skulls",
+      "unitOccurrence": 1,
+      "modelCount": 1,
+      "weaponGroup": "Great cleaver of Khorne",
+      "phase": "fight",
+      "selectedProfile": "Strike",
+      "activeCount": 1
+    },
+    {
+      "faction": "world-eaters",
+      "unit": "Lord on Juggernaut",
+      "unitOccurrence": 1,
+      "modelCount": 1,
+      "weaponGroup": "Plasma pistol",
+      "phase": "shooting",
+      "selectedProfile": "Supercharge",
+      "activeCount": 1
+    }
+  ]
+}

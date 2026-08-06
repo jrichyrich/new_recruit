@@ -135,7 +135,7 @@ export type NewRecruitDeliveryOptions = WriteOptions & {
    * Recruit game-system revision. Drifted artifacts are never promoted into
    * the trusted persistent cache.
    */
-  catalogueDriftMode?: "reject" | "diagnostic";
+  catalogueDriftMode?: "reject" | "diagnostic" | "force";
 };
 
 export type NewRecruitCompanionDependencies = {
@@ -1036,10 +1036,9 @@ export async function deliverRosterToNewRecruit(
               )
               .join("; ");
             if (
-              options.catalogueDriftMode === "diagnostic" &&
-              isForwardGameSystemRevisionOnlyDrift(
-                catalogueProvenance,
-              )
+              options.catalogueDriftMode === "force" ||
+              (options.catalogueDriftMode === "diagnostic" &&
+                isForwardGameSystemRevisionOnlyDrift(catalogueProvenance))
             ) {
               catalogueProvenanceWarnings.push({
                 code: "TESSERA_VERIFIED_CATALOGUE_DRIFT_DIAGNOSTIC",

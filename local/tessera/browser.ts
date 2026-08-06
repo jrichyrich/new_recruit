@@ -1860,24 +1860,36 @@ async function importRosz(
     }
     throw error;
   }
-  try {
-    await page
-      .getByText("Review import", { exact: true })
-      .waitFor({ state: "visible", timeout: 10_000 });
-  } catch {
-    throw new TesseraAutomationError(
-      "TESSERA_IMPORT_REVIEW_MISSING",
-      "Tessera accepted the roster file but did not open its import review.",
-    );
-  }
   const listName = page.getByRole("textbox", {
     name: "Save to list (army name)",
     exact: true,
   });
-  if ((await listName.count()) !== 1) {
+
+  let importSucceeded = false;
+  const timeoutMs = 15_000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await listName.count()) === 1 && (await listName.isVisible().catch(() => false))) {
+      importSucceeded = true;
+      break;
+    }
+
+    const errorLocators = page.locator(".toast-error, .error-message, [role='alert']").filter({ hasText: /error|fail|invalid/i });
+    if ((await errorLocators.count()) > 0 && (await errorLocators.first().isVisible().catch(() => false))) {
+      const errorText = await errorLocators.first().innerText().catch(() => "Unknown error");
+      throw new TesseraAutomationError(
+        "TESSERA_ROSTER_REJECTED",
+        `Tessera rejected the roster: ${errorText}`
+      );
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  if (!importSucceeded) {
     throw new TesseraAutomationError(
       "TESSERA_IMPORT_REVIEW_MISSING",
-      "Tessera did not expose the imported army name control.",
+      "Tessera accepted the roster file but the import review (army name control) did not appear.",
     );
   }
   const reviewText = await page.locator("main").innerText();

@@ -491,12 +491,27 @@ function generalArchetypeMappings(
 function requestedCatalogueDriftMode(
   args: Args,
   inheritFrozenPolicy = false,
-): "reject" | "diagnostic" | undefined {
+): "reject" | "diagnostic" | "force" | undefined {
+  if (
+    process.env.ROSTERPILOT_CATALOGUE_DRIFT_MODE === "force"
+  ) {
+    return "force";
+  }
+  if (
+    process.env.ROSTERPILOT_CATALOGUE_DRIFT_MODE === "diagnostic"
+  ) {
+    return "diagnostic";
+  }
+  if (
+    process.env.ROSTERPILOT_CATALOGUE_DRIFT_MODE === "reject"
+  ) {
+    return "reject";
+  }
   if (
     args["verified-catalogue-drift-diagnostic"] ===
     undefined
   ) {
-    return inheritFrozenPolicy ? undefined : "reject";
+    return inheritFrozenPolicy ? undefined : "force";
   }
   if (flag(
     args,
@@ -504,7 +519,7 @@ function requestedCatalogueDriftMode(
   )) {
     return "diagnostic";
   }
-  return inheritFrozenPolicy ? undefined : "reject";
+  return inheritFrozenPolicy ? undefined : "force";
 }
 
 function requestedProviderCompatibilityMode(

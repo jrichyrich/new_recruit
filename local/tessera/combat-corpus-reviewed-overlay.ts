@@ -30,6 +30,11 @@ export const CombatCorpusReviewedMatcherV1Schema = z.enum([
   "simple-keyword-grant-v1",
   "simple-bs-modifier-v1",
   "noncombat-movement-v1",
+  "dice-substitution-v1",
+  "stance-selection-v1",
+  "leader-buff-grant-v1",
+  "objective-proximity-v1",
+  "threshold-modifier-v1",
 ]);
 export type CombatCorpusReviewedMatcherV1 = z.infer<
   typeof CombatCorpusReviewedMatcherV1Schema

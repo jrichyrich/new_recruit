@@ -563,9 +563,18 @@ function shouldStartDurableTesseraRun(
 function requestedCatalogueDriftMode(
   requested: boolean | undefined,
   inheritFrozenPolicy = false,
-): "reject" | "diagnostic" | undefined {
+): "reject" | "diagnostic" | "force" | undefined {
+  if (process.env.ROSTERPILOT_CATALOGUE_DRIFT_MODE === "force") {
+    return "force";
+  }
+  if (process.env.ROSTERPILOT_CATALOGUE_DRIFT_MODE === "diagnostic") {
+    return "diagnostic";
+  }
+  if (process.env.ROSTERPILOT_CATALOGUE_DRIFT_MODE === "reject") {
+    return "reject";
+  }
   if (requested === true) return "diagnostic";
-  return inheritFrozenPolicy ? undefined : "reject";
+  return inheritFrozenPolicy ? undefined : "force";
 }
 
 function inProgressJobContent(job: TesseraRunJob) {
@@ -1804,7 +1813,7 @@ export function createRosterPilotMcpServer(
           analysisMode: "full" as const,
           allowPointMismatch: false,
           includeChangeCandidates: true,
-          catalogueDriftMode: "reject" as const,
+          catalogueDriftMode: requestedCatalogueDriftMode(undefined, false) ?? "reject",
         };
         const requests: Array<{
           targetId: string;
@@ -1845,7 +1854,7 @@ export function createRosterPilotMcpServer(
                         executionMode: "simulate",
                         simulationBackend,
                         experimental: false,
-                        catalogueDriftMode: "reject",
+                        catalogueDriftMode: requestedCatalogueDriftMode(undefined, false) ?? "reject",
                         portfolioPreview: target.portfolioPreview,
                       },
                     },

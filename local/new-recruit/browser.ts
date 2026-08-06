@@ -85,7 +85,7 @@ async function captureNewRecruitUiIdentity(
 }
 
 function normalized(value: string): string {
-  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  return value.replace(/\s+/g, " ").replace(/['’]/g, "'").trim().toLocaleLowerCase();
 }
 
 async function firstVisible(page: Page, selectors: string[]) {
@@ -353,8 +353,10 @@ async function importRoster(
     .waitForEvent("filechooser", { timeout: 3_000 })
     .catch(() => null);
   if (await importButton.isVisible().catch(() => false)) {
+    await importButton.evaluate((el) => el.setAttribute("data-rosterpilot-original", "true")).catch(() => undefined);
     await importButton.click();
   } else if (await importLink.isVisible().catch(() => false)) {
+    await importLink.evaluate((el) => el.setAttribute("data-rosterpilot-original", "true")).catch(() => undefined);
     await importLink.click();
   } else {
     throw new NewRecruitAutomationError(
@@ -382,61 +384,67 @@ async function importRoster(
     await fileInput.setInputFiles(roszPath);
   }
 
-  await page.waitForTimeout(250);
-  if (!listUrlPattern.test(page.url())) {
-    const confirms = page.getByRole("button", {
-      name: /import|upload|create/i,
-    });
-    for (let index = (await confirms.count()) - 1; index >= 0; index -= 1) {
-      const confirm = confirms.nth(index);
-      if (await confirm.isVisible().catch(() => false)) {
-        await confirm.click();
-        break;
-      }
-    }
-  }
+  let confirmClicked = false;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (listUrlPattern.test(page.url())) {
       return { imported: true, listUrl: page.url() };
     }
+
     if ((await rosterRows.count()) > initialRosterCount) {
       const matchingRows = page
         .locator("tr.listRow")
         .filter({ hasText: rosterName });
-      while (Date.now() < deadline) {
-        if (listUrlPattern.test(page.url())) {
+      const candidates =
+        (await matchingRows.count()) > 0 ? matchingRows : rosterRows;
+      for (
+        let index = 0;
+        index < (await candidates.count()) && Date.now() < deadline;
+        index += 1
+      ) {
+        const candidate = candidates.nth(index);
+        if (!(await candidate.isVisible().catch(() => false))) continue;
+        await candidate.scrollIntoViewIfNeeded().catch(() => undefined);
+        await candidate.click({ timeout: 2_000 }).catch(() => undefined);
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        const opened = await page
+          .waitForURL(listUrlPattern, {
+            timeout: Math.min(2_000, remainingMs),
+          })
+          .then(() => true)
+          .catch(() => false);
+        if (opened) {
           return { imported: true, listUrl: page.url() };
         }
-        const candidates =
-          (await matchingRows.count()) > 0 ? matchingRows : rosterRows;
-        for (
-          let index = 0;
-          index < (await candidates.count()) && Date.now() < deadline;
-          index += 1
-        ) {
-          const candidate = candidates.nth(index);
-          if (!(await candidate.isVisible().catch(() => false))) continue;
-          await candidate.scrollIntoViewIfNeeded().catch(() => undefined);
-          await candidate.click({ timeout: 2_000 }).catch(() => undefined);
-          const remainingMs = deadline - Date.now();
-          if (remainingMs <= 0) break;
-          const opened = await page
-            .waitForURL(listUrlPattern, {
-              timeout: Math.min(2_000, remainingMs),
-            })
-            .then(() => true)
+      }
+    } else if (!confirmClicked) {
+      const confirms = page.getByRole("button", {
+        name: /import|upload|create/i,
+      });
+      const count = await confirms.count();
+      for (let index = count - 1; index >= 0; index -= 1) {
+        const confirm = confirms.nth(index);
+        if (await confirm.isVisible().catch(() => false)) {
+          const isOriginal = await confirm
+            .evaluate((el) => el.hasAttribute("data-rosterpilot-original"))
             .catch(() => false);
-          if (opened) {
-            return { imported: true, listUrl: page.url() };
+          if (!isOriginal) {
+            try {
+              await confirm.click({ timeout: 2_000 });
+              confirmClicked = true;
+              break;
+            } catch (error) {
+              // Click failed, perhaps it's disabled or not ready.
+              // Do not set confirmClicked to true so we retry.
+            }
           }
         }
-        await page.waitForTimeout(250);
       }
-      return { imported: true, listUrl: null };
     }
     await page.waitForTimeout(250);
   }
+  await page.screenshot({ path: "/Users/jasricha/.gemini/antigravity-ide/brain/847e3231-7dec-41d2-a532-ea65faea8ea7/scratch/timeout-screenshot.png", fullPage: true }).catch(() => undefined);
   return {
     imported: false,
     listUrl: null,

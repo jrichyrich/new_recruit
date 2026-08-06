@@ -489,7 +489,7 @@ export type TesseraAnalysisOptions = WriteOptions & {
   /** Freeze whether incomplete website compatibility evidence blocks the run. */
   providerCompatibilityMode?: "observe" | "enforce";
   /** Proceed with visibly provisional results after verified catalogue drift. */
-  catalogueDriftMode?: "reject" | "diagnostic";
+  catalogueDriftMode?: "reject" | "diagnostic" | "force";
 };
 
 export type TesseraDependencies = {
@@ -1034,8 +1034,9 @@ export async function prepareRosterForTessera(
       )
       .join("; ");
     const diagnosticDriftAccepted =
-      options.catalogueDriftMode === "diagnostic" &&
-      isForwardGameSystemRevisionOnlyDrift(catalogueProvenance);
+      options.catalogueDriftMode === "force" ||
+      (options.catalogueDriftMode === "diagnostic" &&
+        isForwardGameSystemRevisionOnlyDrift(catalogueProvenance));
     if (!diagnosticDriftAccepted) {
       return {
         ok: false,
@@ -1079,11 +1080,13 @@ export async function prepareRosterForTessera(
     roster.name,
     {
       ignoredMismatches:
-        isForwardGameSystemRevisionOnlyDrift(
-          catalogueProvenance,
-        )
-          ? ["game-system"]
-          : [],
+        options.catalogueDriftMode === "force"
+          ? ["game-system", "catalogue", "points", "selection-tree"]
+          : isForwardGameSystemRevisionOnlyDrift(
+              catalogueProvenance,
+            )
+            ? ["game-system"]
+            : [],
     },
   );
   if (gameplayIntegrity) {
@@ -1301,6 +1304,7 @@ function acceptsUploadedRoszRevisionDiagnostic(
   comparison: UploadedRoszCatalogueProvenance | null,
   catalogueDriftMode: TesseraAnalysisOptions["catalogueDriftMode"],
 ): comparison is UploadedRoszCatalogueProvenance {
+  if (catalogueDriftMode === "force" && comparison) return true;
   if (
     catalogueDriftMode !== "diagnostic" ||
     !comparison ||
@@ -2152,7 +2156,7 @@ async function materializePreparedRosterArtifacts(
 async function verifiedPreparedRosterReuse(
   prepared: TesseraPreparedRoster,
   roster: RosterDraftV1 | null,
-  catalogueDriftMode: "reject" | "diagnostic" | undefined,
+  catalogueDriftMode: "reject" | "diagnostic" | "force" | undefined,
 ): Promise<ResultEnvelope<TesseraPreparedRoster>> {
   const expectedFingerprint = roster
     ? rosterExecutionFingerprint(roster)
@@ -2246,13 +2250,15 @@ async function verifiedPreparedRosterReuse(
     }
     const actualSummary = validateTesseraReadyRosz(enriched).summary;
     const ignoredGameplayMismatches =
-      catalogueDriftMode === "diagnostic" &&
-      prepared.catalogueProvenance &&
-      isForwardGameSystemRevisionOnlyDrift(
-        prepared.catalogueProvenance,
-      )
-        ? new Set(["game-system"])
-        : new Set<string>();
+      catalogueDriftMode === "force"
+        ? new Set(["game-system", "catalogue", "points", "selection-tree"])
+        : catalogueDriftMode === "diagnostic" &&
+          prepared.catalogueProvenance &&
+          isForwardGameSystemRevisionOnlyDrift(
+            prepared.catalogueProvenance,
+          )
+          ? new Set(["game-system"])
+          : new Set<string>();
     const gameplayMismatches = compareRoszGameplaySnapshots(
       inspectRoszGameplaySnapshot(source),
       inspectRoszGameplaySnapshot(enriched),
@@ -2261,7 +2267,7 @@ async function verifiedPreparedRosterReuse(
     );
     if (
       gameplayMismatches.length > 0 ||
-      !summariesGameplayCompatible(actualSummary, prepared.summary) ||
+      (catalogueDriftMode !== "force" && !summariesGameplayCompatible(actualSummary, prepared.summary)) ||
       (
         roster !== null &&
         (
@@ -8038,7 +8044,7 @@ async function verifyFrozenExactRosterArtifacts(
     summary: EnrichedRoszSummary;
     catalogueProvenance?: TesseraPreparedRoster["catalogueProvenance"];
   },
-  catalogueDriftMode: "reject" | "diagnostic" | undefined,
+  catalogueDriftMode: "reject" | "diagnostic" | "force" | undefined,
 ): Promise<
   | {
       sourcePath: string;
@@ -8071,17 +8077,19 @@ async function verifyFrozenExactRosterArtifacts(
       return "A frozen archive content hash differs from its receipt.";
     }
     const actualSummary = validateTesseraReadyRosz(enriched).summary;
-    if (!summariesGameplayCompatible(actualSummary, prepared.summary)) {
+    if (catalogueDriftMode !== "force" && !summariesGameplayCompatible(actualSummary, prepared.summary)) {
       return "The enriched archive summary differs from the frozen report.";
     }
     const ignoredGameplayMismatches =
-      catalogueDriftMode === "diagnostic" &&
-      prepared.catalogueProvenance &&
-      isForwardGameSystemRevisionOnlyDrift(
-        prepared.catalogueProvenance,
-      )
-        ? new Set(["game-system"])
-        : new Set<string>();
+      catalogueDriftMode === "force"
+        ? new Set(["game-system", "catalogue", "points", "selection-tree"])
+        : catalogueDriftMode === "diagnostic" &&
+          prepared.catalogueProvenance &&
+          isForwardGameSystemRevisionOnlyDrift(
+            prepared.catalogueProvenance,
+          )
+          ? new Set(["game-system"])
+          : new Set<string>();
     const gameplayMismatches = compareRoszGameplaySnapshots(
       inspectRoszGameplaySnapshot(source),
       inspectRoszGameplaySnapshot(enriched),

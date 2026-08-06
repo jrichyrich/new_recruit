@@ -3295,8 +3295,17 @@ export function buildRoster(
       }> = [];
       for (const unit of buildUnitPool) {
         const currentCopies = state.copies.get(unit.id) ?? 0;
-        const rulesMaximumCopies =
-          isNamedCharacter(unit) || isCharacterUnit(unit) ? 1 : 3;
+        let rulesMaximumCopies = 3;
+        if (isNamedCharacter(unit) || isCharacterUnit(unit)) {
+          rulesMaximumCopies = 1;
+        } else if (
+          unit.raw.role === "battleline" ||
+          unit.raw.role === "dedicated-transport"
+        ) {
+          rulesMaximumCopies = 6;
+        } else if (input.pointsLimit <= 1000) {
+          rulesMaximumCopies = 2;
+        }
         const collectionMaximumCopies =
           ownedCollection?.get(unit.id)?.maxUnits ??
           rulesMaximumCopies;
