@@ -3481,7 +3481,7 @@ export async function runTesseraBrowserMatchup(
     dependencies.context ??
     (await chromium.launchPersistentContext(input.profileDirectory, {
       channel: "chrome",
-      headless: dependencies.headless ?? false,
+      headless: false,
       acceptDownloads: true,
     }));
   dependencies.onContext?.(context);

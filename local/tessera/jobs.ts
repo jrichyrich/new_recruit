@@ -3020,17 +3020,18 @@ async function workerProcessMatches(
   ) {
     return liveProcessStart ? "mismatched" : "unverifiable";
   }
-  const workerPath = path.join(
+  const tsWorkerPath = path.join(
     projectRoot,
     "local",
     "tessera",
     "job-worker.ts",
   );
+  const mjsWorkerPath = "tessera-job-worker.mjs";
   const tokenMatches = (
     command.match(/\b[0-9a-f]{64}\b/g) ?? []
   ).some((candidate) => contentSha256(candidate) === tokenSha256);
   return (
-    command.includes(workerPath) &&
+    (command.includes(tsWorkerPath) || command.includes(mjsWorkerPath)) &&
     command.includes(jobPath) &&
     tokenMatches
   )

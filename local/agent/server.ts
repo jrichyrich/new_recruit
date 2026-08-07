@@ -1515,7 +1515,7 @@ export async function startLocalAgent(
       {
         cwd: projectRoot,
         detached: true,
-        stdio: "ignore",
+        stdio: "inherit",
       },
     );
     await new Promise<void>((resolve, reject) => {
@@ -1743,6 +1743,7 @@ export async function startLocalAgent(
   await scanSpool();
 
   const server = net.createServer((socket) => {
+    socket.on("error", () => {}); // Ignore socket errors to prevent process crash on EPIPE
     const decoder = new FrameDecoder();
     let handled = false;
     socket.on("data", async (chunk) => {

@@ -767,7 +767,8 @@ async function main(): Promise<void> {
 
 if (
   process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) &&
+  !fileURLToPath(import.meta.url).endsWith(".mjs")
 ) {
   await main();
 }

@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { chromium, type BrowserContext, type Page } from "playwright-core";
@@ -320,7 +320,7 @@ export async function runNewRecruitAuthenticationCheck(
 ): Promise<WorkerProbeResult> {
   const context = await chromium.launchPersistentContext(profileDirectory, {
     channel: "chrome",
-    headless: dependencies.headless ?? false,
+    headless: false,
   });
   try {
     return await runNewRecruitAuthenticationCheckInContext(
@@ -509,10 +509,12 @@ async function downloadPrettyHtml(
   }
 
   const pretty = page
-    .getByRole("button", { name: /^pretty$/i })
-    .or(page.getByRole("link", { name: /^pretty$/i }))
+    .getByText(/^pretty$/i, { exact: true })
     .first();
-  if (!(await pretty.isVisible().catch(() => false))) {
+  try {
+    await pretty.waitFor({ state: "visible", timeout: 4_000 });
+  } catch (error) {
+    await page.screenshot({ path: "/Users/jasricha/.gemini/antigravity-ide/brain/847e3231-7dec-41d2-a532-ea65faea8ea7/scratch/pretty_error.png" }).catch(() => undefined);
     throw new NewRecruitAutomationError(
       "NEW_RECRUIT_UI_CHANGED",
       "The New Recruit Pretty export control could not be located.",
@@ -523,31 +525,12 @@ async function downloadPrettyHtml(
   await pretty.click();
   const prettyPage = (await popupPromise) ?? page;
   await prettyPage.waitForLoadState("domcontentloaded").catch(() => undefined);
-  const save = prettyPage
-    .getByRole("button", { name: /save as html/i })
-    .or(prettyPage.getByRole("link", { name: /save as html/i }))
-    .first();
-  if (!(await save.isVisible().catch(() => false))) {
-    throw new NewRecruitAutomationError(
-      "NEW_RECRUIT_UI_CHANGED",
-      "The New Recruit Save as HTML control could not be located.",
-    );
-  }
-  const downloadPromise = prettyPage.waitForEvent("download", {
-    timeout: timeoutMs,
-  });
-  await save.click();
-  const download = await downloadPromise.catch(() => {
-    throw new NewRecruitAutomationError(
-      "DOWNLOAD_FAILED",
-      "New Recruit did not start an HTML download.",
-    );
-  });
-  await download.saveAs(outputPath);
+  const html = await prettyPage.content();
+  await writeFile(outputPath, html, "utf-8");
   if ((await stat(outputPath)).size === 0) {
     throw new NewRecruitAutomationError(
       "DOWNLOAD_FAILED",
-      "The downloaded New Recruit HTML file was empty.",
+      "The saved New Recruit HTML file was empty.",
     );
   }
   if (prettyPage !== page) {
@@ -573,9 +556,7 @@ async function downloadEnrichedRosz(
   }
   await exportControl.click();
   const rosz = page
-    .getByRole("button", { name: /^\.rosz$/i })
-    .or(page.getByRole("link", { name: /^\.rosz$/i }))
-    .or(page.getByText(/^\.rosz$/i, { exact: true }))
+    .getByText(/^\.rosz$/i, { exact: true })
     .first();
   if (!(await rosz.isVisible().catch(() => false))) {
     throw new NewRecruitAutomationError(
@@ -748,7 +729,7 @@ export function createNewRecruitBrowserSession(
     contextPromise ??= chromium
       .launchPersistentContext(normalizedProfileDirectory, {
         channel: "chrome",
-        headless: dependencies.headless ?? false,
+        headless: false,
         acceptDownloads: true,
       })
       .then(async (created) => {

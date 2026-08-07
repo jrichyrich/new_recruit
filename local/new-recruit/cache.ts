@@ -1299,7 +1299,7 @@ async function recoveryArtifactForDelivery(
   ) {
     throw failClosed(
       "NEW_RECRUIT_MUTATION_ARTIFACT_REQUIRED",
-      "A created New Recruit mutation cannot be finalized without verified enriched-artifact evidence.",
+      `A created New Recruit mutation cannot be finalized without verified enriched-artifact evidence. (enrichedSummary: ${!!delivery.data?.enrichedSummary}, event: ${!!event}, origin: ${event?.origin}, outcome: ${event?.outcome})`,
     );
   }
   const sourceRoszPath = delivery.data.artifacts.find(
