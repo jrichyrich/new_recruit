@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "stateKind": "rosterpilot-local-source-update-state",
+  "revision": 2,
+  "activeJobId": null,
+  "lastJobId": "7c220b3c-fcff-412d-911b-8aac02f20935",
+  "latestCandidate": null,
+  "latestObservation": null,
+  "lastAttemptAt": "2026-08-07T21:00:42.206Z",
+  "lastSuccessAt": null,
+  "consecutiveFailures": 1,
+  "nextAutomaticAttemptAt": "2026-08-07T22:00:42.268Z",
+  "updatedAt": "2026-08-07T21:00:42.275Z",
+  "integritySha256": "a3cf6e645f3b553a1aa1ed0d5638f78a9806ad271e4c7961af75c561cfa96715"
+}

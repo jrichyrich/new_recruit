@@ -987,7 +987,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 86,
-        "mappedBaseLoadouts": 78,
+        "mappedBaseLoadouts": 80,
         "engineDetachments": 15,
         "mappedDetachments": 14,
         "complete": false
@@ -1164,52 +1164,6 @@
           }
         },
         {
-          "id": "2f99445826824a1f",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "adeptus-astartes",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "775629c25ef3e8c0",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "adeptus-astartes",
@@ -1275,53 +1229,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "5d0e0781fd502a82",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "adeptus-astartes",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "3b8e9b29eb83cec4",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "adeptus-astartes",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -3532,27 +3439,6 @@
           }
         },
         {
-          "id": "d2272e31354c0c89",
-          "rootCauseKey": "7bf8fdd12704092e",
-          "factionId": "adeptus-custodes",
-          "entityType": "equipment",
-          "entityId": "shield-captain:pyrithite-spear-shield-captain",
-          "entityName": "Shield-Captain: Pyrithite spear",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Pyrithite spear for Shield-Captain is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "pyrithite-spear-shield-captain",
-            "entryPath": "3ab2-181b-28a4-6978::b61c-b815-65c0-b1cc"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "3ab2-181b-28a4-6978::b61c-b815-65c0-b1cc"
-          }
-        },
-        {
           "id": "bc75f9728e0547fe",
           "rootCauseKey": "01227f1abd16ff39",
           "factionId": "adeptus-custodes",
@@ -4583,127 +4469,12 @@
       "coverage": {
         "engineUnits": 76,
         "mappedUnits": 71,
-        "mappedBaseLoadouts": 55,
+        "mappedBaseLoadouts": 63,
         "engineDetachments": 15,
         "mappedDetachments": 15,
         "complete": false
       },
       "conflicts": [
-        {
-          "id": "e909c43e38e31d98",
-          "rootCauseKey": "dc88c0fe1cefe1c8",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "asurmen:base:757e94064876",
-          "entityName": "Asurmen",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Asurmen base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Asurmen equipment \"Bloody Twins\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:bloody-twins=1|id:sword-of-asur=1"
-              }
-            ],
-            "entryPath": "b425-6079-7cf8-c3fd::828d-840a-9a67-9074"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "b425-6079-7cf8-c3fd::828d-840a-9a67-9074"
-          }
-        },
-        {
-          "id": "0fe63c2a3aafda75",
-          "rootCauseKey": "d4da92f2956d59ec",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "asurmen:bloody-twins",
-          "entityName": "Asurmen: Bloody Twins",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Bloody Twins for Asurmen is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "bloody-twins",
-            "entryPath": "b425-6079-7cf8-c3fd::828d-840a-9a67-9074"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "b425-6079-7cf8-c3fd::828d-840a-9a67-9074"
-          }
-        },
-        {
-          "id": "c85b2683fdad9f19",
-          "rootCauseKey": "f472f313dfd14b74",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "asurmen:sword-of-asur",
-          "entityName": "Asurmen: Sword of Asur",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Sword of Asur for Asurmen is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "sword-of-asur",
-            "entryPath": "b425-6079-7cf8-c3fd::828d-840a-9a67-9074"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "b425-6079-7cf8-c3fd::828d-840a-9a67-9074"
-          }
-        },
-        {
-          "id": "3ebb18b62630f2d1",
-          "rootCauseKey": "4b46a4bdfdae5767",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "baharroth:base:506a5e1fc54e",
-          "entityName": "Baharroth",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Baharroth base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Baharroth equipment \"Shining Blade\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:fury-of-the-tempest=1|id:shining-blade=1"
-              }
-            ],
-            "entryPath": "87d1-3564-c23-7818::8732-df2f-a542-805f"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "87d1-3564-c23-7818::8732-df2f-a542-805f"
-          }
-        },
-        {
-          "id": "a79bab898699f222",
-          "rootCauseKey": "9b3359828add441f",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "baharroth:shining-blade",
-          "entityName": "Baharroth: Shining Blade",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Shining Blade for Baharroth is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "shining-blade",
-            "entryPath": "87d1-3564-c23-7818::8732-df2f-a542-805f"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "87d1-3564-c23-7818::8732-df2f-a542-805f"
-          }
-        },
         {
           "id": "bb31fe025f02d123",
           "rootCauseKey": "78a6123858aedd64",
@@ -4848,99 +4619,6 @@
           }
         },
         {
-          "id": "65c282a5ff16cf22",
-          "rootCauseKey": "9e1c4efcb6497b83",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "dire-avengers:base:d6ba0882085a",
-          "entityName": "Dire Avengers",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Dire Avengers base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Dire Avenger Exarch model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:avenger-shuriken-catapult=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:avenger-shuriken-catapult=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:avenger-shuriken-catapult=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:avenger-shuriken-catapult=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:avenger-shuriken-catapult=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:avenger-shuriken-catapult=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "a5e0-9c61-f07d-467b::e6c2-f3b2-6d3e-c3d3"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "a5e0-9c61-f07d-467b::e6c2-f3b2-6d3e-c3d3"
-          }
-        },
-        {
-          "id": "1089b0c63d5847bd",
-          "rootCauseKey": "3a07dc79385d5e0b",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "eldrad-ulthran:base:ba8ed96e2a27",
-          "entityName": "Eldrad Ulthran",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Eldrad Ulthran base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Eldrad Ulthran equipment \"The Staff of Ulthamar and witchblade\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:mind-war=1|id:shuriken-pistol-eldrad-ulthran=1|id:the-staff-of-ulthamar-and-witchblade=1"
-              }
-            ],
-            "entryPath": "e426-84a4-a7da-e154::f48e-276e-a997-c90e"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "e426-84a4-a7da-e154::f48e-276e-a997-c90e"
-          }
-        },
-        {
-          "id": "969a11b0d71494e9",
-          "rootCauseKey": "30bc2567f8efc733",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "eldrad-ulthran:the-staff-of-ulthamar-and-witchblade",
-          "entityName": "Eldrad Ulthran: The Staff of Ulthamar and witchblade",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The Staff of Ulthamar and witchblade for Eldrad Ulthran is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "the-staff-of-ulthamar-and-witchblade",
-            "entryPath": "e426-84a4-a7da-e154::f48e-276e-a997-c90e"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "e426-84a4-a7da-e154::f48e-276e-a997-c90e"
-          }
-        },
-        {
           "id": "0a01fd8832f23b83",
           "rootCauseKey": "9a7a716f90f77292",
           "factionId": "aeldari",
@@ -5035,99 +4713,6 @@
           }
         },
         {
-          "id": "b5998db689cf646d",
-          "rootCauseKey": "a89f4cb8310691e3",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "howling-banshees:base:d8b76b77e065",
-          "entityName": "Howling Banshees",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Howling Banshees base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Howling Banshee Exarch model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:banshee-blade-howling-banshees=5|id:shuriken-pistol=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:banshee-blade-howling-banshees=6|id:shuriken-pistol=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:banshee-blade-howling-banshees=7|id:shuriken-pistol=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:banshee-blade-howling-banshees=8|id:shuriken-pistol=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:banshee-blade-howling-banshees=9|id:shuriken-pistol=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:banshee-blade-howling-banshees=10|id:shuriken-pistol=10"
-              }
-            ],
-            "entryPath": "95d-ae5a-5668-b5b::7fcb-9262-474a-7cec"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "95d-ae5a-5668-b5b::7fcb-9262-474a-7cec"
-          }
-        },
-        {
-          "id": "a00878706068ff76",
-          "rootCauseKey": "62ccaeee83375c99",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "jain-zar:base:1d11162c3fc2",
-          "entityName": "Jain Zar",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Jain Zar base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Jain Zar equipment \"Blade of Destruction\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:blade-of-destruction=1|id:silent-death=1"
-              }
-            ],
-            "entryPath": "1255-9ad2-1468-40f4::77f9-e8de-225f-9e68"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "1255-9ad2-1468-40f4::77f9-e8de-225f-9e68"
-          }
-        },
-        {
-          "id": "08c601f9a06f1aa5",
-          "rootCauseKey": "3e1e8b292a9b7e1c",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "jain-zar:blade-of-destruction",
-          "entityName": "Jain Zar: Blade of Destruction",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Blade of Destruction for Jain Zar is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "blade-of-destruction",
-            "entryPath": "1255-9ad2-1468-40f4::77f9-e8de-225f-9e68"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "1255-9ad2-1468-40f4::77f9-e8de-225f-9e68"
-          }
-        },
-        {
           "id": "5eb6e8242a54f36f",
           "rootCauseKey": "73a8f731d252fc90",
           "factionId": "aeldari",
@@ -5154,74 +4739,6 @@
           }
         },
         {
-          "id": "d35c349188332002",
-          "rootCauseKey": "5c612df0049fedd3",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "prince-yriel:base:5cec48d408be",
-          "entityName": "Prince Yriel",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Prince Yriel base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Prince Yriel equipment \"Eye of Wrath\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:eye-of-wrath=1|id:shuriken-pistol-prince-yriel=1|id:spear-of-twilight=1"
-              }
-            ],
-            "entryPath": "c44d-b187-3736-c3b8::54dc-aa1f-817a-a5c5"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "c44d-b187-3736-c3b8::54dc-aa1f-817a-a5c5"
-          }
-        },
-        {
-          "id": "2347c16121065c38",
-          "rootCauseKey": "5cfa574168484b2a",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "prince-yriel:eye-of-wrath",
-          "entityName": "Prince Yriel: Eye of Wrath",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Eye of Wrath for Prince Yriel is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "eye-of-wrath",
-            "entryPath": "c44d-b187-3736-c3b8::54dc-aa1f-817a-a5c5"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "c44d-b187-3736-c3b8::54dc-aa1f-817a-a5c5"
-          }
-        },
-        {
-          "id": "732ab45a370e50be",
-          "rootCauseKey": "b10c7e40a02aa948",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "prince-yriel:spear-of-twilight",
-          "entityName": "Prince Yriel: Spear of Twilight",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Spear of Twilight for Prince Yriel is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "spear-of-twilight",
-            "entryPath": "c44d-b187-3736-c3b8::54dc-aa1f-817a-a5c5"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "c44d-b187-3736-c3b8::54dc-aa1f-817a-a5c5"
-          }
-        },
-        {
           "id": "e4278361fe28a0fe",
           "rootCauseKey": "729c11b132f3a4c8",
           "factionId": "aeldari",
@@ -5245,52 +4762,6 @@
             "id": "34a5-8c7e-f468-82d1",
             "revision": 1,
             "entryPath": "ed6a-ff9f-28a3-1716::ca40-4a0d-567-852"
-          }
-        },
-        {
-          "id": "4e6164bb9abfaa46",
-          "rootCauseKey": "a455ac6cd472612d",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "striking-scorpions:base:9625aed1b51b",
-          "entityName": "Striking Scorpions",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Striking Scorpions base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Striking Scorpion Exarch model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:scorpion-chainsword=5|id:scorpions-claw=1|id:shuriken-pistol=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:scorpion-chainsword=6|id:scorpions-claw=1|id:shuriken-pistol=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:scorpion-chainsword=7|id:scorpions-claw=1|id:shuriken-pistol=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:scorpion-chainsword=8|id:scorpions-claw=1|id:shuriken-pistol=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:scorpion-chainsword=9|id:scorpions-claw=1|id:shuriken-pistol=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:scorpion-chainsword=10|id:scorpions-claw=1|id:shuriken-pistol=10"
-              }
-            ],
-            "entryPath": "d4d2-fedf-140e-3f76::c90f-a8e5-6afa-eb91"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "d4d2-fedf-140e-3f76::c90f-a8e5-6afa-eb91"
           }
         },
         {
@@ -5367,27 +4838,6 @@
           }
         },
         {
-          "id": "92d3384d093d724f",
-          "rootCauseKey": "e87c12b884c1f22b",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "warp-spiders:powerblade-array",
-          "entityName": "Warp Spiders: Powerblade array",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Powerblade array for Warp Spiders is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "powerblade-array",
-            "entryPath": "e43e-9113-736d-cdf6::57ec-47a8-a59a-6a46"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "e43e-9113-736d-cdf6::57ec-47a8-a59a-6a46"
-          }
-        },
-        {
           "id": "e34236227ca3c80a",
           "rootCauseKey": "6e7045cb4a17a383",
           "factionId": "aeldari",
@@ -5406,27 +4856,6 @@
             "id": "34a5-8c7e-f468-82d1",
             "revision": 1,
             "entryPath": "c302-5769-871e-853b::ad88-f706-318c-e70e"
-          }
-        },
-        {
-          "id": "f7b6bebe0fb658d6",
-          "rootCauseKey": "bcf8496c7e96416f",
-          "factionId": "aeldari",
-          "entityType": "equipment",
-          "entityId": "wraithblades:ghostaxe",
-          "entityName": "Wraithblades: Ghostaxe",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Ghostaxe for Wraithblades is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "ghostaxe",
-            "entryPath": "8cb-f672-a815-49ef::bb4f-4359-cc16-e6d5"
-          },
-          "catalogue": {
-            "id": "34a5-8c7e-f468-82d1",
-            "revision": 1,
-            "entryPath": "8cb-f672-a815-49ef::bb4f-4359-cc16-e6d5"
           }
         },
         {
@@ -6402,7 +5831,7 @@
       "coverage": {
         "engineUnits": 75,
         "mappedUnits": 72,
-        "mappedBaseLoadouts": 41,
+        "mappedBaseLoadouts": 44,
         "engineDetachments": 11,
         "mappedDetachments": 11,
         "complete": false
@@ -6712,15 +6141,15 @@
           }
         },
         {
-          "id": "a19990e8641010f5",
-          "rootCauseKey": "7ba6ae6033472c05",
+          "id": "da2aef51eaaec7d6",
+          "rootCauseKey": "0854610d60edaf84",
           "factionId": "astra-militarum",
           "entityType": "equipment",
-          "entityId": "cadian-shock-troops:base:0b0d0fb2e86d",
+          "entityId": "cadian-shock-troops:base:eec3895abe58",
           "entityName": "Cadian Shock Troops",
           "code": "UNMAPPED",
           "blocking": true,
-          "message": "The deterministic Cadian Shock Troops base loadout for model count 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Shock Trooper Sergeant model with the selected equipment.",
+          "message": "The deterministic Cadian Shock Troops base loadout for model count 10 cannot be represented in the New Recruit catalogue. New Recruit model mapping for Shock Trooper Sergeant is ambiguous between: Shock Trooper Sergeant, Shock Trooper Sergeant.",
           "source": "bsdata",
           "scope": {
             "selectionScopes": [
@@ -8774,58 +8203,6 @@
           }
         },
         {
-          "id": "e495168d57dd53e8",
-          "rootCauseKey": "5e04ab1baca8ac98",
-          "factionId": "astra-militarum",
-          "entityType": "equipment",
-          "entityId": "rogal-dorn-battle-tank:base:3c5c7ed1e060",
-          "entityName": "Rogal Dorn Battle Tank",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Rogal Dorn Battle Tank base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Rogal Dorn Battle Tank equipment \"Heavy stubber\" is ambiguous.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-tracks=1|id:castigator-gatling-cannon=1|id:heavy-stubber=1|id:twin-battle-cannon=1"
-              }
-            ],
-            "entryPath": "c7e0-68a4-64af-88e4::2127-efcc-1f62-7fab"
-          },
-          "catalogue": {
-            "id": "b0ae-12a5-c84-ea45",
-            "revision": 1,
-            "entryPath": "c7e0-68a4-64af-88e4::2127-efcc-1f62-7fab"
-          }
-        },
-        {
-          "id": "03378c5efba356e9",
-          "rootCauseKey": "be95375200490ab6",
-          "factionId": "astra-militarum",
-          "entityType": "equipment",
-          "entityId": "rogal-dorn-commander:base:a85474b673b6",
-          "entityName": "Rogal Dorn Commander",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Rogal Dorn Commander base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Rogal Dorn Commander equipment \"Heavy stubber\" is ambiguous.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-tracks=1|id:castigator-gatling-cannon=1|id:heavy-stubber=1|id:twin-battle-cannon=1"
-              }
-            ],
-            "entryPath": "c447-a6f6-2245-f7da::78b6-f280-bba9-0594"
-          },
-          "catalogue": {
-            "id": "b0ae-12a5-c84-ea45",
-            "revision": 1,
-            "entryPath": "c447-a6f6-2245-f7da::78b6-f280-bba9-0594"
-          }
-        },
-        {
           "id": "37b1438cec30f3d0",
           "rootCauseKey": "6eafb27d77f8fa15",
           "factionId": "astra-militarum",
@@ -8917,32 +8294,6 @@
             "id": "b0ae-12a5-c84-ea45",
             "revision": 1,
             "entryPath": "8621-8c62-2041-9bb5::892b-678c-72e6-ee58"
-          }
-        },
-        {
-          "id": "1dec6f84ca1c0096",
-          "rootCauseKey": "ef1349d46c111566",
-          "factionId": "astra-militarum",
-          "entityType": "equipment",
-          "entityId": "stormsword:base:92ab2dbf4e29",
-          "entityName": "Stormsword",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormsword base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormsword equipment \"Lascannon\" is ambiguous.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-tracks-stormsword=1|id:lascannon=2|id:stormsword-siege-cannon=1|id:twin-heavy-bolter=1|id:twin-heavy-flamer=2"
-              }
-            ],
-            "entryPath": "d3fe-e9f2-d76b-a67::67bc-a760-7ed5-9952"
-          },
-          "catalogue": {
-            "id": "b0ae-12a5-c84-ea45",
-            "revision": 1,
-            "entryPath": "d3fe-e9f2-d76b-a67::67bc-a760-7ed5-9952"
           }
         },
         {
@@ -9097,7 +8448,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 95,
-        "mappedBaseLoadouts": 86,
+        "mappedBaseLoadouts": 88,
         "engineDetachments": 21,
         "mappedDetachments": 20,
         "complete": false
@@ -9300,52 +8651,6 @@
           }
         },
         {
-          "id": "a64cb68b73c169f5",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "black-templars",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "a239a28be8f727fd",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "black-templars",
@@ -9411,53 +8716,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "0e5187d8da922177",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "black-templars",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "4287961917f9891d",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "black-templars",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -11678,7 +10936,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 101,
-        "mappedBaseLoadouts": 91,
+        "mappedBaseLoadouts": 94,
         "engineDetachments": 23,
         "mappedDetachments": 22,
         "complete": false
@@ -11753,27 +11011,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "d0e-d643-2621-7cc9::129d-2da5-66f3-f4ec"
-          }
-        },
-        {
-          "id": "8c6773c3450bbd43",
-          "rootCauseKey": "251bc410aa7386df",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "baal-predator:heavy-bolter",
-          "entityName": "Baal Predator: Heavy bolter",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Heavy bolter for Baal Predator is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "heavy-bolter",
-            "entryPath": "eacb-5067-279-84c4::640-9969-d5b9-875c"
-          },
-          "catalogue": {
-            "id": "4ef9-15ce-e3e6-36de",
-            "revision": 1,
-            "entryPath": "eacb-5067-279-84c4::640-9969-d5b9-875c"
           }
         },
         {
@@ -11923,99 +11160,6 @@
           }
         },
         {
-          "id": "dbd2538a2a40036d",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
-          "id": "49128897df22696c",
-          "rootCauseKey": "9871f8a622f14e16",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "lemartes:base:e79e195b9d06",
-          "entityName": "Lemartes",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Lemartes base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Lemartes equipment \"Absolvor bolt pistol\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:absolvor-bolt-pistol-lemartes=1|id:the-blood-crozius=1"
-              }
-            ],
-            "entryPath": "2ac0-a864-7232-daa1::cbc2-18c9-45b6-6327"
-          },
-          "catalogue": {
-            "id": "4ef9-15ce-e3e6-36de",
-            "revision": 1,
-            "entryPath": "2ac0-a864-7232-daa1::cbc2-18c9-45b6-6327"
-          }
-        },
-        {
-          "id": "4e125920c9fd331e",
-          "rootCauseKey": "c887a4396195aa3f",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "lemartes:absolvor-bolt-pistol-lemartes",
-          "entityName": "Lemartes: Absolvor bolt pistol",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Absolvor bolt pistol for Lemartes is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "absolvor-bolt-pistol-lemartes",
-            "entryPath": "2ac0-a864-7232-daa1::cbc2-18c9-45b6-6327"
-          },
-          "catalogue": {
-            "id": "4ef9-15ce-e3e6-36de",
-            "revision": 1,
-            "entryPath": "2ac0-a864-7232-daa1::cbc2-18c9-45b6-6327"
-          }
-        },
-        {
           "id": "fff9442953c9d604",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "blood-angels",
@@ -12081,53 +11225,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "395ccd2de69138ed",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "196b42421b772d3d",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "blood-angels",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -15015,7 +14112,7 @@
       "coverage": {
         "engineUnits": 58,
         "mappedUnits": 54,
-        "mappedBaseLoadouts": 46,
+        "mappedBaseLoadouts": 47,
         "engineDetachments": 17,
         "mappedDetachments": 17,
         "complete": false
@@ -15189,53 +14286,6 @@
             "id": "c8da-e875-58f7-f6d6",
             "revision": 5,
             "entryPath": "429b-856c-7cb8-f6a2::29f9-fc47-787e-d9d3"
-          }
-        },
-        {
-          "id": "62f93a10a8c93c36",
-          "rootCauseKey": "6421aae171824aa6",
-          "factionId": "chaos-space-marines",
-          "entityType": "equipment",
-          "entityId": "fabius-bile:base:3191d4bc345d",
-          "entityName": "Fabius Bile",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Fabius Bile base loadout for model count 2 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Fabius Bile model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 2,
-                "equipmentSignature": "id:chirurgeon=1|id:rod-of-torment=1|id:surgeon-acolytes-tools=1|id:xyclos-needler=1"
-              }
-            ],
-            "entryPath": "93c4-12f7-c81e-6f93::cd9c-96e7-6dcb-bedf"
-          },
-          "catalogue": {
-            "id": "c8da-e875-58f7-f6d6",
-            "revision": 5,
-            "entryPath": "93c4-12f7-c81e-6f93::cd9c-96e7-6dcb-bedf"
-          }
-        },
-        {
-          "id": "6ccacb25049d828f",
-          "rootCauseKey": "0491b22fe49f6d30",
-          "factionId": "chaos-space-marines",
-          "entityType": "equipment",
-          "entityId": "fabius-bile:chirurgeon",
-          "entityName": "Fabius Bile: Chirurgeon",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Chirurgeon for Fabius Bile is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "chirurgeon",
-            "entryPath": "93c4-12f7-c81e-6f93::cd9c-96e7-6dcb-bedf"
-          },
-          "catalogue": {
-            "id": "c8da-e875-58f7-f6d6",
-            "revision": 5,
-            "entryPath": "93c4-12f7-c81e-6f93::cd9c-96e7-6dcb-bedf"
           }
         },
         {
@@ -15505,7 +14555,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 89,
-        "mappedBaseLoadouts": 81,
+        "mappedBaseLoadouts": 83,
         "engineDetachments": 15,
         "mappedDetachments": 14,
         "complete": false
@@ -15682,52 +14732,6 @@
           }
         },
         {
-          "id": "ecb69bdcec25bfdf",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "crimson-fists",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "65669677052787d8",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "crimson-fists",
@@ -15793,53 +14797,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "49dd7f7b989ab0a6",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "crimson-fists",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "2d4e2ce72fa86df5",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "crimson-fists",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -17974,7 +16931,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 102,
-        "mappedBaseLoadouts": 94,
+        "mappedBaseLoadouts": 96,
         "engineDetachments": 23,
         "mappedDetachments": 22,
         "complete": false
@@ -18151,52 +17108,6 @@
           }
         },
         {
-          "id": "f8dde5ac439cb5fb",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "dark-angels",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "cc33b1dd1e360107",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "dark-angels",
@@ -18262,53 +17173,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "dfaa3bc2691bffc5",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "dark-angels",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "03d703855e58c30b",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "dark-angels",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -20778,7 +19642,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 93,
-        "mappedBaseLoadouts": 80,
+        "mappedBaseLoadouts": 83,
         "engineDetachments": 16,
         "mappedDetachments": 15,
         "complete": false
@@ -20905,52 +19769,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "8a1e-45c9-7719-b8c3::2f2e-d99b-b235-163a"
-          }
-        },
-        {
-          "id": "52a5f3a17912a0c4",
-          "rootCauseKey": "ee0acf9dc9b7f613",
-          "factionId": "deathwatch",
-          "entityType": "equipment",
-          "entityId": "deathwatch-terminator-squad:base:4d3b999be11e",
-          "entityName": "Deathwatch Terminator Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Deathwatch Terminator Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Deathwatch Terminator Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:power-fist=5|id:storm-bolter=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:power-fist=6|id:storm-bolter=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:power-fist=7|id:storm-bolter=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:power-fist=8|id:storm-bolter=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:power-fist=9|id:storm-bolter=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:power-fist=10|id:storm-bolter=10"
-              }
-            ],
-            "entryPath": "9a-d0b0-480d-21cd::390e-706b-a059-378b"
-          },
-          "catalogue": {
-            "id": "f89b-84e0-6e3b-f1e2",
-            "revision": 4,
-            "entryPath": "9a-d0b0-480d-21cd::390e-706b-a059-378b"
           }
         },
         {
@@ -21214,52 +20032,6 @@
           }
         },
         {
-          "id": "c9aa281f88be93a8",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "deathwatch",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "d0c8c8aff8c7beb3",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "deathwatch",
@@ -21391,53 +20163,6 @@
             "id": "f89b-84e0-6e3b-f1e2",
             "revision": 4,
             "entryPath": "6482-591d-fe98-7961::2544-5189-7806-30f3"
-          }
-        },
-        {
-          "id": "0b035edae6149850",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "deathwatch",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "0b68ce8509c3d0ec",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "deathwatch",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -23534,69 +22259,22 @@
       "coverage": {
         "engineUnits": 27,
         "mappedUnits": 23,
-        "mappedBaseLoadouts": 19,
+        "mappedBaseLoadouts": 20,
         "engineDetachments": 9,
         "mappedDetachments": 9,
         "complete": false
       },
       "conflicts": [
         {
-          "id": "7eea668e056a1d3d",
-          "rootCauseKey": "c77a5b88a4ce6ef3",
+          "id": "cfd87a2c71e824d6",
+          "rootCauseKey": "b6e13cbab22fbc7b",
           "factionId": "drukhari",
           "entityType": "equipment",
-          "entityId": "drazhar:base:2b0b4fb290f6",
-          "entityName": "Drazhar",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Drazhar base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Drazhar equipment \"Executioner’s demiklaives\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:executioners-demiklaives=1"
-              }
-            ],
-            "entryPath": "80eb-f424-6a35-c0c9::a30b-b966-d264-e935"
-          },
-          "catalogue": {
-            "id": "38de-521f-1ce0-44a0",
-            "revision": 1,
-            "entryPath": "80eb-f424-6a35-c0c9::a30b-b966-d264-e935"
-          }
-        },
-        {
-          "id": "7d134da4ed169ed0",
-          "rootCauseKey": "336d5d1f529a1891",
-          "factionId": "drukhari",
-          "entityType": "equipment",
-          "entityId": "drazhar:executioners-demiklaives",
-          "entityName": "Drazhar: Executioner’s demiklaives",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Executioner’s demiklaives for Drazhar is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "executioners-demiklaives",
-            "entryPath": "80eb-f424-6a35-c0c9::a30b-b966-d264-e935"
-          },
-          "catalogue": {
-            "id": "38de-521f-1ce0-44a0",
-            "revision": 1,
-            "entryPath": "80eb-f424-6a35-c0c9::a30b-b966-d264-e935"
-          }
-        },
-        {
-          "id": "d44a1ec49ca340c3",
-          "rootCauseKey": "6cd4e5c06e4ea598",
-          "factionId": "drukhari",
-          "entityType": "equipment",
-          "entityId": "lady-malys:base:639fa6cfe3a9",
+          "entityId": "lady-malys:base:c00c6b80867e",
           "entityName": "Lady Malys",
           "code": "UNMAPPED",
           "blocking": true,
-          "message": "The deterministic Lady Malys base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Lady Malys equipment \"Lady’s Blade\" is missing.",
+          "message": "The deterministic Lady Malys base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Lady Malys equipment \"Razor fan\" is missing.",
           "source": "bsdata",
           "scope": {
             "selectionScopes": [
@@ -23605,27 +22283,6 @@
                 "equipmentSignature": "id:ladys-blade=1|id:razor-fan=1"
               }
             ],
-            "entryPath": "1a82-f502-3d69-09da::a223-234b-7886-fccc"
-          },
-          "catalogue": {
-            "id": "38de-521f-1ce0-44a0",
-            "revision": 1,
-            "entryPath": "1a82-f502-3d69-09da::a223-234b-7886-fccc"
-          }
-        },
-        {
-          "id": "6405b510420cabae",
-          "rootCauseKey": "4b3469c056375aa5",
-          "factionId": "drukhari",
-          "entityType": "equipment",
-          "entityId": "lady-malys:ladys-blade",
-          "entityName": "Lady Malys: Lady’s Blade",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Lady’s Blade for Lady Malys is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "ladys-blade",
             "entryPath": "1a82-f502-3d69-09da::a223-234b-7886-fccc"
           },
           "catalogue": {
@@ -23720,27 +22377,6 @@
           "source": "bsdata",
           "scope": {
             "equipmentItemId": "maco-scalpel",
-            "entryPath": "eae1-89c6-5754-9ac4::5c5f-b70b-f6ee-a81e"
-          },
-          "catalogue": {
-            "id": "38de-521f-1ce0-44a0",
-            "revision": 1,
-            "entryPath": "eae1-89c6-5754-9ac4::5c5f-b70b-f6ee-a81e"
-          }
-        },
-        {
-          "id": "364c3e1811b1d729",
-          "rootCauseKey": "2c646ef115028a0b",
-          "factionId": "drukhari",
-          "entityType": "equipment",
-          "entityId": "talos:twin-haywire-blaster",
-          "entityName": "Talos: Twin haywire blaster",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin haywire blaster for Talos is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "twin-haywire-blaster",
             "entryPath": "eae1-89c6-5754-9ac4::5c5f-b70b-f6ee-a81e"
           },
           "catalogue": {
@@ -23854,7 +22490,7 @@
       "coverage": {
         "engineUnits": 20,
         "mappedUnits": 17,
-        "mappedBaseLoadouts": 14,
+        "mappedBaseLoadouts": 16,
         "engineDetachments": 10,
         "mappedDetachments": 10,
         "complete": false
@@ -23884,58 +22520,6 @@
             "id": "03fe-a162-4c02-f07b",
             "revision": 4,
             "entryPath": "8359-7588-cbb4-d9fb::8ae1-aa47-e1d1-1b31"
-          }
-        },
-        {
-          "id": "cabbc216f410efb3",
-          "rootCauseKey": "d452ef158041857f",
-          "factionId": "emperors-children",
-          "entityType": "equipment",
-          "entityId": "chaos-terminators:base:3a1c7c4a4dcd",
-          "entityName": "Chaos Terminators",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Chaos Terminators base loadout for model count 5 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Terminator Champion model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:accursed-weapon=5|id:combi-bolter=5"
-              }
-            ],
-            "entryPath": "8584-5fcd-53bf-7cc5::5926-4deb-a85d-c73a"
-          },
-          "catalogue": {
-            "id": "03fe-a162-4c02-f07b",
-            "revision": 4,
-            "entryPath": "8584-5fcd-53bf-7cc5::5926-4deb-a85d-c73a"
-          }
-        },
-        {
-          "id": "2b9f1c06117b953b",
-          "rootCauseKey": "049671b9a6d0c50b",
-          "factionId": "emperors-children",
-          "entityType": "equipment",
-          "entityId": "lord-kakophonist:base:2c81963703b9",
-          "entityName": "Lord Kakophonist",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Lord Kakophonist base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Lord Kakophonist equipment \"Screamer pistol\" is ambiguous.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:power-sword=1|id:screamer-pistol=1"
-              }
-            ],
-            "entryPath": "3144-df82-3e22-2ab1::ee50-955a-0a81-41f1"
-          },
-          "catalogue": {
-            "id": "03fe-a162-4c02-f07b",
-            "revision": 4,
-            "entryPath": "3144-df82-3e22-2ab1::ee50-955a-0a81-41f1"
           }
         },
         {
@@ -24022,7 +22606,7 @@
       "coverage": {
         "engineUnits": 28,
         "mappedUnits": 24,
-        "mappedBaseLoadouts": 20,
+        "mappedBaseLoadouts": 21,
         "engineDetachments": 9,
         "mappedDetachments": 8,
         "complete": false
@@ -24244,72 +22828,6 @@
           }
         },
         {
-          "id": "50fa3f2722a9c861",
-          "rootCauseKey": "752e42604513c270",
-          "factionId": "genestealer-cults",
-          "entityType": "equipment",
-          "entityId": "neophyte-hybrids:base:5dcd80db428b",
-          "entityName": "Neophyte Hybrids",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Neophyte Hybrids base loadout for model counts 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Neophyte Leader model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:autopistol=10|id:close-combat-weapon-neophyte-hybrids=10|id:hybrid-firearm=10"
-              },
-              {
-                "modelCount": 11,
-                "equipmentSignature": "id:autopistol=11|id:close-combat-weapon-neophyte-hybrids=11|id:hybrid-firearm=11"
-              },
-              {
-                "modelCount": 12,
-                "equipmentSignature": "id:autopistol=12|id:close-combat-weapon-neophyte-hybrids=12|id:hybrid-firearm=12"
-              },
-              {
-                "modelCount": 13,
-                "equipmentSignature": "id:autopistol=13|id:close-combat-weapon-neophyte-hybrids=13|id:hybrid-firearm=13"
-              },
-              {
-                "modelCount": 14,
-                "equipmentSignature": "id:autopistol=14|id:close-combat-weapon-neophyte-hybrids=14|id:hybrid-firearm=14"
-              },
-              {
-                "modelCount": 15,
-                "equipmentSignature": "id:autopistol=15|id:close-combat-weapon-neophyte-hybrids=15|id:hybrid-firearm=15"
-              },
-              {
-                "modelCount": 16,
-                "equipmentSignature": "id:autopistol=16|id:close-combat-weapon-neophyte-hybrids=16|id:hybrid-firearm=16"
-              },
-              {
-                "modelCount": 17,
-                "equipmentSignature": "id:autopistol=17|id:close-combat-weapon-neophyte-hybrids=17|id:hybrid-firearm=17"
-              },
-              {
-                "modelCount": 18,
-                "equipmentSignature": "id:autopistol=18|id:close-combat-weapon-neophyte-hybrids=18|id:hybrid-firearm=18"
-              },
-              {
-                "modelCount": 19,
-                "equipmentSignature": "id:autopistol=19|id:close-combat-weapon-neophyte-hybrids=19|id:hybrid-firearm=19"
-              },
-              {
-                "modelCount": 20,
-                "equipmentSignature": "id:autopistol=20|id:close-combat-weapon-neophyte-hybrids=20|id:hybrid-firearm=20"
-              }
-            ],
-            "entryPath": "f44-cd5f-4a3-f6b7::b5d2-8681-6bba-f05b"
-          },
-          "catalogue": {
-            "id": "3bdf-a114-5035-c6ac",
-            "revision": 2,
-            "entryPath": "f44-cd5f-4a3-f6b7::b5d2-8681-6bba-f05b"
-          }
-        },
-        {
           "id": "83645fa6531baa4e",
           "rootCauseKey": "59e49f72b6170da9",
           "factionId": "genestealer-cults",
@@ -24492,7 +23010,7 @@
       "coverage": {
         "engineUnits": 30,
         "mappedUnits": 26,
-        "mappedBaseLoadouts": 25,
+        "mappedBaseLoadouts": 23,
         "engineDetachments": 9,
         "mappedDetachments": 9,
         "complete": false
@@ -24543,6 +23061,98 @@
             "id": "50c4-3e83-fe54-97c4",
             "revision": 1,
             "entryPath": "19bb-564d-866d-ff13::f667-5267-f241-37"
+          }
+        },
+        {
+          "id": "223c2feaf7f857b3",
+          "rootCauseKey": "5f29b982c37a2680",
+          "factionId": "grey-knights",
+          "entityType": "equipment",
+          "entityId": "interceptor-squad:base:0e643158bcca",
+          "entityName": "Interceptor Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "The deterministic Interceptor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit model mapping for Interceptor Justicar is ambiguous between: Interceptor, Justicar.",
+          "source": "bsdata",
+          "scope": {
+            "selectionScopes": [
+              {
+                "modelCount": 5,
+                "equipmentSignature": "id:nemesis-force-weapon-interceptor-squad=5|id:storm-bolter=5"
+              },
+              {
+                "modelCount": 6,
+                "equipmentSignature": "id:nemesis-force-weapon-interceptor-squad=6|id:storm-bolter=6"
+              },
+              {
+                "modelCount": 7,
+                "equipmentSignature": "id:nemesis-force-weapon-interceptor-squad=7|id:storm-bolter=7"
+              },
+              {
+                "modelCount": 8,
+                "equipmentSignature": "id:nemesis-force-weapon-interceptor-squad=8|id:storm-bolter=8"
+              },
+              {
+                "modelCount": 9,
+                "equipmentSignature": "id:nemesis-force-weapon-interceptor-squad=9|id:storm-bolter=9"
+              },
+              {
+                "modelCount": 10,
+                "equipmentSignature": "id:nemesis-force-weapon-interceptor-squad=10|id:storm-bolter=10"
+              }
+            ],
+            "entryPath": "a53-5d6c-8148-4393::d9f7-71b7-8e67-7f44"
+          },
+          "catalogue": {
+            "id": "50c4-3e83-fe54-97c4",
+            "revision": 1,
+            "entryPath": "a53-5d6c-8148-4393::d9f7-71b7-8e67-7f44"
+          }
+        },
+        {
+          "id": "9e40e5988f284669",
+          "rootCauseKey": "cf22afb6153f7fc0",
+          "factionId": "grey-knights",
+          "entityType": "equipment",
+          "entityId": "purgation-squad:base:f0285dde8c6e",
+          "entityName": "Purgation Squad",
+          "code": "UNMAPPED",
+          "blocking": true,
+          "message": "The deterministic Purgation Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit model mapping for Purgator Justicar is ambiguous between: Justicar, Purgator.",
+          "source": "bsdata",
+          "scope": {
+            "selectionScopes": [
+              {
+                "modelCount": 5,
+                "equipmentSignature": "id:nemesis-force-weapon-purgation-squad=5|id:storm-bolter=5"
+              },
+              {
+                "modelCount": 6,
+                "equipmentSignature": "id:nemesis-force-weapon-purgation-squad=6|id:storm-bolter=6"
+              },
+              {
+                "modelCount": 7,
+                "equipmentSignature": "id:nemesis-force-weapon-purgation-squad=7|id:storm-bolter=7"
+              },
+              {
+                "modelCount": 8,
+                "equipmentSignature": "id:nemesis-force-weapon-purgation-squad=8|id:storm-bolter=8"
+              },
+              {
+                "modelCount": 9,
+                "equipmentSignature": "id:nemesis-force-weapon-purgation-squad=9|id:storm-bolter=9"
+              },
+              {
+                "modelCount": 10,
+                "equipmentSignature": "id:nemesis-force-weapon-purgation-squad=10|id:storm-bolter=10"
+              }
+            ],
+            "entryPath": "8440-8405-d8ce-1592::e8ad-bd40-5952-6859"
+          },
+          "catalogue": {
+            "id": "50c4-3e83-fe54-97c4",
+            "revision": 1,
+            "entryPath": "8440-8405-d8ce-1592::e8ad-bd40-5952-6859"
           }
         },
         {
@@ -24624,7 +23234,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 89,
-        "mappedBaseLoadouts": 81,
+        "mappedBaseLoadouts": 83,
         "engineDetachments": 16,
         "mappedDetachments": 15,
         "complete": false
@@ -24801,52 +23411,6 @@
           }
         },
         {
-          "id": "b2d636dfb7892ace",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "imperial-fists",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "1bf251f9725ef32b",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "imperial-fists",
@@ -24912,53 +23476,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "1d7134fa503f3d04",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "imperial-fists",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "e14c11fcaf820dcb",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "imperial-fists",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -27857,7 +26374,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 88,
-        "mappedBaseLoadouts": 80,
+        "mappedBaseLoadouts": 82,
         "engineDetachments": 16,
         "mappedDetachments": 15,
         "complete": false
@@ -28034,52 +26551,6 @@
           }
         },
         {
-          "id": "6f5c05da06360ebe",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "iron-hands",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "0dfc9e51dde31aa2",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "iron-hands",
@@ -28145,53 +26616,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "915c9484ea6c451f",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "iron-hands",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "152de1f5af132701",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "iron-hands",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -30710,27 +29134,6 @@
           }
         },
         {
-          "id": "f4d83aa6b8a65094",
-          "rootCauseKey": "8c440c35d550129e",
-          "factionId": "necrons",
-          "entityType": "equipment",
-          "entityId": "triarch-praetorians:particle-caster",
-          "entityName": "Triarch Praetorians: Particle caster",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Particle caster for Triarch Praetorians is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "particle-caster",
-            "entryPath": "bfbd-40ed-e9db-b4ac::6829-6dcb-b342-afe4"
-          },
-          "catalogue": {
-            "id": "b654-a18a-ea1-3bf2",
-            "revision": 9,
-            "entryPath": "bfbd-40ed-e9db-b4ac::6829-6dcb-b342-afe4"
-          }
-        },
-        {
           "id": "0886ae5e6135145a",
           "rootCauseKey": "7124251ca98fd609",
           "factionId": "necrons",
@@ -30996,78 +29399,12 @@
       "coverage": {
         "engineUnits": 63,
         "mappedUnits": 58,
-        "mappedBaseLoadouts": 44,
+        "mappedBaseLoadouts": 46,
         "engineDetachments": 12,
         "mappedDetachments": 12,
         "complete": false
       },
       "conflicts": [
-        {
-          "id": "59d1de12d68fc6b8",
-          "rootCauseKey": "e6b32d9e693d8d5d",
-          "factionId": "orks",
-          "entityType": "equipment",
-          "entityId": "boyz:base:fc5e84823ce2",
-          "entityName": "Boyz",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Boyz base loadout for model counts 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Boss Nob model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=9|id:slugga=10"
-              },
-              {
-                "modelCount": 11,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=10|id:slugga=11"
-              },
-              {
-                "modelCount": 12,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=11|id:slugga=12"
-              },
-              {
-                "modelCount": 13,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=12|id:slugga=13"
-              },
-              {
-                "modelCount": 14,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=13|id:slugga=14"
-              },
-              {
-                "modelCount": 15,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=14|id:slugga=15"
-              },
-              {
-                "modelCount": 16,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=15|id:slugga=16"
-              },
-              {
-                "modelCount": 17,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=16|id:slugga=17"
-              },
-              {
-                "modelCount": 18,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=17|id:slugga=18"
-              },
-              {
-                "modelCount": 19,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=18|id:slugga=19"
-              },
-              {
-                "modelCount": 20,
-                "equipmentSignature": "id:big-choppa=1|id:choppa=19|id:slugga=20"
-              }
-            ],
-            "entryPath": "187-93d6-1ac7-dbde::e3b1-1240-2476-cd86"
-          },
-          "catalogue": {
-            "id": "a55f-b7b3-6c65-a05f",
-            "revision": 2,
-            "entryPath": "187-93d6-1ac7-dbde::e3b1-1240-2476-cd86"
-          }
-        },
         {
           "id": "b3d3e7c39cd5819e",
           "rootCauseKey": "aad3d15ef42a3aeb",
@@ -31434,52 +29771,6 @@
           }
         },
         {
-          "id": "b572ea5d9cdccbc6",
-          "rootCauseKey": "9ab480bfb99ea7ac",
-          "factionId": "orks",
-          "entityType": "equipment",
-          "entityId": "nobz:base:fc5e84823ce2",
-          "entityName": "Nobz",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Nobz base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Boss Nob model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:big-choppa=5|id:slugga=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:big-choppa=6|id:slugga=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:big-choppa=7|id:slugga=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:big-choppa=8|id:slugga=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:big-choppa=9|id:slugga=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:big-choppa=10|id:slugga=10"
-              }
-            ],
-            "entryPath": "9c08-238c-554d-1719::b16a-7132-3f8a-abe5"
-          },
-          "catalogue": {
-            "id": "a55f-b7b3-6c65-a05f",
-            "revision": 2,
-            "entryPath": "9c08-238c-554d-1719::b16a-7132-3f8a-abe5"
-          }
-        },
-        {
           "id": "640d4aaf82ba5ca9",
           "rootCauseKey": "a43d32944308a88f",
           "factionId": "orks",
@@ -31793,7 +30084,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 88,
-        "mappedBaseLoadouts": 80,
+        "mappedBaseLoadouts": 82,
         "engineDetachments": 16,
         "mappedDetachments": 15,
         "complete": false
@@ -31970,52 +30261,6 @@
           }
         },
         {
-          "id": "182764693136a9b3",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "raven-guard",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "21ac8709d0d9e419",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "raven-guard",
@@ -32081,53 +30326,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "78166367d09f488d",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "raven-guard",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "8cc83fb6a1568668",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "raven-guard",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -34278,7 +32476,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 88,
-        "mappedBaseLoadouts": 80,
+        "mappedBaseLoadouts": 82,
         "engineDetachments": 16,
         "mappedDetachments": 15,
         "complete": false
@@ -34455,52 +32653,6 @@
           }
         },
         {
-          "id": "b99e431e0ea1024a",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "salamanders",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "64f2bb6ae8808876",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "salamanders",
@@ -34566,53 +32718,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "74a7ff795cea80b5",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "salamanders",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "8ea764f52cf5cac6",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "salamanders",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -36763,7 +34868,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 106,
-        "mappedBaseLoadouts": 92,
+        "mappedBaseLoadouts": 95,
         "engineDetachments": 22,
         "mappedDetachments": 21,
         "complete": false
@@ -36940,52 +35045,6 @@
           }
         },
         {
-          "id": "b9f4904771399789",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "daeb3c0417559d62",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "space-wolves",
@@ -37051,53 +35110,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "0d5293116182ca8e",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "92c664225937c839",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -37254,52 +35266,6 @@
           }
         },
         {
-          "id": "1183344e7fe99ddd",
-          "rootCauseKey": "fd498a1a54709000",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "wolf-guard-terminators:base:2b72cd89b0c3",
-          "entityName": "Wolf Guard Terminators",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Wolf Guard Terminators base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Wolf Guard Terminator Pack Leader model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:master-crafted-power-weapon-wolf-guard-terminators=5|id:storm-bolter-wolf-guard-terminators=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:master-crafted-power-weapon-wolf-guard-terminators=6|id:storm-bolter-wolf-guard-terminators=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:master-crafted-power-weapon-wolf-guard-terminators=7|id:storm-bolter-wolf-guard-terminators=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:master-crafted-power-weapon-wolf-guard-terminators=8|id:storm-bolter-wolf-guard-terminators=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:master-crafted-power-weapon-wolf-guard-terminators=9|id:storm-bolter-wolf-guard-terminators=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:master-crafted-power-weapon-wolf-guard-terminators=10|id:storm-bolter-wolf-guard-terminators=10"
-              }
-            ],
-            "entryPath": "5167-2675-f8da-b1d7::ca30-caf3-d7a8-1d32"
-          },
-          "catalogue": {
-            "id": "94bb-3284-ee14-57a1",
-            "revision": 3,
-            "entryPath": "5167-2675-f8da-b1d7::ca30-caf3-d7a8-1d32"
-          }
-        },
-        {
           "id": "5b15231c0db89fbc",
           "rootCauseKey": "85bd5a0077c721a5",
           "factionId": "space-wolves",
@@ -37312,27 +35278,6 @@
           "source": "bsdata",
           "scope": {
             "equipmentItemId": "relic-greataxe",
-            "entryPath": "5167-2675-f8da-b1d7::ca30-caf3-d7a8-1d32"
-          },
-          "catalogue": {
-            "id": "94bb-3284-ee14-57a1",
-            "revision": 3,
-            "entryPath": "5167-2675-f8da-b1d7::ca30-caf3-d7a8-1d32"
-          }
-        },
-        {
-          "id": "1e21897e431ac7f3",
-          "rootCauseKey": "c133924ff030769f",
-          "factionId": "space-wolves",
-          "entityType": "equipment",
-          "entityId": "wolf-guard-terminators:twin-lightning-claws-wolf-guard-terminators",
-          "entityName": "Wolf Guard Terminators: Twin lightning claws",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Twin lightning claws for Wolf Guard Terminators is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "twin-lightning-claws-wolf-guard-terminators",
             "entryPath": "5167-2675-f8da-b1d7::ca30-caf3-d7a8-1d32"
           },
           "catalogue": {
@@ -39581,7 +37526,7 @@
       "coverage": {
         "engineUnits": 47,
         "mappedUnits": 43,
-        "mappedBaseLoadouts": 40,
+        "mappedBaseLoadouts": 41,
         "engineDetachments": 7,
         "mappedDetachments": 7,
         "complete": false
@@ -39816,32 +37761,6 @@
             "id": "d81a-61dd-6d27-a3ce",
             "revision": 2,
             "entryPath": "fb91-c605-9c59-19f4::99fa-35-ba6e-5354"
-          }
-        },
-        {
-          "id": "c585855b8f1a8780",
-          "rootCauseKey": "e3297078cfc5b4ac",
-          "factionId": "tau-empire",
-          "entityType": "equipment",
-          "entityId": "crisis-fireknife-battlesuits:base:3f98f6eeae38",
-          "entityName": "Crisis Fireknife Battlesuits",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Crisis Fireknife Battlesuits base loadout for model count 3 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 2 Crisis Fireknife Shas’ui models with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 3,
-                "equipmentSignature": "id:battlesuit-fists=3|id:missile-pod=3|id:plasma-rifle=3"
-              }
-            ],
-            "entryPath": "d959-561c-6561-a9f3::9373-d0b3-94c9-e47"
-          },
-          "catalogue": {
-            "id": "d81a-61dd-6d27-a3ce",
-            "revision": 2,
-            "entryPath": "d959-561c-6561-a9f3::9373-d0b3-94c9-e47"
           }
         },
         {
@@ -40448,6 +38367,58 @@
             "id": "d81a-61dd-6d27-a3ce",
             "revision": 2,
             "entryPath": "ef2-a2c9-729b-61b9::acdd-2901-1a75-99f4"
+          }
+        },
+        {
+          "id": "bb5c8d79d5fa610a",
+          "rootCauseKey": "f184497821815e52",
+          "factionId": "tau-empire",
+          "entityType": "points",
+          "entityId": "crisis-fireknife-battlesuits:3",
+          "entityName": "Crisis Fireknife Battlesuits",
+          "code": "POINTS_MISMATCH",
+          "blocking": true,
+          "message": "Crisis Fireknife Battlesuits (3 models, copies 1-2) is 115 points in RosterPilot but evaluates to 100 points in the selected New Recruit path.",
+          "source": "bsdata",
+          "rulesValue": 115,
+          "newRecruitValue": 100,
+          "scope": {
+            "modelCount": 3,
+            "unitOrdinalMin": 1,
+            "unitOrdinalMax": 2,
+            "equipmentSignature": "id:battlesuit-fists=3|id:missile-pod=3|id:plasma-rifle=3",
+            "entryPath": "d959-561c-6561-a9f3::9373-d0b3-94c9-e47"
+          },
+          "catalogue": {
+            "id": "d81a-61dd-6d27-a3ce",
+            "revision": 2,
+            "entryPath": "d959-561c-6561-a9f3::9373-d0b3-94c9-e47"
+          }
+        },
+        {
+          "id": "467547c98698e890",
+          "rootCauseKey": "d5fa3cc9494841e3",
+          "factionId": "tau-empire",
+          "entityType": "points",
+          "entityId": "crisis-fireknife-battlesuits:3",
+          "entityName": "Crisis Fireknife Battlesuits",
+          "code": "POINTS_MISMATCH",
+          "blocking": true,
+          "message": "Crisis Fireknife Battlesuits (3 models, copies 3+) is 125 points in RosterPilot but evaluates to 110 points in the selected New Recruit path.",
+          "source": "bsdata",
+          "rulesValue": 125,
+          "newRecruitValue": 110,
+          "scope": {
+            "modelCount": 3,
+            "unitOrdinalMin": 3,
+            "unitOrdinalMax": null,
+            "equipmentSignature": "id:battlesuit-fists=3|id:missile-pod=3|id:plasma-rifle=3",
+            "entryPath": "d959-561c-6561-a9f3::9373-d0b3-94c9-e47"
+          },
+          "catalogue": {
+            "id": "d81a-61dd-6d27-a3ce",
+            "revision": 2,
+            "entryPath": "d959-561c-6561-a9f3::9373-d0b3-94c9-e47"
           }
         },
         {
@@ -41408,7 +39379,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 94,
-        "mappedBaseLoadouts": 85,
+        "mappedBaseLoadouts": 88,
         "engineDetachments": 17,
         "mappedDetachments": 16,
         "complete": false
@@ -41585,52 +39556,6 @@
           }
         },
         {
-          "id": "68e5fe7a213fa8a6",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "557e0fe9e1916de1",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "ultramarines",
@@ -41696,100 +39621,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "febffe9e902ef999",
-          "rootCauseKey": "9e4292b66f04045e",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "roboute-guilliman:base:ad779f062698",
-          "entityName": "Roboute Guilliman",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Roboute Guilliman base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Roboute Guilliman equipment \"Emperor’s Sword\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:emperors-sword=1|id:hand-of-dominion=1"
-              }
-            ],
-            "entryPath": "49fb-cb39-f830-9ee::4aea-b1cc-6c69-1c44"
-          },
-          "catalogue": {
-            "id": "4029-9237-e8db-af55",
-            "revision": 1,
-            "entryPath": "49fb-cb39-f830-9ee::4aea-b1cc-6c69-1c44"
-          }
-        },
-        {
-          "id": "9c207282321d9057",
-          "rootCauseKey": "ee16691abc4c469b",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "roboute-guilliman:emperors-sword",
-          "entityName": "Roboute Guilliman: Emperor’s Sword",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Emperor’s Sword for Roboute Guilliman is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "emperors-sword",
-            "entryPath": "49fb-cb39-f830-9ee::4aea-b1cc-6c69-1c44"
-          },
-          "catalogue": {
-            "id": "4029-9237-e8db-af55",
-            "revision": 1,
-            "entryPath": "49fb-cb39-f830-9ee::4aea-b1cc-6c69-1c44"
-          }
-        },
-        {
-          "id": "62b4d61c321ae0ce",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "876c4bf532afd57b",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "ultramarines",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -43844,7 +41675,7 @@
       "coverage": {
         "engineUnits": 194,
         "mappedUnits": 88,
-        "mappedBaseLoadouts": 80,
+        "mappedBaseLoadouts": 82,
         "engineDetachments": 16,
         "mappedDetachments": 15,
         "complete": false
@@ -44021,52 +41852,6 @@
           }
         },
         {
-          "id": "c635a343b6cc5794",
-          "rootCauseKey": "cbc106a54214511f",
-          "factionId": "white-scars",
-          "entityType": "equipment",
-          "entityId": "intercessor-squad:base:9213e2204313",
-          "entityName": "Intercessor Squad",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Intercessor Squad base loadout for model counts 5, 6, 7, 8, 9, 10 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Intercessor Sergeant model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:bolt-pistol=5|id:bolt-rifle=5|id:close-combat-weapon=5"
-              },
-              {
-                "modelCount": 6,
-                "equipmentSignature": "id:bolt-pistol=6|id:bolt-rifle=6|id:close-combat-weapon=6"
-              },
-              {
-                "modelCount": 7,
-                "equipmentSignature": "id:bolt-pistol=7|id:bolt-rifle=7|id:close-combat-weapon=7"
-              },
-              {
-                "modelCount": 8,
-                "equipmentSignature": "id:bolt-pistol=8|id:bolt-rifle=8|id:close-combat-weapon=8"
-              },
-              {
-                "modelCount": 9,
-                "equipmentSignature": "id:bolt-pistol=9|id:bolt-rifle=9|id:close-combat-weapon=9"
-              },
-              {
-                "modelCount": 10,
-                "equipmentSignature": "id:bolt-pistol=10|id:bolt-rifle=10|id:close-combat-weapon=10"
-              }
-            ],
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "85b1-eb9a-17a6-e5be::8da0-4570-c3c-819f"
-          }
-        },
-        {
           "id": "e6d9b6a0f9967815",
           "rootCauseKey": "d8a441c5f7e1b90f",
           "factionId": "white-scars",
@@ -44132,53 +41917,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "72c7-e95f-cade-27d7::a7ae-e495-683b-7c90"
-          }
-        },
-        {
-          "id": "610de04f467d874b",
-          "rootCauseKey": "0aea173a76d8a391",
-          "factionId": "white-scars",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:base:9df22eee48b5",
-          "entityName": "Stormraven Gunship",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Stormraven Gunship base loadout for model count 1 cannot be represented in the New Recruit catalogue. New Recruit catalogue mapping for Stormraven Gunship equipment \"Stormstrike missile launcher\" is missing.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 1,
-                "equipmentSignature": "id:armoured-hull-stormraven-gunship=1|id:stormstrike-missile-launcher=2|id:twin-assault-cannon=1|id:typhoon-missile-launcher=1"
-              }
-            ],
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          }
-        },
-        {
-          "id": "ff3deed385b5f078",
-          "rootCauseKey": "74164b845583b4ce",
-          "factionId": "white-scars",
-          "entityType": "equipment",
-          "entityId": "stormraven-gunship:stormstrike-missile-launcher",
-          "entityName": "Stormraven Gunship: Stormstrike missile launcher",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "Stormstrike missile launcher for Stormraven Gunship is legal in 40kdc but has no New Recruit catalogue selection.",
-          "source": "bsdata",
-          "scope": {
-            "equipmentItemId": "stormstrike-missile-launcher",
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "6a36-465-ee24-331b::469b-3370-30f3-473a"
           }
         },
         {
@@ -46362,32 +44100,6 @@
           }
         },
         {
-          "id": "ef9f4b0e77ed85c3",
-          "rootCauseKey": "00d8c327c792f082",
-          "factionId": "world-eaters",
-          "entityType": "equipment",
-          "entityId": "chaos-terminators:base:3a1c7c4a4dcd",
-          "entityName": "Chaos Terminators",
-          "code": "UNMAPPED",
-          "blocking": true,
-          "message": "The deterministic Chaos Terminators base loadout for model count 5 cannot be represented in the New Recruit catalogue. New Recruit has no model entry for 1 Terminator Champion model with the selected equipment.",
-          "source": "bsdata",
-          "scope": {
-            "selectionScopes": [
-              {
-                "modelCount": 5,
-                "equipmentSignature": "id:accursed-weapon=5|id:combi-bolter=5"
-              }
-            ],
-            "entryPath": "94b7-fa73-a8cd-5b9d::45f6-8429-a1d9-2a51"
-          },
-          "catalogue": {
-            "id": "df9a-59b2-f464-59ad",
-            "revision": 6,
-            "entryPath": "94b7-fa73-a8cd-5b9d::45f6-8429-a1d9-2a51"
-          }
-        },
-        {
           "id": "1b8156d5842be64f",
           "rootCauseKey": "56eac8e4bf7daeb8",
           "factionId": "world-eaters",
@@ -46602,10 +44314,10 @@
     "completeFactions": 0,
     "engineUnits": 3421,
     "mappedUnits": 2024,
-    "mappedBaseLoadouts": 1758,
-    "conflicts": 2336,
-    "blockingConflicts": 2336,
-    "uniqueConflicts": 779,
-    "uniqueBlockingConflicts": 779
+    "mappedBaseLoadouts": 1805,
+    "conflicts": 2258,
+    "blockingConflicts": 2258,
+    "uniqueConflicts": 737,
+    "uniqueBlockingConflicts": 737
   }
 }

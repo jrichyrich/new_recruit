@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "jobKind": "rosterpilot-local-source-update",
+  "jobId": "7c220b3c-fcff-412d-911b-8aac02f20935",
+  "revision": 3,
+  "trigger": "startup",
+  "forced": false,
+  "status": "failed",
+  "progress": "The local update failed; the active snapshot was preserved.",
+  "createdAt": "2026-08-07T21:00:41.476Z",
+  "startedAt": "2026-08-07T21:00:42.206Z",
+  "updatedAt": "2026-08-07T21:00:42.269Z",
+  "completedAt": "2026-08-07T21:00:42.269Z",
+  "retryAt": "2026-08-07T22:00:42.268Z",
+  "recoveryCount": 0,
+  "bsDataCommitOverride": null,
+  "observation": null,
+  "officialReconciliation": "unavailable",
+  "candidate": null,
+  "evidence": [],
+  "quarantinedScopes": [],
+  "reliabilityWarnings": [],
+  "error": {
+    "code": "LOCAL_SOURCE_UPDATE_FAILED",
+    "message": "fetch failed",
+    "retryable": true
+  },
+  "integritySha256": "a459108e33e8b1980da033f95b598330fc6bef427ab9fe110f6e4578e5b015fa"
+}

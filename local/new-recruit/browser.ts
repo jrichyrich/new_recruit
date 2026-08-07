@@ -1,7 +1,12 @@
 import { stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { chromium, type BrowserContext, type Page } from "playwright-core";
+import {
+  chromium,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "playwright-core";
 
 import {
   NEW_RECRUIT_MY_LISTS,
@@ -51,6 +56,31 @@ type ImportRosterResult = {
 };
 
 const listUrlPattern = /\/app\/Lists\//i;
+
+/**
+ * Wait for the possible veil overlay to disappear and then return a locator for the Export control.
+ * The function respects environment-configurable timeouts.
+ */
+async function waitForExportControl(page: Page, timeoutMs: number = EXPORT_VEIL_WAIT_MS): Promise<Locator> {
+  const veil = page.locator('.veil');
+  // If a veil is present, wait for it to be hidden.
+  if (await veil.isVisible().catch(() => false)) {
+    await veil.waitFor({ state: 'hidden', timeout: timeoutMs }).catch(() => {});
+  }
+  // Locate the export control (button, link, or plain text).
+  const exportControl = page
+    .getByRole('button', { name: /^export( list)?$/i })
+    .or(page.getByRole('link', { name: /^export( list)?$/i }))
+    .or(page.getByText(/^export( list)?$/i, { exact: true }));
+  await exportControl.waitFor({ state: 'visible', timeout: timeoutMs });
+  return exportControl.first();
+}
+
+// Configuration defaults (can be overridden via env vars)
+const EXPORT_RETRY_COUNT = Number(process.env.EXPORT_RETRY_COUNT) || 3;
+const EXPORT_RETRY_DELAY_MS = Number(process.env.EXPORT_RETRY_DELAY_MS) || 2000;
+const EXPORT_VEIL_WAIT_MS = Number(process.env.EXPORT_VEIL_WAIT_MS) || 10_000;
+
 export { stopsNewRecruitBrowserSession } from "./contracts";
 
 async function captureNewRecruitUiIdentity(
@@ -493,20 +523,22 @@ async function downloadPrettyHtml(
   outputPath: string,
   timeoutMs = 30_000,
 ): Promise<void> {
-  const exportButton = page
-    .getByRole("button", { name: /^export( list)?$/i })
-    .first();
-  const exportLink = page.getByRole("link", { name: /^export( list)?$/i }).first();
-  const exportText = page.getByText(/^export( list)?$/i, { exact: true }).first();
-  if (await exportButton.isVisible().catch(() => false)) await exportButton.click();
-  else if (await exportLink.isVisible().catch(() => false)) await exportLink.click();
-  else if (await exportText.isVisible().catch(() => false)) await exportText.click();
-  else {
-    throw new NewRecruitAutomationError(
-      "NEW_RECRUIT_UI_CHANGED",
-      "The New Recruit Export control could not be located.",
-    );
-  }
+   let exportControl: Locator | null = null;
+   for (let attempt = 0; attempt < EXPORT_RETRY_COUNT; attempt++) {
+     try {
+       exportControl = await waitForExportControl(page, EXPORT_VEIL_WAIT_MS);
+       await exportControl.click();
+       break;
+     } catch (e) {
+       if (attempt === EXPORT_RETRY_COUNT - 1) {
+         throw new NewRecruitAutomationError(
+           "NEW_RECRUIT_UI_CHANGED",
+           "The New Recruit Export control could not be clicked after retries."
+         );
+       }
+       await page.waitForTimeout(EXPORT_RETRY_DELAY_MS);
+     }
+   }
 
   const pretty = page
     .getByText(/^pretty$/i, { exact: true })
@@ -543,18 +575,22 @@ async function downloadEnrichedRosz(
   outputPath: string,
   timeoutMs = 30_000,
 ): Promise<void> {
-  const exportControl = page
-    .getByRole("button", { name: /^export( list)?$/i })
-    .or(page.getByRole("link", { name: /^export( list)?$/i }))
-    .or(page.getByText(/^export( list)?$/i, { exact: true }))
-    .first();
-  if (!(await exportControl.isVisible().catch(() => false))) {
-    throw new NewRecruitAutomationError(
-      "NEW_RECRUIT_UI_CHANGED",
-      "The New Recruit Export control could not be located.",
-    );
+  let exportControl: Locator | null = null;
+  for (let attempt = 0; attempt < EXPORT_RETRY_COUNT; attempt++) {
+    try {
+      exportControl = await waitForExportControl(page, EXPORT_VEIL_WAIT_MS);
+      await exportControl.click();
+      break;
+    } catch (e) {
+      if (attempt === EXPORT_RETRY_COUNT - 1) {
+        throw new NewRecruitAutomationError(
+          "NEW_RECRUIT_UI_CHANGED",
+          "The New Recruit Export control could not be clicked after retries."
+        );
+      }
+      await page.waitForTimeout(EXPORT_RETRY_DELAY_MS);
+    }
   }
-  await exportControl.click();
   const rosz = page
     .getByText(/^\.rosz$/i, { exact: true })
     .first();
