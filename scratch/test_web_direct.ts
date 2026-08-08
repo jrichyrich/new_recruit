@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildRoster, validateRoster, rosterProfileRequirements, type PreferenceTag } from "../lib/rosterpilot/index.ts";
 import { analyzeRosterMatchup } from "../local/tessera/companion.ts";
-import { profilePolicyScaffold } from "../local/tessera/profile-policy.ts";
+import { runTesseraBrowserMatchup } from "../local/tessera/browser.ts";
+import { resolveProfilePolicyScaffold } from "../local/tessera/profile-policy.ts";
 
 const CUSTODES_KEY_UNITS = [
   "contemptor-galatus-dreadnought",
@@ -54,8 +55,11 @@ function getRandomPreferences(count = 2): PreferenceTag[] {
 
 async function main() {
   const runId = Math.floor(Math.random() * 1000000);
+  const outDir = path.resolve("exports/tessera");
+  fs.mkdirSync(outDir, { recursive: true });
+
   console.log("=========================================================================");
-  console.log(` DIRECT PLAYTESSERA WEB FULL SIMULATION (RUN #${runId})                  `);
+  console.log(` DIRECT PLAYTESSERA WEB CERTIFIED SIMULATION (RUN #${runId})             `);
   console.log("=========================================================================\n");
 
   const requiredCustodesUnit = getRandom(CUSTODES_KEY_UNITS);
@@ -127,9 +131,8 @@ async function main() {
     ...rosterProfileRequirements(custodesRoster),
     ...rosterProfileRequirements(aeldariRoster),
   ];
-  const dynamicPolicy = profilePolicyScaffold(reqs);
-  const policyPath = path.resolve("exports/tessera/active_profile_policy.json");
-  fs.mkdirSync(path.dirname(policyPath), { recursive: true });
+  const dynamicPolicy = resolveProfilePolicyScaffold(reqs);
+  const policyPath = path.join(outDir, "active_profile_policy.json");
   fs.writeFileSync(policyPath, JSON.stringify(dynamicPolicy, null, 2), "utf8");
   console.log(` Dynamic Profile Policy written to: ${policyPath}`);
   console.log(` Resolved Profile Entries: ${dynamicPolicy.entries.length}`);
@@ -139,13 +142,17 @@ async function main() {
     custodesRoster,
     { kind: "roster", roster: aeldariRoster },
     {
-      outputDirectory: "exports/tessera",
+      outputDirectory: outDir,
       simulationBackend: "website",
       executionMode: "simulate",
       profilePolicyPath: policyPath,
       catalogueDriftMode: "force",
+      overwrite: true,
     },
-    { runtimeIssue: () => null }
+    {
+      runBrowser: runTesseraBrowserMatchup,
+      runtimeIssue: () => null,
+    }
   );
 
   console.log("\nSimulation Result Envelope OK:", simResult.ok);
@@ -156,20 +163,14 @@ async function main() {
 
   const data = simResult.data;
   console.log("\n=========================================================================");
-  console.log(" PLAYTESSERA WEB FULL SIMULATION SUMMARY                                ");
+  console.log(" PLAYTESSERA WEB CERTIFIED SIMULATION SUMMARY                           ");
   console.log("=========================================================================");
   if (data) {
     console.log(`Simulation Status          : ${data.status}`);
     console.log(`Execution Mode             : ${data.simulation.executionMode}`);
     console.log(`Requested Backend          : ${data.simulation.requestedBackend}`);
     console.log(`Selected Backend           : ${data.simulation.selectedBackend}`);
-    console.log(`UI Identity                : ${data.uiIdentity ?? "N/A"}`);
-    console.log(`Matchup Artifacts          : ${data.artifacts?.map(a => `${a.filename} (${a.format})`).join(", ")}`);
-    if (data.metrics) {
-      console.log(`Custodes Expected Win Rate : ${(data.metrics.expectedWinRate * 100).toFixed(1)}%`);
-      console.log(`Expected Custodes VP       : ${data.metrics.expectedPlayerVp.toFixed(1)}`);
-      console.log(`Expected Aeldari VP        : ${data.metrics.expectedOpponentVp.toFixed(1)}`);
-    }
+    console.log(`Envelope OK                : ${simResult.ok}`);
   }
   console.log("=========================================================================\n");
 }

@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 3,
+  "gameSystem": "warhammer-40000-11e",
+  "sourceData": {
+    "package": "@alpaca-software/40kdc-data",
+    "version": "1.2.1",
+    "edition": "11th",
+    "dataslate": "launch",
+    "releaseId": "bundle-7202bb9ed6df63b331cd08b37792df38ab9b7d66594c4dddb2d9dd88cf19f431",
+    "newRecruit": {
+      "repository": "BSData/wh40k-11e",
+      "commit": "d1a6efc2f220963a4528b797fa81510d5b38f8ce",
+      "gameSystemRevision": 8,
+      "catalogueRevision": 6
+    },
+    "official": {
+      "mfmVersion": "1.1",
+      "updatedAt": "2026-07-31T03:21:29.052Z",
+      "contentSha256": "91706631d93b6065ee65c089e044c8df1652d73c752680d3ef10def11e77acfb",
+      "authority": {
+        "reason": "No reviewed official extraction evidence was supplied.",
+        "status": "unavailable"
+      }
+    },
+    "bundleId": "7202bb9ed6df63b331cd08b37792df38ab9b7d66594c4dddb2d9dd88cf19f431",
+    "engineDataSchemaVersion": 2,
+    "rosterRulesHash": "f9806a62819c12234a8bd64c21ce58b856038a85d9c511694d26eb922287363f",
+    "factionRulesHash": "812b4d6871bc08d227b928163bd539681a370c23582b7eb86d60b5eff8e13f35",
+    "mappingHash": "0f9b470c181b5b31112ec3db98873eb5f60b44fa13993c182a758f0769392a17",
+    "entityHashes": {
+      "detachment:brazen-engines": "faef7edbe1014e7e67135ae5a1f21ebfd41b221a55f20a9d4987169cf027fdda",
+      "equipment:angron:samniarius-and-spinegrinder": "01cc6389e4b7fc9c28c9d6d05003f06d7cefd773cbb82159adf1aa95ec14d089",
+      "equipment:helbrute:close-combat-weapon": "a085d771845fa64fb8bbf98c6aaa073c2fe7f6e06af9654d1f560e28d1f7c3d5",
+      "equipment:helbrute:missile-launcher": "0326fc404ceb22219a075cf3f89f9ffd87e3adbf8a263599d275be826997ab07",
+      "equipment:helbrute:multi-melta": "7892f0f9b60ec6c8ff9679d7592bcfbaf0e8f195bc1ff997cc7d6fb33ca7292e",
+      "equipment:khorne-lord-of-skulls:gorestorm-cannon": "a147c127221820aff60da433640778226707f119ed572bd4db2693576d97eff0",
+      "equipment:khorne-lord-of-skulls:great-cleaver-of-khorne": "3299f155279a00a99d75a8d4aa6697c6752f1964aa44e302af0ecebf0157f098",
+      "equipment:khorne-lord-of-skulls:hades-gatling-cannon": "429bfed9b5195ff998fcde92243cf0e3285b651922dc31e7a827c711e68a861e",
+      "faction:world-eaters": "50e4ad3bea224ab2ec748f5fabefa8b4be99244a60a874186bb55cb163b3b6f0",
+      "force-disposition:disruption": "64c5f1120319fb4bb4d0e18daff3f1645c5a990f860d171a17026ca717046f33",
+      "mapping:configuration:base": "0116523c37371cf48e273bff20e29285ba11cebd022c79e0f9dc6a98edbf9520",
+      "mapping:configuration:battle-size:incursion": "9fa9d371aea109e4c3fdf0cbfe1b90b21c363ac00a87a0fde0ac49192e1f3cb1",
+      "mapping:configuration:detachment:brazen-engines": "2a826795a93133fbb917b5e402d77d433361b8c4a35a73af737b3f28ce7cabd6",
+      "mapping:configuration:force-disposition:disruption": "3aadb3275233d4bb267731b38063b3fbc0c713d06ca527acff8311725163da1c",
+      "mapping:unit:angron:base": "6da141c7d0bd90fc553eb8c65df722cc87e141aedebc7c6301295677ba566770",
+      "mapping:unit:angron:equipment:samniarius-and-spinegrinder": "daf75a6ef1ead5434ce2af31bf821ef0be3ba72ddaf71099bb79e4f5090be736",
+      "mapping:unit:angron:models": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "mapping:unit:angron:points:1": "5426d2ca50f244fb43fe9eafc82da08f33f3b4f8d9140802bd0102e780b629d6",
+      "mapping:unit:angron:warlord": "c9461e72019e70f0fcdeaf3255fa63df176a51172ce3f583a6a743c0878c41e2",
+      "mapping:unit:helbrute:base": "abe2d19cb5a3006cd9d134dc34f0674d0a1988753495b4987cb2d7d04ae8cd75",
+      "mapping:unit:helbrute:equipment:close-combat-weapon": "a6f7bbc3c2970ecc753804a2d905dd1477226ff5e407340339cd9928cef87b08",
+      "mapping:unit:helbrute:equipment:missile-launcher": "1c646b655e43e4385fd1c31f24967911d47fa4559eed1a12f846e0dbbeca8cac",
+      "mapping:unit:helbrute:equipment:multi-melta": "cbcc0dd06b550462b95d0ca18956a4de41636fcad3da9f702467beba1b9ef93d",
+      "mapping:unit:helbrute:models": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "mapping:unit:helbrute:points:1": "2abaca4911e68fa9bfbf3482ee797fd5b9045b841fdff7253557c5fe15de6477",
+      "mapping:unit:khorne-lord-of-skulls:base": "ad364b3b309a16ef2045d6481d3a55f3ef5e006e56ae3f5c7c0b82c336b99a98",
+      "mapping:unit:khorne-lord-of-skulls:equipment:gorestorm-cannon": "4f3056f745c3b148ba1d94d3d5428fce83ce23ef6cb0373299d99cb9d0e44749",
+      "mapping:unit:khorne-lord-of-skulls:equipment:great-cleaver-of-khorne": "ea5ce035030304b6174338a081dbf13a79b30228ed798bf470941ddb3c10ecfc",
+      "mapping:unit:khorne-lord-of-skulls:equipment:hades-gatling-cannon": "929dc4e32e3a752f9011133aa5aa3628dc4546c898353de8b94fd8bb0da5e2d4",
+      "mapping:unit:khorne-lord-of-skulls:models": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "mapping:unit:khorne-lord-of-skulls:points:1": "e13b778ae833ca8c5d757c58e4a85bd71e08c05caedbd096e13ec3f7b228b43a",
+      "unit:angron": "405535776678719f7fdb565b80fd86e089186d0c613618227c91f955e22a0c63",
+      "unit:helbrute": "2cd9f7407f3aeff14041ac00fbd8b65828c564043e9e00252a7b08afd32c0e3f",
+      "unit:khorne-lord-of-skulls": "14e14604fc3eb50ea469c5ea8f3646087df25d28e69cd351ccb48cc73f4a9849"
+    },
+    "identityStatus": "verified"
+  },
+  "id": "rp-cfpx4d",
+  "name": "RosterPilot Draft",
+  "factionId": "world-eaters",
+  "factionName": "World Eaters",
+  "pointsLimit": 955,
+  "totalPoints": 955,
+  "battleSize": "incursion",
+  "detachmentId": "brazen-engines",
+  "detachmentName": "Brazen Engines",
+  "forceDispositionId": "disruption",
+  "forceDispositionName": "Disruption",
+  "preferences": [
+    "objective",
+    "durability"
+  ],
+  "constraints": {
+    "allowNamedCharacters": true,
+    "allowLegends": false,
+    "legendsPolicyDecision": {
+      "requestedPolicy": "auto",
+      "promptIntent": "silent",
+      "contextPermission": "unknown",
+      "effectiveAllowLegends": false,
+      "resolution": "excluded",
+      "source": "default",
+      "reason": "Legends permission is unknown, so Legends units are excluded.",
+      "classificationAuthority": "unavailable",
+      "playContextKind": "unspecified"
+    },
+    "collectionUnitIds": null,
+    "collectionProfile": {
+      "mode": "open-catalog"
+    },
+    "requiredUnitIds": [
+      "angron",
+      "helbrute",
+      "khorne-lord-of-skulls"
+    ],
+    "excludedUnitIds": [],
+    "requiredWarlordUnitId": null,
+    "opponentFactionId": null,
+    "opponentRosterFingerprint": null,
+    "opponentThreatProfile": null
+  },
+  "units": [
+    {
+      "selectionId": "rp-rkyefy",
+      "unitId": "angron",
+      "name": "Angron",
+      "role": "Epic Hero",
+      "modelCount": 1,
+      "ordinal": 1,
+      "points": 330,
+      "isWarlord": true,
+      "enhancementId": null,
+      "enhancementName": null,
+      "equipment": [
+        {
+          "itemId": "samniarius-and-spinegrinder",
+          "name": "Samni’arius and Spinegrinder",
+          "count": 1
+        }
+      ],
+      "tags": [
+        "mobility",
+        "durability",
+        "objective",
+        "melee",
+        "elite"
+      ]
+    },
+    {
+      "selectionId": "rp-1uh3ldv",
+      "unitId": "helbrute",
+      "name": "Helbrute",
+      "role": "Vehicle",
+      "modelCount": 1,
+      "ordinal": 1,
+      "points": 120,
+      "isWarlord": false,
+      "enhancementId": null,
+      "enhancementName": null,
+      "equipment": [
+        {
+          "itemId": "close-combat-weapon",
+          "name": "Close combat weapon",
+          "count": 1
+        },
+        {
+          "itemId": "missile-launcher",
+          "name": "Missile launcher",
+          "count": 1
+        },
+        {
+          "itemId": "multi-melta",
+          "name": "Multi-melta",
+          "count": 1
+        }
+      ],
+      "tags": [
+        "durability",
+        "objective",
+        "shooting",
+        "melee",
+        "elite"
+      ]
+    },
+    {
+      "selectionId": "rp-viahog",
+      "unitId": "khorne-lord-of-skulls",
+      "name": "Khorne Lord of Skulls",
+      "role": "Vehicle",
+      "modelCount": 1,
+      "ordinal": 1,
+      "points": 505,
+      "isWarlord": false,
+      "enhancementId": null,
+      "enhancementName": null,
+      "equipment": [
+        {
+          "itemId": "gorestorm-cannon",
+          "name": "Gorestorm cannon",
+          "count": 1
+        },
+        {
+          "itemId": "great-cleaver-of-khorne",
+          "name": "Great cleaver of Khorne",
+          "count": 1
+        },
+        {
+          "itemId": "hades-gatling-cannon",
+          "name": "Hades gatling cannon",
+          "count": 1
+        }
+      ],
+      "tags": [
+        "mobility",
+        "durability",
+        "objective",
+        "shooting",
+        "melee",
+        "elite"
+      ]
+    }
+  ],
+  "createdAt": "2026-08-08T02:02:10.641Z",
+  "updatedAt": "2026-08-08T02:02:10.641Z"
+}

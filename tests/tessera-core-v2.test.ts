@@ -53,6 +53,7 @@ import {
   aggregateProfileRequirements,
   ProfilePolicySchema,
   profilePolicyScaffold,
+  resolveProfilePolicyScaffold,
   validateProfilePolicy,
 } from "../local/tessera/profile-policy";
 
@@ -138,6 +139,11 @@ test("profile policies preserve duplicate unit sizes and migrate unambiguous leg
     })),
   };
   assert.equal(validateProfilePolicy(requirements, policy).valid, true);
+
+  const autoResolved = resolveProfilePolicyScaffold(requirements);
+  assert.equal(autoResolved.entries[0].selectedProfile, "Strike");
+  assert.equal(autoResolved.entries[1].selectedProfile, "Strike");
+  assert.equal(validateProfilePolicy(requirements, autoResolved).valid, true);
 
   const legacy = ProfilePolicySchema.parse({
     schemaVersion: 1,

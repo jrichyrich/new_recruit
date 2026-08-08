@@ -226,6 +226,22 @@ export function profilePolicyScaffold(
   };
 }
 
+export function resolveProfilePolicyScaffold(
+  requirements: TesseraProfileRequirement[],
+): ProfilePolicyV1 {
+  const raw = profilePolicyScaffold(requirements);
+  return {
+    ...raw,
+    entries: raw.entries.map((entry) => ({
+      ...entry,
+      selectedProfile: entry.selectedProfile.startsWith("SELECT_ONE_OF:")
+        ? entry.selectedProfile.replace(/^SELECT_ONE_OF:\s*/, "").split("|")[0].trim()
+        : entry.selectedProfile,
+    })),
+  };
+}
+
+
 export type ProfilePolicyValidation = {
   valid: boolean;
   hash: string | null;
