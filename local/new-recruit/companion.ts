@@ -6,21 +6,25 @@ import { fileURLToPath } from "node:url";
 
 import {
   compareNewRecruitCatalogueProvenance,
-  getNewRecruitFactionSummary,
   isForwardGameSystemRevisionOnlyDrift,
-  newRecruitCatalogue,
-  prepareNewRecruitHandoff,
   inspectEnrichedRosz,
   validateEnrichedRosz,
-  validateRoster,
-  type ExportArtifact,
-  type ConnectorEvent,
-  type NewRecruitConnectionStatus,
-  type NewRecruitCatalogueProvenanceComparison,
-  type NewRecruitDelivery,
-  type ResultEnvelope,
-  type RosterDraftV1,
-} from "../../lib/rosterpilot";
+} from "../../lib/rosterpilot/enriched-rosz";
+import {
+  getNewRecruitFactionSummary,
+  newRecruitCatalogue,
+} from "../../lib/rosterpilot/catalogue-summary";
+import { prepareNewRecruitHandoff } from "../../lib/rosterpilot/handoff";
+import { validateRoster } from "../../lib/rosterpilot/engine";
+import type {
+  ExportArtifact,
+  ConnectorEvent,
+  NewRecruitConnectionStatus,
+  NewRecruitCatalogueProvenanceComparison,
+  NewRecruitDelivery,
+  ResultEnvelope,
+  RosterDraftV1,
+} from "../../lib/rosterpilot/types";
 import {
   resolveExportArtifactTargets,
   writeExportArtifact,

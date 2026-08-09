@@ -422,6 +422,8 @@ function mechanicForMatcher(input: {
       return input.node.type === "movement-modifier"
         ? ["movement-only"]
         : null;
+    default:
+      return null;
   }
 }
 

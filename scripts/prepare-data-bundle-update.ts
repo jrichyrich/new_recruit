@@ -16,10 +16,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  checkDataFreshness,
-  type LiveDataFreshness,
-} from "../lib/rosterpilot";
+import { checkDataFreshness } from "../lib/rosterpilot/freshness";
+import type { LiveDataFreshness } from "../lib/rosterpilot/types";
 import {
   canonicalJson,
   type DataBundleDeltaClassification,

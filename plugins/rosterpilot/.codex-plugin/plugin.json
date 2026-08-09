@@ -1,11 +1,10 @@
 {
   "name": "rosterpilot",
-  "version": "0.2.0",
-  "description": "Build, inspect, modify, validate, explain, export, and optionally analyze Warhammer 40,000 army rosters with RosterPilot.",
+  "version": "1.0.0",
+  "description": "Local-first roster building, New Recruit upload, and local or Website Tessera stress testing.",
   "author": {
     "name": "RosterPilot"
   },
-  "homepage": "https://rosterpilot-army-builder.jasonricha.chatgpt.site",
   "repository": "https://github.com/jrichyrich/new_recruit",
   "keywords": [
     "warhammer-40000",
@@ -17,19 +16,18 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "RosterPilot",
-    "shortDescription": "Build and validate Warhammer 40,000 army rosters.",
-    "longDescription": "RosterPilot uses official-first signed semantic data bundles and deterministic legality rules to build, inspect, modify, validate, explain, and export Warhammer 40,000 rosters. New Recruit handoffs and local Tessera analysis run only when explicitly requested.",
+    "shortDescription": "Build, validate, upload, and stress-test 40K rosters.",
+    "longDescription": "RosterPilot provides deterministic Warhammer 40,000 roster workflows through a compact local MCP server, with confirmed New Recruit upload and local or Website Tessera stress tests.",
     "developerName": "RosterPilot",
     "category": "Games",
     "capabilities": [
       "Interactive",
       "Write"
     ],
-    "websiteURL": "https://rosterpilot-army-builder.jasonricha.chatgpt.site",
     "defaultPrompt": [
       "Build a validated 1,000-point army.",
-      "Check this roster and explain any legality issues.",
-      "Stress-test this roster against a known faction."
+      "Upload this roster to New Recruit.",
+      "Stress-test this roster locally or with Tessera Website."
     ],
     "brandColor": "#B9974F"
   }

@@ -1,0 +1,62 @@
+import path from "node:path";
+
+import { RosterPilotService } from "../lib/rosterpilot/service";
+import { rosterPilotSupportDirectory } from "./agent/paths";
+import {
+  getCurrentLocalDataBundleProvider,
+  initializeLocalDataBundleProvider,
+} from "./data-bundles/configure";
+import {
+  deliverRosterToNewRecruit,
+  getNewRecruitConnectionStatus,
+} from "./new-recruit/companion";
+import { runRosterStressTest } from "./tessera/stress";
+import {
+  TESSERA_SCENARIO_METRICS,
+  TESSERA_SCENARIO_PHASES,
+  localTesseraScenarioContract,
+} from "./tessera/scenario-contract";
+
+export async function createLocalRosterPilotService(): Promise<RosterPilotService> {
+  await initializeLocalDataBundleProvider();
+  const service = new RosterPilotService({
+    rootDirectory: path.join(rosterPilotSupportDirectory(), "lean-v1"),
+    newRecruitStatus: getNewRecruitConnectionStatus,
+    deliverToNewRecruit: deliverRosterToNewRecruit,
+    runStress: (roster, opponentFactionId, options) =>
+      runRosterStressTest(
+        roster,
+        { kind: "faction", factionId: opponentFactionId },
+        {
+          outputDirectory: options.outputDirectory,
+          rootDir: options.outputDirectory,
+          allowOutsideRoot: false,
+          overwrite: options.overwrite,
+          simulationBackend: options.backend,
+          suite: options.suite,
+          analysisStrategy: options.strategy,
+          executionMode: "simulate",
+          experimental: true,
+          resumeManifestPath: options.resumeManifestPath,
+          profilePolicyPath: options.profilePolicyPath,
+          forceRetry: options.forceRetry,
+          scenarioContract: options.backend === "local-engine"
+            ? localTesseraScenarioContract(
+                10_000,
+                TESSERA_SCENARIO_PHASES,
+                TESSERA_SCENARIO_METRICS,
+              )
+            : undefined,
+        },
+      ),
+    lease: async (operation) => {
+      const provider = await getCurrentLocalDataBundleProvider();
+      const { withDataBundleSnapshotLease } = await import(
+        "../lib/rosterpilot/data-operations"
+      );
+      return withDataBundleSnapshotLease(operation, provider);
+    },
+  });
+  await service.initialize();
+  return service;
+}

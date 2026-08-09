@@ -14,24 +14,30 @@ import path from "node:path";
 
 import {
   compareNewRecruitCatalogueProvenance,
-  getNewRecruitFactionSummary,
   isForwardGameSystemRevisionOnlyDrift,
-  newRecruitCatalogue,
-  prepareNewRecruitHandoff,
-  type ConnectorEvent,
-  rosterExportFingerprint,
-  rosterExecutionFingerprint,
-  rosterStructuralFingerprint,
-  rosterSourceDataCompatibleForExport,
-  type EnrichedRoszSummary,
-  type NewRecruitDelivery,
-  type NewRecruitCatalogueProvenanceComparison,
-  type ResultEnvelope,
-  type RosterDraftV1,
   validateEnrichedRosz,
   validateEnrichedRoszGameplayIdentity,
   validateTesseraReadyRosz,
-} from "../../lib/rosterpilot";
+} from "../../lib/rosterpilot/enriched-rosz";
+import {
+  getNewRecruitFactionSummary,
+  newRecruitCatalogue,
+} from "../../lib/rosterpilot/catalogue-summary";
+import { prepareNewRecruitHandoff } from "../../lib/rosterpilot/handoff";
+import {
+  rosterExportFingerprint,
+  rosterExecutionFingerprint,
+  rosterStructuralFingerprint,
+} from "../../lib/rosterpilot/fingerprint";
+import { rosterSourceDataCompatibleForExport } from "../../lib/rosterpilot/draft";
+import type {
+  ConnectorEvent,
+  EnrichedRoszSummary,
+  NewRecruitDelivery,
+  NewRecruitCatalogueProvenanceComparison,
+  ResultEnvelope,
+  RosterDraftV1,
+} from "../../lib/rosterpilot/types";
 import { rosterPilotSupportDirectory } from "../agent/paths";
 import {
   compareRoszGameplaySnapshots,
@@ -222,6 +228,7 @@ export type NewRecruitMutationResolution = {
   outcome: "created" | "reused" | "not-created";
   connectorEvent: ConnectorEvent | null;
   message: string;
+  recoveryArtifact?: NewRecruitMutationRecoveryArtifact | null;
 };
 
 export type NewRecruitMutationTransaction = {
@@ -2197,6 +2204,62 @@ export async function reconcileNewRecruitMutationReceipt(input: {
       rosterName: input.roster.name,
       assert: (receipt) =>
         assertReceiptProvenance(receipt, input.roster),
+    },
+  });
+}
+
+export async function reconcileNewRecruitMutationReceiptWithRecoveryArtifact(input: {
+  roster: RosterDraftV1;
+  runId: string;
+  attemptId?: string;
+  connectorEvent: ConnectorEvent;
+  message: string;
+  sourceRoszPath: string;
+  enrichedRoszPath: string;
+}): Promise<NewRecruitMutationReceipt> {
+  const receipt = await readNewRecruitMutationReceipt(input.roster);
+  if (!receipt) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_RECEIPT_MISSING",
+      `No durable New Recruit mutation receipt exists for ${input.roster.name}.`,
+    );
+  }
+  const attempt = [...receipt.attempts]
+    .reverse()
+    .find(
+      (candidate) =>
+        candidate.runId === input.runId.trim() &&
+        (!input.attemptId || candidate.attemptId === input.attemptId),
+    );
+  if (!attempt) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ATTEMPT_MISSING",
+      "No New Recruit mutation attempt matches the supplied run and attempt IDs.",
+    );
+  }
+  const enrichedRoszSha256 = input.connectorEvent.contentSha256;
+  if (!enrichedRoszSha256) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_EVENT_HASH_MISSING",
+      "The New Recruit connector event does not contain the enriched ROSZ hash required for recovery.",
+    );
+  }
+  const recoveryArtifact = await persistMutationRecoveryArtifact({
+    cacheKey: receipt.cacheKey,
+    sourceRoszPath: input.sourceRoszPath,
+    enrichedRoszPath: input.enrichedRoszPath,
+    expectedSourceRoszSha256: attempt.expectedSourceRoszSha256,
+    expectedEnrichedRoszSha256: enrichedRoszSha256,
+  });
+  return reconcileNewRecruitMutationReceipt({
+    roster: input.roster,
+    runId: input.runId,
+    attemptId: input.attemptId,
+    resolution: {
+      outcome: "created",
+      connectorEvent: input.connectorEvent,
+      message: input.message,
+      recoveryArtifact,
     },
   });
 }

@@ -67,13 +67,32 @@ async function waitForExportControl(page: Page, timeoutMs: number = EXPORT_VEIL_
   if (await veil.isVisible().catch(() => false)) {
     await veil.waitFor({ state: 'hidden', timeout: timeoutMs }).catch(() => {});
   }
-  // Locate the export control (button, link, or plain text).
-  const exportControl = page
-    .getByRole('button', { name: /^export( list)?$/i })
-    .or(page.getByRole('link', { name: /^export( list)?$/i }))
-    .or(page.getByText(/^export( list)?$/i, { exact: true }));
-  await exportControl.waitFor({ state: 'visible', timeout: timeoutMs });
-  return exportControl.first();
+  const deadline = Date.now() + timeoutMs;
+  const candidates = [
+    page.getByRole('button', { name: /export/i }),
+    page.getByRole('link', { name: /export/i }),
+    page.locator("button:has-text('Export')"),
+    page.locator("a:has-text('Export')"),
+    page.locator("[aria-label*='Export' i]"),
+    page.locator("[title*='Export' i]"),
+    page.getByText(/^export( list)?$/i, { exact: true }),
+  ];
+  while (Date.now() < deadline) {
+    for (const locator of candidates) {
+      const count = await locator.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const candidate = locator.nth(index);
+        if (await candidate.isVisible().catch(() => false)) {
+          return candidate;
+        }
+      }
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new NewRecruitAutomationError(
+    "NEW_RECRUIT_UI_CHANGED",
+    "The New Recruit Export control could not be located.",
+  );
 }
 
 // Configuration defaults (can be overridden via env vars)
@@ -464,7 +483,7 @@ async function importRoster(
               await confirm.click({ timeout: 2_000 });
               confirmClicked = true;
               break;
-            } catch (error) {
+            } catch {
               // Click failed, perhaps it's disabled or not ready.
               // Do not set confirmClicked to true so we retry.
             }
@@ -523,13 +542,15 @@ async function downloadPrettyHtml(
   outputPath: string,
   timeoutMs = 30_000,
 ): Promise<void> {
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+  await page.waitForTimeout(1_000);
    let exportControl: Locator | null = null;
    for (let attempt = 0; attempt < EXPORT_RETRY_COUNT; attempt++) {
      try {
        exportControl = await waitForExportControl(page, EXPORT_VEIL_WAIT_MS);
-       await exportControl.click();
+       await exportControl.click({ timeout: 10_000 });
        break;
-     } catch (e) {
+     } catch {
        if (attempt === EXPORT_RETRY_COUNT - 1) {
          throw new NewRecruitAutomationError(
            "NEW_RECRUIT_UI_CHANGED",
@@ -545,15 +566,16 @@ async function downloadPrettyHtml(
     .first();
   try {
     await pretty.waitFor({ state: "visible", timeout: 4_000 });
-  } catch (error) {
-    await page.screenshot({ path: "/Users/jasricha/.gemini/antigravity-ide/brain/847e3231-7dec-41d2-a532-ea65faea8ea7/scratch/pretty_error.png" }).catch(() => undefined);
+  } catch {
     throw new NewRecruitAutomationError(
       "NEW_RECRUIT_UI_CHANGED",
       "The New Recruit Pretty export control could not be located.",
     );
   }
 
-  const popupPromise = context.waitForEvent("page", { timeout: 4_000 }).catch(() => null);
+  const popupPromise = context
+    .waitForEvent("page", { timeout: Math.min(timeoutMs, 4_000) })
+    .catch(() => null);
   await pretty.click();
   const prettyPage = (await popupPromise) ?? page;
   await prettyPage.waitForLoadState("domcontentloaded").catch(() => undefined);
@@ -575,13 +597,15 @@ async function downloadEnrichedRosz(
   outputPath: string,
   timeoutMs = 30_000,
 ): Promise<void> {
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+  await page.waitForTimeout(1_000);
   let exportControl: Locator | null = null;
   for (let attempt = 0; attempt < EXPORT_RETRY_COUNT; attempt++) {
     try {
       exportControl = await waitForExportControl(page, EXPORT_VEIL_WAIT_MS);
-      await exportControl.click();
+      await exportControl.click({ timeout: 10_000 });
       break;
-    } catch (e) {
+    } catch {
       if (attempt === EXPORT_RETRY_COUNT - 1) {
         throw new NewRecruitAutomationError(
           "NEW_RECRUIT_UI_CHANGED",

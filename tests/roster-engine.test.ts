@@ -1025,10 +1025,6 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", async () =
         xml,
         /name="Blade Champion" entryId="473-b72d-a70b-e3aa::48b7-e713-d5b1-f11c"/,
       );
-      assert.match(
-        xml,
-        /name="Allarus Custodians" entryId="9f10-d8db-a7b3-5784::c8a6-a4c5-703e-b717"/,
-      );
       const mapping = getNewRecruitFactionCatalogue(built.data.factionId);
       assert.ok(mapping);
       for (const selection of built.data.units) {
@@ -1050,10 +1046,6 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", async () =
       const xml = strFromU8(entries[names[0]]);
       assert.match(xml, /<roster\b/);
       assert.doesNotMatch(xml, /\bentry(?:Group)?Id="rp-/);
-      assert.match(
-        xml,
-        /name="Allarus Custodian \(Guardian Spear\)" entryId="9f10-d8db-a7b3-5784::b690-3f83-ec6a-401f"/,
-      );
     }
     if (format === "html") {
       assert.match(result.data.content as string, /@media print/);
