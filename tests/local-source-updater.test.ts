@@ -21,8 +21,6 @@ import {
 import {
   LOCAL_SOURCE_CHECK_INTERVAL_MS,
   LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS,
-  LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS,
-  LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS,
   LOCAL_SOURCE_INITIAL_RETRY_MS,
   LOCAL_SOURCE_MAX_RETRY_MS,
   LocalSourcePipelineError,
@@ -65,10 +63,8 @@ const LATEST_BSDATA_COMMIT =
 const HISTORICAL_BSDATA_COMMIT =
   "419a80d35346cd9bf26d32f69b4a5df404beb95d";
 
-test("full local certification is bounded and split across isolated shards", () => {
+test("retained local validation remains bounded", () => {
   assert.equal(LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS, 60 * 60_000);
-  assert.equal(LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS, 4);
-  assert.equal(LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS, "degraded");
 });
 
 function observation(checkedAt: string): LocalSourceObservationV1 {
@@ -203,10 +199,14 @@ async function treeInventory(
 
 async function createMinimalPipelineProject(root: string): Promise<void> {
   for (const directory of [
+    "cli",
     "data/generated",
     "lib/rosterpilot",
     "local/data-bundles",
+    "mcp",
     "scripts",
+    "tests",
+    "types",
   ]) {
     await mkdir(path.join(root, directory), { recursive: true });
   }
@@ -263,6 +263,10 @@ async function createMinimalPipelineProject(root: string): Promise<void> {
     "scripts/sync-certification-manifest.ts",
     "local/data-bundles/local-source-candidate.ts",
     "lib/rosterpilot/fixture.ts",
+    "cli/rosterpilot.ts",
+    "mcp/stdio.ts",
+    "tests/fixture.test.ts",
+    "types/tessera-engine.d.ts",
   ]) {
     files[filename] = "fixture";
   }
@@ -980,35 +984,18 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
     const certificationCommands = seenCommands.filter(
       ({ command, args }) =>
         command === "npm" &&
-        args[0] === "run" &&
-        args[1] === "certify",
-    );
-    assert.equal(
-      certificationCommands.length,
-      LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS,
+        (
+          (args[0] === "run" && args[1] === "typecheck") ||
+          args[0] === "test"
+        ),
     );
     assert.deepEqual(
-      certificationCommands
-        .map(({ args }) => args[args.indexOf("--shard") + 1])
-        .sort(),
-      ["1/4", "2/4", "3/4", "4/4"],
-    );
-    assert.ok(
-      certificationCommands.every(
-        ({ args, timeoutMs }) =>
-          args.includes("--portfolio") &&
-          args[args.indexOf("--require-status") + 1] ===
-            LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS &&
-          timeoutMs === LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS,
-      ),
+      certificationCommands.map(({ args }) => args),
+      [["run", "typecheck"], ["test"]],
     );
     assert.equal(
-      new Set(
-        certificationCommands.map(
-          ({ args }) => args[args.indexOf("--out-dir") + 1],
-        ),
-      ).size,
-      LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS,
+      certificationCommands[1]?.timeoutMs,
+      LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS,
     );
     assert.ok(result.candidate);
     const verified = await verifyLocalSourceCandidate(result.candidate!.directory, {
@@ -1022,6 +1009,16 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
     assert.ok(
       verified.buildEvidence.builder.files.some(
         (entry) => entry.path === "package-lock.json",
+      ),
+    );
+    assert.ok(
+      verified.buildEvidence.builder.files.some(
+        (entry) => entry.path === "types/tessera-engine.d.ts",
+      ),
+    );
+    assert.ok(
+      verified.buildEvidence.builder.files.some(
+        (entry) => entry.path === "tests/fixture.test.ts",
       ),
     );
     assert.deepEqual(await treeInventory(projectRoot), before);

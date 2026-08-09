@@ -925,9 +925,6 @@ export function evaluateResolvedPoints(
       unresolvedReasons: cost.unresolvedReasons,
     };
   };
-  const rootCost = evaluateSelection(selections[0]);
-  if (!rootCost.ok) return rootCost;
-  if (rootCost.value !== 0) return rootCost;
   for (const selection of selections) {
     const cost = evaluateSelection(selection);
     if (!cost.ok) return cost;

@@ -4256,18 +4256,10 @@ export function modifyRosterBatch(
     ok: validation.ok,
     data: working,
     violations: validation.violations,
-    warnings: [
-      ...validation.warnings,
-      ...intermediateWarnings.filter(
-        (warning, index, all) =>
-          all.findIndex(
-            (candidate) =>
-              candidate.code === warning.code &&
-              candidate.message === warning.message &&
-              candidate.selectionId === warning.selectionId,
-          ) === index,
-      ),
-    ],
+    // A batch is atomic from the caller's perspective. Warnings produced while
+    // applying an intermediate draft (for example POINTS_REMAIN after a
+    // remove-before-add replacement) do not describe the committed roster.
+    warnings: validation.warnings,
   };
 }
 

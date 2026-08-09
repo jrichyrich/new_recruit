@@ -6,8 +6,83 @@ import v8 from "node:v8";
 import { newRecruitCatalogueMappings } from "../lib/rosterpilot/catalogue";
 import {
   resolveNewRecruitUnit,
+  type NewRecruitUnitResolution,
   type NewRecruitUnitInput,
 } from "../lib/rosterpilot/new-recruit-resolver";
+import {
+  evaluateResolvedPoints,
+  type UnitMappingResult,
+} from "../scripts/sync-bsdata";
+
+test("adds selected equipment costs to a nonzero unit cost", () => {
+  const pointsTypeId = "points";
+  const unitEntryId = "unit";
+  const modelEntryId = "model";
+  const lanceEntryId = "lance";
+  const mappingResult: UnitMappingResult = {
+    mapping: {
+      name: "Venatari Custodians",
+      normalizedName: "venatari custodians",
+      type: "unit",
+      entryId: unitEntryId,
+      categories: [],
+      directEquipment: [],
+      models: [],
+      enhancements: {},
+      pointsByModelCount: {},
+    },
+    nodesByEntryPath: new Map([
+      [unitEntryId, {
+        id: unitEntryId,
+        costs: [{ typeId: pointsTypeId, value: 150 }],
+      }],
+      [modelEntryId, {
+        id: modelEntryId,
+        costs: [{ typeId: pointsTypeId, value: 0 }],
+      }],
+      [lanceEntryId, {
+        id: lanceEntryId,
+        costs: [{ typeId: pointsTypeId, value: 5 }],
+      }],
+    ]),
+  };
+  const resolution: Extract<NewRecruitUnitResolution, { ok: true }> = {
+    ok: true,
+    models: [{
+      reference: {
+        name: "Venatari Custodian (Venatari lance)",
+        normalizedName: "venatari custodian (venatari lance)",
+        type: "model",
+        entryId: modelEntryId,
+        equipment: [],
+      },
+      count: 3,
+      equipment: [{
+        itemId: "venatari-lance",
+        name: "Venatari lance",
+        count: 3,
+        reference: {
+          name: "Venatari lance",
+          normalizedName: "venatari lance",
+          type: "upgrade",
+          entryId: lanceEntryId,
+        },
+      }],
+    }],
+    directEquipment: [],
+  };
+
+  assert.deepEqual(
+    evaluateResolvedPoints(
+      mappingResult,
+      resolution,
+      pointsTypeId,
+      3,
+      "adeptus-custodes",
+    ),
+    { ok: true, value: 165, unresolvedReasons: [] },
+  );
+});
 
 const eliminatorSelection: NewRecruitUnitInput = {
   unitId: "eliminator-squad",

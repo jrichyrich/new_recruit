@@ -10,6 +10,10 @@ import {
   deliverRosterToNewRecruit,
   getNewRecruitConnectionStatus,
 } from "./new-recruit/companion";
+import {
+  analyzeRosterMatchup,
+  compareRosterRevision,
+} from "./tessera/companion";
 import { runRosterStressTest } from "./tessera/stress";
 import {
   TESSERA_SCENARIO_METRICS,
@@ -49,6 +53,48 @@ export async function createLocalRosterPilotService(): Promise<RosterPilotServic
             : undefined,
         },
       ),
+    runExactStress: (roster, opponent, options) =>
+      options.baselineReportPath
+        ? compareRosterRevision(
+            options.baselineReportPath,
+            roster,
+            {
+              outputDirectory: options.outputDirectory,
+              rootDir: options.outputDirectory,
+              allowOutsideRoot: false,
+              overwrite: options.overwrite,
+              simulationBackend: options.backend,
+              executionMode: "simulate",
+              profilePolicyPath: options.profilePolicyPath,
+              allowPointMismatch: options.allowPointMismatch,
+              includeChangeCandidates: false,
+              providerCompatibilityMode: "observe",
+            },
+          )
+        : analyzeRosterMatchup(
+            roster,
+            { kind: "roster", roster: opponent },
+            {
+              outputDirectory: options.outputDirectory,
+              rootDir: options.outputDirectory,
+              allowOutsideRoot: false,
+              overwrite: options.overwrite,
+              simulationBackend: options.backend,
+              executionMode: "simulate",
+              analysisMode: "full",
+              profilePolicyPath: options.profilePolicyPath,
+              allowPointMismatch: options.allowPointMismatch,
+              includeChangeCandidates: true,
+              providerCompatibilityMode: "observe",
+              scenarioContract: options.backend === "local-engine"
+                ? localTesseraScenarioContract(
+                    10_000,
+                    TESSERA_SCENARIO_PHASES,
+                    TESSERA_SCENARIO_METRICS,
+                  )
+                : undefined,
+            },
+          ),
     lease: async (operation) => {
       const provider = await getCurrentLocalDataBundleProvider();
       const { withDataBundleSnapshotLease } = await import(

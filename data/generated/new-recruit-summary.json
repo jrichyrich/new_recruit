@@ -1409,162 +1409,6 @@
           }
         },
         {
-          "id": "69f1428e1eb591ab",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "adeptus-astartes",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "b5870723f2c15bc4",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "adeptus-astartes",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "3d92c8ea6c887ec2",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "adeptus-astartes",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "50ab2c49c533c648",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "adeptus-astartes",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "8dad1ad2df0a5a1b",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "adeptus-astartes",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "9cbabcf406385603",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "adeptus-astartes",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
           "id": "d617b4be526c14af",
           "rootCauseKey": "a8d373be94ec76f4",
           "factionId": "adeptus-astartes",
@@ -3439,214 +3283,6 @@
           }
         },
         {
-          "id": "bc75f9728e0547fe",
-          "rootCauseKey": "01227f1abd16ff39",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:3",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (3 models, copies 1-2) is 165 points in RosterPilot but evaluates to 150 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 165,
-          "newRecruitValue": 150,
-          "scope": {
-            "modelCount": 3,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": 2,
-            "equipmentSignature": "id:venatari-lance=3",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
-          "id": "ceb46729270a8517",
-          "rootCauseKey": "3e84f1c43c516423",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:3",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (3 models, copies 3+) is 175 points in RosterPilot but evaluates to 160 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 175,
-          "newRecruitValue": 160,
-          "scope": {
-            "modelCount": 3,
-            "unitOrdinalMin": 3,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:venatari-lance=3",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
-          "id": "446f24cd61326f64",
-          "rootCauseKey": "bf04f92a2468b76c",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:4",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (4 models, copies 1-2) is 320 points in RosterPilot but evaluates to 300 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 320,
-          "newRecruitValue": 300,
-          "scope": {
-            "modelCount": 4,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": 2,
-            "equipmentSignature": "id:venatari-lance=4",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
-          "id": "ad5e8f505eda4438",
-          "rootCauseKey": "e469cc7c1c8f3b8a",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:4",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (4 models, copies 3+) is 330 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 330,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 4,
-            "unitOrdinalMin": 3,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:venatari-lance=4",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
-          "id": "349ea59ec2b3f6b1",
-          "rootCauseKey": "e2006d64c5c8ed05",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:5",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (5 models, copies 1-2) is 325 points in RosterPilot but evaluates to 300 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 325,
-          "newRecruitValue": 300,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": 2,
-            "equipmentSignature": "id:venatari-lance=5",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
-          "id": "fd64ea15ecd8523f",
-          "rootCauseKey": "cf9dabbcfb7d9dd1",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:5",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (5 models, copies 3+) is 335 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 335,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 3,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:venatari-lance=5",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
-          "id": "a12774d9877d8816",
-          "rootCauseKey": "cbef86b3d40cccc6",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:6",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (6 models, copies 1-2) is 330 points in RosterPilot but evaluates to 300 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 330,
-          "newRecruitValue": 300,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": 2,
-            "equipmentSignature": "id:venatari-lance=6",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
-          "id": "381a1674b4193cb1",
-          "rootCauseKey": "4055af4b83ed41a4",
-          "factionId": "adeptus-custodes",
-          "entityType": "points",
-          "entityId": "venatari-custodians:6",
-          "entityName": "Venatari Custodians",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Venatari Custodians (6 models, copies 3+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 3,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:venatari-lance=6",
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          },
-          "catalogue": {
-            "id": "1f19-6509-d906-ca10",
-            "revision": 6,
-            "entryPath": "15e2-1903-8d94-f574::201e-e502-a8d1-3974"
-          }
-        },
-        {
           "id": "832cb1c2f153d28c",
           "rootCauseKey": "7704808325261134",
           "factionId": "adeptus-custodes",
@@ -4241,7 +3877,7 @@
           }
         },
         {
-          "id": "5b5a4aadcb7ecddb",
+          "id": "6c9166806434ff87",
           "rootCauseKey": "55374fd0fac9f6dc",
           "factionId": "adeptus-mechanicus",
           "entityType": "points",
@@ -4249,7 +3885,7 @@
           "entityName": "Ironstrider Ballistarii",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Ironstrider Ballistarii (1 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Ironstrider Ballistarii (1 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 80,
           "scope": {
@@ -4266,7 +3902,7 @@
           }
         },
         {
-          "id": "c867d7ff116f389a",
+          "id": "22bb98aea577f0fe",
           "rootCauseKey": "1b0498a2dff9c02a",
           "factionId": "adeptus-mechanicus",
           "entityType": "points",
@@ -4274,7 +3910,7 @@
           "entityName": "Ironstrider Ballistarii",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Ironstrider Ballistarii (1 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Ironstrider Ballistarii (1 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 95,
           "scope": {
@@ -4291,7 +3927,7 @@
           }
         },
         {
-          "id": "31cc3ad075323aaa",
+          "id": "4f60d49c8e3e73fa",
           "rootCauseKey": "8941dc6cd206a281",
           "factionId": "adeptus-mechanicus",
           "entityType": "points",
@@ -4299,7 +3935,7 @@
           "entityName": "Ironstrider Ballistarii",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Ironstrider Ballistarii (2 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Ironstrider Ballistarii (2 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 160,
           "scope": {
@@ -4316,7 +3952,7 @@
           }
         },
         {
-          "id": "7d5630b8e2b2d88d",
+          "id": "8cc68d646c3afdd5",
           "rootCauseKey": "84a8e2cb9cd9bc9c",
           "factionId": "adeptus-mechanicus",
           "entityType": "points",
@@ -4324,7 +3960,7 @@
           "entityName": "Ironstrider Ballistarii",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Ironstrider Ballistarii (2 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Ironstrider Ballistarii (2 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 175,
           "scope": {
@@ -4341,7 +3977,7 @@
           }
         },
         {
-          "id": "51554b7baf370ddc",
+          "id": "46745a72302fc3b0",
           "rootCauseKey": "9aab55a11875d9fb",
           "factionId": "adeptus-mechanicus",
           "entityType": "points",
@@ -4349,7 +3985,7 @@
           "entityName": "Ironstrider Ballistarii",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Ironstrider Ballistarii (3 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Ironstrider Ballistarii (3 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 250,
           "scope": {
@@ -4366,7 +4002,7 @@
           }
         },
         {
-          "id": "121fa3d1fd8cfc71",
+          "id": "28e9d1f66f866547",
           "rootCauseKey": "fa5209fd29e26e4c",
           "factionId": "adeptus-mechanicus",
           "entityType": "points",
@@ -4374,7 +4010,7 @@
           "entityName": "Ironstrider Ballistarii",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Ironstrider Ballistarii (3 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Ironstrider Ballistarii (3 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 265,
           "scope": {
@@ -9078,162 +8714,6 @@
           }
         },
         {
-          "id": "104986d97343d620",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "black-templars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "db7bc5ff132fdb3a",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "black-templars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "2438e560564e2d76",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "black-templars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "e83df242820560d0",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "black-templars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "6a24467b70149366",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "black-templars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "fdbea1490b7fedbc",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "black-templars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
           "id": "252daf27c3b5cd7e",
           "rootCauseKey": "a8d373be94ec76f4",
           "factionId": "black-templars",
@@ -11712,162 +11192,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "efc9-2aff-c5b-6790::a14e-75ca-ef91-397f"
-          }
-        },
-        {
-          "id": "75a8bf1de26a0655",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "blood-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "57e6ed5a9a4d0bea",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "blood-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "4362c45f0c43d815",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "blood-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "8939d5db18dd30fa",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "blood-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "eb8c8a6ac8d4f3b4",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "blood-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "6962f534cdd28083",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "blood-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
           }
         },
         {
@@ -14977,162 +14301,6 @@
           }
         },
         {
-          "id": "62c64b4225518329",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "crimson-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "1b3c2473b79708da",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "crimson-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "5fcbdcb5f2bc68d1",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "crimson-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "7612a908d9c7f376",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "crimson-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "a25fefeea92fec19",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "crimson-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "10e8305788ac656f",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "crimson-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
           "id": "763be2e622fb15c7",
           "rootCauseKey": "a8d373be94ec76f4",
           "factionId": "crimson-fists",
@@ -17350,162 +16518,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "efc9-2aff-c5b-6790::a14e-75ca-ef91-397f"
-          }
-        },
-        {
-          "id": "50d906d7516ff8c2",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "dark-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "b4b097d2e19e117a",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "dark-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "4ee80bb7a714a3fc",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "dark-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "8b15067bfece4bd4",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "dark-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "62f50958fc5ea249",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "dark-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "8450db4f1db4d8bf",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "dark-angels",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
           }
         },
         {
@@ -20369,162 +19381,6 @@
           }
         },
         {
-          "id": "4301aa88f58f6c25",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "deathwatch",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "fa8f9e567a127e60",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "deathwatch",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "923a18c9cfcac869",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "deathwatch",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "aef46e1e3544ab01",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "deathwatch",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "7492cb854bd59e43",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "deathwatch",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "26d23b49e11848ff",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "deathwatch",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
           "id": "d294236afc3ebba1",
           "rootCauseKey": "a8d373be94ec76f4",
           "factionId": "deathwatch",
@@ -22412,6 +21268,32 @@
           }
         },
         {
+          "id": "2b18007065775a10",
+          "rootCauseKey": "f803a886484344b4",
+          "factionId": "drukhari",
+          "entityType": "points",
+          "entityId": "ravager:1",
+          "entityName": "Ravager",
+          "code": "POINTS_MISMATCH",
+          "blocking": true,
+          "message": "Ravager (1 models, copies 1+) is 110 points in RosterPilot but evaluates to 125 points in the selected New Recruit path.",
+          "source": "bsdata",
+          "rulesValue": 110,
+          "newRecruitValue": 125,
+          "scope": {
+            "modelCount": 1,
+            "unitOrdinalMin": 1,
+            "unitOrdinalMax": null,
+            "equipmentSignature": "id:bladevanes-ravager=1|id:dark-lance-ravager=3",
+            "entryPath": "db8-7a89-3b82-c492::3376-d337-6a33-4bca"
+          },
+          "catalogue": {
+            "id": "38de-521f-1ce0-44a0",
+            "revision": 1,
+            "entryPath": "db8-7a89-3b82-c492::3376-d337-6a33-4bca"
+          }
+        },
+        {
           "id": "c515a762022986c8",
           "rootCauseKey": "ab113f15b2535d72",
           "factionId": "drukhari",
@@ -23653,162 +22535,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "efc9-2aff-c5b-6790::a14e-75ca-ef91-397f"
-          }
-        },
-        {
-          "id": "dc95c111bfe247c8",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "imperial-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "39d72c107be75a31",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "imperial-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "04bd04b7e5dfe37b",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "imperial-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "104020ca5d61b886",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "imperial-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "76130bf001e4961f",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "imperial-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "24dfad31524e14c5",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "imperial-fists",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
           }
         },
         {
@@ -26796,162 +25522,6 @@
           }
         },
         {
-          "id": "f872a3e4da16748b",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "iron-hands",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "845b377c3104f060",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "iron-hands",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "10e90a2d6311167d",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "iron-hands",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "a2bebcfdaf4b6a7e",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "iron-hands",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "e2f6f756897b6a45",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "iron-hands",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "60282d4bbe0e2f1f",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "iron-hands",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
           "id": "92c575eb9a2dd59e",
           "rootCauseKey": "a8d373be94ec76f4",
           "factionId": "iron-hands",
@@ -29155,7 +27725,7 @@
           }
         },
         {
-          "id": "698096e9f375631a",
+          "id": "5a7bef65a0adda7a",
           "rootCauseKey": "4e0d097fb3de2752",
           "factionId": "necrons",
           "entityType": "points",
@@ -29163,7 +27733,7 @@
           "entityName": "Lokhust Heavy Destroyers",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Lokhust Heavy Destroyers (1 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Lokhust Heavy Destroyers (1 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 50,
           "scope": {
@@ -29180,7 +27750,7 @@
           }
         },
         {
-          "id": "074d5dd10c625555",
+          "id": "ca644dbd99a7323e",
           "rootCauseKey": "8f1c26b122c4cd97",
           "factionId": "necrons",
           "entityType": "points",
@@ -29188,7 +27758,7 @@
           "entityName": "Lokhust Heavy Destroyers",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Lokhust Heavy Destroyers (1 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Lokhust Heavy Destroyers (1 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 60,
           "scope": {
@@ -29205,7 +27775,7 @@
           }
         },
         {
-          "id": "f24a69ced4487553",
+          "id": "df40ffe0b94212d0",
           "rootCauseKey": "81dd8f4a9b5c6df7",
           "factionId": "necrons",
           "entityType": "points",
@@ -29213,7 +27783,7 @@
           "entityName": "Lokhust Heavy Destroyers",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Lokhust Heavy Destroyers (2 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Lokhust Heavy Destroyers (2 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 100,
           "scope": {
@@ -29230,7 +27800,7 @@
           }
         },
         {
-          "id": "898ccecbd79293f4",
+          "id": "ee98d9deee701461",
           "rootCauseKey": "7557da883f3a488d",
           "factionId": "necrons",
           "entityType": "points",
@@ -29238,7 +27808,7 @@
           "entityName": "Lokhust Heavy Destroyers",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Lokhust Heavy Destroyers (2 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Lokhust Heavy Destroyers (2 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 110,
           "scope": {
@@ -29255,7 +27825,7 @@
           }
         },
         {
-          "id": "ee739b8a46d456af",
+          "id": "51c6a2ad03b83dc7",
           "rootCauseKey": "9bea95958484b693",
           "factionId": "necrons",
           "entityType": "points",
@@ -29263,7 +27833,7 @@
           "entityName": "Lokhust Heavy Destroyers",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Lokhust Heavy Destroyers (3 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Lokhust Heavy Destroyers (3 models, copies 1-2) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 160,
           "scope": {
@@ -29280,7 +27850,7 @@
           }
         },
         {
-          "id": "408010fd4f1ec795",
+          "id": "72283baeda5c3fbf",
           "rootCauseKey": "e2c5104af4d2cd24",
           "factionId": "necrons",
           "entityType": "points",
@@ -29288,7 +27858,7 @@
           "entityName": "Lokhust Heavy Destroyers",
           "code": "POINTS_EVALUATION_UNSUPPORTED",
           "blocking": true,
-          "message": "New Recruit points for Lokhust Heavy Destroyers (3 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context; a selected BSData entry has a points modifier whose conditions require roster context.",
+          "message": "New Recruit points for Lokhust Heavy Destroyers (3 models, copies 3+) could not be evaluated safely because a selected BSData entry has a points modifier whose conditions require roster context.",
           "source": "reconciler",
           "rulesValue": 170,
           "scope": {
@@ -30503,162 +29073,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "efc9-2aff-c5b-6790::a14e-75ca-ef91-397f"
-          }
-        },
-        {
-          "id": "6af9d253c1788cbf",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "raven-guard",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "98134ab34c91dcc7",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "raven-guard",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "79bbc2f9ccd3810f",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "raven-guard",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "63462072594502a6",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "raven-guard",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "0690fc5c60bb240e",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "raven-guard",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "70489aa1837546bf",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "raven-guard",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
           }
         },
         {
@@ -32895,162 +31309,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "efc9-2aff-c5b-6790::a14e-75ca-ef91-397f"
-          }
-        },
-        {
-          "id": "96c3f731cbc88579",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "salamanders",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "4836b81c6a8bf7b3",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "salamanders",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "f25929080de47a8a",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "salamanders",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "d53fe67b65a0c498",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "salamanders",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "555a94de8b754b7a",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "salamanders",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "1d59b85d2600b1ef",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "salamanders",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
           }
         },
         {
@@ -35841,162 +34099,6 @@
             "id": "e0af-67df-9d63-8fb7",
             "revision": 5,
             "entryPath": "efc9-2aff-c5b-6790::a14e-75ca-ef91-397f"
-          }
-        },
-        {
-          "id": "87eb38a97690c32f",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "space-wolves",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "6722a32cd45444be",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "space-wolves",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "56740f1318142591",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "space-wolves",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "e3c3a66802ff6307",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "space-wolves",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "cb8b9d479caadb06",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "space-wolves",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "b3e7a063360518de",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "space-wolves",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
           }
         },
         {
@@ -39801,162 +37903,6 @@
           }
         },
         {
-          "id": "cee6b78a1f760851",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "ultramarines",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "5d93110b0f1ffffb",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "ultramarines",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "77bf63c38a494386",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "ultramarines",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "e99d7fa3fe32b80f",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "ultramarines",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "7f80ed4aeaaf29f9",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "ultramarines",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "e7b86b42dbd1f9f4",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "ultramarines",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
           "id": "c7e73366457bcacb",
           "rootCauseKey": "a8d373be94ec76f4",
           "factionId": "ultramarines",
@@ -42097,162 +40043,6 @@
           }
         },
         {
-          "id": "095436e762c8b0cf",
-          "rootCauseKey": "d67c235bf24c9db6",
-          "factionId": "white-scars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:5",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (5 models, copies 1+) is 180 points in RosterPilot but evaluates to 155 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 180,
-          "newRecruitValue": 155,
-          "scope": {
-            "modelCount": 5,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=5|id:thunder-hammer=5",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "f577b7a586319faf",
-          "rootCauseKey": "781cfe8f5a4d3436",
-          "factionId": "white-scars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:6",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (6 models, copies 1+) is 340 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 340,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 6,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=6|id:thunder-hammer=6",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "eb1b86555951caca",
-          "rootCauseKey": "694c2d35147472db",
-          "factionId": "white-scars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:7",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (7 models, copies 1+) is 345 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 345,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 7,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=7|id:thunder-hammer=7",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "e683eb6af8a07b6b",
-          "rootCauseKey": "1abd7365890985be",
-          "factionId": "white-scars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:8",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (8 models, copies 1+) is 350 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 350,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 8,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=8|id:thunder-hammer=8",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "0c7fecf0d11060aa",
-          "rootCauseKey": "ac950239252e5331",
-          "factionId": "white-scars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:9",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (9 models, copies 1+) is 355 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 355,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 9,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=9|id:thunder-hammer=9",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
-          "id": "e76bed1384abe512",
-          "rootCauseKey": "e7f7bddad5d4206b",
-          "factionId": "white-scars",
-          "entityType": "points",
-          "entityId": "terminator-assault-squad:10",
-          "entityName": "Terminator Assault Squad",
-          "code": "POINTS_MISMATCH",
-          "blocking": true,
-          "message": "Terminator Assault Squad (10 models, copies 1+) is 360 points in RosterPilot but evaluates to 310 points in the selected New Recruit path.",
-          "source": "bsdata",
-          "rulesValue": 360,
-          "newRecruitValue": 310,
-          "scope": {
-            "modelCount": 10,
-            "unitOrdinalMin": 1,
-            "unitOrdinalMax": null,
-            "equipmentSignature": "id:storm-shield=10|id:thunder-hammer=10",
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          },
-          "catalogue": {
-            "id": "e0af-67df-9d63-8fb7",
-            "revision": 5,
-            "entryPath": "adb8-cae3-4bd2-e08e::ae9a-10e3-8091-20"
-          }
-        },
-        {
           "id": "d5929525b3e8d36c",
           "rootCauseKey": "a8d373be94ec76f4",
           "factionId": "white-scars",
@@ -44315,9 +42105,9 @@
     "engineUnits": 3421,
     "mappedUnits": 2024,
     "mappedBaseLoadouts": 1805,
-    "conflicts": 2258,
-    "blockingConflicts": 2258,
-    "uniqueConflicts": 737,
-    "uniqueBlockingConflicts": 737
+    "conflicts": 2173,
+    "blockingConflicts": 2173,
+    "uniqueConflicts": 724,
+    "uniqueBlockingConflicts": 724
   }
 }

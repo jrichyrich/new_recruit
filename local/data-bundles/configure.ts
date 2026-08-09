@@ -364,10 +364,46 @@ async function reconcileServiceReferences(
   const registry = createServiceCompatibilityStore({
     rootDirectory: dataBundleRoot(),
   });
+  const observations = distinctServiceCompatibilityObservations(
+    registryState.observations,
+  );
+  const retainedReferenceKeys = new Set(
+    registryState.snapshotReferences.map(
+      (reference) =>
+        `${reference.bundleId}:${reference.compatibilityKey}`,
+    ),
+  );
+  const installedReferenceIds = new Set(
+    storeStatus.references.map((reference) => reference.referenceId),
+  );
+  const verifiedBundleIds = new Set(
+    storeStatus.bundles
+      .filter((bundle) => bundle.integrity === "verified")
+      .map((bundle) => bundle.bundleId),
+  );
+  for (const reference of registryState.snapshotReferences) {
+    if (
+      verifiedBundleIds.has(reference.bundleId) &&
+      !installedReferenceIds.has(reference.referenceId)
+    ) {
+      await store.setBundleReference(
+        reference.referenceId,
+        reference.bundleId,
+      );
+      installedReferenceIds.add(reference.referenceId);
+    }
+  }
   for (const bundle of storeStatus.bundles) {
     if (bundle.integrity !== "verified") continue;
+    const unresolvedObservations = observations.filter(
+      (observation) =>
+        !retainedReferenceKeys.has(
+          `${bundle.bundleId}:${observation.compatibilityKey}`,
+        ),
+    );
+    if (unresolvedObservations.length === 0) continue;
     const installed = await store.loadBundle(bundle.bundleId);
-    for (const observation of registryState.observations) {
+    for (const observation of unresolvedObservations) {
       let identity;
       try {
         identity = deriveSnapshotServiceIdentity(
@@ -380,6 +416,9 @@ async function reconcileServiceReferences(
       if (!sameNewRecruitServiceIdentity(identity, observation.identity)) {
         continue;
       }
+      const retainedKey =
+        `${bundle.bundleId}:${observation.compatibilityKey}`;
+      if (retainedReferenceKeys.has(retainedKey)) continue;
       const reference = await registry.retainCompatibleSnapshot({
         bundleId: bundle.bundleId,
         identity,
@@ -392,8 +431,22 @@ async function reconcileServiceReferences(
         reference.referenceId,
         bundle.bundleId,
       );
+      installedReferenceIds.add(reference.referenceId);
+      retainedReferenceKeys.add(retainedKey);
     }
   }
+}
+
+export function distinctServiceCompatibilityObservations<
+  T extends { compatibilityKey: string },
+>(observations: readonly T[]): T[] {
+  const distinct = new Map<string, T>();
+  for (const observation of observations) {
+    if (!distinct.has(observation.compatibilityKey)) {
+      distinct.set(observation.compatibilityKey, observation);
+    }
+  }
+  return [...distinct.values()];
 }
 
 async function replaceActiveProvider(

@@ -641,6 +641,50 @@ test("applies roster modifications atomically and validates the final draft", ()
     ),
     false,
   );
+  assert.equal(
+    result.warnings.some((warning) => warning.code === "POINTS_REMAIN"),
+    result.data!.totalPoints < result.data!.pointsLimit,
+  );
+});
+
+test("does not leak transient warnings from intermediate batch drafts", () => {
+  const built = buildRoster({
+    playerFaction: "world-eaters",
+    pointsLimit: 575,
+    requiredUnitIds: [
+      "kharn-the-betrayer",
+      "helbrute",
+      "khorne-berzerkers",
+    ],
+  });
+  assert.ok(built.data);
+  const berzerkers = built.data.units.find(
+    (unit) => unit.unitId === "khorne-berzerkers",
+  );
+  assert.ok(berzerkers);
+
+  const result = modifyRosterBatch(built.data, [
+    { type: "remove", selectionId: berzerkers.selectionId },
+    { type: "add", unitId: "khorne-berzerkers", modelCount: 10 },
+    { type: "add", unitId: "khorne-berzerkers", modelCount: 10 },
+  ]);
+
+  assert.equal(
+    result.ok,
+    true,
+    result.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.equal(result.data?.totalPoints, 575);
+  assert.equal(
+    result.warnings.some((warning) => warning.code === "POINTS_REMAIN"),
+    false,
+  );
+  assert.equal(
+    result.warnings.filter(
+      (warning) => warning.code === "OFFICIAL_AUTHORITY_UNAVAILABLE",
+    ).length,
+    1,
+  );
 });
 
 test("builds and validates every embedded faction at common game sizes", () => {

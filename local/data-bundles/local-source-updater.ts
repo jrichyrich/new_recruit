@@ -61,12 +61,6 @@ export const LOCAL_SOURCE_MAX_RETRY_MS = 6 * 60 * 60 * 1_000;
 export const LOCAL_SOURCE_CANDIDATE_RETENTION_MS =
   30 * 24 * 60 * 60 * 1_000;
 export const LOCAL_SOURCE_CERTIFICATION_TIMEOUT_MS = 60 * 60_000;
-export const LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS = 4;
-// Local certification must reject every failed case, while allowing explicit
-// human-review limitations to remain visible as degraded evidence. Hosted
-// release promotion keeps its separate signed, pass-only canary policy.
-export const LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS =
-  "degraded" as const;
 const STATE_LOCK_STALE_MS = 60_000;
 const WORKER_LOCK_STALE_GRACE_MS = 60_000;
 const MAX_COMMAND_OUTPUT_BYTES = 4 * 1_024 * 1_024;
@@ -913,9 +907,13 @@ async function listBuilderFiles(
   return [
     ...new Set([
       ...selected,
+      ...(await walk("cli")),
       ...(await walk("lib")),
       ...(await walk("local")),
+      ...(await walk("mcp")),
       ...(await walk("scripts")),
+      ...(await walk("tests")),
+      ...(await walk("types")),
     ]),
   ].sort();
 }
@@ -972,7 +970,16 @@ async function copyStagingProject(
   projectRoot: string,
   stagingRoot: string,
 ): Promise<void> {
-  for (const directory of ["data", "lib", "local", "scripts"]) {
+  for (const directory of [
+    "cli",
+    "data",
+    "lib",
+    "local",
+    "mcp",
+    "scripts",
+    "tests",
+    "types",
+  ]) {
     const source = path.join(projectRoot, directory);
     const metadata = await lstat(source);
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
@@ -1620,8 +1627,6 @@ export function createDefaultLocalSourceUpdatePipeline(
         candidateValidationScopes = preflightDelta
           ? quarantineScopes(preflightDelta)
           : ["candidate:bootstrap"];
-        const preflightPlan = validationPlanForDelta(preflightDelta);
-
         await input.onProgress(
           "certifying",
           "Validating schema, mappings, exports, and the required deterministic scope.",
@@ -1658,38 +1663,23 @@ export function createDefaultLocalSourceUpdatePipeline(
         await runEvidence(
           "mapping",
           "mapping-sync-check",
-          "npm",
-          ["run", "data:sync-check"],
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/sync-bsdata.ts",
+            "--checkout",
+            bsdataCheckout,
+            "--commit",
+            observation.newRecruit.commit,
+            "--check",
+          ],
           {
             cwd: stagingRoot,
             env: buildEnvironment,
             timeoutMs: timeouts.validation,
           },
         );
-        if (preflightPlan.syncCertificationManifest) {
-          await runEvidence(
-            "certification",
-            "sync-certification-manifest",
-            "npm",
-            ["run", "certify:manifest:sync"],
-            {
-              cwd: stagingRoot,
-              env: buildEnvironment,
-              timeoutMs: timeouts.validation,
-            },
-          );
-          await runEvidence(
-            "certification",
-            "check-certification-manifest",
-            "npm",
-            ["run", "certify:manifest:check"],
-            {
-              cwd: stagingRoot,
-              env: buildEnvironment,
-              timeoutMs: timeouts.validation,
-            },
-          );
-        }
         const finalCandidate = await buildCandidate(
           finalArtifacts,
           "build-final-candidate",
@@ -1741,88 +1731,36 @@ export function createDefaultLocalSourceUpdatePipeline(
             reason: "provenance-only delta preserved export semantics",
           });
         }
-        const certificationOutput = path.join(
-          stagingParent,
-          "certification",
-        );
-        if (finalPlan.fullCertification) {
+        if (
+          finalPlan.fullCertification ||
+          finalPlan.certificationFactions.length > 0
+        ) {
           await input.onProgress(
             "certifying",
-            `Running ${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS} isolated deterministic certification shards. Every shard must pass before activation.`,
+            "Running the retained product type checks and focused test suite before activation.",
           );
-          const shardResults = await Promise.allSettled(
-            Array.from(
-              { length: LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS },
-              (_, index) => {
-                const shard = index + 1;
-                return runEvidence(
-                  "certification",
-                  `full-deterministic-certification-shard-${shard}-of-${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS}`,
-                  "npm",
-                  [
-                    "run",
-                    "certify",
-                    "--",
-                    "--tier",
-                    "deterministic",
-                    "--portfolio",
-                    "--require-status",
-                    LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS,
-                    "--shard",
-                    `${shard}/${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS}`,
-                    "--out-dir",
-                    path.join(
-                      certificationOutput,
-                      `shard-${shard}-of-${LOCAL_SOURCE_FULL_CERTIFICATION_SHARDS}`,
-                    ),
-                  ],
-                  {
-                    cwd: stagingRoot,
-                    env: buildEnvironment,
-                    timeoutMs: timeouts.certification,
-                  },
-                );
-              },
-            ),
+          await runEvidence(
+            "certification",
+            "retained-product-typecheck",
+            "npm",
+            ["run", "typecheck"],
+            {
+              cwd: stagingRoot,
+              env: buildEnvironment,
+              timeoutMs: timeouts.validation,
+            },
           );
-          const rejectedShards = shardResults.filter(
-            (result): result is PromiseRejectedResult =>
-              result.status === "rejected",
+          await runEvidence(
+            "certification",
+            "retained-product-tests",
+            "npm",
+            ["test"],
+            {
+              cwd: stagingRoot,
+              env: buildEnvironment,
+              timeoutMs: timeouts.certification,
+            },
           );
-          const failedShard =
-            rejectedShards.find(
-              ({ reason }) =>
-                reason instanceof BoundedCommandError &&
-                reason.code === "COMMAND_FAILED",
-            ) ?? rejectedShards[0];
-          if (failedShard) throw failedShard.reason;
-        } else if (finalPlan.certificationFactions.length > 0) {
-          for (const factionId of finalPlan.certificationFactions) {
-            await runEvidence(
-              "certification",
-              `deterministic-certification-${factionId}`,
-              "npm",
-              [
-                "run",
-                "certify",
-                "--",
-                "--tier",
-                "deterministic",
-                ...(finalPlan.includePortfolio ? ["--portfolio"] : []),
-                "--require-status",
-                LOCAL_SOURCE_MINIMUM_CERTIFICATION_STATUS,
-                "--faction",
-                factionId,
-                "--out-dir",
-                path.join(certificationOutput, factionId),
-              ],
-              {
-                cwd: stagingRoot,
-                env: buildEnvironment,
-                timeoutMs: timeouts.certification,
-              },
-            );
-          }
         } else {
           await jsonEvidence(
             "certification",

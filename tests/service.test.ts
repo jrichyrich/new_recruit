@@ -6,11 +6,13 @@ import test from "node:test";
 
 import {
   RosterPilotService,
+  type ExactStressRunner,
   type StressRunner,
 } from "../lib/rosterpilot/service";
 
 async function fixture(options: {
   runStress?: StressRunner;
+  runExactStress?: ExactStressRunner;
   deliver?: ConstructorParameters<typeof RosterPilotService>[0]["deliverToNewRecruit"];
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-service-"));
@@ -22,6 +24,7 @@ async function fixture(options: {
     })(),
     lease: async (operation) => operation(),
     runStress: options.runStress,
+    runExactStress: options.runExactStress,
     deliverToNewRecruit: options.deliver,
   });
   await service.initialize();
@@ -168,6 +171,102 @@ test("runs local stress directly and confirms website stress through act", async
     assert.equal(calls[1].profilePolicyPath, "profiles/world-eaters.json");
     assert.match(calls[1].outputDirectory, new RegExp(`${staged.operationId}$`));
     assert.notEqual(calls[0].outputDirectory, calls[1].outputDirectory);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("routes exact stress locally and confirms exact website stress through act", async () => {
+  const calls: Array<{
+    playerId: string;
+    opponentId: string;
+    backend: string;
+    allowPointMismatch: boolean;
+    profilePolicyPath?: string;
+    baselineReportPath?: string;
+  }> = [];
+  const runExactStress: ExactStressRunner = async (player, opponent, options) => {
+    calls.push({
+      playerId: player.id,
+      opponentId: opponent.id,
+      backend: options.backend,
+      allowPointMismatch: options.allowPointMismatch,
+      profilePolicyPath: options.profilePolicyPath,
+      baselineReportPath: options.baselineReportPath,
+    });
+    return {
+      ok: true,
+      data: {
+        schemaVersion: 4,
+        reportKind: "tessera-matchup-analysis",
+        runId: `exact-${calls.length}`,
+        status: "complete",
+        simulation: { trustedMatrices: 16 },
+        findings: [{ title: "Exact pressure", summary: "Preserve screens." }],
+      },
+      violations: [],
+      warnings: [],
+    };
+  };
+  const { service, root } = await fixture({ runExactStress });
+  try {
+    const player = await build(service, "adeptus-custodes");
+    const opponent = await build(service, "world-eaters");
+    const local = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "local-engine",
+        allowPointMismatch: true,
+      },
+    });
+    assert.equal(local.state, "completed");
+    assert.equal(local.result?.mode, "exact");
+    assert.equal(local.opponent?.rosterId, opponent.roster!.rosterId);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].backend, "local-engine");
+    assert.equal(calls[0].allowPointMismatch, true);
+
+    const conflict = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "local-engine",
+        opponentFaction: "world-eaters",
+      },
+    });
+    assert.equal(conflict.state, "failed");
+    assert.equal(conflict.violations[0]?.code, "OPPONENT_SCOPE_CONFLICT");
+
+    const staged = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "website",
+        allowPointMismatch: true,
+        baselineReportPath: "reports/baseline.json",
+      },
+    });
+    assert.equal(staged.state, "action-required");
+    assert.equal(staged.opponent?.rosterId, opponent.roster!.rosterId);
+    assert.equal(calls.length, 1);
+
+    const completed = await service.act({
+      operationId: staged.operationId,
+      expectedRevision: staged.revision,
+      actionId: "tessera.stress.run",
+      choice: "profiles/exact.json",
+      confirm: true,
+    });
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.result?.mode, "exact");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].backend, "website");
+    assert.equal(calls[1].profilePolicyPath, "profiles/exact.json");
+    assert.equal(calls[1].baselineReportPath, "reports/baseline.json");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

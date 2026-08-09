@@ -40,12 +40,26 @@ import {
   LocalDataBundleStoreError,
 } from "../local/data-bundles/store";
 import {
+  distinctServiceCompatibilityObservations,
   getCurrentLocalDataBundleProvider,
   initializeLocalDataBundleProvider,
   resetLocalDataBundleProviderInitializationForTests,
 } from "../local/data-bundles/configure";
 
 const digest = (character: string): string => character.repeat(64);
+
+test("deduplicates receipt observations before compatibility reconciliation", () => {
+  const observations = [
+    { compatibilityKey: "custodes-v8-r7", receipt: "first" },
+    { compatibilityKey: "custodes-v8-r7", receipt: "second" },
+    { compatibilityKey: "world-eaters-v8-r7", receipt: "third" },
+  ];
+
+  assert.deepEqual(
+    distinctServiceCompatibilityObservations(observations),
+    [observations[0], observations[2]],
+  );
+});
 
 type BundleFixture = {
   manifest: Awaited<
