@@ -1245,15 +1245,18 @@ export class RosterPilotService {
           forceRetry: boolean(options.forceRetry),
         });
     const report = result.data;
-    const artifact = report
-      ? await this.#storeStressArtifact(
+    const artifacts = report
+      ? await this.#storeStressArtifacts(
           outputDirectory,
           report,
           opponent
             ? `${safeFilename(roster.name)}-vs-${safeFilename(opponent.name)}-${backend}-exact-stress.json`
             : `${safeFilename(roster.name)}-${backend}-stress.json`,
+          Array.isArray(record(report).revisedReports)
+            ? `${safeFilename(roster.name)}-revision.html`
+            : null,
         )
-      : null;
+      : [];
     const reportRecord = record(report);
     const simulation = record(reportRecord.simulation);
     const comparisonSummary = record(reportRecord.summary);
@@ -1290,7 +1293,7 @@ export class RosterPilotService {
         aggregateCounts: comparisonSummary.aggregateCounts ?? null,
         findings,
       },
-      artifacts: artifact ? [artifact] : [],
+      artifacts,
       violations: compactIssues(result.violations),
       warnings: compactIssues(result.warnings),
       nextActions: [],
@@ -1762,11 +1765,12 @@ export class RosterPilotService {
     });
   }
 
-  async #storeStressArtifact(
+  async #storeStressArtifacts(
     outputDirectory: string,
     report: unknown,
     fallbackFilename: string,
-  ): Promise<ArtifactReference> {
+    fallbackHtmlFilename: string | null,
+  ): Promise<ArtifactReference[]> {
     const reportArtifacts = Array.isArray(record(report).artifacts)
       ? record(report).artifacts as unknown[]
       : [];
@@ -1776,33 +1780,55 @@ export class RosterPilotService {
         .find((value) => value.format === format);
       return match ? text(match.written) ?? null : null;
     };
-    const reportFilename = writtenArtifact("matchup-json");
-    const receiptFilename = writtenArtifact("matchup-receipt");
+    const resolvedOutputDirectory = path.resolve(outputDirectory);
+    const resolveWritten = (written: string | null): string | null => {
+      if (!written) return null;
+      const candidate = path.resolve(outputDirectory, written);
+      const relative = path.relative(resolvedOutputDirectory, candidate);
+      return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+        ? candidate
+        : null;
+    };
+    const reportPath = resolveWritten(writtenArtifact("matchup-json"));
+    const receiptPath = resolveWritten(writtenArtifact("matchup-receipt"));
+    let jsonArtifact: ArtifactReference;
     if (
-      !reportFilename ||
-      !receiptFilename ||
-      safeFilename(reportFilename) !== reportFilename ||
-      safeFilename(receiptFilename) !== receiptFilename
+      reportPath &&
+      receiptPath &&
+      (await exists(reportPath)) &&
+      (await exists(receiptPath))
     ) {
-      return this.#storeJsonArtifact(fallbackFilename, report);
+      jsonArtifact = await this.#storeArtifact({
+        filename: path.basename(reportPath),
+        mimeType: "application/json",
+        encoding: "utf8",
+        content: await readFile(reportPath),
+      });
+      const metadata = await this.#readArtifactMetadata(jsonArtifact.uri);
+      const storedReceiptPath = path.join(
+        path.dirname(metadata.path),
+        path.basename(receiptPath),
+      );
+      if (!(await exists(storedReceiptPath))) {
+        await writeAtomic(storedReceiptPath, await readFile(receiptPath));
+      }
+    } else {
+      jsonArtifact = await this.#storeJsonArtifact(fallbackFilename, report);
     }
-    const reportPath = path.join(outputDirectory, reportFilename);
-    const receiptPath = path.join(outputDirectory, receiptFilename);
-    if (!(await exists(reportPath)) || !(await exists(receiptPath))) {
-      return this.#storeJsonArtifact(fallbackFilename, report);
-    }
-    const artifact = await this.#storeArtifact({
-      filename: reportFilename,
-      mimeType: "application/json",
+    const htmlWritten = reportArtifacts
+      .map((value) => record(value))
+      .find((value) => typeof value.format === "string" && value.format.endsWith("-html"));
+    const htmlPath = resolveWritten(
+      htmlWritten ? text(htmlWritten.written) ?? null : fallbackHtmlFilename,
+    );
+    if (!htmlPath || !(await exists(htmlPath))) return [jsonArtifact];
+    const htmlArtifact = await this.#storeArtifact({
+      filename: path.basename(htmlPath),
+      mimeType: "text/html",
       encoding: "utf8",
-      content: await readFile(reportPath),
+      content: await readFile(htmlPath),
     });
-    const metadata = await this.#readArtifactMetadata(artifact.uri);
-    const storedReceiptPath = path.join(path.dirname(metadata.path), receiptFilename);
-    if (!(await exists(storedReceiptPath))) {
-      await writeAtomic(storedReceiptPath, await readFile(receiptPath));
-    }
-    return artifact;
+    return [jsonArtifact, htmlArtifact];
   }
 
   async #storeArtifact(input: {

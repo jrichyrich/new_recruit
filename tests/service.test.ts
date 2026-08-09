@@ -205,6 +205,7 @@ test("routes exact stress locally and confirms exact website stress through act"
         ? {
             artifacts: [
               { format: "matchup-json", written: `exact-${calls.length}-matchup.json` },
+              { format: "matchup-html", written: `exact-${calls.length}-matchup.html` },
               { format: "matchup-receipt", written: `exact-${calls.length}-matchup.receipt.json` },
             ],
           }
@@ -215,6 +216,10 @@ test("routes exact stress locally and confirms exact website stress through act"
       await writeFile(
         path.join(options.outputDirectory, `exact-${calls.length}-matchup.json`),
         `${JSON.stringify(data)}\n`,
+      );
+      await writeFile(
+        path.join(options.outputDirectory, `exact-${calls.length}-matchup.html`),
+        "<!doctype html><title>Matchup heatmap</title>\n",
       );
       await writeFile(
         path.join(options.outputDirectory, `exact-${calls.length}-matchup.receipt.json`),
@@ -288,6 +293,8 @@ test("routes exact stress locally and confirms exact website stress through act"
     assert.equal(calls[1].profilePolicyPath, "profiles/exact.json");
     assert.equal(calls[1].baselineReportPath, "reports/baseline.json");
     assert.equal(completed.artifacts[0]?.filename, "exact-2-matchup.json");
+    assert.equal(completed.artifacts[1]?.filename, "exact-2-matchup.html");
+    assert.equal(completed.artifacts[1]?.mimeType, "text/html");
     const stored = await service.inspect({ ref: completed.artifacts[0]!.uri });
     const storedPath = (stored as { path: string }).path;
     const receipt = JSON.parse(await readFile(
