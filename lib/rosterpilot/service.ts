@@ -1246,11 +1246,12 @@ export class RosterPilotService {
         });
     const report = result.data;
     const artifact = report
-      ? await this.#storeJsonArtifact(
+      ? await this.#storeStressArtifact(
+          outputDirectory,
+          report,
           opponent
             ? `${safeFilename(roster.name)}-vs-${safeFilename(opponent.name)}-${backend}-exact-stress.json`
             : `${safeFilename(roster.name)}-${backend}-stress.json`,
-          report,
         )
       : null;
     const reportRecord = record(report);
@@ -1759,6 +1760,49 @@ export class RosterPilotService {
       encoding: "utf8",
       content: `${JSON.stringify(value, null, 2)}\n`,
     });
+  }
+
+  async #storeStressArtifact(
+    outputDirectory: string,
+    report: unknown,
+    fallbackFilename: string,
+  ): Promise<ArtifactReference> {
+    const reportArtifacts = Array.isArray(record(report).artifacts)
+      ? record(report).artifacts as unknown[]
+      : [];
+    const writtenArtifact = (format: string): string | null => {
+      const match = reportArtifacts
+        .map((value) => record(value))
+        .find((value) => value.format === format);
+      return match ? text(match.written) ?? null : null;
+    };
+    const reportFilename = writtenArtifact("matchup-json");
+    const receiptFilename = writtenArtifact("matchup-receipt");
+    if (
+      !reportFilename ||
+      !receiptFilename ||
+      safeFilename(reportFilename) !== reportFilename ||
+      safeFilename(receiptFilename) !== receiptFilename
+    ) {
+      return this.#storeJsonArtifact(fallbackFilename, report);
+    }
+    const reportPath = path.join(outputDirectory, reportFilename);
+    const receiptPath = path.join(outputDirectory, receiptFilename);
+    if (!(await exists(reportPath)) || !(await exists(receiptPath))) {
+      return this.#storeJsonArtifact(fallbackFilename, report);
+    }
+    const artifact = await this.#storeArtifact({
+      filename: reportFilename,
+      mimeType: "application/json",
+      encoding: "utf8",
+      content: await readFile(reportPath),
+    });
+    const metadata = await this.#readArtifactMetadata(artifact.uri);
+    const storedReceiptPath = path.join(path.dirname(metadata.path), receiptFilename);
+    if (!(await exists(storedReceiptPath))) {
+      await writeAtomic(storedReceiptPath, await readFile(receiptPath));
+    }
+    return artifact;
   }
 
   async #storeArtifact(input: {

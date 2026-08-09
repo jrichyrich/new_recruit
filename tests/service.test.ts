@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -194,16 +194,36 @@ test("routes exact stress locally and confirms exact website stress through act"
       profilePolicyPath: options.profilePolicyPath,
       baselineReportPath: options.baselineReportPath,
     });
+    const data = {
+      schemaVersion: 4,
+      reportKind: "tessera-matchup-analysis",
+      runId: `exact-${calls.length}`,
+      status: "complete",
+      simulation: { trustedMatrices: 16 },
+      findings: [{ title: "Exact pressure", summary: "Preserve screens." }],
+      ...(options.backend === "website"
+        ? {
+            artifacts: [
+              { format: "matchup-json", written: `exact-${calls.length}-matchup.json` },
+              { format: "matchup-receipt", written: `exact-${calls.length}-matchup.receipt.json` },
+            ],
+          }
+        : {}),
+    };
+    if (options.backend === "website") {
+      await mkdir(options.outputDirectory, { recursive: true });
+      await writeFile(
+        path.join(options.outputDirectory, `exact-${calls.length}-matchup.json`),
+        `${JSON.stringify(data)}\n`,
+      );
+      await writeFile(
+        path.join(options.outputDirectory, `exact-${calls.length}-matchup.receipt.json`),
+        `${JSON.stringify({ reportFilename: `exact-${calls.length}-matchup.json` })}\n`,
+      );
+    }
     return {
       ok: true,
-      data: {
-        schemaVersion: 4,
-        reportKind: "tessera-matchup-analysis",
-        runId: `exact-${calls.length}`,
-        status: "complete",
-        simulation: { trustedMatrices: 16 },
-        findings: [{ title: "Exact pressure", summary: "Preserve screens." }],
-      },
+      data,
       violations: [],
       warnings: [],
     };
@@ -267,6 +287,14 @@ test("routes exact stress locally and confirms exact website stress through act"
     assert.equal(calls[1].backend, "website");
     assert.equal(calls[1].profilePolicyPath, "profiles/exact.json");
     assert.equal(calls[1].baselineReportPath, "reports/baseline.json");
+    assert.equal(completed.artifacts[0]?.filename, "exact-2-matchup.json");
+    const stored = await service.inspect({ ref: completed.artifacts[0]!.uri });
+    const storedPath = (stored as { path: string }).path;
+    const receipt = JSON.parse(await readFile(
+      path.join(path.dirname(storedPath), "exact-2-matchup.receipt.json"),
+      "utf8",
+    )) as { reportFilename: string };
+    assert.equal(receipt.reportFilename, "exact-2-matchup.json");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
