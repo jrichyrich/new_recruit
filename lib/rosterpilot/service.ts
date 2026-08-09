@@ -210,6 +210,7 @@ export type NewRecruitDeliverer = (
     downloadEnrichedRosz: boolean;
     downloadPrettyHtml: boolean;
     outputDirectory: string;
+    rootDir: string;
     overwrite: boolean;
   },
 ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
@@ -532,17 +533,24 @@ export class RosterPilotService {
       const result = await this.#deliverToNewRecruit(roster, {
         downloadEnrichedRosz: true,
         downloadPrettyHtml: false,
-        outputDirectory: path.join(this.#rootDirectory, "new-recruit"),
+        outputDirectory: "new-recruit",
+        rootDir: this.#rootDirectory,
         overwrite: false,
       });
       if (!result.ok || !result.data) {
+        const failedBeforeMutation = result.violations.length > 0 &&
+          result.violations.every((violation) =>
+            violation.code === "FILE_COLLISION"
+          );
         started = this.#nextRevision(started, {
           state: "failed",
           message: "New Recruit upload did not produce a verified result.",
           violations: compactIssues(result.violations),
           warnings: compactIssues(result.warnings),
           newRecruitMutation: {
-            status: "uncertain",
+            status: failedBeforeMutation
+              ? "failed-before-mutation"
+              : "uncertain",
             startedAt: started.newRecruitMutation?.startedAt ?? null,
             completedAt: this.#timestamp(),
             listUrl: null,

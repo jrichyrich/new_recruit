@@ -85,6 +85,91 @@ function semanticSelections(snapshot: RoszGameplaySnapshot): string[] {
     .sort();
 }
 
+function oneEditApart(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (Math.abs(left.length - right.length) > 1) return false;
+  const [shorter, longer] = left.length <= right.length
+    ? [left, right]
+    : [right, left];
+  let differences = 0;
+  for (let short = 0, long = 0; long < longer.length; long += 1) {
+    if (shorter[short] === longer[long]) {
+      short += 1;
+      continue;
+    }
+    differences += 1;
+    if (differences > 1) return false;
+    if (shorter.length === longer.length) short += 1;
+  }
+  return true;
+}
+
+function nameTokens(value: string): string[] {
+  return normalizedSelectionName(value)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 1);
+}
+
+function implicitCatalogueCompletions(
+  expected: RoszGameplaySnapshot,
+  observed: RoszGameplaySnapshot,
+): Set<string> {
+  const expectedSelections = expected.selections.map((entry) =>
+    JSON.parse(entry) as ParsedSelection
+  );
+  const observedSelections = observed.selections.map((entry) =>
+    JSON.parse(entry) as ParsedSelection
+  );
+  const expectedSemantic = new Set(semanticSelections(expected));
+  const ignored = new Set<string>();
+  for (const selection of observedSelections) {
+    const serialized = JSON.stringify({
+      ancestry: selection.ancestry.map(semanticAncestryIdentity),
+      entryId: selection.entryId,
+      ...(selection.entryId
+        ? {}
+        : { name: normalizedSelectionName(selection.name) }),
+      type: selection.type,
+      number: selection.number,
+    });
+    if (
+      expectedSemantic.has(serialized) ||
+      selection.type !== "upgrade" ||
+      selection.costs.length > 0 ||
+      selection.ancestry.length === 0
+    ) {
+      continue;
+    }
+    const [parentEntryId = "", parentName = "", parentType = ""] =
+      selection.ancestry.at(-1)!.split("|");
+    if (normalized(parentType) !== "model") continue;
+    const observedParent = observedSelections.find(
+      (candidate) =>
+        candidate.entryId === parentEntryId &&
+        candidate.type === "model" &&
+        candidate.number === selection.number,
+    );
+    const expectedParent = expectedSelections.find(
+      (candidate) =>
+        candidate.entryId === parentEntryId &&
+        candidate.type === "model" &&
+        candidate.number === selection.number,
+    );
+    if (!observedParent || !expectedParent) continue;
+    const parentTokens = nameTokens(parentName || observedParent.name);
+    const childTokens = nameTokens(selection.name);
+    if (
+      childTokens.length > 0 &&
+      childTokens.every((child) =>
+        parentTokens.some((parent) => oneEditApart(child, parent))
+      )
+    ) {
+      ignored.add(serialized);
+    }
+  }
+  return ignored;
+}
+
 function optionalInteger(value: string | undefined): number | null {
   if (value === undefined || value.trim() === "") return null;
   const parsed = Number(value);
@@ -268,7 +353,12 @@ export function compareRoszGameplaySnapshots(
   }
   if (
     JSON.stringify(semanticSelections(expected)) !==
-    JSON.stringify(semanticSelections(observed))
+    JSON.stringify(
+      semanticSelections(observed).filter(
+        (selection) =>
+          !implicitCatalogueCompletions(expected, observed).has(selection),
+      ),
+    )
   ) {
     mismatches.push("selection-tree");
   }

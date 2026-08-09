@@ -1728,8 +1728,11 @@ export async function compileCombatBridgeInputV2FromSnapshot(
       semanticAuthority: "bundle-manifest-verified",
       playerFactionRulesHash: playerSemantic.factionRulesHash,
       opponentFactionRulesHash: opponentSemantic.factionRulesHash,
-      playerMappingHash: playerSemantic.mappingHash,
-      opponentMappingHash: opponentSemantic.mappingHash,
+      // The local-engine input freezes the selection-scoped mapping identity
+      // stamped onto each roster. The manifest faction hash is an input to that
+      // stamp, but is not itself the resulting roster mapping hash.
+      playerMappingHash: playerRoster.sourceData.mappingHash,
+      opponentMappingHash: opponentRoster.sourceData.mappingHash,
       playerEntityHashes: playerSemantic.entityHashes,
       opponentEntityHashes: opponentSemantic.entityHashes,
       portfolioHash,

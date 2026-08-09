@@ -175,9 +175,13 @@ test("runs local stress directly and confirms website stress through act", async
 
 test("blocks stale actions and performs confirmed New Recruit upload once", async () => {
   let deliveries = 0;
+  const deliveryOptions: Array<Parameters<NonNullable<
+    ConstructorParameters<typeof RosterPilotService>[0]["deliverToNewRecruit"]
+  >>[1]> = [];
   const { service, root } = await fixture({
-    deliver: async (roster) => {
+    deliver: async (roster, options) => {
       deliveries += 1;
+      deliveryOptions.push(options);
       return {
         ok: true,
         data: {
@@ -222,6 +226,8 @@ test("blocks stale actions and performs confirmed New Recruit upload once", asyn
     });
     assert.equal(uploaded.state, "completed");
     assert.equal(deliveries, 1);
+    assert.equal(deliveryOptions[0].rootDir, root);
+    assert.equal(deliveryOptions[0].outputDirectory, "new-recruit");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

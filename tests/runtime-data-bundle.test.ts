@@ -18,6 +18,7 @@ import {
   createDataBundleSnapshot,
   verifyDataBundleManifest,
   verifyDataBundleShard,
+  type DataBundleProvider,
   type VerifiedDataBundleShardV1,
   type DataBundleVerificationResult,
 } from "../lib/rosterpilot/data-bundle";
@@ -35,6 +36,7 @@ import {
   FACTION_DATA_DEPENDENCIES,
   signRuntimeDataBundle,
   activateRuntimeDataBundle,
+  runtimeRosterCompatibilitySnapshot,
   verifyRuntimeDataBundle,
   type RuntimeFactionShardDataV2,
   type RuntimeDataBundleShardDataV1,
@@ -52,6 +54,13 @@ import {
 import {
   resetRosterCompatibilityIdentityCache,
 } from "../lib/rosterpilot/draft";
+import { rebaseRosterWithProvider } from "../lib/rosterpilot/data-operations";
+import {
+  compileCombatBridgeInputV2FromSnapshot,
+} from "../local/tessera/combat-bridge-input";
+import {
+  selectedBaselineTesseraScenarioPolicyContractV2,
+} from "../local/tessera/scenario-contract-v2";
 import {
   resetActiveLegendsInventoryForTests,
 } from "../lib/rosterpilot/legends";
@@ -252,6 +261,47 @@ test("a signed runtime bundle reconstructs one immutable build snapshot", async 
     rosterExecutionFingerprint(before.data),
   );
   assert.equal(after.data.sourceData.bundleId, signed.manifest.bundleId);
+
+  const opponent = buildRoster({
+    playerFaction: "world-eaters",
+    pointsLimit: 1_000,
+    name: "Runtime bridge opponent",
+  });
+  assert.ok(opponent.ok && opponent.data);
+  const bridgeInput = await compileCombatBridgeInputV2FromSnapshot({
+    snapshot,
+    playerRoster: after.data,
+    opponentRoster: opponent.data,
+    scenarioPolicy: selectedBaselineTesseraScenarioPolicyContractV2(1),
+  });
+  assert.equal(
+    bridgeInput.bundle.playerMappingHash,
+    after.data.sourceData.mappingHash,
+  );
+  assert.equal(
+    bridgeInput.bundle.opponentMappingHash,
+    opponent.data.sourceData.mappingHash,
+  );
+
+  clearActiveDataBundleManifestForTests();
+  const provider = {
+    acquireSnapshot: async () => ({
+      leaseId: "historical-runtime-test",
+      snapshot,
+      released: false,
+      release: () => undefined,
+    }),
+  } as DataBundleProvider<RuntimeDataBundleShardDataV1>;
+  const rebased = await rebaseRosterWithProvider(after.data, provider);
+  assert.equal(rebased.ok, true);
+  assert.equal(rebased.data?.status, "current");
+  assert.deepEqual(
+    runtimeRosterCompatibilitySnapshot(
+      snapshot,
+      "adeptus-custodes",
+    ).provenance.official.authority,
+    after.data.sourceData.official.authority,
+  );
 });
 
 test("a degraded official-authority state is frozen into rosters and warned during validation", async () => {

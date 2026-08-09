@@ -618,15 +618,16 @@ export async function rebaseRosterWithProvider(
   } catch {
     return rebaseRosterData(roster);
   }
+  let verifiedHistorical: ResultEnvelope<RosterDataRebaseResult>;
   try {
     const historical = runtimeRosterCompatibilitySnapshot(
       lease.snapshot as DataBundleSnapshot<RuntimeDataBundleShardDataV1>,
       parsed.data.factionId,
     );
-    const verified = rebaseRosterData(parsed.data, {
+    verifiedHistorical = rebaseRosterData(parsed.data, {
       snapshot: historical,
     });
-    if (!verified.ok) return verified;
+    if (!verifiedHistorical.ok) return verifiedHistorical;
   } finally {
     await lease.release();
   }
@@ -662,5 +663,5 @@ export async function rebaseRosterWithProvider(
       await targetLease?.release();
     }
   }
-  return rebaseRosterData(parsed.data);
+  return verifiedHistorical;
 }

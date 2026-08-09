@@ -1728,6 +1728,7 @@ export function runtimeRosterCompatibilitySnapshot(
         mfmVersion: sources.official.mfmVersion,
         updatedAt: sources.official.updatedAt,
         contentSha256: sources.official.contentSha256,
+        authority: structuredClone(global.officialAuthority),
       },
     },
     factions: {

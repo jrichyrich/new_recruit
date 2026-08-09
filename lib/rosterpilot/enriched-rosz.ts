@@ -168,19 +168,23 @@ function topLevelUnits(xml: string): EnrichedRoszSummary["units"] {
     directPoints: number | null;
     immediateChildPoints: number;
     hasImmediateChildPoints: boolean;
+    nestedUpgradePoints: number;
     topLevel: boolean;
   }> = [];
   const units: EnrichedRoszSummary["units"] = [];
   const ordinals = new Map<string, number>();
 
   const finish = (node: (typeof stack)[number]) => {
-    const points =
+    const basePoints =
       node.directPoints ??
       (
         node.hasImmediateChildPoints
           ? node.immediateChildPoints
           : null
       );
+    const points = basePoints === null
+      ? (node.nestedUpgradePoints > 0 ? node.nestedUpgradePoints : null)
+      : basePoints + node.nestedUpgradePoints;
     if (node.topLevel && (node.type === "unit" || node.type === "model")) {
       const key = normalized(node.name);
       const ordinal = (ordinals.get(key) ?? 0) + 1;
@@ -209,7 +213,12 @@ function topLevelUnits(xml: string): EnrichedRoszSummary["units"] {
         const attrs = attributes(token);
         if (normalized(attrs.name ?? "") === "pts") {
           const value = Number(attrs.value ?? Number.NaN);
-          if (Number.isFinite(value)) current.directPoints = value;
+          if (Number.isFinite(value)) {
+            current.directPoints = value;
+            if (!current.topLevel && current.type === "upgrade") {
+              stack[0].nestedUpgradePoints += value;
+            }
+          }
         }
       }
       continue;
@@ -240,6 +249,7 @@ function topLevelUnits(xml: string): EnrichedRoszSummary["units"] {
       directPoints: null,
       immediateChildPoints: 0,
       hasImmediateChildPoints: false,
+      nestedUpgradePoints: 0,
       topLevel: stack.length === 0,
     };
     if (!node.topLevel && node.type === "model") {

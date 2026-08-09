@@ -43,6 +43,10 @@ import {
 } from "../local/new-recruit/companion";
 import { prepareRosterForTessera } from "../local/tessera/companion";
 import {
+  compareRoszGameplaySnapshots,
+  inspectRoszGameplaySnapshot,
+} from "../local/tessera/rosz-integrity";
+import {
   createWorkflowReliabilityEventStore,
   resolveWorkflowReliabilityIdentity,
 } from "../local/reliability";
@@ -145,6 +149,60 @@ function enrichedRosz(
   }
   return zipSync({ [filename]: strToU8(xml) });
 }
+
+test("attributes nested enhancement points to the owning character", () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<roster name="Enhancement points" generatedBy="https://newrecruit.eu">
+  <costs><cost name="pts" value="125" /></costs>
+  <forces><force name="Army Roster" catalogueName="Imperium - Adeptus Custodes">
+    <selections><selection id="captain" name="Shield-Captain" number="1" type="model">
+      <selections><selection id="mantle" name="Auric Mantle" number="1" type="upgrade">
+        <costs><cost name="pts" value="15" /></costs>
+      </selection></selections>
+      <costs><cost name="pts" value="110" /></costs>
+    </selection></selections>
+  </force></forces>
+</roster>`;
+  const summary = inspectEnrichedRosz(
+    zipSync({ "enhancement-points.ros": strToU8(xml) }),
+  );
+
+  assert.equal(summary.totalPoints, 125);
+  assert.deepEqual(summary.units, [{
+    name: "Shield-Captain",
+    modelCount: 1,
+    selectionId: "captain",
+    ordinal: 1,
+    points: 125,
+  }]);
+});
+
+test("accepts only catalogue-completed equipment encoded by the parent model", () => {
+  const archive = (childName?: string) => zipSync({
+    "venatari.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<roster gameSystemId="system" gameSystemRevision="8">
+  <costs><cost name="pts" value="150" /></costs>
+  <forces><force catalogueId="custodes" catalogueRevision="7">
+    <selections><selection entryId="venatari" name="Venatari Custodians" number="1" type="unit">
+      <selections><selection entryId="buckler-model" name="Venatari Custodian (Kinetic Destroyer &amp; Tarsus Buckler)" number="3" type="model">
+        ${childName
+          ? `<selections><selection entryId="catalogue-child" name="${childName}" number="3" type="upgrade"></selection></selections>`
+          : ""}
+      </selection></selections>
+    </selection></selections>
+  </force></forces>
+</roster>`),
+  });
+  const source = inspectRoszGameplaySnapshot(archive());
+  const completed = inspectRoszGameplaySnapshot(archive("Tarsis buckler"));
+  const unrelated = inspectRoszGameplaySnapshot(archive("Teleport homer"));
+
+  assert.deepEqual(compareRoszGameplaySnapshots(source, completed), []);
+  assert.deepEqual(
+    compareRoszGameplaySnapshots(source, unrelated),
+    ["selection-tree"],
+  );
+});
 
 async function withSupportDirectory(
   label: string,
