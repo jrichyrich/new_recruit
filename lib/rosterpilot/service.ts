@@ -444,8 +444,17 @@ export class RosterPilotService {
           "This operation does not contain a Tessera stress request.",
         );
       }
+      const stressRequest = input.choice
+        ? {
+            ...operation.request,
+            options: {
+              ...record(operation.request.options),
+              profilePolicyPath: input.choice,
+            },
+          }
+        : operation.request;
       return this.#lease(() =>
-        this.#executeStress(operation, operation.request!, true)
+        this.#executeStress(operation, stressRequest, true)
       );
     }
     if (input.actionId !== "new-recruit.upload") {
@@ -1147,7 +1156,11 @@ export class RosterPilotService {
       await this.#writeOperation(running);
     }
     const result = await this.#runStress(roster, opponentFactionId, {
-      outputDirectory: path.join(this.#rootDirectory, "tessera-stress"),
+      outputDirectory: path.join(
+        this.#rootDirectory,
+        "tessera-stress",
+        operation.operationId,
+      ),
       overwrite: boolean(options.overwrite),
       backend,
       suite,

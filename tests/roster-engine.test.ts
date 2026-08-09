@@ -35,6 +35,7 @@ import {
 } from "../lib/rosterpilot/catalogue-summary";
 import { getNewRecruitFactionCatalogue } from "../lib/rosterpilot/catalogue";
 import type { DataConflict } from "../lib/rosterpilot/catalogue-types";
+import { resolveFactionIntent } from "../lib/rosterpilot/faction-intent";
 import {
   writeExportArtifact,
   writeExportArtifacts,
@@ -487,6 +488,17 @@ test("a canonical faction name suppresses nested generic aliases", () => {
   );
   assert.equal(inferredOpponent.data?.factionId, "death-guard");
   assert.equal(inferredOpponent.data?.constraints.opponentFactionId, "orks");
+});
+
+test("does not treat Custodian Guard as an Astra Militarum prompt mention", () => {
+  const resolution = resolveFactionIntent({
+    prompt: "Build a Shield Host with 4 Custodian Guard.",
+    playerFaction: "adeptus-custodes",
+  });
+
+  assert.equal(resolution.status, "resolved");
+  assert.equal(resolution.factionId, "adeptus-custodes");
+  assert.deepEqual(resolution.opponentFactionIds, []);
 });
 
 test("honors prompt and structured hard unit constraints", () => {

@@ -83,7 +83,10 @@ const REVIEWED_FACTION_ALIASES: Readonly<
   "adeptus-mechanicus": ["Mechanicus", "AdMech", "Ad Mech"],
   aeldari: ["Eldar", "Craftworld Eldar", "Craftworlds"],
   "agents-of-the-imperium": ["Imperial Agents"],
-  "astra-militarum": ["Imperial Guard", "Guard"],
+  "astra-militarum": [
+    "Imperial Guard",
+    { text: "Guard", promptSafe: false },
+  ],
   "chaos-space-marines": ["Chaos Marines", "CSM"],
   drukhari: ["Dark Eldar"],
   "genestealer-cults": ["GSC"],

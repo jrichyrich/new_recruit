@@ -95,9 +95,19 @@ test("analyzes two exact rosters locally without claiming a win rate", async () 
 });
 
 test("runs local stress directly and confirms website stress through act", async () => {
-  const calls: Array<{ backend: string; faction: string }> = [];
+  const calls: Array<{
+    backend: string;
+    faction: string;
+    outputDirectory: string;
+    profilePolicyPath?: string;
+  }> = [];
   const runStress: StressRunner = async (_roster, faction, options) => {
-    calls.push({ backend: options.backend, faction });
+    calls.push({
+      backend: options.backend,
+      faction,
+      outputDirectory: options.outputDirectory,
+      profilePolicyPath: options.profilePolicyPath,
+    });
     return {
       ok: true,
       data: {
@@ -130,10 +140,9 @@ test("runs local stress directly and confirms website stress through act", async
     });
     assert.equal(local.state, "completed");
     assert.ok(Buffer.byteLength(JSON.stringify(local)) <= 4_096);
-    assert.deepEqual(calls[0], {
-      backend: "local-engine",
-      faction: "world-eaters",
-    });
+    assert.equal(calls[0].backend, "local-engine");
+    assert.equal(calls[0].faction, "world-eaters");
+    assert.match(calls[0].outputDirectory, new RegExp(`${local.operationId}$`));
 
     const staged = await service.run({
       action: "stress",
@@ -150,13 +159,15 @@ test("runs local stress directly and confirms website stress through act", async
       operationId: staged.operationId,
       expectedRevision: staged.revision,
       actionId: "tessera.stress.run",
+      choice: "profiles/world-eaters.json",
       confirm: true,
     });
     assert.equal(completed.state, "completed");
-    assert.deepEqual(calls[1], {
-      backend: "website",
-      faction: "world-eaters",
-    });
+    assert.equal(calls[1].backend, "website");
+    assert.equal(calls[1].faction, "world-eaters");
+    assert.equal(calls[1].profilePolicyPath, "profiles/world-eaters.json");
+    assert.match(calls[1].outputDirectory, new RegExp(`${staged.operationId}$`));
+    assert.notEqual(calls[0].outputDirectory, calls[1].outputDirectory);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
