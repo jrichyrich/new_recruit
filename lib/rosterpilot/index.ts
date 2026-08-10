@@ -33,3 +33,4 @@ export * from "./roster-workflow";
 export * from "./workflow-recovery";
 export * from "./service";
 export * from "./matchup";
+export * from "./opponent-option-comparison";

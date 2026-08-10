@@ -58,6 +58,7 @@ function roster(
     faction,
     pointsLimit: 500,
     name: `Mutation receipt ${faction}`,
+    internalRequireNewRecruitExportability: true,
   });
   assert.ok(built.data);
   return built.data;

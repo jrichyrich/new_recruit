@@ -76,8 +76,49 @@ function abilityBuffs(
   }
 }
 
+function factionAncestryIds(factionId: string): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  let faction = factions.get(factionId);
+  while (faction && !seen.has(faction.id)) {
+    result.push(faction.id);
+    seen.add(faction.id);
+    faction = faction.raw.parent_faction_id
+      ? factions.get(faction.raw.parent_faction_id)
+      : undefined;
+  }
+  return result;
+}
+
 function unitView(roster: RosterDraftV1, unitId: string) {
-  return units.getInFaction(unitId, roster.factionId);
+  for (const factionId of factionAncestryIds(roster.factionId)) {
+    const unit = units.getInFaction(unitId, factionId);
+    if (unit) return unit;
+  }
+  return undefined;
+}
+
+function abilityView(
+  roster: RosterDraftV1,
+  abilityId: string,
+): BuffProvider | undefined {
+  if (!abilityId) return undefined;
+  for (const factionId of factionAncestryIds(roster.factionId)) {
+    const ability = abilities.getInFaction(abilityId, factionId);
+    if (ability) return ability as BuffProvider;
+  }
+  return undefined;
+}
+
+function detachmentView(roster: RosterDraftV1) {
+  for (const factionId of factionAncestryIds(roster.factionId)) {
+    const detachment = detachments.getInFaction(
+      roster.detachmentId,
+      factionId,
+    );
+    if (detachment) return detachment;
+  }
+  return undefined;
 }
 
 function ruleBuffs(
@@ -87,13 +128,15 @@ function ruleBuffs(
   perspective: "attacker" | "target",
 ): Buff[] {
   const faction = factions.get(roster.factionId);
-  const factionRule = abilities.get(
+  const factionRule = abilityView(
+    roster,
     faction?.raw.faction_rule_id ?? "",
-  ) as BuffProvider | undefined;
-  const detachment = detachments.get(roster.detachmentId);
-  const detachmentRule = abilities.get(
+  );
+  const detachment = detachmentView(roster);
+  const detachmentRule = abilityView(
+    roster,
     detachment?.detachment_rule_id ?? "",
-  ) as BuffProvider | undefined;
+  );
   return [
     ...abilityBuffs(factionRule, "army", context, perspective),
     ...(

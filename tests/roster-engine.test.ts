@@ -12,10 +12,13 @@ import {
 import { unzipSync, strFromU8 } from "fflate";
 
 import {
+  baselineDamageCells,
   buildRoster,
   checkDataFreshness,
+  compareOpponentRosterOptions,
   explainRoster,
   exportRoster,
+  generateFactionStressPortfolio,
   getDataStatus,
   getNewRecruitCapability,
   modifyRoster,
@@ -24,6 +27,8 @@ import {
   prepareNewRecruitHandoff,
   searchFactions,
   searchUnits,
+  toCanonicalRoster,
+  rosterStructuralFingerprint,
   validateRoster,
   type BuildRosterInput,
   type RosterDraftV1,
@@ -120,8 +125,8 @@ test("distinguishes the player faction from an opponent in prose", () => {
     explanation.data?.optimizer.scoreOrder.slice(0, 3),
     [
       "hard constraints and legality",
-      "New Recruit exportability",
       "points utilization",
+      "mission readiness",
     ],
   );
   assert.equal(
@@ -134,6 +139,58 @@ test("distinguishes the player faction from an opponent in prose", () => {
       (candidate) =>
         Number.isFinite(candidate.components.total),
     ),
+  );
+});
+
+test("keeps Warlord-only candidates structurally distinct and repeatable", () => {
+  const built = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.ok && built.data);
+  const firstUnit = built.data.units[0];
+  const alternateUnit = built.data.units.find(
+    (unit) => unit.unitId !== firstUnit?.unitId,
+  );
+  assert.ok(firstUnit && alternateUnit);
+
+  const withFirstWarlord = structuredClone(built.data);
+  const withAlternateWarlord = structuredClone(built.data);
+  for (const unit of withFirstWarlord.units) {
+    unit.isWarlord = unit.selectionId === firstUnit.selectionId;
+  }
+  for (const unit of withAlternateWarlord.units) {
+    unit.isWarlord =
+      unit.selectionId === alternateUnit.selectionId;
+  }
+
+  const firstFingerprint = rosterStructuralFingerprint(
+    withFirstWarlord,
+  );
+  const alternateFingerprint = rosterStructuralFingerprint(
+    withAlternateWarlord,
+  );
+  assert.notEqual(firstFingerprint, alternateFingerprint);
+
+  const deterministicRepeat = structuredClone(withFirstWarlord);
+  deterministicRepeat.name = "Presentation-only rename";
+  deterministicRepeat.units.reverse();
+  for (const unit of deterministicRepeat.units) {
+    unit.equipment.reverse();
+  }
+  assert.equal(
+    rosterStructuralFingerprint(deterministicRepeat),
+    firstFingerprint,
+  );
+
+  const candidateRefs = new Map([
+    [firstFingerprint, "rosterpilot://rosters/warlord-first"],
+    [alternateFingerprint, "rosterpilot://rosters/warlord-alternate"],
+  ]);
+  assert.equal(candidateRefs.size, 2);
+  assert.notEqual(
+    candidateRefs.get(firstFingerprint),
+    candidateRefs.get(alternateFingerprint),
   );
 });
 
@@ -209,6 +266,616 @@ test("builds against an exact opponent roster and records owned-model limits", (
   );
 });
 
+test("varies deterministic Custodes counters across exact World Eaters archetypes", () => {
+  const portfolio = generateFactionStressPortfolio({
+    faction: "world-eaters",
+    pointsLimit: 1000,
+    suite: "diverse-9",
+    artifactMode: "canonical",
+  });
+  assert.ok(
+    portfolio.ok && portfolio.data,
+    portfolio.violations.map((violation) => violation.message).join("; "),
+  );
+  const opponents = portfolio.data.items.flatMap((item) =>
+    item.status === "ready" && item.roster
+      ? [{
+          templateId: item.templateId,
+          posture: item.posture,
+          composition: item.composition,
+          roster: item.roster,
+        }]
+      : [],
+  );
+  assert.equal(opponents.length, 9);
+  const opponentPortfolioHash =
+    portfolio.data.contract?.portfolioHash ?? null;
+  assert.match(opponentPortfolioHash ?? "", /^[0-9a-f]{64}$/);
+  const portfolioBuildInput: BuildRosterInput = {
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "world-eaters",
+      representativeRosters: opponents.map((entry) => entry.roster),
+      portfolioHash: opponentPortfolioHash!,
+    },
+  };
+  const portfolioBuild = buildRoster(portfolioBuildInput);
+  const repeatedPortfolioBuild = buildRoster(portfolioBuildInput);
+  assert.ok(portfolioBuild.ok && portfolioBuild.data);
+  assert.ok(repeatedPortfolioBuild.ok && repeatedPortfolioBuild.data);
+  assert.equal(portfolioBuild.data.id, repeatedPortfolioBuild.data.id);
+  assert.equal(
+    portfolioBuild.data.constraints.opponentPortfolioHash,
+    opponentPortfolioHash,
+  );
+  assert.equal(
+    portfolioBuild.data.constraints.opponentRosterFingerprints?.length,
+    9,
+  );
+  assert.notEqual(
+    portfolioBuild.data.constraints.opponentThreatProfile?.bodyCount,
+    null,
+  );
+
+  const counters = opponents.map(({ templateId, roster }) => {
+    const built = buildRoster({
+      playerFaction: "adeptus-custodes",
+      pointsLimit: 1000,
+      opponentContext: { kind: "known-roster", roster },
+    });
+    assert.ok(
+      built.ok && built.data,
+      `${templateId}: ${built.violations
+        .map((violation) => violation.message)
+        .join("; ")}`,
+    );
+    assert.ok(built.data.totalPoints >= 980, templateId);
+    assert.equal(validateRoster(built.data).ok, true, templateId);
+    assert.ok(
+      built.data.constraints.opponentRosterFingerprint,
+      `${templateId} must retain its exact opponent fingerprint`,
+    );
+    return { templateId, roster: built.data };
+  });
+  const structuralFingerprint = (roster: RosterDraftV1) =>
+    roster.units
+      .map((selection) =>
+        [
+          selection.unitId,
+          selection.modelCount,
+          selection.points,
+          selection.equipment
+            .map((entry) => `${entry.itemId}:${entry.count}`)
+            .sort()
+            .join(","),
+        ].join("|"),
+      )
+      .sort()
+      .join(";");
+  assert.ok(
+    new Set(
+      counters.map(({ roster }) => structuralFingerprint(roster)),
+    ).size >= 3,
+    "nine materially different opponent rosters must not collapse to one or two Custodes lists",
+  );
+  assert.equal(
+    new Set(
+      counters.map(
+        ({ roster }) =>
+          roster.constraints.opponentRosterFingerprint,
+      ),
+    ).size,
+    9,
+  );
+  const massCounter = counters.find(
+    ({ templateId }) => templateId === "balanced-control:mass",
+  );
+  const eliteCounter = counters.find(
+    ({ templateId }) => templateId === "balanced-control:elite-heavy",
+  );
+  assert.ok(massCounter && eliteCounter);
+  assert.ok(
+    massCounter.roster.units.reduce(
+      (sum, selection) => sum + selection.modelCount,
+      0,
+    ) >
+      eliteCounter.roster.units.reduce(
+        (sum, selection) => sum + selection.modelCount,
+        0,
+      ),
+    "mass and elite-heavy targets must drive materially different body-count responses",
+  );
+  const selectedUnitIds = new Set(
+    counters.flatMap(({ roster }) =>
+      roster.units.map((selection) => selection.unitId),
+    ),
+  );
+  assert.ok(
+    selectedUnitIds.has("venatari-custodians") ||
+      selectedUnitIds.has("vertus-praetors"),
+    "the matchup search must retain a mobile Custodes option",
+  );
+  assert.ok(
+    selectedUnitIds.has("caladius-grav-tank") ||
+      selectedUnitIds.has("contemptor-achillus-dreadnought") ||
+      selectedUnitIds.has("telemon-heavy-dreadnought") ||
+      counters.some(({ roster }) =>
+        roster.units.some((selection) =>
+          selection.equipment.some(
+            (equipment) => equipment.itemId === "salvo-launcher",
+          )
+        )
+      ),
+    "the matchup search must retain an anti-heavy Custodes option",
+  );
+
+  const repeatTarget = opponents.find(
+    ({ templateId }) => templateId === "balanced-control:mass",
+  );
+  assert.ok(repeatTarget);
+  const repeated = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    opponentContext: {
+      kind: "known-roster",
+      roster: repeatTarget.roster,
+    },
+  });
+  assert.ok(repeated.ok && repeated.data);
+  const original = counters.find(
+    ({ templateId }) => templateId === repeatTarget.templateId,
+  );
+  assert.ok(original);
+  assert.equal(
+    structuralFingerprint(repeated.data),
+    structuralFingerprint(original.roster),
+  );
+
+  const comparisonInput = portfolioBuildInput;
+  const baseline = portfolioBuild;
+  assert.ok(baseline.ok && baseline.data);
+  const comparisons = [0, 1].map(() =>
+    compareOpponentRosterOptions({
+      buildInput: comparisonInput,
+      baselineRoster: baseline.data!,
+      opponents,
+      opponentPortfolioHash,
+      maximumBuilds: 8,
+    })
+  );
+  assert.ok(comparisons.every(
+    (comparison) => comparison.ok && comparison.data
+  ));
+  assert.equal(
+    comparisons[0].data!.audit.comparisonFingerprint,
+    comparisons[1].data!.audit.comparisonFingerprint,
+  );
+  assert.deepEqual(
+    comparisons[0].data!.candidates.map(
+      (candidate) => candidate.simulationFingerprint
+    ),
+    comparisons[1].data!.candidates.map(
+      (candidate) => candidate.simulationFingerprint
+    ),
+  );
+  for (const candidate of comparisons[0].data!.candidates) {
+    assert.equal(
+      candidate.roster.constraints.opponentFactionId,
+      "world-eaters",
+    );
+    assert.equal(
+      candidate.roster.constraints.opponentRosterFingerprint,
+      null,
+    );
+    assert.deepEqual(
+      candidate.roster.constraints.requiredUnitIds,
+      [],
+      "comparison anchors must not be persisted as user requirements",
+    );
+  }
+});
+
+test("records complete bounded catalogue, detachment, Warlord, and profile coverage", () => {
+  const opponent = buildRoster({
+    playerFaction: "world-eaters",
+    pointsLimit: 500,
+  });
+  assert.ok(opponent.ok && opponent.data);
+  const buildInput: BuildRosterInput = {
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 500,
+    opponentContext: {
+      kind: "known-roster",
+      roster: opponent.data,
+    },
+  };
+  const baseline = buildRoster(buildInput);
+  assert.ok(baseline.ok && baseline.data);
+  const comparison = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: baseline.data,
+    opponents: [{ templateId: "exact", roster: opponent.data }],
+    maximumBuilds: 1,
+  });
+  assert.ok(comparison.ok && comparison.data);
+
+  const invalidOpponent = {
+    ...opponent.data,
+    totalPoints: opponent.data.totalPoints + 1,
+  };
+  const rejectedOpponent = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: baseline.data,
+    opponents: [{ templateId: "tampered", roster: invalidOpponent }],
+    maximumBuilds: 1,
+  });
+  assert.equal(rejectedOpponent.ok, false);
+  assert.equal(
+    rejectedOpponent.violations[0]?.code,
+    "OPPONENT_COMPARISON_ROSTER_INVALID",
+  );
+
+  const tooManyOpponents = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: baseline.data,
+    opponents: Array.from({ length: 10 }, (_, index) => ({
+      templateId: `limit-${index}`,
+      roster: opponent.data!,
+    })),
+    maximumBuilds: 1,
+  });
+  assert.equal(tooManyOpponents.ok, false);
+  assert.equal(
+    tooManyOpponents.violations[0]?.code,
+    "OPPONENT_COMPARISON_LIMIT_EXCEEDED",
+  );
+
+  const duplicateTemplate = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: baseline.data,
+    opponents: [
+      { templateId: "duplicate", roster: opponent.data },
+      { templateId: "duplicate", roster: opponent.data },
+    ],
+    maximumBuilds: 1,
+  });
+  assert.equal(duplicateTemplate.ok, false);
+  assert.equal(
+    duplicateTemplate.violations[0]?.code,
+    "OPPONENT_COMPARISON_DUPLICATE_TEMPLATE_ID",
+  );
+
+  const duplicateStructure = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: baseline.data,
+    opponents: [
+      { templateId: "structural-a", roster: opponent.data },
+      { templateId: "structural-b", roster: opponent.data },
+    ],
+    maximumBuilds: 1,
+  });
+  assert.equal(duplicateStructure.ok, false);
+  assert.equal(
+    duplicateStructure.violations[0]?.code,
+    "OPPONENT_COMPARISON_DUPLICATE_STRUCTURAL_FINGERPRINT",
+  );
+
+  const forgedPortfolioHash = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: baseline.data,
+    opponents: [{ templateId: "forged", roster: opponent.data }],
+    opponentPortfolioHash: "f".repeat(64),
+    maximumBuilds: 1,
+  });
+  assert.equal(forgedPortfolioHash.ok, false);
+  assert.equal(
+    forgedPortfolioHash.violations[0]?.code,
+    "OPPONENT_COMPARISON_PORTFOLIO_HASH_MISMATCH",
+  );
+  const forgedPortfolioBuild = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 500,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "world-eaters",
+      representativeRosters: [opponent.data],
+      portfolioHash: "f".repeat(64),
+    },
+  });
+  assert.equal(forgedPortfolioBuild.ok, false);
+  assert.equal(
+    forgedPortfolioBuild.violations[0]?.code,
+    "OPPONENT_PORTFOLIO_HASH_MISMATCH",
+  );
+
+  const largerOpponent = buildRoster({
+    playerFaction: "world-eaters",
+    pointsLimit: 1000,
+  });
+  assert.ok(largerOpponent.ok && largerOpponent.data);
+  const mismatchedBuild = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 500,
+    opponentContext: {
+      kind: "known-roster",
+      roster: largerOpponent.data,
+    },
+  });
+  assert.equal(mismatchedBuild.ok, false);
+  assert.equal(
+    mismatchedBuild.violations[0]?.code,
+    "OPPONENT_ROSTER_POINTS_LIMIT_MISMATCH",
+  );
+  const broadFactionInput: BuildRosterInput = {
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 500,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "world-eaters",
+    },
+  };
+  const broadFactionBaseline = buildRoster(broadFactionInput);
+  assert.ok(broadFactionBaseline.ok && broadFactionBaseline.data);
+  const mismatchedPoints = compareOpponentRosterOptions({
+    buildInput: broadFactionInput,
+    baselineRoster: broadFactionBaseline.data,
+    opponents: [{
+      templateId: "wrong-game-size",
+      roster: largerOpponent.data,
+    }],
+    maximumBuilds: 1,
+  });
+  assert.equal(mismatchedPoints.ok, false);
+  assert.equal(
+    mismatchedPoints.violations[0]?.code,
+    "OPPONENT_COMPARISON_POINTS_LIMIT_MISMATCH",
+  );
+
+  const necronOpponent = buildRoster({
+    playerFaction: "necrons",
+    pointsLimit: 500,
+  });
+  assert.ok(necronOpponent.ok && necronOpponent.data);
+  const contradictoryOpponent = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: baseline.data,
+    opponents: [{ templateId: "necrons", roster: necronOpponent.data }],
+    maximumBuilds: 1,
+  });
+  assert.equal(contradictoryOpponent.ok, false);
+  assert.equal(
+    contradictoryOpponent.violations[0]?.code,
+    "OPPONENT_COMPARISON_BASELINE_OPPONENT_MISMATCH",
+  );
+
+  const contradictoryContext = compareOpponentRosterOptions({
+    buildInput: {
+      ...buildInput,
+      opponentContext: {
+        kind: "known-roster",
+        roster: necronOpponent.data,
+      },
+    },
+    baselineRoster: baseline.data,
+    opponents: [{ templateId: "world-eaters", roster: opponent.data }],
+    maximumBuilds: 1,
+  });
+  assert.equal(contradictoryContext.ok, false);
+  assert.equal(
+    contradictoryContext.violations[0]?.code,
+    "OPPONENT_COMPARISON_OPPONENT_CONTEXT_MISMATCH",
+  );
+
+  const necronBaseline = buildRoster({
+    playerFaction: "necrons",
+    pointsLimit: 500,
+    opponentContext: {
+      kind: "known-roster",
+      roster: opponent.data,
+    },
+  });
+  assert.ok(necronBaseline.ok && necronBaseline.data);
+  const contradictoryBaseline = compareOpponentRosterOptions({
+    buildInput,
+    baselineRoster: necronBaseline.data,
+    opponents: [{ templateId: "world-eaters", roster: opponent.data }],
+    maximumBuilds: 1,
+  });
+  assert.equal(contradictoryBaseline.ok, false);
+  assert.equal(
+    contradictoryBaseline.violations[0]?.code,
+    "OPPONENT_COMPARISON_BASELINE_INPUT_MISMATCH",
+  );
+
+  const { audit, candidates } = comparison.data;
+  assert.equal(audit.method, "stratified-catalogue-axis-comparison-v3");
+  assert.equal(audit.opponents[0]?.rosterId, opponent.data.id);
+  assert.equal(
+    audit.opponents[0]?.structuralFingerprint,
+    rosterStructuralFingerprint(opponent.data),
+  );
+  assert.equal(audit.coverage.catalogueComplete, true);
+  assert.equal(audit.coverage.catalogueMayBeTruncated, false);
+  assert.equal(audit.coverage.coverageMode, "bounded");
+  assert.equal(audit.coverage.catalogueRows, 35);
+  assert.equal(audit.coverage.allied.rulesOffered, 2);
+  assert.equal(audit.coverage.allied.ruleRows, 51);
+  assert.equal(audit.coverage.allied.uniqueDatasheets, 51);
+  assert.equal(audit.coverage.allied.inventoryOnly, 51);
+  assert.equal(audit.coverage.allied.selectable, 0);
+  assert.equal(audit.coverage.allied.attempted, 0);
+  assert.equal(audit.coverage.allied.expansionSupported, false);
+  assert.equal(
+    audit.coverage.terminalLedgerRows,
+    audit.coverage.catalogueRows + audit.coverage.allied.ruleRows,
+  );
+  assert.equal(
+    audit.ledger.length,
+    audit.coverage.catalogueRows + audit.coverage.allied.ruleRows,
+  );
+  assert.ok(audit.coverage.catalogueRows > audit.coverage.maximumBuilds);
+  assert.equal(audit.coverage.legal, 1);
+  assert.equal(audit.coverage.budgetExhausted, true);
+  assert.equal(audit.coverage.detachments.mode, "enumerated");
+  assert.ok(
+    audit.coverage.detachments.evaluatedIds.every((detachmentId) =>
+      audit.coverage.detachments.eligibleIds.includes(detachmentId)
+    ),
+  );
+  assert.ok(
+    audit.coverage.detachments.evaluatedIds.includes(
+      baseline.data.detachmentId,
+    ),
+  );
+  assert.ok(
+    audit.coverage.detachments.evaluatedIds.length <=
+      audit.coverage.maximumBuilds + 1,
+  );
+  assert.ok(
+    audit.coverage.detachments.evaluatedIds.length <
+      audit.coverage.detachments.eligibleIds.length,
+  );
+  assert.deepEqual(
+    [...new Set([
+      ...audit.coverage.detachments.successfulIds,
+      ...audit.coverage.detachments.failures.map(
+        (failure) => failure.detachmentId,
+      ),
+    ])].sort(),
+    audit.coverage.detachments.evaluatedIds,
+  );
+  assert.ok(audit.coverage.detachments.successfulIds.length > 1);
+  assert.equal(audit.coverage.warlords.mode, "stratified");
+  assert.ok(audit.coverage.warlords.eligibleIds.length > 1);
+  assert.ok(audit.coverage.warlords.evaluatedIds.length > 1);
+  assert.ok(
+    audit.ledger
+      .filter(
+        (entry) =>
+          entry.origin === "faction-native" &&
+          entry.status !== "ineligible",
+      )
+      .every(
+        (entry) =>
+          entry.detachmentId !== null && entry.warlordUnitId !== null,
+      ),
+  );
+  const alliedLedger = audit.ledger.filter(
+    (entry) => entry.origin === "allied-rule",
+  );
+  assert.equal(alliedLedger.length, 51);
+  assert.ok(alliedLedger.every(
+    (entry) =>
+      entry.status === "inventory-only" &&
+      entry.reasonCode === "ALLIED_CONSTRUCTION_UNSUPPORTED" &&
+      entry.structuralFingerprint === null &&
+      entry.simulationFingerprint === null &&
+      entry.warlordUnitId === null,
+  ));
+  assert.match(
+    audit.source.alliedInventoryHash ?? "",
+    /^[0-9a-f]{64}$/,
+  );
+  const draxus = alliedLedger.find(
+    (entry) => entry.unitId === "inquisitor-draxus",
+  );
+  assert.ok(draxus);
+  assert.equal(draxus.sourceFactionId, "agents-of-the-imperium");
+  assert.equal(draxus.alliedRuleId, "agents-of-the-imperium-allies");
+  assert.equal(draxus.pointsFrom, 110);
+  assert.equal(draxus.pricingBasis, "allied");
+  assert.equal(draxus.alliedPriceHostKey, "imperium");
+  assert.ok(candidates.every(
+    (candidate) => !candidate.anchorUnitIds.includes("inquisitor-draxus")
+  ));
+  for (const unitId of [
+    "venatari-custodians",
+    "vertus-praetors",
+    "contemptor-achillus-dreadnought",
+    "contemptor-galatus-dreadnought",
+    "venerable-contemptor-dreadnought",
+    "telemon-heavy-dreadnought",
+    "caladius-grav-tank",
+    "pallas-grav-attack",
+  ]) {
+    const entry = audit.ledger.find((candidate) =>
+      candidate.unitId === unitId
+    );
+    assert.ok(entry, `${unitId} must have a terminal ledger row`);
+    assert.ok(
+      entry.structuralFingerprint || entry.reasonCode,
+      `${unitId} must have candidate evidence or an explicit reason`,
+    );
+  }
+  assert.ok(
+    candidates.some((candidate) =>
+      candidate.matchupScores.some(
+        (matchup) =>
+          matchup.missingProfileCellCount > 0 &&
+          matchup.evidenceCompleteness < 1,
+      )
+    ),
+    "cells without weapon-profile evidence must be incomplete, not complete zero-output evidence",
+  );
+
+  const pinned = compareOpponentRosterOptions({
+    buildInput: {
+      ...buildInput,
+      detachmentId: baseline.data.detachmentId,
+    },
+    baselineRoster: baseline.data,
+    opponents: [{ templateId: "exact", roster: opponent.data }],
+    maximumBuilds: 1,
+  });
+  assert.ok(pinned.ok && pinned.data);
+  assert.equal(pinned.data.audit.coverage.detachments.mode, "pinned");
+  assert.deepEqual(
+    pinned.data.audit.coverage.detachments.eligibleIds,
+    [baseline.data.detachmentId],
+  );
+  assert.deepEqual(
+    pinned.data.audit.coverage.detachments.evaluatedIds,
+    [baseline.data.detachmentId],
+  );
+});
+
+test("keeps same-source AlliedRule datasheets out of native Aeldari construction", () => {
+  for (const unitId of ["yvraine", "troupe-master"]) {
+    const anchored = buildRoster({
+      playerFaction: "aeldari",
+      pointsLimit: 1000,
+      detachmentId: "guardian-battlehost",
+      internalExplorationAnchorUnitIds: [unitId],
+    });
+    assert.equal(anchored.ok, false);
+    assert.equal(
+      anchored.violations[0]?.code,
+      "REQUIRED_UNIT_NOT_FOUND",
+    );
+
+    const warlord = buildRoster({
+      playerFaction: "aeldari",
+      pointsLimit: 1000,
+      detachmentId: "guardian-battlehost",
+      requiredWarlordUnitId: unitId,
+    });
+    assert.equal(warlord.ok, false);
+    assert.equal(
+      warlord.violations[0]?.code,
+      "REQUIRED_UNIT_NOT_FOUND",
+    );
+  }
+
+  const nativeYvraine = searchUnits({
+    faction: "aeldari",
+    query: "Yvraine",
+  });
+  assert.equal(nativeYvraine.ok, true);
+  assert.deepEqual(nativeYvraine.data, []);
+});
+
 test("keeps generic Sentinel defaults but selects anti-elite profiles against Custodes", async () => {
   const requiredUnitIds = [
     "armoured-sentinels",
@@ -266,13 +933,32 @@ test("keeps generic Sentinel defaults but selects anti-elite profiles against Cu
     ),
   );
   assert.equal(validateRoster(matchup.data).ok, true);
-  const exported = await exportRoster(matchup.data, "rosz");
+  const exportBlockers = conflictsForRoster(matchup.data).filter(
+    (item) => item.blocking,
+  );
+  assert.ok(
+    exportBlockers.length > 0,
+    "the fixture must exercise roster-specific New Recruit preflight",
+  );
   assert.equal(
-    exported.ok,
-    true,
-    exported.violations
-      .map((violation) => violation.message)
-      .join("; "),
+    exportBlockers.some((conflict) =>
+      requiredUnitIds.some(
+        (unitId) =>
+          conflict.entityId === unitId ||
+          conflict.entityId.startsWith(`${unitId}:`),
+      )
+    ),
+    false,
+    "the selected anti-elite Sentinel configurations must remain export-mapped",
+  );
+  const exported = await exportRoster(matchup.data, "rosz");
+  assert.equal(exported.ok, false);
+  assert.equal(exported.data, null);
+  assert.ok(
+    exported.violations.some(
+      (violation) =>
+        violation.code === "NEW_RECRUIT_DATA_CONFLICT",
+    ),
   );
   const explanation = explainRoster(matchup.data);
   assert.ok(
@@ -291,6 +977,371 @@ test("keeps generic Sentinel defaults but selects anti-elite profiles against Cu
         candidate.equipmentSignature.includes("lascannon"),
       ),
   );
+});
+
+test("enumerates intermediate model counts inside ranged points tiers", () => {
+  const input: BuildRosterInput = {
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    requiredUnitIds: ["venatari-custodians"],
+    collectionProfile: {
+      mode: "owned",
+      units: [
+        {
+          unitId: "shield-captain",
+          maxUnits: 1,
+          maxModels: 1,
+        },
+        {
+          unitId: "venatari-custodians",
+          maxUnits: 1,
+          maxModels: 5,
+        },
+      ],
+    },
+  };
+  const result = buildRoster(input);
+  assert.ok(result.ok && result.data);
+  const venatari = result.data.units.find(
+    (unit) => unit.unitId === "venatari-custodians",
+  );
+  assert.ok(venatari);
+  assert.equal(
+    venatari.modelCount,
+    5,
+    "the legal 4-6 points range must expose its intermediate size",
+  );
+  assert.equal(validateRoster(result.data).ok, true);
+
+  const repeated = buildRoster(input);
+  assert.ok(repeated.ok && repeated.data);
+  assert.equal(
+    repeated.data.units.find(
+      (unit) => unit.unitId === "venatari-custodians",
+    )?.modelCount,
+    5,
+  );
+});
+
+test("combines independent wargear choices under a deterministic representative cap", () => {
+  const baseInput: BuildRosterInput = {
+    playerFaction: "astra-militarum",
+    pointsLimit: 1000,
+    requiredUnitIds: ["armoured-sentinels"],
+    collectionProfile: {
+      mode: "owned",
+      units: [
+        {
+          unitId: "cadian-castellan",
+          maxUnits: 1,
+          maxModels: 1,
+        },
+        {
+          unitId: "armoured-sentinels",
+          maxUnits: 1,
+          maxModels: 2,
+        },
+      ],
+    },
+  };
+  const shooting = buildRoster({
+    ...baseInput,
+    preferences: ["shooting"],
+  });
+  assert.ok(shooting.ok && shooting.data);
+  const shootingSentinels = shooting.data.units.find(
+    (unit) => unit.unitId === "armoured-sentinels",
+  );
+  assert.ok(shootingSentinels);
+  const shootingEquipment = new Set(
+    shootingSentinels.equipment.map((equipment) => equipment.itemId),
+  );
+  assert.ok(
+    shootingEquipment.has("plasma-cannon") ||
+      shootingEquipment.has("lascannon"),
+  );
+  assert.ok(
+    shootingEquipment.has("hunter-killer-missile"),
+    "a preferred main-gun swap must combine with an independent add-on",
+  );
+  assert.equal(validateRoster(shooting.data).ok, true);
+
+  const repeated = buildRoster({
+    ...baseInput,
+    preferences: ["shooting"],
+  });
+  assert.ok(repeated.ok && repeated.data);
+  assert.deepEqual(
+    repeated.data.units.find(
+      (unit) => unit.unitId === "armoured-sentinels",
+    )?.equipment,
+    shootingSentinels.equipment,
+    "bounded combination search must have a stable deterministic result",
+  );
+
+  const matchup = buildRoster({
+    ...baseInput,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "adeptus-custodes",
+    },
+  });
+  assert.ok(matchup.ok && matchup.data);
+  const matchupSentinels = matchup.data.units.find(
+    (unit) => unit.unitId === "armoured-sentinels",
+  );
+  assert.ok(matchupSentinels);
+  const matchupEquipment = new Set(
+    matchupSentinels.equipment.map((equipment) => equipment.itemId),
+  );
+  assert.ok(matchupEquipment.has("lascannon"));
+  assert.ok(matchupEquipment.has("hunter-killer-missile"));
+  assert.ok(matchupEquipment.has("sentinel-chainsaw"));
+  assert.equal(validateRoster(matchup.data).ok, true);
+});
+
+test("builds required support units with legal canonical bodyguard links", () => {
+  const cases = [
+    {
+      factionId: "adeptus-astartes",
+      supportUnitId: "lieutenant",
+      bodyguardUnitId: "intercessor-squad",
+    },
+    {
+      factionId: "necrons",
+      supportUnitId: "technomancer",
+      bodyguardUnitId: "immortals",
+    },
+    {
+      factionId: "aeldari",
+      supportUnitId: "warlock",
+      bodyguardUnitId: "guardian-defenders",
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const built = buildRoster({
+      playerFaction: testCase.factionId,
+      pointsLimit: 1000,
+      requiredUnitIds: [testCase.supportUnitId],
+      collectionProfile: {
+        mode: "owned",
+        units: [
+          {
+            unitId: testCase.supportUnitId,
+            maxUnits: 1,
+          },
+          {
+            unitId: testCase.bodyguardUnitId,
+            maxUnits: 1,
+          },
+        ],
+      },
+    });
+    assert.ok(
+      built.ok && built.data,
+      `${testCase.supportUnitId}: ${built.violations
+        .map((violation) => violation.message)
+        .join("; ")}`,
+    );
+    assert.equal(validateRoster(built.data).ok, true);
+    assert.ok(
+      built.data.units.some(
+        (selection) => selection.unitId === testCase.bodyguardUnitId,
+      ),
+    );
+    const support = built.data.units.find(
+      (selection) => selection.unitId === testCase.supportUnitId,
+    );
+    assert.deepEqual(support?.leaderAttachment, {
+      bodyguardUnitId: testCase.bodyguardUnitId,
+      role: "support",
+      provisional: false,
+    });
+
+    const canonicalSupport = toCanonicalRoster(built.data).units.find(
+      (selection) => selection.ref.id === testCase.supportUnitId,
+    );
+    assert.equal(
+      canonicalSupport?.leader_attachment?.bodyguard_ref.id,
+      testCase.bodyguardUnitId,
+    );
+    assert.equal(
+      canonicalSupport?.leader_attachment?.bodyguard_ref.resolved,
+      true,
+    );
+    assert.equal(canonicalSupport?.leader_attachment?.role, "support");
+    assert.equal(canonicalSupport?.leader_attachment?.provisional, false);
+
+    const bodyguard = built.data.units.find(
+      (selection) => selection.unitId === testCase.bodyguardUnitId,
+    );
+    assert.ok(bodyguard);
+    const staleAttachment = modifyRoster(built.data, {
+      type: "remove",
+      selectionId: bodyguard.selectionId,
+    });
+    assert.equal(staleAttachment.ok, false);
+    assert.ok(
+      staleAttachment.violations.some(
+        (violation) => violation.code === "SUPPORT_BODYGUARD_MISSING",
+      ),
+    );
+  }
+
+  const impossible = buildRoster({
+    playerFaction: "adeptus-astartes",
+    pointsLimit: 1000,
+    requiredUnitIds: ["lieutenant"],
+    collectionProfile: {
+      mode: "owned",
+      units: [{ unitId: "lieutenant", maxUnits: 1 }],
+    },
+  });
+  assert.equal(impossible.ok, false);
+  assert.equal(impossible.data, null);
+  assert.ok(
+    impossible.violations.some(
+      (violation) => violation.code === "SUPPORT_ATTACHMENT_UNAVAILABLE",
+    ),
+  );
+});
+
+test("fails closed on unscoped or unknown opponent assumptions", () => {
+  const unscoped = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    opponentAssumptions: {
+      styleTags: ["melee"],
+      source: "user-stated",
+    },
+  });
+  assert.equal(unscoped.ok, false);
+  assert.equal(unscoped.data, null);
+  assert.ok(
+    unscoped.violations.some(
+      (violation) =>
+        violation.code === "OPPONENT_ASSUMPTIONS_SCOPE_REQUIRED",
+    ),
+  );
+
+  const unknownUnit = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "world-eaters",
+    },
+    opponentAssumptions: {
+      styleTags: ["melee"],
+      knownUnitIds: ["technomancer"],
+      source: "user-stated",
+    },
+  });
+  assert.equal(unknownUnit.ok, false);
+  assert.equal(unknownUnit.data, null);
+  assert.ok(
+    unknownUnit.violations.some(
+      (violation) =>
+        violation.code === "OPPONENT_ASSUMPTION_UNIT_NOT_FOUND",
+    ),
+  );
+});
+
+test("persists deterministic opponent assumptions in threat evidence", () => {
+  const baselineInput: BuildRosterInput = {
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    opponentContext: {
+      kind: "known-faction",
+      factionId: "world-eaters",
+    },
+  };
+  const assumedInput: BuildRosterInput = {
+    ...baselineInput,
+    opponentAssumptions: {
+      styleTags: ["horde", "ranged"],
+      knownUnitIds: ["eightbound"],
+      source: "user-stated",
+    },
+  };
+  const baseline = buildRoster(baselineInput);
+  const assumed = buildRoster(assumedInput);
+  const repeated = buildRoster(assumedInput);
+  assert.ok(baseline.ok && baseline.data);
+  assert.ok(assumed.ok && assumed.data);
+  assert.ok(repeated.ok && repeated.data);
+
+  assert.deepEqual(
+    assumed.data.constraints.opponentAssumptions,
+    assumedInput.opponentAssumptions,
+  );
+  assert.equal(assumed.data.id, repeated.data.id);
+  assert.deepEqual(assumed.data.units, repeated.data.units);
+  assert.deepEqual(
+    assumed.data.constraints.opponentThreatProfile,
+    repeated.data.constraints.opponentThreatProfile,
+  );
+
+  const baselineProfile = baseline.data.constraints.opponentThreatProfile;
+  const assumedProfile = assumed.data.constraints.opponentThreatProfile;
+  assert.ok(baselineProfile && assumedProfile);
+  assert.ok(assumedProfile.hordeShare > baselineProfile.hordeShare);
+  assert.ok(assumedProfile.rangedShare > baselineProfile.rangedShare);
+  assert.equal(assumedProfile.keyTargetProfiles[0]?.unitId, "eightbound");
+  assert.equal(
+    baselineProfile.keyTargetProfiles.some(
+      (target) => target.unitId === "eightbound",
+    ),
+    false,
+  );
+
+  const baselineExplanation = explainRoster(baseline.data);
+  const assumedExplanation = explainRoster(assumed.data);
+  assert.ok(baselineExplanation.ok && baselineExplanation.data);
+  assert.ok(assumedExplanation.ok && assumedExplanation.data);
+  assert.equal(
+    assumedExplanation.data.optimizer.targetProfileCoverage
+      ?.keyTargetProfiles[0]?.unitId,
+    "eightbound",
+  );
+  assert.notDeepEqual(
+    assumedExplanation.data.optimizer.targetProfileCoverage,
+    baselineExplanation.data.optimizer.targetProfileCoverage,
+  );
+});
+
+test("baseline damage resolves faction-scoped duplicate IDs", () => {
+  const astartes = buildRoster({
+    playerFaction: "adeptus-astartes",
+    pointsLimit: 1000,
+    requiredUnitIds: ["lieutenant"],
+    collectionProfile: {
+      mode: "owned",
+      units: [
+        { unitId: "lieutenant", maxUnits: 1 },
+        { unitId: "intercessor-squad", maxUnits: 1 },
+      ],
+    },
+  });
+  const custodes = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+    collectionProfile: {
+      mode: "owned",
+      units: [
+        { unitId: "shield-captain", maxUnits: 1 },
+        { unitId: "custodian-guard", maxUnits: 1 },
+      ],
+    },
+  });
+  assert.ok(astartes.ok && astartes.data);
+  assert.ok(custodes.ok && custodes.data);
+  let cells: ReturnType<typeof baselineDamageCells> = [];
+  assert.doesNotThrow(() => {
+    cells = baselineDamageCells(astartes.data!, custodes.data!);
+  });
+  assert.ok(cells.length > 0);
 });
 
 test("distinguishes whole-unit blockers from scoped configuration conflicts", () => {
@@ -340,7 +1391,7 @@ test("distinguishes whole-unit blockers from scoped configuration conflicts", ()
   );
 });
 
-test("the builder selects an exportable model count around a scoped conflict", async () => {
+test("canonical building ignores export-only scoped conflicts", async () => {
   const input: BuildRosterInput = {
     playerFaction: "adeptus-custodes",
     pointsLimit: 1000,
@@ -386,24 +1437,22 @@ test("the builder selects an exportable model count around a scoped conflict", a
       (selection) => selection.unitId === "prosecutors",
     );
     assert.ok(selected.length > 0);
-    assert.ok(
-      selected.every(
-        (selection) =>
-          selection.modelCount !== baselineSelection.modelCount,
-      ),
-      "the beam must keep the unit and choose an unblocked model count",
-    );
+    assert.ok(selected.some(
+      (selection) =>
+        selection.modelCount === baselineSelection.modelCount,
+    ));
     assert.equal(
       conflictsForRoster(built.data).some(
         (item) => item.id === conflict.id,
       ),
-      false,
+      true,
     );
     const exported = await exportRoster(built.data, "rosz");
-    assert.equal(
-      exported.ok,
-      true,
-      exported.violations.map((issue) => issue.message).join("; "),
+    assert.equal(exported.ok, false);
+    assert.ok(
+      exported.violations.some(
+        (issue) => issue.code === "NEW_RECRUIT_DATA_CONFLICT",
+      ),
     );
   } finally {
     removeConflict();
@@ -501,6 +1550,17 @@ test("does not treat Custodian Guard as an Astra Militarum prompt mention", () =
   assert.deepEqual(resolution.opponentFactionIds, []);
 });
 
+test("structured player faction ignores unclassified factions in a roster name", () => {
+  const resolution = resolveFactionIntent({
+    prompt:
+      "Build an Adeptus Custodes army. Name it Custodes World Eaters Counter 1000.",
+    playerFaction: "adeptus-custodes",
+  });
+
+  assert.equal(resolution.status, "resolved");
+  assert.equal(resolution.factionId, "adeptus-custodes");
+});
+
 test("honors prompt and structured hard unit constraints", () => {
   const result = buildRoster({
     prompt:
@@ -566,7 +1626,7 @@ test("rejects an ineligible Warlord and validates an eligible mapped one", () =>
   );
 });
 
-test("retains a required named unit when a separate exportable Warlord is required", async () => {
+test("retains a required named unit when other selections fail export preflight", async () => {
   const artemisMapping =
     getNewRecruitFactionCatalogue("adeptus-astartes")?.units[
       "watch-captain-artemis"
@@ -607,11 +1667,37 @@ test("retains a required named unit when a separate exportable Warlord is requir
     "captain-in-phobos-armour",
     "watch-captain-artemis",
   ]);
-  const exported = await exportRoster(built.data, "rosz");
+  assert.equal(validateRoster(built.data).ok, true);
+  const requiredExportUnitIds = [
+    "captain-in-phobos-armour",
+    "watch-captain-artemis",
+  ];
+  const exportBlockers = conflictsForRoster(built.data).filter(
+    (item) => item.blocking,
+  );
+  assert.ok(
+    exportBlockers.length > 0,
+    "the fixture must exercise roster-specific New Recruit preflight",
+  );
   assert.equal(
-    exported.ok,
-    true,
-    exported.violations.map((violation) => violation.message).join("; "),
+    exportBlockers.some((conflict) =>
+      requiredExportUnitIds.some(
+        (unitId) =>
+          conflict.entityId === unitId ||
+          conflict.entityId.startsWith(`${unitId}:`),
+      )
+    ),
+    false,
+    "the required named unit and mapped Warlord must not cause the export failure",
+  );
+  const exported = await exportRoster(built.data, "rosz");
+  assert.equal(exported.ok, false);
+  assert.equal(exported.data, null);
+  assert.ok(
+    exported.violations.some(
+      (violation) =>
+        violation.code === "NEW_RECRUIT_DATA_CONFLICT",
+    ),
   );
 });
 
@@ -622,11 +1708,11 @@ test("applies roster modifications atomically and validates the final draft", ()
   });
   assert.ok(built.data);
   const removable = [...built.data.units]
-    .filter((unit) => !unit.isWarlord && unit.points >= 50)
+    .filter((unit) => !unit.isWarlord && unit.points >= 60)
     .sort((left, right) => left.points - right.points)[0];
   assert.ok(removable);
   const result = modifyRosterBatch(built.data, [
-    { type: "add", unitId: "shadowseer" },
+    { type: "add", unitId: "vibro-cannon-platform" },
     { type: "remove", selectionId: removable.selectionId },
   ]);
   assert.equal(
@@ -634,7 +1720,11 @@ test("applies roster modifications atomically and validates the final draft", ()
     true,
     result.violations.map((violation) => violation.message).join("; "),
   );
-  assert.ok(result.data?.units.some((unit) => unit.unitId === "shadowseer"));
+  assert.ok(
+    result.data?.units.some(
+      (unit) => unit.unitId === "vibro-cannon-platform",
+    ),
+  );
   assert.equal(
     result.data?.units.some(
       (unit) => unit.selectionId === removable.selectionId,
@@ -763,21 +1853,35 @@ test("records semantic source identity and migrates V1 drafts", async () => {
   );
 });
 
-test("exports a conflict-free non-Custodes roster through generated mappings", async () => {
+test("separates non-Custodes canonical legality from generated-mapping preflight", async () => {
   const built = buildRoster({
     faction: "necrons",
     pointsLimit: 1000,
     allowNamedCharacters: false,
   });
-  assert.ok(built.data);
-  assert.equal(getNewRecruitCapability("necrons").available, true);
-  const exported = await exportRoster(built.data, "rosz");
   assert.equal(
-    exported.ok,
+    built.ok,
     true,
-    exported.violations.map((item) => item.message).join("; "),
+    built.violations.map((item) => item.message).join("; "),
   );
-  assert.ok(exported.data);
+  assert.ok(built.data);
+  assert.equal(validateRoster(built.data).ok, true);
+  assert.equal(getNewRecruitCapability("necrons").available, true);
+  const exportBlockers = conflictsForRoster(built.data).filter(
+    (item) => item.blocking,
+  );
+  assert.ok(
+    exportBlockers.length > 0,
+    "faction-level capability must still be narrowed by roster preflight",
+  );
+  const exported = await exportRoster(built.data, "rosz");
+  assert.equal(exported.ok, false);
+  assert.equal(exported.data, null);
+  assert.ok(
+    exported.violations.some(
+      (item) => item.code === "NEW_RECRUIT_DATA_CONFLICT",
+    ),
+  );
 });
 
 test("checks all live source classes without changing the pinned build", async () => {

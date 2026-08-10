@@ -22,7 +22,11 @@ import {
   newRecruitEquipmentSignature,
   resolveNewRecruitUnit,
 } from "./new-recruit-resolver";
-import { getActiveDataBundleManifest } from "./active-data-context";
+import {
+  portfolioCapabilityHash,
+  stablePortfolioFingerprint as stableFingerprint,
+  TESSERA_STRESS_GENERATOR_VERSION,
+} from "./portfolio-capability";
 import type {
   BuildRosterInput,
   GenerateFactionStressPortfolioInput,
@@ -39,7 +43,10 @@ import type {
   TesseraStressPortfolioPreview,
 } from "./types";
 
-export const TESSERA_STRESS_GENERATOR_VERSION = "faction-stress-v6";
+export {
+  portfolioCapabilityHash,
+  TESSERA_STRESS_GENERATOR_VERSION,
+} from "./portfolio-capability";
 
 const POSTURES: TesseraArchetype[] = [
   "balanced-control",
@@ -52,23 +59,6 @@ const COMPOSITIONS: TesseraStressComposition[] = [
   "mass",
   "elite-heavy",
 ];
-
-function stableFingerprint(value: string): string {
-  const seeds = [
-    0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35,
-    0x27d4eb2f, 0x165667b1, 0xd3a2646c, 0xfd7046c5,
-  ];
-  return seeds
-    .map((seed, seedIndex) => {
-      let hash = seed;
-      for (let index = 0; index < value.length; index += 1) {
-        hash ^= value.charCodeAt(index) + seedIndex;
-        hash = Math.imul(hash, 0x01000193);
-      }
-      return (hash >>> 0).toString(16).padStart(8, "0");
-    })
-    .join("");
-}
 
 const POSTURE_TAGS: Record<TesseraArchetype, PreferenceTag[]> = {
   "balanced-control": ["objective"],
@@ -148,7 +138,8 @@ function simulationTokens(roster: RosterDraftV1): Map<string, number> {
 /**
  * Stable list identity for paired runs and portfolio deduplication. Presentation
  * fields, selection ids, ordinals, force disposition, and timestamps are
- * intentionally excluded.
+ * intentionally excluded. Warlord and enhancement assignments are included
+ * because they are rule-bearing candidate differences.
  */
 export function rosterStructuralFingerprint(
   roster: RosterDraftV1,
@@ -157,6 +148,7 @@ export function rosterStructuralFingerprint(
     .map((unit) => ({
       unitId: unit.unitId,
       modelCount: unit.modelCount,
+      isWarlord: unit.isWarlord,
       enhancementId: unit.enhancementId,
       equipment: unit.equipment
         .map((entry) => ({ itemId: entry.itemId, count: entry.count }))
@@ -170,6 +162,7 @@ export function rosterStructuralFingerprint(
       (left, right) =>
         left.unitId.localeCompare(right.unitId) ||
         left.modelCount - right.modelCount ||
+        Number(left.isWarlord) - Number(right.isWarlord) ||
         (left.enhancementId ?? "").localeCompare(
           right.enhancementId ?? "",
         ) ||
@@ -418,25 +411,6 @@ export function portfolioReviewCapabilityBindingMatches(
     );
   }
   return review.sourceReleaseId === binding.sourceReleaseId;
-}
-
-function portfolioCapabilityHash(factionId: string): string {
-  const activeHash =
-    getActiveDataBundleManifest()?.semanticHashes.factions[
-      factionId
-    ]?.portfolioHash;
-  if (activeHash) return activeHash;
-  // The compiled bootstrap has no activated signed manifest. Give it a
-  // deterministic methodology-scoped identity rather than falling back to
-  // raw release provenance.
-  return stableFingerprint(
-    JSON.stringify({
-      schemaVersion: 1,
-      factionId,
-      methodology: "adaptive-threat-lenses-v1",
-      generatorVersion: TESSERA_STRESS_GENERATOR_VERSION,
-    }),
-  );
 }
 
 export function tesseraStressPortfolioContractFingerprint(

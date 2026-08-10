@@ -78,6 +78,15 @@ function booleanFlag(args: Arguments, name: string): boolean | undefined {
   throw new Error(`--${name} must be true or false.`);
 }
 
+function comparisonDepthFlag(
+  args: Arguments,
+): "standard" | "expanded" | undefined {
+  const value = args.flags.get("comparison-depth");
+  if (value === undefined) return undefined;
+  if (value === "standard" || value === "expanded") return value;
+  throw new Error("--comparison-depth must be standard or expanded.");
+}
+
 function jsonObjectFlag(
   args: Arguments,
   name: string,
@@ -94,9 +103,17 @@ function jsonObjectFlag(
 function buildOptions(args: Arguments): Record<string, unknown> | undefined {
   const options = jsonObjectFlag(args, "options");
   const values: Array<[string, unknown]> = [
+    ["playerFaction", stringFlag(args, "player-faction")],
     ["faction", stringFlag(args, "faction")],
     ["name", stringFlag(args, "name")],
     ["pointsLimit", numberFlag(args, "points")],
+    ["detachmentId", stringFlag(args, "detachment")],
+    ["forceDispositionId", stringFlag(args, "force-disposition")],
+    [
+      "compareOpponentOptions",
+      booleanFlag(args, "compare-opponent-options"),
+    ],
+    ["comparisonDepth", comparisonDepthFlag(args)],
     ["limit", numberFlag(args, "limit")],
     ["includeLegends", booleanFlag(args, "include-legends")],
     ["allowLegends", booleanFlag(args, "allow-legends")],
@@ -154,10 +171,13 @@ Usage:
   rosterpilot mcp
 
 Common run flags:
-  --faction <id> --points <n> --roster <ref> --opponent <ref>
+  --player-faction <id> --faction <id> --points <n>
+  --detachment <id> --force-disposition <id>
+  --compare-opponent-options[=true|false] --comparison-depth <standard|expanded>
+  --roster <ref> --opponent <ref> --opponent-faction <id>
   --format <ros|rosz|newrecruit-json|roster-json|text|html>
   --output <path> --overwrite --options '<json>'
-  --backend <local-engine|website> --opponent-faction <id>
+  --backend <local-engine|website>
   --suite <core-3|diverse-9> --strategy <staged|full-all>
 
 Results are compact JSON. Full rosters and artifacts are returned as rosterpilot:// refs.`;

@@ -9,6 +9,8 @@ import type {
 } from "./combat-bridge";
 import type { CombatBridgeV3 } from "./combat-bridge-v3";
 import {
+  LegendsPlayContextSchema,
+  LegendsPolicySchema,
   LegendsPolicyDecisionSchema,
   type LegendsPlayContext,
   type LegendsPolicy,
@@ -49,6 +51,14 @@ export type OpponentAssumptions = {
   source: "user-stated";
 };
 
+export const OpponentAssumptionsSchema = z
+  .object({
+    styleTags: z.array(OpponentStyleTagSchema),
+    knownUnitIds: z.array(z.string().min(1)).optional(),
+    source: z.literal("user-stated"),
+  })
+  .strict();
+
 export type ResultEnvelope<T> = {
   ok: boolean;
   data: T | null;
@@ -85,6 +95,15 @@ export const DraftUnitSchema = z
     isWarlord: z.boolean(),
     enhancementId: z.string().min(1).nullable(),
     enhancementName: z.string().min(1).nullable(),
+    leaderAttachment: z
+      .object({
+        bodyguardUnitId: z.string().min(1),
+        role: z.enum(["leader", "support"]),
+        provisional: z.boolean(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     equipment: z.array(EquipmentSelectionSchema),
     tags: z.array(PreferenceTagSchema),
   })
@@ -115,6 +134,54 @@ export const CollectionProfileSchema = z.discriminatedUnion("mode", [
 ]);
 
 export type CollectionProfile = z.infer<typeof CollectionProfileSchema>;
+
+/**
+ * Strict application-boundary schema for the options accepted by a build
+ * operation. CLI and MCP adapters intentionally keep their transport shape
+ * shallow; the service owns validation and normalization.
+ */
+export const BuildRunOptionsSchema = z
+  .object({
+    playerFaction: z.string().min(1).optional(),
+    faction: z.string().min(1).optional(),
+    opponentFaction: z.string().min(1).optional(),
+    pointsLimit: z.number().int().min(100).max(5000).optional(),
+    name: z.string().min(1).max(160).optional(),
+    preferences: z.array(PreferenceTagSchema).optional(),
+    allowNamedCharacters: z.boolean().optional(),
+    legendsPolicy: LegendsPolicySchema.optional(),
+    allowLegends: z.boolean().optional(),
+    playContext: LegendsPlayContextSchema.optional(),
+    collectionUnitIds: z.array(z.string().min(1)).optional(),
+    collectionProfile: CollectionProfileSchema.optional(),
+    requiredUnitIds: z.array(z.string().min(1)).optional(),
+    excludedUnitIds: z.array(z.string().min(1)).optional(),
+    requiredWarlordUnitId: z.string().min(1).optional(),
+    detachmentId: z.string().min(1).optional(),
+    forceDispositionId: z.string().min(1).optional(),
+    opponentAssumptions: OpponentAssumptionsSchema.optional(),
+    mixedThreatIntent: z.boolean().optional(),
+    compareOpponentOptions: z.boolean().optional(),
+    comparisonBuildLimit: z.number().int().positive().max(500).optional(),
+    comparisonDepth: z.enum(["standard", "expanded"]).optional(),
+  })
+  .strict()
+  .superRefine((options, context) => {
+    if (
+      options.playerFaction !== undefined &&
+      options.faction !== undefined &&
+      options.playerFaction !== options.faction
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["playerFaction"],
+        message:
+          "playerFaction and the deprecated faction alias must identify the same faction when both are supplied.",
+      });
+    }
+  });
+
+export type BuildRunOptions = z.infer<typeof BuildRunOptionsSchema>;
 
 export const OpponentThreatProfileSchema = z
   .object({
@@ -170,6 +237,11 @@ export const RosterConstraintsSchema = z
     opponentFactionId: z.string().min(1).nullable().optional(),
     collectionProfile: CollectionProfileSchema.nullable().optional(),
     opponentRosterFingerprint: z.string().min(1).nullable().optional(),
+    opponentPortfolioHash:
+      z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+    opponentRosterFingerprints:
+      z.array(z.string().min(1)).max(9).optional(),
+    opponentAssumptions: OpponentAssumptionsSchema.nullable().optional(),
     opponentThreatProfile:
       OpponentThreatProfileSchema.nullable().optional(),
   })
@@ -379,6 +451,13 @@ export type BuildRosterInput = {
     | {
         kind: "known-faction";
         factionId: string;
+        /**
+         * Internal frozen stress representatives for an unknown list from a
+         * known faction. They are construction evidence, not prevalence
+         * weights, and are never accepted directly from transport options.
+         */
+        representativeRosters?: RosterDraftV1[];
+        portfolioHash?: string;
       }
     | {
         kind: "known-roster";
@@ -398,6 +477,28 @@ export type BuildRosterInput = {
     unitOrdinalMin?: number;
     unitOrdinalMax?: number | null;
   }>;
+  /**
+   * Internal comparison contract used to prove that viable catalogue options
+   * were evaluated. These anchors affect deterministic construction but are
+   * not user requirements and must never be persisted as roster constraints.
+   */
+  internalExplorationAnchorUnitIds?: string[];
+  /**
+   * Internal comparison seed. It permits deterministic Warlord exploration
+   * without stamping the choice as a user-authored Warlord constraint.
+   */
+  internalExplorationWarlordUnitId?: string;
+  /**
+   * Opaque operation-local cache identity. Internal coordinators may share one
+   * object across related builds; WeakMap lifetime prevents reuse by a later
+   * data-bundle lease or unrelated request.
+   */
+  internalBuildCacheToken?: object;
+  /**
+   * Internal export/repair mode. Canonical construction must leave this false
+   * so New Recruit mapping gaps cannot hide otherwise legal datasheets.
+   */
+  internalRequireNewRecruitExportability?: boolean;
 };
 
 export const ModifyRosterOperationSchema = z.discriminatedUnion("type", [

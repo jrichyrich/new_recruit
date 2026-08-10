@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildRoster,
+  internalFactionUnitInventory,
   repairRosterDeterministically,
   rosterExecutionFingerprint,
   rosterSimulationFingerprint,
@@ -124,6 +125,100 @@ function selectedUnitSummaries(
     return summary;
   });
 }
+
+test("internal faction inventories remain complete beyond public search caps", () => {
+  const factionResult = searchFactions("", 100);
+  assert.ok(
+    factionResult.data,
+    `Faction discovery failed: ${issues(factionResult.violations)}`,
+  );
+  const supportedFactions = factionResult.data.filter(
+    (faction) => faction.supported,
+  );
+  const inventories = new Map<
+    string,
+    NonNullable<ReturnType<typeof internalFactionUnitInventory>["data"]>
+  >();
+  for (const faction of supportedFactions) {
+    const inventory = internalFactionUnitInventory({
+      faction: faction.id,
+    });
+    assert.ok(
+      inventory.ok && inventory.data,
+      `${faction.id}: internal inventory failed: ${issues(inventory.violations)}`,
+    );
+    assert.ok(
+      inventory.data.length > 0,
+      `${faction.id}: supported faction has no terminal unit summaries`,
+    );
+    assert.equal(
+      new Set(inventory.data.map((unit) => unit.id)).size,
+      inventory.data.length,
+      `${faction.id}: internal inventory contains duplicate terminal unit IDs`,
+    );
+    inventories.set(faction.id, inventory.data);
+  }
+
+  const hasKeyword = (
+    unit: { keywords: string[] },
+    keyword: string,
+  ) =>
+    unit.keywords.some(
+      (candidate) =>
+        candidate.trim().toLocaleLowerCase() === keyword,
+    );
+  const hasNonCharacterKeyword = (
+    factionId: string,
+    keyword: "infantry" | "mounted" | "vehicle",
+  ) =>
+    inventories.get(factionId)?.some(
+      (unit) =>
+        hasKeyword(unit, keyword) &&
+        !hasKeyword(unit, "character"),
+    ) === true;
+
+  const astartes = inventories.get("adeptus-astartes");
+  assert.ok(astartes && astartes.length > 100);
+  for (const keyword of ["infantry", "mounted", "vehicle"] as const) {
+    assert.ok(
+      hasNonCharacterKeyword("adeptus-astartes", keyword),
+      `Adeptus Astartes inventory lost a non-character ${keyword} option`,
+    );
+  }
+  for (const keyword of ["mounted", "vehicle"] as const) {
+    assert.ok(
+      inventories.get("aeldari")?.some((unit) =>
+        hasKeyword(unit, keyword)
+      ),
+      `Aeldari inventory lost a ${keyword} option`,
+    );
+  }
+
+  const lateVehicleRows = {
+    "astra-militarum": "hippogriff-afv",
+    orks: "wazdakka-gutsmek",
+    "chaos-space-marines": "khorne-lord-of-skulls",
+    necrons: "amonhotekhs-guard-canoptek-doomstalker",
+  } as const;
+  for (const [factionId, unitId] of Object.entries(lateVehicleRows)) {
+    const vehicle = inventories.get(factionId)?.find(
+      (unit) => unit.id === unitId,
+    );
+    assert.ok(vehicle, `${factionId}: late vehicle row ${unitId} is missing`);
+    assert.ok(
+      hasKeyword(vehicle, "vehicle"),
+      `${factionId}: ${unitId} lost its Vehicle keyword`,
+    );
+  }
+
+  const publicAstartes = searchUnits({
+    faction: "adeptus-astartes",
+    limit: 10_000,
+  });
+  assert.ok(publicAstartes.ok && publicAstartes.data);
+  assert.ok(publicAstartes.data.length <= 100);
+  assert.ok(publicAstartes.data.length < astartes.length);
+});
 
 test(
   "fixed-seed all-faction builds revalidate, round-trip, reject mutations, and preserve canonical identity",

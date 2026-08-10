@@ -71,6 +71,7 @@ const crossFactionFixture = buildRoster({
   faction: "necrons",
   pointsLimit: 1000,
   allowNamedCharacters: false,
+  internalRequireNewRecruitExportability: true,
 });
 if (!crossFactionFixture.ok || !crossFactionFixture.data) {
   throw new Error("Cross-faction New Recruit acceptance roster failed.");

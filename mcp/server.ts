@@ -81,7 +81,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Run a RosterPilot workflow",
       description:
-        "Research, build, modify, export, sync, compare exact rosters, or run Tessera stress tests locally or on the website. Pass references instead of full roster documents.",
+        "Research, build, modify, export, sync, compare exact rosters, or run Tessera stress tests locally or on the website. Build options include playerFaction, opponentFaction, detachmentId, forceDispositionId, compareOpponentOptions, and comparisonDepth (standard or expanded). Pass references instead of full roster documents.",
       inputSchema: {
         action: z.enum([
           "research",

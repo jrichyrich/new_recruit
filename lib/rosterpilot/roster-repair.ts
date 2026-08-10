@@ -171,6 +171,7 @@ export async function repairRosterDeterministically(
     for (const preferences of variants) {
       candidateInputs.push({
         ...buildInput,
+        internalRequireNewRecruitExportability: true,
         playerFaction: factionId,
         faction: factionId,
         pointsLimit: initial.data.pointsLimit,

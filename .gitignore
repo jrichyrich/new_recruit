@@ -60,6 +60,7 @@ next-env.d.ts
 .rosterpilot-data-update-transaction/
 /.rosterpilot-data-bundle-release.lock
 /.rosterpilot-data-bundle-release-transaction.json
+/.rosterpilot-support/
 /data/.bootstrap-data-bundle.next-*
 /data/bootstrap-data-bundle.previous-release-*
 /public/.data-bundles.next-*

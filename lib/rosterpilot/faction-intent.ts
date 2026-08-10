@@ -22,6 +22,7 @@ type FactionIntentResolutionBase = {
     | null
     | "FACTION_REQUIRED"
     | "FACTION_UNSUPPORTED"
+    | "OPPONENT_FACTION_UNSUPPORTED"
     | "AMBIGUOUS_PLAYER_FACTION"
     | "FACTION_CONFLICT";
   message: string;
@@ -292,6 +293,9 @@ function mentionRole(
   const suffix = prompt
     .slice(end, Math.min(prompt.length, end + 32))
     .trimStart();
+  if (/\b(?:name|call)(?:\s+it)?\b[^.;,:!?]{0,64}$/.test(prefix)) {
+    return "unclassified";
+  }
   if (
     /\b(?:against|versus|vs|facing|face|fight|fighting|battle|beat|counter(?:ing)?(?:\s+(?:to|against))?|into)(?:\s+(?:a|an|the|unknown|known))*$/.test(
       prefix,
@@ -437,6 +441,15 @@ export function resolveFactionIntent(
   const opponentMatch = input.opponentFaction
     ? resolveExactFactionReference(input.opponentFaction)
     : null;
+  if (input.opponentFaction && !opponentMatch) {
+    return {
+      status: "unsupported",
+      code: "OPPONENT_FACTION_UNSUPPORTED",
+      message: `No supported opponent faction exactly matches "${input.opponentFaction}". Choose a canonical faction or supply an exact opponent roster.`,
+      suggestions: suggestFactions(input.opponentFaction),
+      opponentFactionIds: [],
+    };
+  }
   const mentions = input.prompt ? findFactionMentions(input.prompt) : [];
   const opponentFactionIds = [
     ...new Set([
@@ -446,13 +459,14 @@ export function resolveFactionIntent(
         .map((mention) => mention.factionId),
     ]),
   ].sort();
+  const structured = structuredMatches[0];
   let playerMentions = mentions.filter(
     (mention) => mention.role === "player",
   );
   const unclassified = mentions.filter(
     (mention) => mention.role === "unclassified",
   );
-  if (playerMentions.length === 0) {
+  if (playerMentions.length === 0 && !structured) {
     const available = unclassified.filter(
       (mention) => !opponentFactionIds.includes(mention.factionId),
     );
@@ -460,7 +474,6 @@ export function resolveFactionIntent(
     else if (available.length > 1) playerMentions = available;
   }
   const playerIds = [...new Set(playerMentions.map((mention) => mention.factionId))];
-  const structured = structuredMatches[0];
   if (
     structured &&
     playerIds.some((factionId) => factionId !== structured.factionId)

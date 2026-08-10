@@ -9,11 +9,14 @@ import {
   type ExactStressRunner,
   type StressRunner,
 } from "../lib/rosterpilot/service";
+import { rosterStructuralFingerprint } from "../lib/rosterpilot/stress-portfolio";
+import type { RosterDraftV1 } from "../lib/rosterpilot/types";
 
 async function fixture(options: {
   runStress?: StressRunner;
   runExactStress?: ExactStressRunner;
   deliver?: ConstructorParameters<typeof RosterPilotService>[0]["deliverToNewRecruit"];
+  lease?: ConstructorParameters<typeof RosterPilotService>[0]["lease"];
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-service-"));
   const service = new RosterPilotService({
@@ -22,7 +25,7 @@ async function fixture(options: {
       let id = 0;
       return () => `operation-${++id}`;
     })(),
-    lease: async (operation) => operation(),
+    lease: options.lease ?? (async (operation) => operation()),
     runStress: options.runStress,
     runExactStress: options.runExactStress,
     deliverToNewRecruit: options.deliver,
@@ -42,6 +45,16 @@ async function build(service: RosterPilotService, faction = "adeptus-custodes") 
   return result;
 }
 
+async function rosterDetails(
+  service: RosterPilotService,
+  rosterRef: string,
+): Promise<RosterDraftV1> {
+  return await service.inspect({
+    ref: rosterRef,
+    view: "details",
+  }) as RosterDraftV1;
+}
+
 test("builds a compact operation and stores a V4 roster", async () => {
   const { service, root } = await fixture();
   try {
@@ -53,6 +66,684 @@ test("builds a compact operation and stores a V4 roster", async () => {
     )) as { schemaVersion: number; roster: { schemaVersion: number } };
     assert.equal(stored.schemaVersion, 4);
     assert.equal(stored.roster.schemaVersion, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("stores semantic roster variants under distinct collision-safe refs", async () => {
+  const { service, root } = await fixture();
+  try {
+    const built = await service.run({
+      action: "build",
+      request: "Build a 500 point Adeptus Custodes roster.",
+      options: {
+        faction: "adeptus-custodes",
+        pointsLimit: 500,
+        name: "Semantic identity roster",
+        requiredUnitIds: ["custodian-wardens"],
+      },
+    });
+    assert.equal(built.state, "completed", JSON.stringify(built.violations));
+    assert.ok(built.roster?.rosterRef);
+    const original = await rosterDetails(service, built.roster.rosterRef);
+    const wardens = original.units.find(
+      (unit) => unit.unitId === "custodian-wardens",
+    );
+    assert.ok(wardens);
+    const replacementItemId = wardens.equipment.some(
+        (entry) => entry.itemId === "guardian-spear",
+      )
+      ? "castellan-axe"
+      : "guardian-spear";
+    const modified = await service.run({
+      action: "modify",
+      rosterRef: built.roster.rosterRef,
+      options: {
+        operation: {
+          type: "set-equipment",
+          selectionId: wardens.selectionId,
+          equipment: [{
+            itemId: replacementItemId,
+            count: wardens.modelCount,
+          }],
+        },
+      },
+    });
+    assert.equal(
+      modified.state,
+      "completed",
+      JSON.stringify(modified.violations),
+    );
+    assert.ok(modified.roster?.rosterRef);
+    assert.match(original.id, /^rp-[a-f0-9]{64}$/);
+    assert.notEqual(modified.roster.rosterRef, built.roster.rosterRef);
+
+    const retainedOriginal = await rosterDetails(
+      service,
+      built.roster.rosterRef,
+    );
+    const storedModified = await rosterDetails(
+      service,
+      modified.roster.rosterRef,
+    );
+    assert.deepEqual(retainedOriginal, original);
+    assert.ok(
+      storedModified.units
+        .find((unit) => unit.selectionId === wardens.selectionId)
+        ?.equipment.some((entry) => entry.itemId === replacementItemId),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("fails closed instead of overwriting a conflicting roster reference", async () => {
+  const { service, root } = await fixture();
+  try {
+    const request = {
+      action: "build" as const,
+      request: "Build a 500 point Adeptus Custodes roster.",
+      options: {
+        faction: "adeptus-custodes",
+        pointsLimit: 500,
+        name: "Storage collision roster",
+      },
+    };
+    const built = await service.run(request);
+    assert.equal(built.state, "completed", JSON.stringify(built.violations));
+    assert.ok(built.roster?.rosterId);
+    const filename = path.join(
+      root,
+      "rosters",
+      "v4",
+      `${built.roster.rosterId}.json`,
+    );
+    const conflicting = JSON.parse(await readFile(filename, "utf8")) as {
+      roster: RosterDraftV1;
+    };
+    conflicting.roster.detachmentName = "Conflicting stored semantics";
+    await writeFile(filename, `${JSON.stringify(conflicting, null, 2)}\n`);
+
+    const repeated = await service.run(request);
+    assert.equal(repeated.state, "failed");
+    assert.equal(repeated.violations[0]?.code, "OPERATION_FAILED");
+    assert.match(
+      repeated.violations[0]?.message ?? "",
+      /ROSTER_REFERENCE_COLLISION/,
+    );
+    const retained = JSON.parse(await readFile(filename, "utf8")) as {
+      roster: RosterDraftV1;
+    };
+    assert.equal(
+      retained.roster.detachmentName,
+      "Conflicting stored semantics",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("continues to read legacy roster IDs", async () => {
+  const { service, root } = await fixture();
+  try {
+    const built = await build(service);
+    const roster = await rosterDetails(service, built.roster!.rosterRef);
+    const legacyId = "rp-legacy-readable";
+    const legacy = { ...roster, id: legacyId };
+    await writeFile(
+      path.join(root, "rosters", "v4", `${legacyId}.json`),
+      `${JSON.stringify({
+        schemaVersion: 4,
+        storedAt: "2026-01-01T00:00:00.000Z",
+        importedFromSchemaVersion: 3,
+        roster: legacy,
+      }, null, 2)}\n`,
+    );
+
+    const inspected = await rosterDetails(
+      service,
+      `rosterpilot://rosters/${legacyId}`,
+    );
+    assert.equal(inspected.id, legacyId);
+    assert.deepEqual(inspected.units, roster.units);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("forwards structured build options and known-faction opponent scope", async () => {
+  const { service, root } = await fixture();
+  try {
+    const result = await service.run({
+      action: "build",
+      request: "Build a matched-play counter roster.",
+      options: {
+        playerFaction: "adeptus-custodes",
+        pointsLimit: 1000,
+        name: "Structured Custodes Counter",
+        preferences: ["mobility"],
+        allowNamedCharacters: false,
+        legendsPolicy: "exclude",
+        playContext: { kind: "matched-play" },
+        collectionProfile: { mode: "open-catalog" },
+        requiredUnitIds: ["venatari-custodians"],
+        excludedUnitIds: ["vertus-praetors"],
+        requiredWarlordUnitId: "shield-captain",
+        detachmentId: "shield-host",
+        forceDispositionId: "purge-the-foe",
+        opponentFaction: "world-eaters",
+        opponentAssumptions: {
+          styleTags: ["aggressive", "melee"],
+          source: "user-stated",
+        },
+        mixedThreatIntent: true,
+      },
+    });
+    assert.equal(result.state, "completed", JSON.stringify(result.violations));
+    assert.ok(result.roster?.rosterRef);
+
+    const roster = await rosterDetails(service, result.roster.rosterRef);
+    assert.equal(roster.factionId, "adeptus-custodes");
+    assert.equal(roster.name, "Structured Custodes Counter");
+    assert.equal(roster.pointsLimit, 1000);
+    assert.equal(roster.detachmentId, "shield-host");
+    assert.equal(roster.forceDispositionId, "purge-the-foe");
+    assert.deepEqual(roster.preferences, ["mobility", "shooting", "melee"]);
+    assert.equal(roster.constraints.allowNamedCharacters, false);
+    assert.equal(roster.constraints.allowLegends, false);
+    assert.equal(
+      roster.constraints.legendsPolicyDecision?.requestedPolicy,
+      "exclude",
+    );
+    assert.equal(
+      roster.constraints.legendsPolicyDecision?.playContextKind,
+      "matched-play",
+    );
+    assert.deepEqual(roster.constraints.collectionProfile, {
+      mode: "open-catalog",
+    });
+    assert.deepEqual(roster.constraints.requiredUnitIds, [
+      "shield-captain",
+      "venatari-custodians",
+    ]);
+    assert.deepEqual(roster.constraints.excludedUnitIds, [
+      "vertus-praetors",
+    ]);
+    assert.equal(
+      roster.constraints.requiredWarlordUnitId,
+      "shield-captain",
+    );
+    assert.equal(roster.constraints.opponentFactionId, "world-eaters");
+    assert.equal(
+      roster.constraints.opponentThreatProfile?.factionId,
+      "world-eaters",
+    );
+    assert.match(
+      roster.constraints.opponentPortfolioHash ?? "",
+      /^[0-9a-f]{64}$/,
+    );
+    assert.equal(
+      roster.constraints.opponentRosterFingerprints?.length,
+      9,
+    );
+    assert.notEqual(
+      roster.constraints.opponentThreatProfile?.bodyCount,
+      null,
+    );
+    assert.ok(roster.units.some((unit) =>
+      unit.unitId === "venatari-custodians"
+    ));
+    assert.ok(!roster.units.some((unit) =>
+      unit.unitId === "vertus-praetors"
+    ));
+    assert.ok(roster.units.some((unit) =>
+      unit.unitId === "shield-captain" && unit.isWarlord
+    ));
+    assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 4_096);
+    const comparison = result.result?.opponentComparison as {
+      status: "complete" | "bounded" | "degraded";
+      scope: "exact-roster" | "faction-portfolio";
+      portfolio: {
+        ready: number;
+        intended: number;
+        complete: boolean;
+        hash: string | null;
+      };
+      coverage: {
+        datasheets: {
+          rows: number;
+          eligible: number;
+          evaluated: number;
+          omitted: number;
+          truncated: boolean;
+        };
+        allied: {
+          rules: number;
+          offered: number;
+          selectable: number;
+          status: "inventory-only";
+        };
+        detachments: {
+          mode: "pinned" | "enumerated";
+          eligible: number;
+          evaluated: number;
+          successful: number;
+        };
+        configurations: "bounded";
+      };
+      recommended: {
+        applied: boolean;
+        rosterRef: string;
+        anchors: string[];
+        floor: number;
+        median: number;
+      };
+      alternatives: Array<{ rosterRef: string; floor: number }>;
+      artifact: string;
+    };
+    assert.equal(comparison.status, "bounded");
+    assert.equal(comparison.scope, "faction-portfolio");
+    assert.deepEqual(
+      {
+        ready: comparison.portfolio.ready,
+        intended: comparison.portfolio.intended,
+        complete: comparison.portfolio.complete,
+      },
+      { ready: 9, intended: 9, complete: true },
+    );
+    assert.match(comparison.portfolio.hash ?? "", /^[0-9a-f]{64}$/);
+    assert.equal(comparison.coverage.datasheets.rows, 35);
+    assert.equal(comparison.coverage.datasheets.omitted, 0);
+    assert.equal(comparison.coverage.datasheets.truncated, false);
+    assert.deepEqual(comparison.coverage.allied, {
+      rules: 2,
+      offered: 51,
+      selectable: 0,
+      status: "inventory-only",
+    });
+    assert.ok(comparison.coverage.datasheets.evaluated > 0);
+    assert.equal(
+      comparison.coverage.datasheets.evaluated,
+      comparison.coverage.datasheets.eligible,
+    );
+    assert.equal(comparison.coverage.detachments.mode, "pinned");
+    assert.equal(
+      comparison.coverage.detachments.evaluated,
+      comparison.coverage.detachments.eligible,
+    );
+    assert.equal(comparison.coverage.configurations, "bounded");
+    assert.equal(comparison.recommended.applied, true);
+    assert.equal(comparison.recommended.rosterRef, result.roster.rosterRef);
+    assert.equal(comparison.alternatives.length, 3);
+    for (const alternative of comparison.alternatives) {
+      assert.match(
+        alternative.rosterRef,
+        /^rosterpilot:\/\/rosters\/rp-[a-f0-9]{64}$/,
+      );
+    }
+    for (const anchorName of comparison.recommended.anchors) {
+      const selected = roster.units.find((unit) => unit.name === anchorName);
+      assert.ok(selected, `${anchorName} must be present in the recommendation`);
+      if (
+        selected.unitId !== "venatari-custodians" &&
+        selected.unitId !== "shield-captain"
+      ) {
+        assert.ok(
+          !roster.constraints.requiredUnitIds?.includes(selected.unitId),
+          "an internal exploration anchor must not become a user requirement",
+        );
+      }
+    }
+
+    const resource = await service.readResource(comparison.artifact);
+    assert.ok("text" in resource);
+    const audit = JSON.parse(resource.text) as {
+      comparisonFingerprint: string;
+      source: {
+        bundleId: string;
+        opponentFactionRulesHash: string | null;
+        opponentPortfolioHash: string | null;
+      };
+      coverage: {
+        catalogueRows: number;
+        attempted: number;
+        uniqueCandidates: number;
+        maximumBuilds: number;
+        notExpanded: number;
+      };
+      opponents: Array<{
+        rosterId: string;
+        rosterRef: string;
+        structuralFingerprint: string;
+        simulationFingerprint: string;
+      }>;
+      candidates: Array<{
+        rosterRef: string;
+        units: Array<{ unitId: string }>;
+        matchupScores: Array<{
+          templateId: string;
+          score: number;
+        }>;
+      }>;
+      ledger: Array<{
+        unitId: string;
+        status: string;
+        reasonCode: string | null;
+        simulationFingerprint: string | null;
+      }>;
+      serviceContract: {
+        status: string;
+        selectedRosterRef: string;
+      };
+    };
+    assert.match(audit.comparisonFingerprint, /^[0-9a-f]{64}$/);
+    assert.equal(audit.source.bundleId, roster.sourceData.bundleId);
+    assert.match(audit.source.opponentFactionRulesHash ?? "", /^[0-9a-f]{64}$/);
+    assert.equal(
+      audit.source.opponentPortfolioHash,
+      comparison.portfolio.hash,
+    );
+    assert.equal(audit.opponents.length, 9);
+    assert.ok(audit.opponents.every((entry) =>
+      /^rosterpilot:\/\/rosters\/rp-[a-f0-9]{64}$/.test(entry.rosterRef) &&
+      /^[a-f0-9]{64}$/.test(entry.structuralFingerprint) &&
+      /^[a-f0-9]{64}$/.test(entry.simulationFingerprint)
+    ));
+    const replayedOpponent = await rosterDetails(
+      service,
+      audit.opponents[0]!.rosterRef,
+    );
+    assert.equal(replayedOpponent.id, audit.opponents[0]!.rosterId);
+    assert.equal(
+      rosterStructuralFingerprint(replayedOpponent),
+      audit.opponents[0]!.structuralFingerprint,
+    );
+    assert.equal(audit.coverage.maximumBuilds, 48);
+    assert.equal(
+      audit.coverage.attempted,
+      comparison.coverage.datasheets.evaluated,
+    );
+    assert.equal(
+      audit.coverage.notExpanded,
+      comparison.coverage.datasheets.omitted,
+    );
+    assert.equal(audit.candidates.length, audit.coverage.uniqueCandidates);
+    assert.ok(audit.candidates.every((candidate) => candidate.rosterRef));
+    assert.equal(audit.serviceContract.status, comparison.status);
+    assert.equal(audit.serviceContract.selectedRosterRef, result.roster.rosterRef);
+    assert.ok(audit.candidates.every(
+      (candidate) => candidate.matchupScores.length === 9
+    ));
+    assert.ok(audit.candidates.some(
+      (candidate) =>
+        new Set(candidate.matchupScores.map((matchup) => matchup.score))
+          .size > 1
+    ), "opponent archetypes must produce materially different option evidence");
+    const expectedOptions = [
+      "venatari-custodians",
+      "vertus-praetors",
+      "contemptor-achillus-dreadnought",
+      "contemptor-galatus-dreadnought",
+      "venerable-contemptor-dreadnought",
+      "telemon-heavy-dreadnought",
+      "caladius-grav-tank",
+      "pallas-grav-attack",
+    ];
+    for (const unitId of expectedOptions) {
+      const entry = audit.ledger.find((item) => item.unitId === unitId);
+      assert.ok(entry, `${unitId} must have a comparison-ledger row`);
+      assert.notEqual(entry.status, "budget-not-expanded");
+      assert.ok(
+        entry.simulationFingerprint || entry.reasonCode,
+        `${unitId} must have candidate evidence or an explicit reason`,
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("builds against an exact rebased opponent reference", async () => {
+  const { service, root } = await fixture();
+  try {
+    const opponentResult = await build(service, "world-eaters");
+    const opponent = await rosterDetails(
+      service,
+      opponentResult.roster!.rosterRef,
+    );
+    const result = await service.run({
+      action: "build",
+      request: "Build an Adeptus Custodes counter roster.",
+      opponentRef: opponentResult.roster!.rosterRef,
+      options: {
+        faction: "adeptus-custodes",
+        pointsLimit: 500,
+        comparisonBuildLimit: 1,
+      },
+    });
+    assert.equal(result.state, "completed", JSON.stringify(result.violations));
+    assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 4_096);
+    assert.equal(result.opponent?.rosterId, opponent.id);
+    assert.ok(result.roster?.rosterRef);
+    const comparison = result.result?.opponentComparison as {
+      status: "complete" | "bounded" | "degraded";
+      scope: "exact-roster" | "faction-portfolio";
+      portfolio: {
+        ready: number;
+        intended: number;
+        complete: boolean;
+        hash: string | null;
+      };
+      coverage: {
+        datasheets: {
+          evaluated: number;
+          omitted: number;
+          truncated: boolean;
+        };
+        allied: {
+          rules: number;
+          offered: number;
+          selectable: number;
+          status: "inventory-only";
+        };
+        configurations: "bounded";
+      };
+      recommended: {
+        applied: boolean;
+        rosterRef: string;
+      };
+      alternatives: Array<{ rosterRef: string }>;
+      artifact: string;
+    };
+    assert.equal(comparison.status, "bounded");
+    assert.equal(comparison.scope, "exact-roster");
+    assert.deepEqual(comparison.portfolio, {
+      ready: 1,
+      intended: 1,
+      complete: true,
+      hash: null,
+    });
+    assert.equal(comparison.coverage.datasheets.evaluated, 1);
+    assert.ok(comparison.coverage.datasheets.omitted > 0);
+    assert.equal(comparison.coverage.datasheets.truncated, false);
+    assert.deepEqual(comparison.coverage.allied, {
+      rules: 2,
+      offered: 51,
+      selectable: 0,
+      status: "inventory-only",
+    });
+    assert.equal(comparison.coverage.configurations, "bounded");
+    assert.equal(comparison.recommended.applied, true);
+    assert.equal(comparison.recommended.rosterRef, result.roster.rosterRef);
+    assert.ok(comparison.alternatives.length <= 3);
+    assert.doesNotMatch(result.message, /whole catalogue/i);
+    const resource = await service.readResource(comparison.artifact);
+    assert.ok("text" in resource);
+    const audit = JSON.parse(resource.text) as {
+      coverage: {
+        attempted: number;
+        notExpanded: number;
+        maximumBuilds: number;
+      };
+      candidates: Array<{ rosterRef: string | null }>;
+      opponents: Array<{
+        rosterId: string;
+        rosterRef: string;
+        structuralFingerprint: string;
+      }>;
+      serviceContract: {
+        status: string;
+        portfolio: { ready: number; intended: number; complete: boolean };
+      };
+    };
+    assert.equal(audit.coverage.maximumBuilds, 1);
+    assert.equal(audit.coverage.attempted, 1);
+    assert.equal(
+      audit.coverage.notExpanded,
+      comparison.coverage.datasheets.omitted,
+    );
+    assert.ok(audit.candidates.every((candidate) => candidate.rosterRef));
+    assert.equal(audit.opponents.length, 1);
+    assert.equal(audit.opponents[0]?.rosterRef, opponentResult.roster!.rosterRef);
+    assert.equal(audit.opponents[0]?.rosterId, opponent.id);
+    assert.equal(
+      audit.opponents[0]?.structuralFingerprint,
+      rosterStructuralFingerprint(opponent),
+    );
+    assert.equal(audit.serviceContract.status, "bounded");
+    assert.deepEqual(audit.serviceContract.portfolio, {
+      ready: 1,
+      intended: 1,
+      complete: true,
+      hash: null,
+    });
+    const operation = await service.inspect({
+      ref: result.operationId,
+      view: "details",
+    }) as { opponentRef: string | null };
+    assert.equal(operation.opponentRef, opponentResult.roster!.rosterRef);
+
+    const roster = await rosterDetails(service, result.roster.rosterRef);
+    assert.equal(roster.constraints.opponentFactionId, "world-eaters");
+    assert.ok(roster.constraints.opponentRosterFingerprint);
+    assert.equal(
+      roster.constraints.opponentThreatProfile?.bodyCount,
+      opponent.units.reduce((sum, unit) => sum + unit.modelCount, 0),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("fails closed for conflicting or unknown structured opponent scope", async () => {
+  const { service, root } = await fixture();
+  try {
+    const opponent = await build(service, "world-eaters");
+    const conflict = await service.run({
+      action: "build",
+      request: "Build an Adeptus Custodes counter roster.",
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        faction: "adeptus-custodes",
+        pointsLimit: 500,
+        opponentFaction: "world-eaters",
+      },
+    });
+    assert.equal(conflict.state, "failed");
+    assert.equal(conflict.violations[0]?.code, "OPPONENT_SCOPE_CONFLICT");
+
+    const unknown = await service.run({
+      action: "build",
+      request: "Build an Adeptus Custodes counter roster.",
+      options: {
+        faction: "adeptus-custodes",
+        pointsLimit: 500,
+        opponentFaction: "not-a-supported-faction",
+      },
+    });
+    assert.equal(unknown.state, "failed");
+    assert.equal(
+      unknown.violations[0]?.code,
+      "OPPONENT_FACTION_UNSUPPORTED",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects invalid build options before construction", async () => {
+  const { service, root } = await fixture();
+  try {
+    const unknownOption = await service.run({
+      action: "build",
+      request: "Build a roster.",
+      options: {
+        faction: "adeptus-custodes",
+        unsupportedComparisonMode: true,
+      },
+    });
+    assert.equal(unknownOption.state, "failed");
+    assert.equal(unknownOption.violations[0]?.code, "BUILD_OPTIONS_INVALID");
+
+    const excessiveLimit = await service.run({
+      action: "build",
+      request: "Build a roster.",
+      options: {
+        faction: "adeptus-custodes",
+        comparisonBuildLimit: 501,
+      },
+    });
+    assert.equal(excessiveLimit.state, "failed");
+    assert.equal(excessiveLimit.violations[0]?.code, "BUILD_OPTIONS_INVALID");
+    assert.ok(Buffer.byteLength(JSON.stringify(excessiveLimit)) <= 4_096);
+
+    const excessiveName = await service.run({
+      action: "build",
+      request: "Build a roster.",
+      options: {
+        faction: "adeptus-custodes",
+        name: "x".repeat(5_000),
+      },
+    });
+    assert.equal(excessiveName.state, "failed");
+    assert.equal(excessiveName.violations[0]?.code, "BUILD_OPTIONS_INVALID");
+    assert.ok(Buffer.byteLength(JSON.stringify(excessiveName)) <= 4_096);
+
+    const hugeUnknownKey = await service.run({
+      action: "build",
+      request: "Build a roster.",
+      options: {
+        faction: "adeptus-custodes",
+        ["x".repeat(5_000)]: true,
+      },
+    });
+    assert.equal(hugeUnknownKey.state, "failed");
+    assert.equal(
+      hugeUnknownKey.violations[0]?.code,
+      "BUILD_OPTIONS_INVALID",
+    );
+    assert.ok(Buffer.byteLength(JSON.stringify(hugeUnknownKey)) <= 4_096);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("keeps faction-scoped research scoped to that faction", async () => {
+  const { service, root } = await fixture();
+  try {
+    const result = await service.run({
+      action: "research",
+      options: { faction: "adeptus-custodes", limit: 100 },
+    });
+    assert.equal(result.state, "completed");
+    assert.equal(result.result?.factionMatchCount, 1);
+    assert.deepEqual(result.result?.factions, [{
+      id: "adeptus-custodes",
+      name: "Adeptus Custodes",
+      supported: true,
+    }]);
+    assert.ok(Number(result.result?.unitMatchCount) > 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -309,11 +1000,21 @@ test("routes exact stress locally and confirms exact website stress through act"
 
 test("blocks stale actions and performs confirmed New Recruit upload once", async () => {
   let deliveries = 0;
+  let leaseDepth = 0;
   const deliveryOptions: Array<Parameters<NonNullable<
     ConstructorParameters<typeof RosterPilotService>[0]["deliverToNewRecruit"]
   >>[1]> = [];
   const { service, root } = await fixture({
+    lease: async (operation) => {
+      leaseDepth += 1;
+      try {
+        return await operation();
+      } finally {
+        leaseDepth -= 1;
+      }
+    },
     deliver: async (roster, options) => {
+      assert.equal(leaseDepth, 1);
       deliveries += 1;
       deliveryOptions.push(options);
       return {
@@ -339,6 +1040,89 @@ test("blocks stale actions and performs confirmed New Recruit upload once", asyn
     },
   });
   try {
+    const unexportable = await service.run({
+      action: "build",
+      request: "Build a 1000 point Necrons roster",
+      options: {
+        faction: "necrons",
+        pointsLimit: 1000,
+        allowNamedCharacters: false,
+      },
+    });
+    assert.equal(
+      unexportable.state,
+      "completed",
+      JSON.stringify(unexportable.violations),
+    );
+    assert.equal(
+      unexportable.nextActions.some(
+        (action) => action.actionId === "new-recruit.upload",
+      ),
+      false,
+    );
+    const blocked = await service.act({
+      operationId: unexportable.operationId,
+      expectedRevision: unexportable.revision,
+      actionId: "new-recruit.upload",
+      confirm: true,
+    });
+    assert.equal(blocked.state, "failed");
+    assert.equal(blocked.violations[0]?.code, "ACTION_NOT_AVAILABLE");
+    assert.equal(deliveries, 0);
+
+    const unexportableRoster = await rosterDetails(
+      service,
+      unexportable.roster!.rosterRef,
+    );
+    const imported = await service.importRoster(unexportableRoster);
+    assert.equal(imported.state, "completed");
+    assert.equal(
+      imported.nextActions.some(
+        (action) => action.actionId === "new-recruit.upload",
+      ),
+      false,
+    );
+
+    const equipmentSelection = unexportableRoster.units.find(
+      (selection) => selection.equipment.length > 0,
+    );
+    assert.ok(equipmentSelection);
+    const modified = await service.run({
+      action: "modify",
+      rosterRef: unexportable.roster!.rosterRef,
+      options: {
+        operation: {
+          type: "set-equipment",
+          selectionId: equipmentSelection.selectionId,
+          equipment: equipmentSelection.equipment.map((entry) => ({
+            itemId: entry.itemId,
+            count: entry.count,
+          })),
+        },
+      },
+    });
+    assert.equal(modified.state, "completed", JSON.stringify(modified.violations));
+    assert.equal(
+      modified.nextActions.some(
+        (action) => action.actionId === "new-recruit.upload",
+      ),
+      false,
+    );
+
+    const textExport = await service.run({
+      action: "export",
+      rosterRef: unexportable.roster!.rosterRef,
+      format: "text",
+    });
+    assert.equal(textExport.state, "completed");
+    assert.equal(
+      textExport.nextActions.some(
+        (action) => action.actionId === "new-recruit.upload",
+      ),
+      false,
+    );
+    assert.equal(deliveries, 0);
+
     const built = await build(service);
     const stale = await service.act({
       operationId: built.operationId,

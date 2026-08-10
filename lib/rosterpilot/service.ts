@@ -3,9 +3,11 @@ import { constants as fsConstants } from "node:fs";
 import {
   access,
   copyFile,
+  link,
   mkdir,
   readFile,
   rename,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +19,8 @@ import {
   exportRoster,
   getDataStatus,
   modifyRosterBatch,
+  parseRosterPrompt,
+  rosterSemanticFingerprint,
   searchFactions,
   searchUnits,
   validateRoster,
@@ -28,12 +32,21 @@ import {
   withDataBundleSnapshotLease,
 } from "./data-operations";
 import { parseRosterDraft } from "./draft";
-import { ModifyRosterOperationSchema } from "./types";
+import {
+  compareOpponentRosterOptions,
+  type OpponentComparisonRoster,
+} from "./opponent-option-comparison";
+import { generateFactionStressPortfolio } from "./stress-portfolio";
+import {
+  BuildRunOptionsSchema,
+  ModifyRosterOperationSchema,
+} from "./types";
 import {
   analyzeExactRosterMatchup,
   type LocalMatchupReport,
 } from "./matchup";
 import type {
+  BuildRosterInput,
   ExportArtifact,
   ExportFormat,
   ModifyRosterOperation,
@@ -281,6 +294,24 @@ function compactIssues(values: RosterIssue[]): RosterIssue[] {
   }));
 }
 
+function compactText(value: string, maximumBytes = 640): string {
+  if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
+  const suffix = "...";
+  const contentBudget = Math.max(
+    0,
+    maximumBytes - Buffer.byteLength(suffix, "utf8"),
+  );
+  let compacted = "";
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > contentBudget) break;
+    compacted += character;
+    bytes += characterBytes;
+  }
+  return `${compacted}${suffix}`;
+}
+
 function safeFilename(value: string): string {
   const safe = value
     .normalize("NFKD")
@@ -481,6 +512,15 @@ export class RosterPilotService {
         `Action ${input.actionId} is not available.`,
       );
     }
+    if (!operation.nextActions.some(
+      (action) => action.actionId === "new-recruit.upload"
+    )) {
+      return this.#updateFailure(
+        operation,
+        "ACTION_NOT_AVAILABLE",
+        "New Recruit upload is not available for this operation or roster.",
+      );
+    }
     if (!input.confirm) {
       const next = this.#nextRevision(operation, {
         state: "action-required",
@@ -490,6 +530,12 @@ export class RosterPilotService {
       await this.#writeOperation(next);
       return this.#publicSummary(next);
     }
+    return this.#lease(() => this.#executeNewRecruitUpload(operation));
+  }
+
+  async #executeNewRecruitUpload(
+    operation: OperationDocument,
+  ): Promise<OperationSummary> {
     if (!operation.rosterRef) {
       return this.#updateFailure(
         operation,
@@ -522,6 +568,25 @@ export class RosterPilotService {
         message: "The roster is no longer valid and was not uploaded.",
         violations: compactIssues(validation.violations),
         warnings: compactIssues(validation.warnings),
+        newRecruitMutation: {
+          status: "failed-before-mutation",
+          startedAt: null,
+          completedAt: this.#timestamp(),
+          listUrl: null,
+        },
+      });
+      await this.#writeOperation(next);
+      return this.#publicSummary(next);
+    }
+    const preflight = await exportRoster(roster, "rosz");
+    if (!preflight.ok) {
+      const next = this.#nextRevision(operation, {
+        state: "failed",
+        message:
+          "The roster cannot be represented safely in the active New Recruit catalogue and was not uploaded.",
+        violations: compactIssues(preflight.violations),
+        warnings: compactIssues(preflight.warnings),
+        nextActions: [],
         newRecruitMutation: {
           status: "failed-before-mutation",
           startedAt: null,
@@ -617,6 +682,13 @@ export class RosterPilotService {
   async importRoster(value: unknown): Promise<OperationSummary> {
     await this.initialize();
     const operation = this.#newOperation("import", null);
+    return this.#lease(() => this.#executeImportRoster(operation, value));
+  }
+
+  async #executeImportRoster(
+    operation: OperationDocument,
+    value: unknown,
+  ): Promise<OperationSummary> {
     const parsed = parseRosterDraft(value);
     if (!parsed.success) {
       const failed = this.#nextRevision(operation, {
@@ -632,6 +704,9 @@ export class RosterPilotService {
     }
     const stored = await this.#storeRoster(parsed.data, sourceSchemaVersion(value));
     const validation = validateRoster(parsed.data);
+    const handoff = validation.ok
+      ? await this.#newRecruitHandoffAvailability(parsed.data)
+      : { nextActions: [], warnings: [] };
     const completed = this.#nextRevision(operation, {
       state: validation.ok ? "completed" : "failed",
       message: validation.ok
@@ -640,8 +715,11 @@ export class RosterPilotService {
       rosterRef: stored,
       roster: this.#summarizeRoster(parsed.data),
       violations: compactIssues(validation.violations),
-      warnings: compactIssues(validation.warnings),
-      nextActions: validation.ok ? [this.#uploadAction()] : [],
+      warnings: compactIssues([
+        ...validation.warnings,
+        ...handoff.warnings,
+      ]),
+      nextActions: handoff.nextActions,
     });
     await this.#writeOperation(completed);
     return this.#publicSummary(completed);
@@ -729,7 +807,9 @@ export class RosterPilotService {
     const factions = Array.isArray(options.factions)
       ? compareFactions(options.factions.filter((value): value is string =>
           typeof value === "string"))
-      : searchFactions(query, number(options.limit) ?? 20);
+      : faction
+        ? compareFactions([faction])
+        : searchFactions(query, number(options.limit) ?? 20);
     const units = faction
       ? searchUnits({
           faction,
@@ -789,52 +869,472 @@ export class RosterPilotService {
     operation: OperationDocument,
     input: RunRequest,
   ): Promise<OperationSummary> {
-    const options = record(input.options);
-    const result = buildRoster({
+    const parsedOptions = BuildRunOptionsSchema.safeParse(input.options ?? {});
+    if (!parsedOptions.success) {
+      const details = parsedOptions.error.issues
+        .slice(0, 4)
+        .map((problem) =>
+          `${problem.path.join(".") || "options"}: ${problem.message}`
+        )
+        .join(" ");
+      return this.#updateFailure(
+        operation,
+        "BUILD_OPTIONS_INVALID",
+        `Build options are invalid. ${details}`,
+      );
+    }
+    const options = parsedOptions.data;
+    if (
+      options.comparisonBuildLimit !== undefined &&
+      options.comparisonBuildLimit > 500
+    ) {
+      return this.#updateFailure(
+        operation,
+        "BUILD_OPTIONS_INVALID",
+        "Build options are invalid. comparisonBuildLimit: Expected a value no greater than 500.",
+      );
+    }
+    const comparisonBuildLimit = options.comparisonBuildLimit ??
+      (options.comparisonDepth === "expanded" ? 500 : 48);
+    const opponentFactionId = options.opponentFaction;
+    if (input.opponentRef && opponentFactionId) {
+      return this.#updateFailure(
+        operation,
+        "OPPONENT_SCOPE_CONFLICT",
+        "Choose either opponentRef for an exact roster or options.opponentFaction for a known faction, not both.",
+      );
+    }
+
+    let opponent: RosterDraftV1 | null = null;
+    if (input.opponentRef) {
+      const storedOpponent = await this.#readRoster(input.opponentRef);
+      const rebased = await rebaseRosterWithProvider(storedOpponent);
+      if (!rebased.ok || !rebased.data) {
+        const message = rebased.violations[0]?.message ??
+          "The exact opponent roster could not be rebased to the active data bundle.";
+        const failed = this.#nextRevision(operation, {
+          state: "failed",
+          message,
+          opponentRef: input.opponentRef,
+          opponent: this.#summarizeRoster(storedOpponent),
+          violations: [issue("OPPONENT_ROSTER_REBASE_FAILED", message)],
+          warnings: compactIssues(rebased.warnings),
+        });
+        await this.#writeOperation(failed);
+        return this.#publicSummary(failed);
+      }
+      if (rebased.data.status === "review-required") {
+        const failed = this.#nextRevision(operation, {
+          state: "failed",
+          message:
+            "The exact opponent roster requires data review before it can influence construction.",
+          opponentRef: input.opponentRef,
+          opponent: this.#summarizeRoster(storedOpponent),
+          result: { changedScopes: rebased.data.changedScopes },
+          violations: [issue(
+            "OPPONENT_DATA_REVIEW_REQUIRED",
+            "Review and rebase the exact opponent roster before constructing a counter-roster.",
+          )],
+          warnings: compactIssues(rebased.warnings),
+        });
+        await this.#writeOperation(failed);
+        return this.#publicSummary(failed);
+      }
+      opponent = rebased.data.roster;
+    }
+
+    let knownFactionPortfolio:
+      | NonNullable<ReturnType<typeof generateFactionStressPortfolio>["data"]>
+      | null = null;
+    let opponentPortfolioHash: string | null = null;
+    const opponentScope: "exact-roster" | "faction-portfolio" | null =
+      opponent
+        ? "exact-roster"
+        : opponentFactionId
+          ? "faction-portfolio"
+          : null;
+    let opponentPortfolioCoverage = opponent
+      ? { ready: 1, intended: 1, complete: true }
+      : { ready: 0, intended: 9, complete: false };
+    const comparisonWarnings: RosterIssue[] = [];
+    if (
+      !opponent &&
+      opponentFactionId &&
+      options.compareOpponentOptions !== false
+    ) {
+      const parsedRequest = parseRosterPrompt(input.request ?? "", {
+        playerFaction: options.playerFaction ?? options.faction,
+        opponentFaction: opponentFactionId,
+      });
+      const portfolio = generateFactionStressPortfolio({
+        faction: opponentFactionId,
+        pointsLimit:
+          options.pointsLimit ?? parsedRequest.pointsLimit ?? 1000,
+        suite: "diverse-9",
+        pointsTolerancePercent: 5,
+        allowLegends:
+          options.allowLegends ?? parsedRequest.allowLegends ?? false,
+        artifactMode: "canonical",
+      });
+      comparisonWarnings.push(...portfolio.warnings);
+      if (portfolio.ok && portfolio.data) {
+        knownFactionPortfolio = portfolio.data;
+        opponentPortfolioHash =
+          portfolio.data.contract?.portfolioHash ?? null;
+        opponentPortfolioCoverage = {
+          ready: portfolio.data.coverage.ready,
+          intended: portfolio.data.coverage.intended,
+          complete:
+            portfolio.data.coverage.maximumResultStatus === "complete" &&
+            portfolio.data.coverage.ready ===
+              portfolio.data.coverage.intended &&
+            portfolio.data.coverage.unavailable === 0 &&
+            opponentPortfolioHash !== null,
+        };
+      } else {
+        comparisonWarnings.push(...portfolio.violations.map(
+          (violation) => ({
+            ...violation,
+            severity: "warn" as const,
+          }),
+        ));
+      }
+      if (!opponentPortfolioCoverage.complete) {
+        comparisonWarnings.push(issue(
+          "OPPONENT_PORTFOLIO_DEGRADED",
+          knownFactionPortfolio
+            ? `The diverse-nine opponent portfolio is incomplete (${opponentPortfolioCoverage.ready}/${opponentPortfolioCoverage.intended} ready); comparison is advisory and the baseline roster will be retained.`
+            : "The diverse-nine opponent portfolio is unavailable; the baseline roster will be retained.",
+          "warn",
+        ));
+      }
+    }
+
+    const frozenRepresentatives =
+      knownFactionPortfolio && opponentPortfolioCoverage.complete
+        ? knownFactionPortfolio.items.flatMap((item) =>
+            item.status === "ready" && item.roster
+              ? [item.roster]
+              : []
+          )
+        : [];
+
+    const buildInput: BuildRosterInput = {
       prompt: input.request,
-      playerFaction: text(options.faction),
-      pointsLimit: number(options.pointsLimit),
-      name: text(options.name),
-      allowLegends: boolean(options.allowLegends),
-      allowNamedCharacters:
-        typeof options.allowNamedCharacters === "boolean"
-          ? options.allowNamedCharacters
+      playerFaction: options.playerFaction ?? options.faction,
+      faction: options.faction,
+      pointsLimit: options.pointsLimit,
+      name: options.name,
+      preferences: options.preferences,
+      allowNamedCharacters: options.allowNamedCharacters,
+      legendsPolicy: options.legendsPolicy,
+      allowLegends: options.allowLegends,
+      playContext: options.playContext,
+      collectionUnitIds: options.collectionUnitIds,
+      collectionProfile: options.collectionProfile,
+      requiredUnitIds: options.requiredUnitIds,
+      excludedUnitIds: options.excludedUnitIds,
+      requiredWarlordUnitId: options.requiredWarlordUnitId,
+      detachmentId: options.detachmentId,
+      forceDispositionId: options.forceDispositionId,
+      opponentContext: opponent
+        ? { kind: "known-roster", roster: opponent }
+        : opponentFactionId
+          ? {
+              kind: "known-faction",
+              factionId: opponentFactionId,
+              ...(frozenRepresentatives.length > 0 && opponentPortfolioHash
+                ? {
+                    representativeRosters: frozenRepresentatives,
+                    portfolioHash: opponentPortfolioHash,
+                  }
+                : {}),
+            }
           : undefined,
-      collectionUnitIds: Array.isArray(options.collectionUnitIds)
-        ? options.collectionUnitIds.filter((value): value is string =>
-            typeof value === "string")
-        : undefined,
-    });
+      opponentAssumptions: options.opponentAssumptions,
+      mixedThreatIntent: options.mixedThreatIntent,
+    };
+    const result = buildRoster(buildInput);
     if (!result.ok || !result.data) {
       const failed = this.#nextRevision(operation, {
         state: "failed",
         message: "Roster construction failed.",
+        opponentRef: input.opponentRef ?? null,
+        opponent: opponent ? this.#summarizeRoster(opponent) : null,
         violations: compactIssues(result.violations),
-        warnings: compactIssues(result.warnings),
+        warnings: compactIssues([
+          ...result.warnings,
+          ...comparisonWarnings,
+        ]),
       });
       await this.#writeOperation(failed);
       return this.#publicSummary(failed);
     }
-    const stored = await this.#storeRoster(result.data, null);
-    const explanation = explainRoster(result.data);
+    let selectedRoster = result.data;
+    let comparison:
+      | NonNullable<ReturnType<typeof compareOpponentRosterOptions>["data"]>
+      | null = null;
+    let frozenComparisonOpponents: OpponentComparisonRoster[] = [];
+    let recommendationApplied = false;
+    if (
+      options.compareOpponentOptions !== false &&
+      result.data.constraints.opponentFactionId
+    ) {
+      frozenComparisonOpponents = opponent
+        ? [{
+            templateId: "exact-opponent",
+            roster: opponent,
+          }]
+        : knownFactionPortfolio
+          ? knownFactionPortfolio.items.flatMap((item) =>
+              item.status === "ready" && item.roster
+                ? [{
+                    templateId: item.templateId,
+                    posture: item.posture,
+                    composition: item.composition,
+                    roster: item.roster,
+                  }]
+                : []
+            )
+          : [];
+      if (frozenComparisonOpponents.length > 0) {
+        const compared = compareOpponentRosterOptions({
+          buildInput,
+          baselineRoster: result.data,
+          opponents: frozenComparisonOpponents,
+          opponentPortfolioHash,
+          maximumBuilds: comparisonBuildLimit,
+          maximumAlternatives: 3,
+        });
+        comparisonWarnings.push(...compared.warnings);
+        if (compared.ok && compared.data) {
+          comparison = compared.data;
+          if (opponent || opponentPortfolioCoverage.complete) {
+            selectedRoster = compared.data.recommended.roster;
+            recommendationApplied = true;
+          }
+        } else {
+          comparisonWarnings.push(...compared.violations.map(
+            (violation) => ({
+              ...violation,
+              severity: "warn" as const,
+            }),
+          ));
+        }
+      }
+    }
+
+    const stored = await this.#storeRoster(selectedRoster, null);
+    const candidateRefEntries = comparison
+      ? await Promise.all(comparison.candidates.map(async (candidate) => ({
+          structuralFingerprint: candidate.structuralFingerprint,
+          rosterRef: await this.#storeRoster(candidate.roster, null),
+        })))
+      : [];
+    const candidateRefs = new Map(
+      candidateRefEntries.map((entry) => [
+        entry.structuralFingerprint,
+        entry.rosterRef,
+      ]),
+    );
+    const opponentRefEntries = comparison
+      ? await Promise.all(frozenComparisonOpponents.map(
+          async (entry, index) => ({
+            index,
+            rosterRef: await this.#storeRoster(entry.roster, null),
+          }),
+        ))
+      : [];
+    const anchorNames = comparison
+      ? new Map(
+          comparison.audit.ledger.map((entry) => [
+            entry.unitId,
+            entry.unitName,
+          ]),
+        )
+      : new Map<string, string>();
+    const anchors = (unitIds: string[]) =>
+      unitIds.map((unitId) => anchorNames.get(unitId) ?? unitId);
+    const comparisonContract = comparison
+      ? (() => {
+          const coverage = comparison.audit.coverage;
+          const eligibleDetachmentIds = coverage.detachments.eligibleIds;
+          const evaluatedDetachmentIds = new Set(
+            coverage.detachments.evaluatedIds,
+          );
+          const detachmentCoverageComplete = eligibleDetachmentIds.every(
+            (detachmentId) => evaluatedDetachmentIds.has(detachmentId),
+          );
+          const status =
+            !opponentPortfolioCoverage.complete ||
+              coverage.catalogueMayBeTruncated
+              ? ("degraded" as const)
+              : coverage.allied.uniqueDatasheets > 0 &&
+                  !coverage.allied.expansionSupported
+                ? ("bounded" as const)
+              : coverage.coverageMode === "complete" &&
+                  detachmentCoverageComplete
+                ? ("complete" as const)
+                : ("bounded" as const);
+          const recommendedRosterRef = candidateRefs.get(
+            comparison.recommended.structuralFingerprint,
+          ) ?? stored;
+          return {
+            status,
+            scope: opponentScope ??
+              (opponent ? "exact-roster" : "faction-portfolio"),
+            portfolio: {
+              ready: opponentPortfolioCoverage.ready,
+              intended: opponentPortfolioCoverage.intended,
+              complete: opponentPortfolioCoverage.complete,
+              hash: opponentPortfolioHash,
+            },
+            coverage: {
+              datasheets: {
+                rows: coverage.catalogueRows,
+                eligible: coverage.eligible,
+                evaluated: coverage.attempted,
+                omitted: coverage.notExpanded,
+                truncated: coverage.catalogueMayBeTruncated,
+              },
+              allied: {
+                rules: coverage.allied.rulesOffered,
+                offered: coverage.allied.uniqueDatasheets,
+                selectable: coverage.allied.selectable,
+                status: "inventory-only" as const,
+              },
+              detachments: {
+                mode: coverage.detachments.mode,
+                eligible: eligibleDetachmentIds.length,
+                evaluated: coverage.detachments.evaluatedIds.length,
+                successful: coverage.detachments.successfulIds.length,
+              },
+              configurations: "bounded" as const,
+            },
+            recommended: {
+              applied: recommendationApplied,
+              rosterRef: recommendedRosterRef,
+              anchors: anchors(comparison.recommended.anchorUnitIds),
+              floor: comparison.recommended.worstArchetypeScore,
+              median: comparison.recommended.medianArchetypeScore,
+            },
+          };
+        })()
+      : null;
+    const alternativeRefs = comparison
+      ? comparison.alternatives.map((alternative) => ({
+          alternative,
+          rosterRef: candidateRefs.get(
+            alternative.candidate.structuralFingerprint,
+          )!,
+        }))
+      : [];
+    const comparisonArtifact = comparison
+      ? await this.#storeJsonArtifact(
+          `${safeFilename(selectedRoster.name)}-opponent-option-comparison.json`,
+          {
+            ...comparison.audit,
+            opponents: comparison.audit.opponents.map(
+              (entry, index) => ({
+                ...entry,
+                rosterRef:
+                  opponentRefEntries.find(
+                    (reference) => reference.index === index,
+                  )?.rosterRef ?? null,
+              }),
+            ),
+            serviceContract: {
+              ...comparisonContract,
+              selectedRosterRef: stored,
+              portfolioEvidence: opponent
+                ? {
+                    suite: "exact-roster",
+                    ready: 1,
+                    intended: 1,
+                    missingCells: [],
+                  }
+                : {
+                    suite: knownFactionPortfolio?.suite ?? "diverse-9",
+                    ready: knownFactionPortfolio?.coverage.ready ?? 0,
+                    intended: knownFactionPortfolio?.coverage.intended ?? 9,
+                    missingCells:
+                      knownFactionPortfolio?.coverage.missingCells ?? [],
+                    maximumResultStatus:
+                      knownFactionPortfolio?.coverage.maximumResultStatus ??
+                        "degraded",
+                  },
+            },
+            recommendation: {
+              ...comparison.audit.recommendation,
+              applied: recommendationApplied,
+              rosterRef: comparisonContract?.recommended.rosterRef ?? stored,
+            },
+            alternatives: comparison.audit.alternatives.map(
+              (alternative) => ({
+                ...alternative,
+                rosterRef:
+                  alternativeRefs.find(
+                    (entry) =>
+                      entry.alternative.candidate.structuralFingerprint ===
+                        alternative.structuralFingerprint,
+                  )?.rosterRef ?? null,
+              }),
+            ),
+            candidates: comparison.audit.candidates.map((candidate) => ({
+              ...candidate,
+              rosterRef:
+                candidateRefs.get(candidate.structuralFingerprint) ?? null,
+            })),
+          },
+        )
+      : null;
+    const comparisonSummary = comparison && comparisonArtifact
+      ? {
+          ...comparisonContract,
+          alternatives: alternativeRefs.map(({ alternative, rosterRef }) => ({
+            contrast: alternative.contrast,
+            rosterRef,
+            floor: alternative.candidate.worstArchetypeScore,
+          })),
+          artifact: comparisonArtifact.uri,
+        }
+      : null;
+    const explanation = explainRoster(selectedRoster);
+    const handoff = await this.#newRecruitHandoffAvailability(selectedRoster);
+    const completionMessage = comparison && comparisonContract
+      ? !opponent && !opponentPortfolioCoverage.complete
+        ? "Built and validated; incomplete opponent evidence was advisory, so the baseline roster was retained."
+        : `Built and validated; ${comparisonContract.status} opponent comparison evaluated ${comparisonContract.coverage.datasheets.evaluated}/${comparisonContract.coverage.datasheets.eligible} faction-native datasheets.`
+      : `Built and validated ${selectedRoster.name}.`;
     const next = this.#nextRevision(operation, {
       state: "completed",
-      message: `Built and validated ${result.data.name}.`,
+      message: completionMessage,
       rosterRef: stored,
-      roster: this.#summarizeRoster(result.data),
+      roster: this.#summarizeRoster(selectedRoster, comparison ? 1 : 12),
+      opponentRef: input.opponentRef ?? null,
+      opponent: opponent ? this.#summarizeRoster(opponent, 0) : null,
       result: explanation.data
-        ? {
-            summary: explanation.data.summary,
-            choices: explanation.data.choices.slice(0, 8),
-            cautions: explanation.data.cautions.slice(0, 8),
-          }
+        ? comparisonSummary
+          ? { opponentComparison: comparisonSummary }
+          : {
+              summary: explanation.data.summary,
+              choices: explanation.data.choices.slice(0, 8),
+              cautions: explanation.data.cautions.slice(0, 8),
+            }
         : null,
       warnings: compactIssues([
-        ...result.warnings,
-        ...explanation.warnings,
+        ...new Map(
+          [
+            ...result.warnings,
+            ...comparisonWarnings,
+            ...explanation.warnings,
+            ...handoff.warnings,
+          ].map((warning) => [warning.code, warning]),
+        ).values(),
       ]),
-      nextActions: [this.#uploadAction()],
-      bundleId: result.data.sourceData.bundleId,
+      artifacts: comparisonArtifact ? [comparisonArtifact] : [],
+      nextActions: handoff.nextActions,
+      bundleId: selectedRoster.sourceData.bundleId,
     });
     await this.#writeOperation(next);
     return this.#publicSummary(next);
@@ -907,13 +1407,17 @@ export class RosterPilotService {
       return this.#publicSummary(failed);
     }
     const stored = await this.#storeRoster(result.data, null);
+    const handoff = await this.#newRecruitHandoffAvailability(result.data);
     const next = this.#nextRevision(operation, {
       state: "completed",
       message: `Modified and validated ${result.data.name}.`,
       rosterRef: stored,
       roster: this.#summarizeRoster(result.data),
-      warnings: compactIssues(result.warnings),
-      nextActions: [this.#uploadAction()],
+      warnings: compactIssues([
+        ...result.warnings,
+        ...handoff.warnings,
+      ]),
+      nextActions: handoff.nextActions,
       bundleId: result.data.sourceData.bundleId,
     });
     await this.#writeOperation(next);
@@ -964,14 +1468,18 @@ export class RosterPilotService {
       ? await this.#publishArtifact(artifact, outputPath, boolean(record(input.options).overwrite))
       : undefined;
     const reference = written ? { ...artifact, written } : artifact;
+    const handoff = await this.#newRecruitHandoffAvailability(roster);
     const next = this.#nextRevision(operation, {
       state: "completed",
       message: `Exported ${roster.name} as ${input.format}.`,
       rosterRef: input.rosterRef,
       roster: this.#summarizeRoster(roster),
       artifacts: [reference],
-      warnings: compactIssues(result.warnings),
-      nextActions: [this.#uploadAction()],
+      warnings: compactIssues([
+        ...result.warnings,
+        ...handoff.warnings,
+      ]),
+      nextActions: handoff.nextActions,
       bundleId: roster.sourceData.bundleId,
     });
     await this.#writeOperation(next);
@@ -1635,7 +2143,7 @@ export class RosterPilotService {
       createdAt: operation.createdAt,
       updatedAt: operation.updatedAt,
       bundleId: operation.bundleId,
-      message: operation.message || operationMessage(operation),
+      message: compactText(operation.message || operationMessage(operation)),
       roster: operation.roster,
       opponent: operation.opponent,
       result: operation.result,
@@ -1646,12 +2154,12 @@ export class RosterPilotService {
     };
   }
 
-  #summarizeRoster(roster: RosterDraftV1): RosterSummary {
+  #summarizeRoster(roster: RosterDraftV1, maximumUnits = 12): RosterSummary {
     const validation = validateRoster(roster);
     return {
       rosterId: roster.id,
       rosterRef: rosterRef(roster.id),
-      name: roster.name,
+      name: compactText(roster.name, 160),
       factionId: roster.factionId,
       factionName: roster.factionName,
       points: `${roster.totalPoints}/${roster.pointsLimit}`,
@@ -1659,7 +2167,7 @@ export class RosterPilotService {
       disposition: roster.forceDispositionName,
       legal: validation.ok,
       unitCount: roster.units.length,
-      units: roster.units.slice(0, 12).map((unit) => ({
+      units: roster.units.slice(0, maximumUnits).map((unit) => ({
         selectionId: unit.selectionId,
         unitId: unit.unitId,
         name: unit.name,
@@ -1675,6 +2183,24 @@ export class RosterPilotService {
       actionId: "new-recruit.upload",
       label: "Upload this roster to New Recruit",
       requiresConfirmation: true,
+    };
+  }
+
+  async #newRecruitHandoffAvailability(
+    roster: RosterDraftV1,
+  ): Promise<{ nextActions: NextAction[]; warnings: RosterIssue[] }> {
+    const preflight = await exportRoster(roster, "rosz");
+    if (preflight.ok) {
+      return { nextActions: [this.#uploadAction()], warnings: [] };
+    }
+    return {
+      nextActions: [],
+      warnings: [issue(
+        "NEW_RECRUIT_HANDOFF_UNAVAILABLE",
+        preflight.violations[0]?.message ??
+          "This canonical roster is legal locally but cannot be represented safely in the active New Recruit catalogue.",
+        "warn",
+      )],
     };
   }
 
@@ -1712,6 +2238,11 @@ export class RosterPilotService {
     roster: RosterDraftV1,
     importedFromSchemaVersion: number | null,
   ): Promise<string> {
+    if (!isSafeId(roster.id)) {
+      throw new Error(
+        "ROSTER_REFERENCE_INVALID: The roster ID is not safe for durable storage.",
+      );
+    }
     const filename = path.join(this.#directories.rosters, `${roster.id}.json`);
     const document: StoredRosterDocumentV4 = {
       schemaVersion: STORED_ROSTER_SCHEMA_VERSION,
@@ -1719,7 +2250,48 @@ export class RosterPilotService {
       importedFromSchemaVersion,
       roster,
     };
-    await writeAtomic(filename, `${JSON.stringify(document, null, 2)}\n`);
+    const assertExistingMatches = async () => {
+      let value: unknown;
+      try {
+        value = JSON.parse(await readFile(filename, "utf8")) as unknown;
+      } catch {
+        throw new Error(
+          `ROSTER_REFERENCE_COLLISION: ${rosterRef(roster.id)} already exists but is not a readable stored roster.`,
+        );
+      }
+      const existingDocument = record(value);
+      const candidate =
+        existingDocument.schemaVersion === STORED_ROSTER_SCHEMA_VERSION
+          ? existingDocument.roster
+          : value;
+      const parsed = parseRosterDraft(candidate);
+      if (
+        !parsed.success ||
+        parsed.data.id !== roster.id ||
+        rosterSemanticFingerprint(parsed.data) !==
+          rosterSemanticFingerprint(roster)
+      ) {
+        throw new Error(
+          `ROSTER_REFERENCE_COLLISION: ${rosterRef(roster.id)} already contains different roster semantics.`,
+        );
+      }
+    };
+    const temporary = `${filename}.next-${process.pid}-${crypto.randomUUID()}`;
+    await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    try {
+      await link(temporary, filename);
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String(error.code)
+          : null;
+      if (code !== "EEXIST") throw error;
+      await assertExistingMatches();
+    } finally {
+      await unlink(temporary).catch(() => undefined);
+    }
     return rosterRef(roster.id);
   }
 

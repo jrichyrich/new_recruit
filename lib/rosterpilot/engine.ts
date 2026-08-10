@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import {
   baseLoadout,
   baseUnitPoints,
@@ -6,7 +8,7 @@ import {
   normalizeName,
   optionCap,
   pointsTierMissing,
-  validateRosterCore,
+  validateLoadout,
   wargearPoints,
 } from "@alpaca-software/40kdc-data";
 import type {
@@ -14,6 +16,7 @@ import type {
   Roster,
   RosterUnit,
   UnitView,
+  WeaponView,
 } from "@alpaca-software/40kdc-data";
 import { strToU8, zipSync } from "fflate";
 
@@ -66,6 +69,7 @@ import {
 import {
   getDataUpdateStatusSnapshot,
 } from "./data-operations";
+import { portfolioCapabilityHash } from "./portfolio-capability";
 import {
   detectLegendsPromptIntent,
   LegendsPlayContextSchema,
@@ -78,6 +82,7 @@ import {
   activeFactionLegendsState,
 } from "./legends";
 import { resolveFactionIntent } from "./faction-intent";
+import { canonicalJson } from "./semantic-hash";
 
 export let DATA_PACKAGE_VERSION =
   newRecruitCatalogue.sources.rules.version;
@@ -192,6 +197,107 @@ function deterministicId(parts: Array<string | number>): string {
   return `rp-${(hash >>> 0).toString(36)}`;
 }
 
+function normalizedRosterConstraints(
+  constraints: RosterDraftV1["constraints"],
+): RosterDraftV1["constraints"] {
+  return {
+    ...constraints,
+    collectionUnitIds: constraints.collectionUnitIds
+      ? [...constraints.collectionUnitIds].sort()
+      : null,
+    ...(constraints.requiredUnitIds
+      ? { requiredUnitIds: [...constraints.requiredUnitIds].sort() }
+      : {}),
+    ...(constraints.excludedUnitIds
+      ? { excludedUnitIds: [...constraints.excludedUnitIds].sort() }
+      : {}),
+    ...(constraints.opponentRosterFingerprints
+      ? {
+          opponentRosterFingerprints: [
+            ...constraints.opponentRosterFingerprints,
+          ].sort(),
+        }
+      : {}),
+    ...(constraints.collectionProfile?.mode === "owned"
+      ? {
+          collectionProfile: {
+            ...constraints.collectionProfile,
+            units: [...constraints.collectionProfile.units].sort(
+              (left, right) => left.unitId.localeCompare(right.unitId),
+            ),
+          },
+        }
+      : {}),
+    ...(constraints.opponentThreatProfile
+      ? {
+          opponentThreatProfile: {
+            ...constraints.opponentThreatProfile,
+            keyTargetProfiles: [
+              ...constraints.opponentThreatProfile.keyTargetProfiles,
+            ].sort(
+              (left, right) =>
+                left.unitId.localeCompare(right.unitId) ||
+                left.name.localeCompare(right.name),
+            ),
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Stable identity for the complete stored roster meaning. Presentation order
+ * and timestamps are excluded, while every selection, loadout, detachment,
+ * constraint, and immutable data identity remains bound to the digest.
+ */
+export function rosterSemanticFingerprint(roster: RosterDraftV1): string {
+  const units = roster.units
+    .map((unit) => ({
+      ...unit,
+      equipment: [...unit.equipment].sort(
+        (left, right) =>
+          left.itemId.localeCompare(right.itemId) ||
+          left.name.localeCompare(right.name) ||
+          left.count - right.count,
+      ),
+      tags: [...unit.tags].sort(),
+    }))
+    .sort((left, right) =>
+      canonicalJson(left).localeCompare(canonicalJson(right))
+    );
+  return crypto
+    .createHash("sha256")
+    .update(canonicalJson({
+      schemaVersion: roster.schemaVersion,
+      gameSystem: roster.gameSystem,
+      sourceData: roster.sourceData,
+      name: roster.name,
+      factionId: roster.factionId,
+      factionName: roster.factionName,
+      pointsLimit: roster.pointsLimit,
+      totalPoints: roster.totalPoints,
+      battleSize: roster.battleSize,
+      detachmentId: roster.detachmentId,
+      detachmentName: roster.detachmentName,
+      forceDispositionId: roster.forceDispositionId,
+      forceDispositionName: roster.forceDispositionName,
+      preferences: [...roster.preferences].sort(),
+      constraints: normalizedRosterConstraints(roster.constraints),
+      units,
+    }))
+    .digest("hex");
+}
+
+function stampSemanticRosterIdentity(
+  roster: RosterDraftV1,
+): RosterDraftV1 {
+  const stamped = stampRosterDataIdentity(roster);
+  return {
+    ...stamped,
+    id: `rp-${rosterSemanticFingerprint(stamped)}`,
+  };
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -251,7 +357,6 @@ export function factionHasLegalNamedAnchor(
     (unit) =>
       !excludedUnitIds.has(unit.id) &&
       isNamedCharacter(unit) &&
-      unit.raw.attachment_role !== "support" &&
       availableModelCounts(unit, 1).some((modelCount) => {
         const equipment = getEquipment(unit, modelCount);
         return (
@@ -269,7 +374,6 @@ export function namedAnchorCollectionVariants(
 ): string[][] {
   const pool = factionUnits(factionId).filter(
     (unit) =>
-      unit.raw.attachment_role !== "support" &&
       availableModelCounts(unit, 1).length > 0,
   );
   const nonCharacters = pool
@@ -296,24 +400,95 @@ export function namedAnchorCollectionVariants(
     .map((anchor) => [anchor.id, ...nonCharacters].sort());
 }
 
-function factionAncestry(factionId: string): string[] {
+function datasetFactionAncestryForResolution(
+  source: Dataset,
+  factionId: string,
+): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
-  let current = factions.get(factionId);
+  let current = source.factions.get(factionId);
   while (current && !seen.has(current.id)) {
     ids.push(current.id);
     seen.add(current.id);
     const parentId = current.raw.parent_faction_id;
-    current = parentId ? factions.get(parentId) : undefined;
+    current = parentId ? source.factions.get(parentId) : undefined;
   }
   return ids;
+}
+
+function factionAncestry(factionId: string): string[] {
+  return datasetFactionAncestryForResolution(dataset, factionId);
+}
+
+const allianceControlledUnitKeysByDataset = new WeakMap<
+  Dataset,
+  Map<string, ReadonlySet<string>>
+>();
+
+function allianceControlledUnitKeys(
+  source: Dataset,
+  factionId: string,
+): ReadonlySet<string> {
+  let byFaction = allianceControlledUnitKeysByDataset.get(source);
+  if (!byFaction) {
+    byFaction = new Map();
+    allianceControlledUnitKeysByDataset.set(source, byFaction);
+  }
+  const cached = byFaction.get(factionId);
+  if (cached) return cached;
+
+  const ancestry = datasetFactionAncestryForResolution(
+    source,
+    factionId,
+  );
+  const ancestryIds = new Set(ancestry);
+  const possibleDetachmentIds = ancestry.flatMap((sourceFactionId) =>
+    source.detachments
+      .byFaction(sourceFactionId)
+      .map((detachment) => detachment.id)
+  );
+  const keys = new Set<string>();
+  for (const rule of source.alliesFor(
+    factionId,
+    possibleDetachmentIds,
+  )) {
+    for (const unit of source.allyUnitsFor(rule.id)) {
+      if (!ancestryIds.has(unit.raw.faction_id)) continue;
+      keys.add(`${unit.raw.faction_id}\u0000${unit.id}`);
+    }
+  }
+  byFaction.set(factionId, keys);
+  return keys;
+}
+
+/**
+ * Datasheets stored in a faction's own catalogue but governed by an AlliedRule
+ * are not faction-native build options. Until allied selections carry their
+ * rule identity through pricing and validation, callers must inventory these
+ * records separately and keep them out of native construction.
+ */
+export function internalAllianceControlledUnitKeys(
+  factionId: string,
+): ReadonlySet<string> {
+  return allianceControlledUnitKeys(dataset, factionId);
 }
 
 function factionUnits(factionId: string): UnitView[] {
   const seen = new Set<string>();
   const result: UnitView[] = [];
+  const allianceControlled = allianceControlledUnitKeys(
+    dataset,
+    factionId,
+  );
   for (const sourceFactionId of factionAncestry(factionId)) {
     for (const unit of units.byFaction(sourceFactionId)) {
+      if (
+        allianceControlled.has(
+          `${unit.raw.faction_id}\u0000${unit.id}`,
+        )
+      ) {
+        continue;
+      }
       if (seen.has(unit.id)) continue;
       seen.add(unit.id);
       result.push(unit);
@@ -380,8 +555,7 @@ function isBuildableFaction(factionId: string): boolean {
   return (
     factionUnits(factionId).some(
       (unit) =>
-        (unit.raw.points ?? []).length > 0 &&
-        unit.raw.attachment_role !== "support",
+        (unit.raw.points ?? []).length > 0,
     ) && matchedPlayDetachments(factionId).length > 0
   );
 }
@@ -396,10 +570,11 @@ function unitTags(unit: UnitView): PreferenceTag[] {
   const save = Number(profile?.Sv ?? 7);
   const objective = Number(profile?.OC ?? 0);
   const modelMinimum = unit.raw.model_count?.min ?? unit.raw.points?.[0]?.models ?? 1;
-  const rangedProfiles = unit.weapons.flatMap((weapon) =>
+  const linkedWeapons = [...linkedWeaponLookup(unit).values()];
+  const rangedProfiles = linkedWeapons.flatMap((weapon) =>
     weapon.raw.profiles.filter((profileEntry) => profileEntry.range !== "Melee"),
   );
-  const meleeProfiles = unit.weapons.flatMap((weapon) =>
+  const meleeProfiles = linkedWeapons.flatMap((weapon) =>
     weapon.raw.profiles.filter((profileEntry) => profileEntry.range === "Melee"),
   );
 
@@ -428,8 +603,13 @@ function availableModelCounts(unit: UnitView, ordinal = 1): number[] {
     const minOrdinal = tier.unit_count_min ?? 1;
     const maxOrdinal = tier.unit_count_max ?? Number.POSITIVE_INFINITY;
     if (ordinal < minOrdinal || ordinal > maxOrdinal) continue;
-    values.add(tier.models);
-    if (tier.models_max) values.add(tier.models_max);
+    for (
+      let modelCount = tier.models;
+      modelCount <= (tier.models_max ?? tier.models);
+      modelCount += 1
+    ) {
+      values.add(modelCount);
+    }
   }
   if (values.size === 0) values.add(unit.raw.model_count?.min ?? 1);
   return [...values]
@@ -437,18 +617,58 @@ function availableModelCounts(unit: UnitView, ordinal = 1): number[] {
     .sort((a, b) => a - b);
 }
 
+function compositionModelsForCount(
+  unit: UnitView,
+  modelCount: number,
+) {
+  const composition = dataset.unitCompositionOf(unit.raw);
+  if (!composition) return undefined;
+  const containingTier = [...(composition.tiers ?? [])]
+    .filter((tier) => {
+      const minimum = tier.models.reduce(
+        (sum, model) => sum + model.min,
+        0,
+      );
+      const maximum = tier.models.reduce(
+        (sum, model) => sum + model.max,
+        0,
+      );
+      return modelCount >= minimum && modelCount <= maximum;
+    })
+    .sort((left, right) => {
+      const span = (tier: typeof left) =>
+        tier.models.reduce(
+          (sum, model) => sum + model.max - model.min,
+          0,
+        );
+      return span(left) - span(right) ||
+        JSON.stringify(left.models).localeCompare(
+          JSON.stringify(right.models),
+        );
+    })[0];
+  if (!containingTier) return composition.models;
+  const canonicalByName = new Map(
+    (composition.models ?? []).map((model) => [model.name, model]),
+  );
+  return containingTier.models.map((model) => ({
+    ...canonicalByName.get(model.name),
+    ...model,
+    default_weapon_ids:
+      canonicalByName.get(model.name)?.default_weapon_ids ?? [],
+  }));
+}
+
 function getEquipment(
   unit: UnitView,
   modelCount: number,
 ): EquipmentSelection[] {
-  const composition = dataset.unitCompositionOf(unit.raw);
   let loadout: ReturnType<typeof baseLoadout>;
   try {
     loadout = baseLoadout(
       unit.raw,
       modelCount,
       dataset.wargearOptionsOf(unit.raw),
-      composition?.models,
+      compositionModelsForCount(unit, modelCount),
     );
   } catch {
     // Some upstream catalogue entries contain cyclic loadout allocation rules.
@@ -464,6 +684,66 @@ function getEquipment(
   return equipmentFromCounts(unit, loadout.counts);
 }
 
+const linkedWeaponLookupByDataset = new WeakMap<
+  Dataset,
+  Map<string, Map<string, WeaponView>>
+>();
+const looseWeaponLookupByDataset = new WeakMap<
+  Dataset,
+  Map<string, WeaponView>
+>();
+const wargearNameLookupByDataset = new WeakMap<
+  Dataset,
+  Map<string, string>
+>();
+
+function linkedWeaponLookup(unit: UnitView): Map<string, WeaponView> {
+  let byUnit = linkedWeaponLookupByDataset.get(dataset);
+  if (!byUnit) {
+    byUnit = new Map();
+    linkedWeaponLookupByDataset.set(dataset, byUnit);
+  }
+  const unitKey = `${unit.raw.faction_id}\u0000${unit.id}`;
+  const cached = byUnit.get(unitKey);
+  if (cached) return cached;
+  const lookup = new Map(
+    unit.weapons.map((weapon) => [weapon.id, weapon]),
+  );
+  byUnit.set(unitKey, lookup);
+  return lookup;
+}
+
+function looseWeaponLookup(): Map<string, WeaponView> {
+  const cached = looseWeaponLookupByDataset.get(dataset);
+  if (cached) return cached;
+  const lookup = new Map(
+    dataset.weapons.all.map((weapon) => [
+      `${weapon.raw.faction_id}\u0000${weapon.id}`,
+      weapon,
+    ]),
+  );
+  looseWeaponLookupByDataset.set(dataset, lookup);
+  return lookup;
+}
+
+function resolveLinkedWeapon(
+  unit: UnitView,
+  itemId: string,
+): WeaponView | undefined {
+  return linkedWeaponLookup(unit).get(itemId) ??
+    looseWeaponLookup().get(`${unit.raw.faction_id}\u0000${itemId}`);
+}
+
+function wargearNameLookup(): Map<string, string> {
+  const cached = wargearNameLookupByDataset.get(dataset);
+  if (cached) return cached;
+  const lookup = new Map(
+    dataset.wargear.all.map((item) => [item.id, item.name]),
+  );
+  wargearNameLookupByDataset.set(dataset, lookup);
+  return lookup;
+}
+
 function equipmentFromCounts(
   unit: UnitView,
   counts: ReadonlyMap<string, number>,
@@ -471,18 +751,10 @@ function equipmentFromCounts(
   return [...counts.entries()]
     .filter(([, count]) => count > 0)
     .map(([itemId, count]) => {
-      const weapon = unit.weapons.find((candidate) => candidate.id === itemId);
-      const looseWeapon = dataset.weapons.all.find(
-        (candidate) =>
-          candidate.id === itemId &&
-          candidate.raw.faction_id === unit.raw.faction_id,
-      );
-      const otherWargear = dataset.wargear.all.find(
-        (candidate) => candidate.id === itemId,
-      );
+      const weapon = resolveLinkedWeapon(unit, itemId);
       return {
         itemId,
-        name: weapon?.name ?? looseWeapon?.name ?? otherWargear?.name ?? itemId,
+        name: weapon?.name ?? wargearNameLookup().get(itemId) ?? itemId,
         count,
       };
     })
@@ -495,22 +767,254 @@ function equipmentSignature(
   return newRecruitEquipmentSignature(equipment);
 }
 
+const EQUIPMENT_CANDIDATE_LIMIT = 16;
+const EQUIPMENT_SEARCH_STATE_LIMIT = 64;
+const EQUIPMENT_RELEVANT_PREFERENCES = new Set<PreferenceTag>([
+  "shooting",
+  "melee",
+  "horde",
+  "elite",
+]);
+
+type EquipmentCandidateProfile = {
+  equipment: EquipmentSelection[];
+  signature: string;
+  contextScore: number;
+  preferenceScore: number;
+  points: number;
+  rangedAttacks: number;
+  rangedPressure: number;
+  meleeAttacks: number;
+  meleePressure: number;
+  hordePressure: number;
+  elitePressure: number;
+  maximumStrength: number;
+  maximumArmourPenetration: number;
+  maximumDamage: number;
+};
+
+function representativeOptionCounts(maximum: number): number[] {
+  if (maximum <= 0) return [];
+  return [
+    ...new Set([
+      1,
+      Math.ceil(maximum / 2),
+      maximum,
+    ]),
+  ]
+    .filter((count) => count <= maximum)
+    .sort((left, right) => left - right);
+}
+
+function itemMultiplicity(values: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function equipmentCandidateProfile(input: {
+  unit: UnitView;
+  modelCount: number;
+  equipment: EquipmentSelection[];
+  opponentProfile: OpponentBuildProfile | null;
+  preferences: PreferenceTag[];
+}): EquipmentCandidateProfile {
+  let rangedAttacks = 0;
+  let rangedPressure = 0;
+  let meleeAttacks = 0;
+  let meleePressure = 0;
+  let hordePressure = 0;
+  let elitePressure = 0;
+  let maximumStrength = 0;
+  let maximumArmourPenetration = 0;
+  let maximumDamage = 0;
+  for (const { selection, weapon } of selectedWeapons(
+    input.unit,
+    input.equipment,
+  )) {
+    for (const profile of weapon.raw.profiles) {
+      const attacks = Math.max(0, expectedProfileValue(profile.stats.A));
+      const strength = Math.max(0, expectedProfileValue(profile.stats.S));
+      const armourPenetration = Math.abs(
+        Math.min(0, expectedProfileValue(profile.stats.AP)),
+      );
+      const damage = Math.max(0, expectedProfileValue(profile.stats.D));
+      const volume = attacks * selection.count;
+      const pressure =
+        volume *
+        Math.max(1, damage) *
+        (1 + strength / 10) *
+        (1 + armourPenetration * 0.15);
+      const keywords = profileKeywords(profile);
+      const horde =
+        volume +
+        (keywords.has("blast") ? 3 * selection.count : 0) +
+        (keywords.has("torrent") ? 3 * selection.count : 0);
+      const elite =
+        pressure *
+        (1 + strength / 20 + armourPenetration * 0.2 + damage * 0.1);
+      if (profile.range === "Melee") {
+        meleeAttacks += volume;
+        meleePressure += pressure;
+      } else {
+        rangedAttacks += volume;
+        rangedPressure += pressure;
+      }
+      hordePressure += horde;
+      elitePressure += elite;
+      maximumStrength = Math.max(maximumStrength, strength);
+      maximumArmourPenetration = Math.max(
+        maximumArmourPenetration,
+        armourPenetration,
+      );
+      maximumDamage = Math.max(maximumDamage, damage);
+    }
+  }
+  const points = selectionPoints(
+    input.unit,
+    input.modelCount,
+    1,
+    input.equipment,
+    null,
+  );
+  const preferenceScore = input.preferences.reduce((score, preference) => {
+    if (preference === "shooting") return score + rangedPressure;
+    if (preference === "melee") return score + meleePressure;
+    if (preference === "horde") return score + hordePressure;
+    if (preference === "elite") return score + elitePressure;
+    return score;
+  }, 0);
+  return {
+    equipment: input.equipment,
+    signature: equipmentSignature(input.equipment),
+    contextScore: equipmentContextScore(
+      input.unit,
+      input.modelCount,
+      points,
+      input.equipment,
+      input.opponentProfile,
+    ),
+    preferenceScore,
+    points,
+    rangedAttacks,
+    rangedPressure,
+    meleeAttacks,
+    meleePressure,
+    hordePressure,
+    elitePressure,
+    maximumStrength,
+    maximumArmourPenetration,
+    maximumDamage,
+  };
+}
+
+function selectRepresentativeEquipmentCandidates(input: {
+  unit: UnitView;
+  modelCount: number;
+  equipment: EquipmentSelection[][];
+  baseSignature: string;
+  opponentProfile: OpponentBuildProfile | null;
+  preferences: PreferenceTag[];
+  limit: number;
+}): EquipmentCandidateProfile[] {
+  const profiles = [
+    ...new Map(
+      input.equipment.map((equipment) => [
+        equipmentSignature(equipment),
+        equipmentCandidateProfile({
+          unit: input.unit,
+          modelCount: input.modelCount,
+          equipment,
+          opponentProfile: input.opponentProfile,
+          preferences: input.preferences,
+        }),
+      ]),
+    ).values(),
+  ].sort((left, right) => left.signature.localeCompare(right.signature));
+  if (profiles.length <= input.limit) return profiles;
+
+  const selected = new Map<string, EquipmentCandidateProfile>();
+  const add = (profile: EquipmentCandidateProfile | undefined) => {
+    if (profile && selected.size < input.limit) {
+      selected.set(profile.signature, profile);
+    }
+  };
+  const addMaximum = (field: keyof Omit<
+    EquipmentCandidateProfile,
+    "equipment" | "signature"
+  >) =>
+    add(
+      [...profiles].sort(
+        (left, right) =>
+          right[field] - left[field] ||
+          left.signature.localeCompare(right.signature),
+      )[0],
+    );
+
+  // The cap is deterministic and profile-aware: retain the base configuration
+  // plus the strongest representatives of each materially different weapon
+  // dimension before filling the remaining slots by contextual relevance.
+  add(profiles.find((profile) => profile.signature === input.baseSignature));
+  for (const field of [
+    "contextScore",
+    "preferenceScore",
+    "rangedAttacks",
+    "rangedPressure",
+    "meleeAttacks",
+    "meleePressure",
+    "hordePressure",
+    "elitePressure",
+    "maximumStrength",
+    "maximumArmourPenetration",
+    "maximumDamage",
+    "points",
+  ] as const) {
+    addMaximum(field);
+  }
+  add(
+    [...profiles].sort(
+      (left, right) =>
+        left.points - right.points ||
+        left.signature.localeCompare(right.signature),
+    )[0],
+  );
+  for (const profile of [...profiles].sort(
+    (left, right) =>
+      right.contextScore - left.contextScore ||
+      right.preferenceScore - left.preferenceScore ||
+      right.rangedPressure + right.meleePressure -
+        (left.rangedPressure + left.meleePressure) ||
+      left.signature.localeCompare(right.signature),
+  )) {
+    add(profile);
+    if (selected.size >= input.limit) break;
+  }
+  return [...selected.values()];
+}
+
 function equipmentCandidates(
   unit: UnitView,
   modelCount: number,
   opponentProfile: OpponentBuildProfile | null,
+  preferences: PreferenceTag[] = [],
 ): EquipmentSelection[][] {
   const base = getEquipment(unit, modelCount);
-  if (!opponentProfile) return [base];
+  const relevantPreferences = preferences.filter((preference) =>
+    EQUIPMENT_RELEVANT_PREFERENCES.has(preference)
+  );
+  if (
+    !opponentProfile &&
+    relevantPreferences.length === 0 &&
+    equipmentLoadoutIsLegal(unit, modelCount, base)
+  ) {
+    return [base];
+  }
   const composition = dataset.unitCompositionOf(unit.raw);
-  const candidates = new Map<string, EquipmentSelection[]>();
-  const addCandidate = (equipment: EquipmentSelection[]) => {
-    if (!equipmentLoadoutIsLegal(unit, modelCount, equipment)) {
-      return;
-    }
-    candidates.set(equipmentSignature(equipment), equipment);
-  };
-  addCandidate(base);
+  let searchStates = new Map<string, EquipmentSelection[]>([
+    [equipmentSignature(base), base],
+  ]);
   for (const option of dataset.wargearOptionsOf(unit.raw)) {
     const rawCap = optionCap(
       option,
@@ -530,49 +1034,83 @@ function equipmentCandidates(
             option.replacement.length > 0
           ? [option.replacement]
           : [];
-    for (const branch of branches) {
-      const counts = new Map(
-        base.map((entry) => [entry.itemId, entry.count]),
+    if (branches.length === 0) continue;
+    const expanded = new Map(searchStates);
+    for (const equipment of searchStates.values()) {
+      const current = new Map(
+        equipment.map((entry) => [entry.itemId, entry.count]),
       );
-      let applicable = true;
-      for (const replaced of option.replaces ?? []) {
-        const current = counts.get(replaced) ?? 0;
-        if (current < cap) {
-          applicable = false;
-          break;
+      const replaceMultiplicity = itemMultiplicity(option.replaces ?? []);
+      const applicableCap = [...replaceMultiplicity.entries()].reduce(
+        (maximum, [itemId, multiplicity]) =>
+          Math.min(
+            maximum,
+            Math.floor((current.get(itemId) ?? 0) / multiplicity),
+          ),
+        cap,
+      );
+      for (const branch of branches) {
+        for (const count of representativeOptionCounts(applicableCap)) {
+          const counts = new Map(current);
+          for (const [itemId, multiplicity] of replaceMultiplicity) {
+            const next = (counts.get(itemId) ?? 0) - multiplicity * count;
+            if (next > 0) counts.set(itemId, next);
+            else counts.delete(itemId);
+          }
+          for (const [itemId, multiplicity] of itemMultiplicity(branch)) {
+            counts.set(
+              itemId,
+              (counts.get(itemId) ?? 0) + multiplicity * count,
+            );
+          }
+          const candidate = equipmentFromCounts(unit, counts);
+          expanded.set(equipmentSignature(candidate), candidate);
         }
-        const next = current - cap;
-        if (next > 0) counts.set(replaced, next);
-        else counts.delete(replaced);
       }
-      if (!applicable) continue;
-      for (const replacement of branch) {
-        counts.set(
-          replacement,
-          (counts.get(replacement) ?? 0) + cap,
-        );
-      }
-      addCandidate(equipmentFromCounts(unit, counts));
     }
+    searchStates = expanded.size <= EQUIPMENT_SEARCH_STATE_LIMIT
+      ? expanded
+      : new Map(
+          selectRepresentativeEquipmentCandidates({
+            unit,
+            modelCount,
+            equipment: [...expanded.values()],
+            baseSignature: equipmentSignature(base),
+            opponentProfile,
+            preferences: relevantPreferences,
+            limit: EQUIPMENT_SEARCH_STATE_LIMIT,
+          }).map((candidate) => [candidate.signature, candidate.equipment]),
+        );
   }
-  return [...candidates.values()]
+  const legal = [...searchStates.values()].filter((equipment) =>
+    equipmentLoadoutIsLegal(unit, modelCount, equipment)
+  );
+  // Never reintroduce an invalid default merely because no explored
+  // configuration validated. The caller will treat this datasheet/model tier
+  // as unavailable and continue with the rest of the legal pool.
+  if (legal.length === 0) return [];
+  return selectRepresentativeEquipmentCandidates({
+    unit,
+    modelCount,
+    equipment: legal,
+    baseSignature: equipmentSignature(base),
+    opponentProfile,
+    preferences: relevantPreferences,
+    limit: EQUIPMENT_CANDIDATE_LIMIT,
+  })
     .sort(
       (left, right) =>
-        equipmentContextScore(
-          unit,
-          right,
-          opponentProfile,
-        ) -
-          equipmentContextScore(
-            unit,
-            left,
-            opponentProfile,
-          ) ||
-        equipmentSignature(left).localeCompare(
-          equipmentSignature(right),
-        ),
+        (
+          !opponentProfile && relevantPreferences.length === 0
+            ? Number(right.signature === equipmentSignature(base)) -
+              Number(left.signature === equipmentSignature(base))
+            : 0
+        ) ||
+        right.contextScore - left.contextScore ||
+        right.preferenceScore - left.preferenceScore ||
+        left.signature.localeCompare(right.signature),
     )
-    .slice(0, 16);
+    .map(({ equipment }) => equipment);
 }
 
 function validEquipmentIds(unit: UnitView): Set<string> {
@@ -599,32 +1137,13 @@ function equipmentLoadoutIsLegal(
     equipment.map((entry) => [entry.itemId, entry.count]),
   );
   try {
-    const verdict = validateRosterCore(
-      {
-        factionId: unit.raw.faction_id,
-        battleSize: null,
-        forceDisposition: null,
-        detachmentIds: [],
-        units: [
-          {
-            unitId: unit.id,
-            modelCount,
-            isWarlord: true,
-            enhancementId: null,
-            leaderBodyguardId: null,
-            counts,
-          },
-        ],
-      },
-      dataset,
-    );
-    return (
-      verdict.units.find(
-        (candidate) =>
-          candidate.unitId === unit.id &&
-          candidate.modelCount === modelCount,
-      )?.violations.length === 0
-    );
+    return validateLoadout(
+      unit.raw,
+      modelCount,
+      dataset.wargearOptionsOf(unit.raw),
+      counts,
+      compositionModelsForCount(unit, modelCount),
+    ).length === 0;
   } catch {
     return false;
   }
@@ -666,6 +1185,7 @@ function makeSelection(
   isWarlord: boolean,
   enhancementId: string | null = null,
   equipment?: EquipmentSelection[],
+  precomputedTags?: PreferenceTag[],
 ): DraftUnit {
   const resolvedEquipment = equipment ?? getEquipment(unit, modelCount);
   const enhancement = enhancementDetails(enhancementId);
@@ -693,8 +1213,43 @@ function makeSelection(
     enhancementId,
     enhancementName: enhancement.name,
     equipment: resolvedEquipment,
-    tags: unitTags(unit),
+    tags: precomputedTags ?? unitTags(unit),
   };
+}
+
+function attachRequiredSupportSelections(
+  selections: DraftUnit[],
+  factionId: string,
+): DraftUnit[] {
+  return selections.map((selection) => {
+    const unit = resolveUnit(selection.unitId, factionId);
+    if (unit?.raw.attachment_role !== "support") return selection;
+    const eligibleBodyguardIds = new Set(
+      dataset.bodyguardsAttachableFrom(unit.id).map((bodyguard) => bodyguard.id),
+    );
+    const bodyguard = [...selections]
+      .filter(
+        (candidate) =>
+          candidate.selectionId !== selection.selectionId &&
+          eligibleBodyguardIds.has(candidate.unitId),
+      )
+      .sort(
+        (left, right) =>
+          left.points - right.points ||
+          left.unitId.localeCompare(right.unitId) ||
+          left.selectionId.localeCompare(right.selectionId),
+      )[0];
+    return bodyguard
+      ? {
+          ...selection,
+          leaderAttachment: {
+            bodyguardUnitId: bodyguard.unitId,
+            role: "support" as const,
+            provisional: false,
+          },
+        }
+      : selection;
+  });
 }
 
 function resolveFaction(query?: string) {
@@ -844,6 +1399,10 @@ function promptUnitConstraints(
 
 function resolveUnit(unitId: string, factionId?: string): UnitView | undefined {
   if (factionId) {
+    const allianceControlled = allianceControlledUnitKeys(
+      dataset,
+      factionId,
+    );
     for (const sourceFactionId of factionAncestry(factionId)) {
       const factionUnit = units
         .byFaction(sourceFactionId)
@@ -852,7 +1411,14 @@ function resolveUnit(unitId: string, factionId?: string): UnitView | undefined {
             unit.id === unitId ||
             normalizeName(unit.name) === normalizeName(unitId),
         );
-      if (factionUnit) return factionUnit;
+      if (
+        factionUnit &&
+        !allianceControlled.has(
+          `${factionUnit.raw.faction_id}\u0000${factionUnit.id}`,
+        )
+      ) {
+        return factionUnit;
+      }
     }
     return undefined;
   }
@@ -872,22 +1438,6 @@ export function resolveFactionUnit(
   return resolveUnit(unitId, factionId);
 }
 
-function datasetFactionAncestryForResolution(
-  source: Dataset,
-  factionId: string,
-): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  let current = source.factions.get(factionId);
-  while (current && !seen.has(current.id)) {
-    ids.push(current.id);
-    seen.add(current.id);
-    const parentId = current.raw.parent_faction_id;
-    current = parentId ? source.factions.get(parentId) : undefined;
-  }
-  return ids;
-}
-
 /**
  * Resolve a faction-scoped unit from an explicitly captured Dataset. This is
  * the snapshot-safe counterpart to resolveFactionUnit for operations that
@@ -898,6 +1448,10 @@ export function resolveFactionUnitFromDataset(
   unitId: string,
   factionId: string,
 ): UnitView | undefined {
+  const allianceControlled = allianceControlledUnitKeys(
+    source,
+    factionId,
+  );
   for (const sourceFactionId of datasetFactionAncestryForResolution(
     source,
     factionId,
@@ -909,7 +1463,14 @@ export function resolveFactionUnitFromDataset(
           unit.id === unitId ||
           normalizeName(unit.name) === normalizeName(unitId),
       );
-    if (factionUnit) return factionUnit;
+    if (
+      factionUnit &&
+      !allianceControlled.has(
+        `${factionUnit.raw.faction_id}\u0000${factionUnit.id}`,
+      )
+    ) {
+      return factionUnit;
+    }
   }
   return undefined;
 }
@@ -1342,22 +1903,11 @@ function summarizeUnit(unit: UnitView): UnitSummary {
   };
 }
 
-export function searchUnits(input: {
-  faction?: string;
-  query?: string;
-  tags?: PreferenceTag[];
-  includeLegends?: boolean;
-  limit?: number;
-}): ResultEnvelope<UnitSummary[]> {
-  const faction = resolveFaction(input.faction);
-  if (!faction) {
-    return envelope<UnitSummary[]>(null, [
-      issue("FACTION_NOT_FOUND", `No faction matched "${input.faction ?? ""}".`),
-    ]);
-  }
-  const normalized = normalizeName(input.query ?? "");
-  const desiredTags = new Set(input.tags ?? []);
-  const runtimeSummaries = factionUnits(faction.id)
+function factionUnitInventorySummaries(input: {
+  factionId: string;
+  includeLegends: boolean;
+}): { summaries: UnitSummary[]; warnings: RosterIssue[] } {
+  const runtimeSummaries = factionUnits(input.factionId)
     .filter((unit) => input.includeLegends || unit.raw.is_legend !== true)
     .filter(
       (unit) =>
@@ -1367,7 +1917,7 @@ export function searchUnits(input: {
   const runtimeUnitIds = new Set(
     runtimeSummaries.map((unit) => unit.id),
   );
-  const legendsStates = factionLegendsStates(faction.id);
+  const legendsStates = factionLegendsStates(input.factionId);
   const seenInventoryEntries = new Set<string>();
   const inventorySummaries: UnitSummary[] = input.includeLegends
     ? legendsStates
@@ -1409,7 +1959,59 @@ export function searchUnits(input: {
           };
         })
     : [];
-  const matches = [...runtimeSummaries, ...inventorySummaries]
+  const warnings =
+    input.includeLegends &&
+    factionLegendsClassificationAuthority(input.factionId) !== "verified"
+      ? [
+          issue(
+            "LEGENDS_CLASSIFICATION_UNVERIFIED",
+            "The active faction bundle does not contain complete, verified Games Workshop Legends classification evidence.",
+            "warn",
+          ),
+        ]
+      : [];
+  return {
+    summaries: [...runtimeSummaries, ...inventorySummaries],
+    warnings,
+  };
+}
+
+/**
+ * Internal uncapped inventory used by deterministic catalogue-wide workflows.
+ * Public research results remain bounded through `searchUnits`.
+ */
+export function internalFactionUnitInventory(input: {
+  faction?: string;
+  includeLegends?: boolean;
+}): ResultEnvelope<UnitSummary[]> {
+  const faction = resolveFaction(input.faction);
+  if (!faction) {
+    return envelope<UnitSummary[]>(null, [
+      issue("FACTION_NOT_FOUND", `No faction matched "${input.faction ?? ""}".`),
+    ]);
+  }
+  const inventory = factionUnitInventorySummaries({
+    factionId: faction.id,
+    includeLegends: input.includeLegends === true,
+  });
+  return envelope(inventory.summaries, [], inventory.warnings);
+}
+
+export function searchUnits(input: {
+  faction?: string;
+  query?: string;
+  tags?: PreferenceTag[];
+  includeLegends?: boolean;
+  limit?: number;
+}): ResultEnvelope<UnitSummary[]> {
+  const inventory = internalFactionUnitInventory({
+    faction: input.faction,
+    includeLegends: input.includeLegends,
+  });
+  if (!inventory.ok || !inventory.data) return inventory;
+  const normalized = normalizeName(input.query ?? "");
+  const desiredTags = new Set(input.tags ?? []);
+  const matches = inventory.data
     .filter((unit) => {
       const textMatch =
         !normalized ||
@@ -1430,18 +2032,7 @@ export function searchUnits(input: {
         a.name.localeCompare(b.name),
     )
     .slice(0, Math.max(1, Math.min(input.limit ?? 30, 100)));
-  const warnings =
-    input.includeLegends &&
-    factionLegendsClassificationAuthority(faction.id) !== "verified"
-      ? [
-          issue(
-            "LEGENDS_CLASSIFICATION_UNVERIFIED",
-            "The active faction bundle does not contain complete, verified Games Workshop Legends classification evidence.",
-            "warn",
-          ),
-        ]
-      : [];
-  return envelope(matches, [], warnings);
+  return envelope(matches, [], inventory.warnings);
 }
 
 function mergeBuildInput(input: BuildRosterInput): Required<
@@ -1555,7 +2146,7 @@ function opponentContextFactionId(
     : context.factionId;
 }
 
-function opponentRosterFingerprint(roster: RosterDraftV1): string {
+export function opponentRosterFingerprint(roster: RosterDraftV1): string {
   return deterministicId([
     roster.gameSystem,
     roster.factionId,
@@ -1593,6 +2184,109 @@ function opponentBuildProfile(
   const factionId = opponentContextFactionId(context);
   const opponent = resolveFaction(factionId);
   if (!opponent) return null;
+  if (
+    context.kind === "known-faction" &&
+    context.representativeRosters &&
+    context.representativeRosters.length > 0
+  ) {
+    const profiles = context.representativeRosters.flatMap((roster) => {
+      const profile = opponentBuildProfile({
+        kind: "known-roster",
+        roster,
+      });
+      return profile ? [profile] : [];
+    });
+    if (profiles.length > 0) {
+      const mean = (values: number[]) =>
+        values.reduce((sum, value) => sum + value, 0) /
+        Math.max(1, values.length);
+      const nullableMean = (values: Array<number | null>) => {
+        const present = values.filter(
+          (value): value is number => value !== null,
+        );
+        return present.length > 0 ? mean(present) : null;
+      };
+      const targetBuckets = new Map<"light" | "medium" | "heavy", OpponentThreatProfile["keyTargetProfiles"]>();
+      targetBuckets.set("light", []);
+      targetBuckets.set("medium", []);
+      targetBuckets.set("heavy", []);
+      const seenTargets = new Set<string>();
+      for (const target of profiles
+        .flatMap((profile) => profile.keyTargetProfiles)
+        .sort(
+          (left, right) =>
+            right.points - left.points ||
+            left.unitId.localeCompare(right.unitId) ||
+            left.toughness - right.toughness,
+        )) {
+        const key = [
+          target.unitId,
+          target.modelCount,
+          target.toughness,
+          target.wounds,
+          target.save,
+        ].join(":");
+        if (seenTargets.has(key)) continue;
+        seenTargets.add(key);
+        const band = target.toughness >= 9 || target.wounds >= 7 || target.save <= 2
+          ? "heavy"
+          : target.toughness >= 5 || target.wounds >= 3 || target.save <= 3
+            ? "medium"
+            : "light";
+        targetBuckets.get(band)!.push(target);
+      }
+      const keyTargetProfiles: OpponentThreatProfile["keyTargetProfiles"] = [];
+      while (
+        keyTargetProfiles.length < 12 &&
+        [...targetBuckets.values()].some((bucket) => bucket.length > 0)
+      ) {
+        for (const band of ["light", "medium", "heavy"] as const) {
+          const target = targetBuckets.get(band)!.shift();
+          if (target && keyTargetProfiles.length < 12) {
+            keyTargetProfiles.push(target);
+          }
+        }
+      }
+      return {
+        schemaVersion: 1,
+        factionId: opponent.id,
+        rosterFingerprint: null,
+        bodyCount: (() => {
+          const value = nullableMean(
+            profiles.map((profile) => profile.bodyCount),
+          );
+          return value === null ? null : Math.round(value);
+        })(),
+        averagePointsPerModel: nullableMean(
+          profiles.map((profile) => profile.averagePointsPerModel),
+        ),
+        eliteShare: mean(profiles.map((profile) => profile.eliteShare)),
+        hordeShare: mean(profiles.map((profile) => profile.hordeShare)),
+        mobilityShare: mean(profiles.map((profile) => profile.mobilityShare)),
+        vehicleMonsterShare: mean(
+          profiles.map((profile) => profile.vehicleMonsterShare),
+        ),
+        rangedShare: mean(profiles.map((profile) => profile.rangedShare)),
+        meleeShare: mean(profiles.map((profile) => profile.meleeShare)),
+        objectiveShare: mean(profiles.map((profile) => profile.objectiveShare)),
+        durabilityShare: mean(
+          profiles.map((profile) => profile.durabilityShare),
+        ),
+        durabilityBands: {
+          light: mean(
+            profiles.map((profile) => profile.durabilityBands.light),
+          ),
+          medium: mean(
+            profiles.map((profile) => profile.durabilityBands.medium),
+          ),
+          heavy: mean(
+            profiles.map((profile) => profile.durabilityBands.heavy),
+          ),
+        },
+        keyTargetProfiles,
+      };
+    }
+  }
   if (context.kind === "known-roster") {
     const selected = context.roster.units.flatMap((selection) => {
       const unit = resolveUnit(selection.unitId, context.roster.factionId);
@@ -1810,7 +2504,81 @@ function opponentBuildProfile(
   };
 }
 
-function opponentContextScore(
+function applyOpponentAssumptions(
+  profile: OpponentBuildProfile | null,
+  assumptions: BuildRosterInput["opponentAssumptions"],
+): OpponentBuildProfile | null {
+  if (!profile || !assumptions) return profile;
+  const next = structuredClone(profile);
+  const increase = (value: number, weight = 0.3) =>
+    Math.min(1, value + (1 - value) * weight);
+  const decrease = (value: number, weight = 0.2) =>
+    Math.max(0, value * (1 - weight));
+  for (const style of [...new Set(assumptions.styleTags)].sort()) {
+    if (style === "aggressive") {
+      next.meleeShare = increase(next.meleeShare);
+      next.mobilityShare = increase(next.mobilityShare, 0.2);
+    } else if (style === "defensive") {
+      next.durabilityShare = increase(next.durabilityShare);
+      next.objectiveShare = increase(next.objectiveShare, 0.2);
+      next.durabilityBands.heavy = increase(
+        next.durabilityBands.heavy,
+        0.2,
+      );
+    } else if (style === "mobile") {
+      next.mobilityShare = increase(next.mobilityShare, 0.4);
+    } else if (style === "ranged") {
+      next.rangedShare = increase(next.rangedShare, 0.4);
+    } else if (style === "melee") {
+      next.meleeShare = increase(next.meleeShare, 0.4);
+    } else if (style === "objective") {
+      next.objectiveShare = increase(next.objectiveShare, 0.4);
+    } else if (style === "elite") {
+      next.eliteShare = increase(next.eliteShare, 0.4);
+      next.durabilityShare = increase(next.durabilityShare, 0.25);
+      next.durabilityBands.heavy = increase(
+        next.durabilityBands.heavy,
+        0.35,
+      );
+      next.hordeShare = decrease(next.hordeShare, 0.35);
+    } else if (style === "horde") {
+      next.hordeShare = increase(next.hordeShare, 0.45);
+      next.objectiveShare = increase(next.objectiveShare, 0.25);
+      next.durabilityBands.light = increase(
+        next.durabilityBands.light,
+        0.35,
+      );
+      next.eliteShare = decrease(next.eliteShare, 0.35);
+    }
+  }
+  const knownTargets = (assumptions.knownUnitIds ?? []).flatMap((unitId) => {
+    const unit = resolveUnit(unitId, profile.factionId);
+    if (!unit) return [];
+    const modelCount = availableModelCounts(unit, 1)[0] ?? 1;
+    const unitProfile = unit.profileAt();
+    return [{
+      unitId: unit.id,
+      name: unit.name,
+      modelCount,
+      points: baseUnitPoints(unit.raw, modelCount, 1),
+      toughness: Number(unitProfile?.T ?? 0),
+      wounds: Number(unitProfile?.W ?? 0),
+      save: Number(unitProfile?.Sv ?? 0),
+    }];
+  });
+  if (knownTargets.length > 0) {
+    next.keyTargetProfiles = [
+      ...knownTargets,
+      ...next.keyTargetProfiles.filter(
+        (target) =>
+          !knownTargets.some((known) => known.unitId === target.unitId),
+      ),
+    ].slice(0, 8);
+  }
+  return next;
+}
+
+function opponentTagScore(
   unit: UnitView,
   profile: OpponentBuildProfile | null,
 ): number {
@@ -1906,15 +2674,7 @@ function selectedWeapons(
 ) {
   return equipment.flatMap((selection) => {
     if (selection.count <= 0) return [];
-    const weapon =
-      unit.weapons.find(
-        (candidate) => candidate.id === selection.itemId,
-      ) ??
-      dataset.weapons.all.find(
-        (candidate) =>
-          candidate.id === selection.itemId &&
-          candidate.raw.faction_id === unit.raw.faction_id,
-      );
+    const weapon = resolveLinkedWeapon(unit, selection.itemId);
     return weapon
       ? [{ selection, weapon }]
       : [];
@@ -2009,7 +2769,119 @@ export function inspectRosterUnitThreatProperties(
   };
 }
 
-function equipmentContextScore(
+function boundedRatio(value: number, midpoint: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return value / (value + midpoint);
+}
+
+function rollSuccessProbability(
+  value: unknown,
+  fallback = 2 / 3,
+): number {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.trim().replace(/\+$/, ""))
+        : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 2 || numeric > 6) {
+    return fallback;
+  }
+  return (7 - numeric) / 6;
+}
+
+function woundSuccessProbability(
+  strength: number,
+  toughness: number,
+): number {
+  if (strength <= 0 || toughness <= 0) return 0;
+  if (strength >= toughness * 2) return 5 / 6;
+  if (strength > toughness) return 4 / 6;
+  if (strength === toughness) return 3 / 6;
+  if (strength * 2 <= toughness) return 1 / 6;
+  return 2 / 6;
+}
+
+function failedSaveProbability(
+  save: number,
+  armourPenetration: number,
+): number {
+  if (!Number.isFinite(save) || save <= 0) return 1;
+  const required = save - Math.min(0, armourPenetration);
+  if (required >= 7) return 1;
+  if (required <= 2) return 1 / 6;
+  return Math.min(1, Math.max(0, (required - 1) / 6));
+}
+
+function targetProfilePressure(
+  unit: UnitView,
+  equipment: EquipmentSelection[],
+  profile: OpponentBuildProfile,
+  points: number,
+): number {
+  if (profile.keyTargetProfiles.length === 0 || points <= 0) return 0;
+  const totalTargetWeight = profile.keyTargetProfiles.reduce(
+    (sum, target) => sum + Math.max(1, target.points),
+    0,
+  );
+  const expectedDamage = profile.keyTargetProfiles.reduce(
+    (targetTotal, target) => {
+      const targetDamage = selectedWeapons(unit, equipment).reduce(
+        (weaponTotal, { selection, weapon }) => {
+          let rangedBest = 0;
+          let meleeBest = 0;
+          for (const weaponProfile of weapon.raw.profiles) {
+            const attacks = Math.max(
+              0,
+              expectedProfileValue(weaponProfile.stats.A),
+            );
+            const strength = Math.max(
+              0,
+              expectedProfileValue(weaponProfile.stats.S),
+            );
+            const armourPenetration = expectedProfileValue(
+              weaponProfile.stats.AP,
+            );
+            const damage = Math.max(
+              0,
+              expectedProfileValue(weaponProfile.stats.D),
+            );
+            const keywords = profileKeywords(weaponProfile);
+            const hitProbability = keywords.has("torrent")
+              ? 1
+              : rollSuccessProbability(
+                  weaponProfile.range === "Melee"
+                    ? weaponProfile.stats.WS
+                    : weaponProfile.stats.BS,
+                );
+            let value =
+              attacks *
+              hitProbability *
+              woundSuccessProbability(strength, target.toughness) *
+              failedSaveProbability(target.save, armourPenetration) *
+              Math.min(Math.max(1, target.wounds), damage);
+            if (keywords.has("one shot")) value *= 0.35;
+            if (weaponProfile.range === "Melee") {
+              meleeBest = Math.max(meleeBest, value);
+            } else {
+              rangedBest = Math.max(rangedBest, value);
+            }
+          }
+          return weaponTotal +
+            (rangedBest + meleeBest) * selection.count;
+        },
+        0,
+      );
+      return targetTotal +
+        targetDamage * Math.max(1, target.points) / totalTargetWeight;
+    },
+    0,
+  );
+  const damagePerHundredPoints = expectedDamage * 100 / points;
+  return 42 * boundedRatio(damagePerHundredPoints, 3);
+}
+
+function equipmentTagScore(
   unit: UnitView,
   equipment: EquipmentSelection[],
   profile: OpponentBuildProfile | null,
@@ -2066,6 +2938,160 @@ function equipmentContextScore(
     : (24 * rawScore) / (rawScore + 24);
 }
 
+type MatchupContextComponents = {
+  tagSupport: number;
+  targetPressure: number;
+  resilience: number;
+  mobility: number;
+  boardControl: number;
+  total: number;
+};
+
+type InternalBuildOperationCache = {
+  dataset: Dataset;
+  equipmentCandidates: Map<string, EquipmentSelection[][]>;
+  matchupComponents: Map<string, MatchupContextComponents>;
+};
+
+const internalBuildOperationCacheByToken = new WeakMap<
+  object,
+  InternalBuildOperationCache
+>();
+
+function internalBuildOperationCache(
+  token: object | undefined,
+): InternalBuildOperationCache {
+  if (token) {
+    const cached = internalBuildOperationCacheByToken.get(token);
+    if (cached?.dataset === dataset) return cached;
+  }
+  const created: InternalBuildOperationCache = {
+    dataset,
+    equipmentCandidates: new Map(),
+    matchupComponents: new Map(),
+  };
+  if (token) internalBuildOperationCacheByToken.set(token, created);
+  return created;
+}
+
+function matchupContextComponents(
+  unit: UnitView,
+  modelCount: number,
+  points: number,
+  equipment: EquipmentSelection[] | null,
+  profile: OpponentBuildProfile | null,
+): MatchupContextComponents {
+  if (!profile || points <= 0) {
+    return {
+      tagSupport: 0,
+      targetPressure: 0,
+      resilience: 0,
+      mobility: 0,
+      boardControl: 0,
+      total: 0,
+    };
+  }
+  const unitProfile = unit.profileAt();
+  const movement = Math.max(0, Number(unitProfile?.M ?? 0));
+  const toughness = Math.max(0, Number(unitProfile?.T ?? 0));
+  const wounds = Math.max(0, Number(unitProfile?.W ?? 0));
+  const save = Math.max(2, Math.min(7, Number(unitProfile?.Sv ?? 7)));
+  const invulnerableSave =
+    unitProfile?.invuln_sv == null
+      ? null
+      : Math.max(2, Math.min(7, Number(unitProfile.invuln_sv)));
+  const objectiveControl = Math.max(0, Number(unitProfile?.OC ?? 0));
+  const keywords = normalizedKeywords(unit);
+  const abilityIds = (unit.raw.ability_ids ?? []).map(normalizeName);
+  const mobilityValue =
+    movement +
+    (keywords.includes("fly") ? 3 : 0) +
+    (keywords.includes("mounted") ? 2 : 0) +
+    (abilityIds.includes("deep strike") ? 3 : 0);
+  const armourQuality = Math.max(0, 7 - save) / 5;
+  const invulnerableQuality = invulnerableSave === null
+    ? 0
+    : Math.max(0, 7 - invulnerableSave) / 5;
+  const effectiveWounds =
+    wounds *
+    modelCount *
+    (1 + Math.max(0, toughness - 4) * 0.08) *
+    (1 + armourQuality * 0.35 + invulnerableQuality * 0.15);
+  const durabilityPerHundredPoints = effectiveWounds * 100 / points;
+  const exactMassPressure = profile.bodyCount === null
+    ? profile.hordeShare
+    : Math.max(0, Math.min(1, (profile.bodyCount - 8) / 24));
+  const exactElitePressure = profile.averagePointsPerModel === null
+    ? Math.max(profile.eliteShare, profile.durabilityBands.heavy)
+    : Math.max(
+        0,
+        Math.min(1, (profile.averagePointsPerModel - 30) / 120),
+      );
+  const assaultPressure = Math.max(
+    profile.meleeShare,
+    profile.mobilityShare * 0.8,
+  );
+  const mobilityNeed = profile.bodyCount === null
+    ? Math.max(profile.mobilityShare, profile.meleeShare * 0.5)
+    : profile.mobilityShare;
+  const controlNeed = profile.bodyCount === null
+    ? Math.max(profile.hordeShare, profile.objectiveShare)
+    : exactMassPressure;
+  const tagSupport = opponentTagScore(unit, profile) * 0.02;
+  const targetPressure = equipment
+    ? targetProfilePressure(unit, equipment, profile, points) +
+      equipmentTagScore(unit, equipment, profile) * 0.2
+    : 0;
+  const resilience =
+    24 *
+    boundedRatio(durabilityPerHundredPoints, 10) *
+    (0.55 + assaultPressure * 0.25 + exactElitePressure * 0.2) +
+    exactElitePressure *
+      (
+        Math.max(0, toughness - 7) * 1.5 +
+        invulnerableQuality * 2
+      );
+  const mobility =
+    18 *
+    Math.min(1, mobilityValue / 18) *
+    (0.3 + mobilityNeed * 0.7);
+  const controlPerHundredPoints =
+    objectiveControl * modelCount * 100 / points;
+  const boardControl =
+    16 *
+    boundedRatio(controlPerHundredPoints, 4) *
+    (0.2 + controlNeed * 0.8);
+  return {
+    tagSupport,
+    targetPressure,
+    resilience,
+    mobility,
+    boardControl,
+    total:
+      tagSupport +
+      targetPressure +
+      resilience +
+      mobility +
+      boardControl,
+  };
+}
+
+function equipmentContextScore(
+  unit: UnitView,
+  modelCount: number,
+  points: number,
+  equipment: EquipmentSelection[],
+  profile: OpponentBuildProfile | null,
+): number {
+  return matchupContextComponents(
+    unit,
+    modelCount,
+    points,
+    equipment,
+    profile,
+  ).total;
+}
+
 function selectedProfileEvidence(
   unit: UnitView,
   equipment: EquipmentSelection[],
@@ -2089,18 +3115,25 @@ function candidateScoreComponents(
   hasWarlord: boolean,
   opponentProfile: OpponentBuildProfile | null = null,
   equipment: EquipmentSelection[] | null = null,
+  precomputedMatchup: MatchupContextComponents | null = null,
+  precomputedTags: PreferenceTag[] | null = null,
 ): {
   preference: number;
   pointsUtilization: number;
   missionReadiness: number;
   opponentCoverage: number;
+  opponentTagSupport: number;
+  opponentTargetPressure: number;
+  opponentResilience: number;
+  opponentMobility: number;
+  opponentBoardControl: number;
   modelValue: number;
   duplicationPenalty: number;
   extraCharacterPenalty: number;
   pointsCostPenalty: number;
   total: number;
 } {
-  const tags = unitTags(unit);
+  const tags = precomputedTags ?? unitTags(unit);
   const preference =
     tags.filter((tag) => preferences.includes(tag)).length * 40;
   const pointsUtilization =
@@ -2111,22 +3144,26 @@ function candidateScoreComponents(
   const extraCharacterPenalty =
     hasWarlord && isCharacterUnit(unit) ? 18 : 0;
   const pointsCostPenalty = points / 100;
-  const opponentCoverage =
-    opponentContextScore(unit, opponentProfile) +
-    (
-      equipment
-        ? equipmentContextScore(
-            unit,
-            equipment,
-            opponentProfile,
-          )
-        : 0
+  const matchup =
+    precomputedMatchup ??
+    matchupContextComponents(
+      unit,
+      modelCount,
+      points,
+      equipment,
+      opponentProfile,
     );
+  const opponentCoverage = matchup.total;
   return {
     preference,
     pointsUtilization,
     missionReadiness,
     opponentCoverage,
+    opponentTagSupport: matchup.tagSupport,
+    opponentTargetPressure: matchup.targetPressure,
+    opponentResilience: matchup.resilience,
+    opponentMobility: matchup.mobility,
+    opponentBoardControl: matchup.boardControl,
     modelValue,
     duplicationPenalty,
     extraCharacterPenalty,
@@ -2242,6 +3279,87 @@ export function buildRoster(
       ]);
     }
   }
+  if (
+    rawInput.opponentContext?.kind === "known-faction" &&
+    rawInput.opponentContext.representativeRosters !== undefined
+  ) {
+    const representatives = rawInput.opponentContext.representativeRosters;
+    if (
+      representatives.length < 1 ||
+      representatives.length > 9 ||
+      !/^[0-9a-f]{64}$/.test(
+        rawInput.opponentContext.portfolioHash ?? "",
+      )
+    ) {
+      return envelope<RosterDraftV1>(null, [
+        issue(
+          "OPPONENT_PORTFOLIO_INVALID",
+          "A frozen known-faction portfolio requires one to nine rosters and its 64-character portfolio hash.",
+        ),
+      ]);
+    }
+    if (
+      rawInput.opponentContext.portfolioHash !==
+      portfolioCapabilityHash(rawInput.opponentContext.factionId)
+    ) {
+      return envelope<RosterDraftV1>(null, [
+        issue(
+          "OPPONENT_PORTFOLIO_HASH_MISMATCH",
+          "The frozen opponent portfolio hash is not bound to the active faction rules and portfolio methodology.",
+        ),
+      ]);
+    }
+    const fingerprints = new Set<string>();
+    for (const representative of representatives) {
+      const validation = validateRoster(representative);
+      if (!validation.ok) {
+        return envelope<RosterDraftV1>(
+          null,
+          [
+            issue(
+              "OPPONENT_PORTFOLIO_ROSTER_INVALID",
+              "Every frozen known-faction representative must validate before it can influence roster construction.",
+            ),
+            ...validation.violations,
+          ],
+          validation.warnings,
+        );
+      }
+      if (
+        representative.factionId !==
+        rawInput.opponentContext.factionId
+      ) {
+        return envelope<RosterDraftV1>(null, [
+          issue(
+            "OPPONENT_PORTFOLIO_FACTION_MISMATCH",
+            "Every frozen representative must belong to the declared opponent faction.",
+          ),
+        ]);
+      }
+      const compatibility = rebaseRosterData(representative);
+      if (
+        !compatibility.ok ||
+        compatibility.data?.status === "review-required"
+      ) {
+        return envelope<RosterDraftV1>(null, [
+          issue(
+            "OPPONENT_PORTFOLIO_DATA_SEMANTICS_CHANGED",
+            "A frozen opponent representative differs from the active data bundle and requires review.",
+          ),
+        ]);
+      }
+      const fingerprint = opponentRosterFingerprint(representative);
+      if (fingerprints.has(fingerprint)) {
+        return envelope<RosterDraftV1>(null, [
+          issue(
+            "OPPONENT_PORTFOLIO_DUPLICATE_ROSTER",
+            "Frozen opponent representatives must be structurally distinct.",
+          ),
+        ]);
+      }
+      fingerprints.add(fingerprint);
+    }
+  }
   const factionResolution = resolveFactionIntent({
     prompt: rawInput.prompt,
     playerFaction: rawInput.playerFaction,
@@ -2283,6 +3401,30 @@ export function buildRoster(
       : {}),
   };
   const input = mergeBuildInput(normalizedInput);
+  if (
+    input.opponentContext?.kind === "known-roster" &&
+    input.opponentContext.roster.pointsLimit !== input.pointsLimit
+  ) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "OPPONENT_ROSTER_POINTS_LIMIT_MISMATCH",
+        "The known opponent roster must use the same points limit as the requested player roster.",
+      ),
+    ]);
+  }
+  if (
+    input.opponentContext?.kind === "known-faction" &&
+    input.opponentContext.representativeRosters?.some(
+      (roster) => roster.pointsLimit !== input.pointsLimit,
+    )
+  ) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "OPPONENT_PORTFOLIO_POINTS_MISMATCH",
+        "Every frozen opponent representative must use the requested points limit.",
+      ),
+    ]);
+  }
   if (input.legendsPolicyDecision.resolution === "blocked") {
     return envelope<RosterDraftV1>(null, [
       issue(
@@ -2297,6 +3439,30 @@ export function buildRoster(
       issue("FACTION_NOT_FOUND", `No faction matched "${input.faction}".`),
     ]);
   }
+  if (input.opponentAssumptions && !input.opponentContext) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "OPPONENT_ASSUMPTIONS_SCOPE_REQUIRED",
+        "Opponent assumptions require a known opponent faction or exact opponent roster.",
+      ),
+    ]);
+  }
+  const assumedOpponentFactionId = opponentContextFactionId(
+    input.opponentContext,
+  );
+  const unknownAssumedUnits = assumedOpponentFactionId
+    ? (input.opponentAssumptions?.knownUnitIds ?? []).filter(
+        (unitId) => !resolveUnit(unitId, assumedOpponentFactionId),
+      )
+    : [];
+  if (unknownAssumedUnits.length > 0) {
+    return envelope<RosterDraftV1>(null, [
+      issue(
+        "OPPONENT_ASSUMPTION_UNIT_NOT_FOUND",
+        `These user-stated opponent units do not belong to ${assumedOpponentFactionId}: ${unknownAssumedUnits.join(", ")}.`,
+      ),
+    ]);
+  }
   if (!isBuildableFaction(faction.id)) {
     return envelope<RosterDraftV1>(null, [
       issue(
@@ -2305,7 +3471,17 @@ export function buildRoster(
       ),
     ]);
   }
-  const requiredUnitIds = new Set(input.requiredUnitIds ?? []);
+  const userRequiredUnitIds = new Set(input.requiredUnitIds ?? []);
+  const effectiveRequiredWarlordUnitId =
+    input.requiredWarlordUnitId ??
+    input.internalExplorationWarlordUnitId;
+  const requiredUnitIds = new Set([
+    ...userRequiredUnitIds,
+    ...(input.internalExplorationAnchorUnitIds ?? []),
+    ...(effectiveRequiredWarlordUnitId
+      ? [effectiveRequiredWarlordUnitId]
+      : []),
+  ]);
   const excludedUnitIds = new Set(input.excludedUnitIds ?? []);
   const ownedCollectionProfile =
     input.collectionProfile?.mode === "owned"
@@ -2413,13 +3589,13 @@ export function buildRoster(
     ]);
   }
   if (
-    input.requiredWarlordUnitId &&
-    excludedUnitIds.has(input.requiredWarlordUnitId)
+    effectiveRequiredWarlordUnitId &&
+    excludedUnitIds.has(effectiveRequiredWarlordUnitId)
   ) {
     return envelope<RosterDraftV1>(null, [
       issue(
         "UNIT_CONSTRAINT_CONFLICT",
-        `${input.requiredWarlordUnitId} cannot be both the required Warlord and excluded.`,
+        `${effectiveRequiredWarlordUnitId} cannot be both the required Warlord and excluded.`,
       ),
     ]);
   }
@@ -2551,9 +3727,64 @@ export function buildRoster(
     .filter((unit) => input.allowNamedCharacters || !isNamedCharacter(unit))
     .filter((unit) => !collection || collection.has(unit.id))
     .filter((unit) => !excludedUnitIds.has(unit.id))
-    .filter((unit) => unit.raw.attachment_role !== "support")
     .filter(unitAllowedByDetachment)
     .filter((unit) => availableModelCounts(unit, 1).length > 0);
+
+  for (const requiredUnitId of [...requiredUnitIds]) {
+    const support = factionUnitPool.find(
+      (unit) =>
+        unit.id === requiredUnitId &&
+        unit.raw.attachment_role === "support",
+    );
+    if (!support) continue;
+    const eligibleBodyguardIds = new Set(
+      dataset.bodyguardsAttachableFrom(support.id).map((unit) => unit.id),
+    );
+    if (
+      [...requiredUnitIds].some((unitId) =>
+        eligibleBodyguardIds.has(unitId)
+      )
+    ) {
+      continue;
+    }
+    const bodyguard = factionUnitPool
+      .filter(
+        (unit) =>
+          eligibleBodyguardIds.has(unit.id) &&
+          unit.raw.attachment_role !== "support" &&
+          availableModelCounts(unit, 1).some((modelCount) =>
+            equipmentLoadoutIsLegal(
+              unit,
+              modelCount,
+              getEquipment(unit, modelCount),
+            )
+          ),
+      )
+      .sort((left, right) => {
+        const leftPoints = Math.min(
+          ...availableModelCounts(left, 1).map((modelCount) =>
+            baseUnitPoints(left.raw, modelCount, 1)
+          ),
+        );
+        const rightPoints = Math.min(
+          ...availableModelCounts(right, 1).map((modelCount) =>
+            baseUnitPoints(right.raw, modelCount, 1)
+          ),
+        );
+        return leftPoints - rightPoints ||
+          left.name.localeCompare(right.name) ||
+          left.id.localeCompare(right.id);
+      })[0];
+    if (!bodyguard) {
+      return envelope<RosterDraftV1>(null, [
+        issue(
+          "SUPPORT_ATTACHMENT_UNAVAILABLE",
+          `${support.name} must attach, but no legal bodyguard is available under the detachment, collection, and unit constraints.`,
+        ),
+      ]);
+    }
+    requiredUnitIds.add(bodyguard.id);
+  }
 
   const selectionFitsCollection = (
     currentSelections: DraftUnit[],
@@ -2622,25 +3853,66 @@ export function buildRoster(
       ),
     ]);
   }
-  const opponentProfile = opponentBuildProfile(input.opponentContext);
-  const equipmentCandidateCache = new Map<
-    string,
-    EquipmentSelection[][]
-  >();
+  const opponentProfile = applyOpponentAssumptions(
+    opponentBuildProfile(input.opponentContext),
+    input.opponentAssumptions,
+  );
+  const operationCache = internalBuildOperationCache(
+    input.internalBuildCacheToken,
+  );
+  const staticCandidateContextKey = crypto
+    .createHash("sha256")
+    .update(canonicalJson({
+      opponentProfile,
+      preferences: [...input.preferences].sort(),
+    }))
+    .digest("hex");
   const candidateEquipment = (
     unit: UnitView,
     modelCount: number,
   ): EquipmentSelection[][] => {
-    const key = `${unit.id}:${modelCount}:${opponentProfile?.factionId ?? "generic"}`;
-    const cached = equipmentCandidateCache.get(key);
+    const key = [
+      staticCandidateContextKey,
+      unit.raw.faction_id,
+      unit.id,
+      modelCount,
+    ].join("\u0000");
+    const cached = operationCache.equipmentCandidates.get(key);
     if (cached) return cached;
     const candidates = equipmentCandidates(
       unit,
       modelCount,
       opponentProfile,
+      input.preferences,
     );
-    equipmentCandidateCache.set(key, candidates);
+    operationCache.equipmentCandidates.set(key, candidates);
     return candidates;
+  };
+  const candidateMatchup = (
+    unit: UnitView,
+    modelCount: number,
+    points: number,
+    equipment: EquipmentSelection[] | null,
+  ): MatchupContextComponents => {
+    const key = [
+      staticCandidateContextKey,
+      unit.raw.faction_id,
+      unit.id,
+      modelCount,
+      points,
+      equipment ? equipmentSignature(equipment) : "none",
+    ].join("\u0000");
+    const cached = operationCache.matchupComponents.get(key);
+    if (cached) return cached;
+    const matchup = matchupContextComponents(
+      unit,
+      modelCount,
+      points,
+      equipment,
+      opponentProfile,
+    );
+    operationCache.matchupComponents.set(key, matchup);
+    return matchup;
   };
   const newRecruitFaction = getNewRecruitFactionCatalogue(faction.id);
   const globallyBlockedUnitIds = new Set(
@@ -2656,10 +3928,18 @@ export function buildRoster(
           .map((unit) => unit.id),
       ),
   );
-  const buildUnitPool = factionUnitPool.filter(
-    (unit) =>
-      !globallyBlockedUnitIds.has(unit.id) ||
-      requiredUnitIds.has(unit.id),
+  // New Recruit mapping coverage is an export concern. Canonical and local
+  // analysis must still consider every rules-legal datasheet. The internal
+  // repair/export workflow opts into mapping-aware construction explicitly.
+  const buildUnitPool = input.internalRequireNewRecruitExportability
+    ? factionUnitPool.filter(
+        (unit) =>
+          !globallyBlockedUnitIds.has(unit.id) ||
+          requiredUnitIds.has(unit.id),
+      )
+    : factionUnitPool;
+  const buildUnitTagsById = new Map(
+    buildUnitPool.map((unit) => [unit.id, unitTags(unit)]),
   );
   type ExportabilitySelection = Pick<
     DraftUnit,
@@ -2739,38 +4019,133 @@ export function buildRoster(
     return exportable;
   };
 
+  type StaticBuildVariant = {
+    unit: UnitView;
+    modelCount: number;
+    equipment: EquipmentSelection[];
+    points: number;
+    ordinal: number;
+    selection: DraftUnit;
+    exportable: boolean;
+    matchup: MatchupContextComponents;
+  };
+  const maximumCopiesByUnitId = new Map(
+    buildUnitPool.map((unit) => {
+      let rulesMaximumCopies = 3;
+      if (isNamedCharacter(unit) || isCharacterUnit(unit)) {
+        rulesMaximumCopies = 1;
+      } else if (
+        unit.raw.role === "battleline" ||
+        unit.raw.role === "dedicated-transport"
+      ) {
+        rulesMaximumCopies = 6;
+      } else if (input.pointsLimit <= 1000) {
+        rulesMaximumCopies = 2;
+      }
+      return [
+        unit.id,
+        Math.min(
+          rulesMaximumCopies,
+          ownedCollection?.get(unit.id)?.maxUnits ?? rulesMaximumCopies,
+        ),
+      ];
+    }),
+  );
+  const supportBodyguardIdsByUnitId = new Map(
+    buildUnitPool
+      .filter((unit) => unit.raw.attachment_role === "support")
+      .map((unit) => [
+        unit.id,
+        new Set(
+          dataset.bodyguardsAttachableFrom(unit.id).map(
+            (bodyguard) => bodyguard.id,
+          ),
+        ),
+      ]),
+  );
+  const staticBuildVariantCache = new Map<string, StaticBuildVariant[]>();
+  const staticBuildVariants = (
+    unit: UnitView,
+    ordinal: number,
+  ): StaticBuildVariant[] => {
+    const key = `${unit.id}:${ordinal}`;
+    const cached = staticBuildVariantCache.get(key);
+    if (cached) return cached;
+    const variants = availableModelCounts(unit, ordinal).flatMap(
+      (modelCount) =>
+        candidateEquipment(unit, modelCount).flatMap((equipment) => {
+          if (!equipmentLoadoutIsLegal(unit, modelCount, equipment)) {
+            return [];
+          }
+          const selection = makeSelection(
+            unit,
+            modelCount,
+            ordinal,
+            false,
+            null,
+            equipment,
+            buildUnitTagsById.get(unit.id),
+          );
+          if (
+            selection.points <= 0 ||
+            selection.points > input.pointsLimit ||
+            selectionIsInternallyExcluded(selection)
+          ) {
+            return [];
+          }
+          return [{
+            unit,
+            modelCount,
+            equipment,
+            points: selection.points,
+            ordinal,
+            selection,
+            exportable: selectionIsExportable(selection),
+            matchup: candidateMatchup(
+              unit,
+              modelCount,
+              selection.points,
+              equipment,
+            ),
+          }];
+        }),
+    );
+    staticBuildVariantCache.set(key, variants);
+    return variants;
+  };
+
   const characterCandidates = buildUnitPool
     .filter(isWarlordEligible)
     .flatMap((unit) =>
-      availableModelCounts(unit, 1).flatMap((modelCount) =>
-        candidateEquipment(unit, modelCount).map(
-          (equipment) => {
-            const points = selectionPoints(
-              unit,
-              modelCount,
-              1,
-              equipment,
-              null,
-            );
-            return {
-              unit,
-              modelCount,
-              equipment,
-              points,
-              exportable: selectionIsExportable(
-                makeSelection(
-                  unit,
-                  modelCount,
-                  1,
-                  true,
-                  null,
-                  equipment,
-                ),
-              ),
-            };
-          },
-        ),
-      ),
+      staticBuildVariants(unit, 1).map((variant) => {
+        const selection = makeSelection(
+          unit,
+          variant.modelCount,
+          1,
+          true,
+          null,
+          variant.equipment,
+          buildUnitTagsById.get(unit.id),
+        );
+        return {
+          ...variant,
+          selection,
+          score: candidateScoreComponents(
+            unit,
+            variant.modelCount,
+            variant.points,
+            input.pointsLimit,
+            input.preferences,
+            0,
+            false,
+            opponentProfile,
+            variant.equipment,
+            variant.matchup,
+            buildUnitTagsById.get(unit.id),
+          ).total,
+          exportable: selectionIsExportable(selection),
+        };
+      }),
     )
     .filter((candidate) =>
       selectionFitsCollection(
@@ -2779,59 +4154,24 @@ export function buildRoster(
         candidate.modelCount,
       ),
     )
-    .filter((candidate) =>
-      equipmentLoadoutIsLegal(
-        candidate.unit,
-        candidate.modelCount,
-        candidate.equipment,
-      ),
+    .filter(
+      (candidate) =>
+        candidate.unit.raw.attachment_role !== "support" ||
+        requiredUnitIds.has(candidate.unit.id),
     )
     .filter(
       (candidate) =>
-        !selectionIsInternallyExcluded(
-          makeSelection(
-            candidate.unit,
-            candidate.modelCount,
-            1,
-            true,
-            null,
-            candidate.equipment,
-          ),
-        ),
-    )
-    .filter((candidate) => candidate.points <= input.pointsLimit)
-    .filter(
-      (candidate) =>
-        !input.requiredWarlordUnitId ||
-        candidate.unit.id === input.requiredWarlordUnitId,
+        !effectiveRequiredWarlordUnitId ||
+        candidate.unit.id === effectiveRequiredWarlordUnitId,
     )
     .sort(
       (a, b) =>
         Number(requiredUnitIds.has(b.unit.id)) -
           Number(requiredUnitIds.has(a.unit.id)) ||
-        Number(b.exportable) - Number(a.exportable) ||
-        candidateScore(
-          b.unit,
-          b.modelCount,
-          b.points,
-          input.pointsLimit,
-          input.preferences,
-          0,
-          false,
-          opponentProfile,
-          null,
-        ) -
-          candidateScore(
-            a.unit,
-            a.modelCount,
-            a.points,
-            input.pointsLimit,
-            input.preferences,
-          0,
-          false,
-          opponentProfile,
-          null,
-        ) ||
+        (input.internalRequireNewRecruitExportability
+          ? Number(b.exportable) - Number(a.exportable)
+          : 0) ||
+        b.score - a.score ||
         a.points - b.points ||
         a.unit.name.localeCompare(b.unit.name),
     );
@@ -2845,9 +4185,7 @@ export function buildRoster(
     ]);
   }
 
-  let selections: DraftUnit[] = [
-    makeSelection(warlord.unit, warlord.modelCount, 1, true, null, warlord.equipment),
-  ];
+  let selections: DraftUnit[] = [warlord.selection];
   let totalPoints = selections[0].points;
   let copies = new Map<string, number>([[warlord.unit.id, 1]]);
 
@@ -2857,46 +4195,7 @@ export function buildRoster(
       (candidate) => candidate.id === requiredUnitId,
     )!;
     const ordinal = (copies.get(unit.id) ?? 0) + 1;
-    const requiredCandidates = availableModelCounts(unit, ordinal)
-      .flatMap((modelCount) =>
-        candidateEquipment(unit, modelCount).map(
-          (equipment) => {
-            const points = selectionPoints(
-              unit,
-              modelCount,
-              ordinal,
-              equipment,
-              null,
-            );
-            return {
-              modelCount,
-              equipment,
-              points,
-              exportable: selectionIsExportable(
-                makeSelection(
-                  unit,
-                  modelCount,
-                  ordinal,
-                  false,
-                  null,
-                  equipment,
-                ),
-              ),
-              score: candidateScore(
-                unit,
-                modelCount,
-                points,
-                input.pointsLimit - totalPoints,
-                input.preferences,
-                ordinal - 1,
-                true,
-                opponentProfile,
-                equipment,
-              ),
-            };
-          },
-        ),
-      )
+    const requiredCandidates = staticBuildVariants(unit, ordinal)
       .filter(
         (candidate) =>
           selectionFitsCollection(
@@ -2904,26 +4203,29 @@ export function buildRoster(
             unit.id,
             candidate.modelCount,
           ) &&
-          equipmentLoadoutIsLegal(
-            unit,
-            candidate.modelCount,
-            candidate.equipment,
-          ) &&
-          !selectionIsInternallyExcluded(
-            makeSelection(
-              unit,
-              candidate.modelCount,
-              ordinal,
-              false,
-              null,
-              candidate.equipment,
-            ),
-          ) &&
           totalPoints + candidate.points <= input.pointsLimit,
       )
+      .map((candidate) => ({
+        ...candidate,
+        score: candidateScoreComponents(
+          unit,
+          candidate.modelCount,
+          candidate.points,
+          input.pointsLimit - totalPoints,
+          input.preferences,
+          ordinal - 1,
+          true,
+          opponentProfile,
+          candidate.equipment,
+          candidate.matchup,
+          buildUnitTagsById.get(unit.id),
+        ).total,
+      }))
       .sort(
         (left, right) =>
-          Number(right.exportable) - Number(left.exportable) ||
+          (input.internalRequireNewRecruitExportability
+            ? Number(right.exportable) - Number(left.exportable)
+            : 0) ||
           right.score - left.score ||
           right.points - left.points ||
           left.modelCount - right.modelCount,
@@ -2939,16 +4241,7 @@ export function buildRoster(
         ),
       ]);
     }
-    selections.push(
-      makeSelection(
-        unit,
-        required.modelCount,
-        ordinal,
-        false,
-        null,
-        required.equipment,
-      ),
-    );
+    selections.push(required.selection);
     copies.set(unit.id, ordinal);
     totalPoints += required.points;
   }
@@ -3044,7 +4337,9 @@ export function buildRoster(
       }];
     });
     const selectedTags = new Set(
-      selectedUnits.flatMap((unit) => unitTags(unit)),
+      selectedUnits.flatMap(
+        (unit) => buildUnitTagsById.get(unit.id) ?? unitTags(unit),
+      ),
     );
     const exportableSelections = state.selections.filter(
       selectionIsExportable,
@@ -3162,21 +4457,24 @@ export function buildRoster(
           ) / 2,
         ),
       );
-    const opponentCoverage = state.selections.reduce(
+    const opponentCoverageTotal = state.selections.reduce(
       (sum, selection) => {
         const unit = unitById.get(selection.unitId);
         return unit
           ? sum +
-              opponentContextScore(unit, opponentProfile) +
-              equipmentContextScore(
+              candidateMatchup(
                 unit,
+                selection.modelCount,
+                selection.points,
                 selection.equipment,
-                opponentProfile,
-              )
+              ).total * selection.points
           : sum;
       },
       0,
     );
+    const opponentCoverage = opponentProfile
+      ? opponentCoverageTotal / Math.max(1, state.totalPoints)
+      : 0;
     const roleBreadth = new Set(
       selectedUnits.map((unit) => unitRole(unit)),
     ).size;
@@ -3224,7 +4522,9 @@ export function buildRoster(
     const b = stateComponents(right);
     if (!opponentProfile) {
       return (
-        b.exportable - a.exportable ||
+        (input.internalRequireNewRecruitExportability
+          ? b.exportable - a.exportable
+          : 0) ||
         b.pointsReady - a.pointsReady ||
         b.pointsProgress - a.pointsProgress ||
         b.points - a.points ||
@@ -3238,15 +4538,17 @@ export function buildRoster(
       );
     }
     return (
-      b.exportable - a.exportable ||
+      (input.internalRequireNewRecruitExportability
+        ? b.exportable - a.exportable
+        : 0) ||
       b.pointsReady - a.pointsReady ||
       a.unsupportedLeaders - b.unsupportedLeaders ||
       a.missionRedDimensions - b.missionRedDimensions ||
-      b.pointsProgress - a.pointsProgress ||
-      b.points - a.points ||
+      b.opponentCoverage - a.opponentCoverage ||
       b.missionGreenDimensions - a.missionGreenDimensions ||
       b.missionReadiness - a.missionReadiness ||
-      b.opponentCoverage - a.opponentCoverage ||
+      b.pointsProgress - a.pointsProgress ||
+      b.points - a.points ||
       b.roleBreadth - a.roleBreadth ||
       a.duplicateCount - b.duplicateCount ||
       a.fingerprint.localeCompare(b.fingerprint)
@@ -3259,12 +4561,14 @@ export function buildRoster(
     const a = stateComponents(left);
     const b = stateComponents(right);
     return (
-      b.exportable - a.exportable ||
+      (input.internalRequireNewRecruitExportability
+        ? b.exportable - a.exportable
+        : 0) ||
       a.unsupportedLeaders - b.unsupportedLeaders ||
       a.missionRedDimensions - b.missionRedDimensions ||
+      b.opponentCoverage - a.opponentCoverage ||
       b.missionGreenDimensions - a.missionGreenDimensions ||
       b.missionReadiness - a.missionReadiness ||
-      b.opponentCoverage - a.opponentCoverage ||
       b.pointsProgress - a.pointsProgress ||
       b.roleBreadth - a.roleBreadth ||
       a.duplicateCount - b.duplicateCount ||
@@ -3278,8 +4582,8 @@ export function buildRoster(
     totalPoints,
   }];
   const completed: BuildState[] = [];
-  const beamWidth = 8;
-  const branchWidth = 6;
+  const beamWidth = opponentProfile ? 12 : 8;
+  const branchWidth = opponentProfile ? 8 : 6;
   for (let depth = 0; depth < 24; depth += 1) {
     const expanded: BuildState[] = [];
     for (const state of beam) {
@@ -3290,46 +4594,36 @@ export function buildRoster(
         equipment: EquipmentSelection[];
         points: number;
         ordinal: number;
+        selection: DraftUnit;
         exportable: boolean;
         score: number;
+        matchup: MatchupContextComponents;
       }> = [];
       for (const unit of buildUnitPool) {
-        const currentCopies = state.copies.get(unit.id) ?? 0;
-        let rulesMaximumCopies = 3;
-        if (isNamedCharacter(unit) || isCharacterUnit(unit)) {
-          rulesMaximumCopies = 1;
-        } else if (
-          unit.raw.role === "battleline" ||
-          unit.raw.role === "dedicated-transport"
-        ) {
-          rulesMaximumCopies = 6;
-        } else if (input.pointsLimit <= 1000) {
-          rulesMaximumCopies = 2;
+        if (unit.raw.attachment_role === "support") {
+          const eligibleBodyguardIds =
+            supportBodyguardIdsByUnitId.get(unit.id) ?? new Set<string>();
+          if (
+            !state.selections.some((selection) =>
+              eligibleBodyguardIds.has(selection.unitId)
+            )
+          ) {
+            continue;
+          }
         }
-        const collectionMaximumCopies =
-          ownedCollection?.get(unit.id)?.maxUnits ??
-          rulesMaximumCopies;
-        const maximumCopies = Math.min(
-          rulesMaximumCopies,
-          collectionMaximumCopies,
-        );
+        const currentCopies = state.copies.get(unit.id) ?? 0;
+        const maximumCopies = maximumCopiesByUnitId.get(unit.id) ?? 0;
         if (currentCopies >= maximumCopies) continue;
         const ordinal = currentCopies + 1;
-        for (const modelCount of availableModelCounts(unit, ordinal)) {
-          for (
-            const equipment of
-              candidateEquipment(unit, modelCount)
-          ) {
-            if (!equipmentLoadoutIsLegal(unit, modelCount, equipment)) {
-              continue;
-            }
-            const points = selectionPoints(
-              unit,
+        for (const variant of staticBuildVariants(unit, ordinal)) {
+            const {
               modelCount,
-              ordinal,
               equipment,
-              null,
-            );
+              points,
+              selection,
+              exportable,
+              matchup,
+            } = variant;
             if (points <= 0 || points > remaining) continue;
             if (
               !selectionFitsCollection(
@@ -3340,44 +4634,37 @@ export function buildRoster(
             ) {
               continue;
             }
-            const selection = makeSelection(
+            const scoreComponents = candidateScoreComponents(
               unit,
               modelCount,
-              ordinal,
-              false,
-              null,
+              points,
+              remaining,
+              input.preferences,
+              currentCopies,
+              true,
+              opponentProfile,
               equipment,
+              matchup,
+              buildUnitTagsById.get(unit.id),
             );
-            if (selectionIsInternallyExcluded(selection)) {
-              continue;
-            }
             candidates.push({
               unit,
               modelCount,
               equipment,
               points,
               ordinal,
-              exportable: selectionIsExportable(
-                selection,
-              ),
-              score: candidateScore(
-                unit,
-                modelCount,
-                points,
-                remaining,
-                input.preferences,
-                currentCopies,
-                true,
-                opponentProfile,
-                equipment,
-              ),
+              selection,
+              exportable,
+              matchup,
+              score: scoreComponents.total,
             });
-          }
         }
       }
       candidates.sort(
         (a, b) =>
-          Number(b.exportable) - Number(a.exportable) ||
+          (input.internalRequireNewRecruitExportability
+            ? Number(b.exportable) - Number(a.exportable)
+            : 0) ||
           b.score - a.score ||
           b.points - a.points ||
           a.unit.name.localeCompare(b.unit.name) ||
@@ -3425,6 +4712,26 @@ export function buildRoster(
       // variants cannot crowd mission pieces out of the beam.
       if (opponentProfile) {
         addDistinctUnitCandidates(candidates, branchWidth);
+        for (
+          const dimension of
+          [
+            "targetPressure",
+            "resilience",
+            "mobility",
+            "boardControl",
+          ] as const
+        ) {
+          addDistinctUnitCandidates(
+            [...candidates].sort(
+              (a, b) =>
+                b.matchup[dimension] - a.matchup[dimension] ||
+                b.score - a.score ||
+                a.points - b.points ||
+                a.unit.name.localeCompare(b.unit.name),
+            ),
+            2,
+          );
+        }
       }
       // Preference-heavy scoring can otherwise prune inexpensive action
       // pieces and model-rich board-control units before the beam has enough
@@ -3459,14 +4766,7 @@ export function buildRoster(
         expanded.push({
           selections: [
             ...state.selections,
-            makeSelection(
-              candidate.unit,
-              candidate.modelCount,
-              candidate.ordinal,
-              false,
-              null,
-              candidate.equipment,
-            ),
+            candidate.selection,
           ],
           copies: nextCopies,
           totalPoints: state.totalPoints + candidate.points,
@@ -3502,21 +4802,17 @@ export function buildRoster(
     copies = selectedState.copies;
     totalPoints = selectedState.totalPoints;
   }
+  selections = attachRequiredSupportSelections(selections, faction.id);
 
   const timestamp = nowIso();
-  const draft = stampRosterDataIdentity({
+  const draft = stampSemanticRosterIdentity({
     schemaVersion: ROSTER_SCHEMA_VERSION,
     gameSystem: SUPPORTED_GAME,
     sourceData: {
       ...currentRosterSourceData(faction.id),
     },
-    id: deterministicId([
-      faction.id,
-      input.name,
-      input.pointsLimit,
-      input.preferences.join(","),
-      selections.map((selection) => selection.unitId).join(","),
-    ]),
+    // Replaced after source-data stamping by the full semantic roster digest.
+    id: "rp-pending",
     name: input.name,
     factionId: faction.id,
     factionName: faction.name,
@@ -3534,12 +4830,24 @@ export function buildRoster(
       legendsPolicyDecision: input.legendsPolicyDecision,
       collectionUnitIds: input.collectionUnitIds ?? null,
       collectionProfile: input.collectionProfile ?? null,
-      requiredUnitIds: [...requiredUnitIds].sort(),
+      requiredUnitIds: [...userRequiredUnitIds].sort(),
       excludedUnitIds: [...excludedUnitIds].sort(),
       requiredWarlordUnitId: input.requiredWarlordUnitId ?? null,
       opponentFactionId: opponentProfile?.factionId ?? null,
       opponentRosterFingerprint:
         opponentProfile?.rosterFingerprint ?? null,
+      opponentPortfolioHash:
+        input.opponentContext?.kind === "known-faction"
+          ? input.opponentContext.portfolioHash ?? null
+          : null,
+      opponentRosterFingerprints:
+        input.opponentContext?.kind === "known-faction" &&
+          input.opponentContext.representativeRosters
+          ? input.opponentContext.representativeRosters
+              .map(opponentRosterFingerprint)
+              .sort()
+          : [],
+      opponentAssumptions: input.opponentAssumptions ?? null,
       opponentThreatProfile: opponentProfile,
     },
     units: selections,
@@ -3581,7 +4889,19 @@ export function toCanonicalRoster(draft: RosterDraftV1): Roster {
         ref: ref(equipment.itemId, equipment.name),
         count: equipment.count,
       })),
-      leader_attachment: null,
+      leader_attachment: selection.leaderAttachment
+        ? {
+            bodyguard_ref: ref(
+              selection.leaderAttachment.bodyguardUnitId,
+              resolveUnit(
+                selection.leaderAttachment.bodyguardUnitId,
+                draft.factionId,
+              )?.name ?? selection.leaderAttachment.bodyguardUnitId,
+            ),
+            role: selection.leaderAttachment.role,
+            provisional: selection.leaderAttachment.provisional,
+          }
+        : null,
     };
   });
   const detachment = resolveDetachment(draft.detachmentId, draft.factionId);
@@ -3794,6 +5114,56 @@ export function validateRoster(
   const selectedLegends: DraftUnit[] = [];
   for (const selection of draft.units) {
     const unit = resolveUnit(selection.unitId, draft.factionId);
+    if (unit?.raw.attachment_role === "support") {
+      const attachment = selection.leaderAttachment;
+      if (!attachment) {
+        violations.push(
+          issue(
+            "SUPPORT_ATTACHMENT_REQUIRED",
+            `${selection.name} must identify a compatible selected bodyguard unit.`,
+            "error",
+            selection.selectionId,
+          ),
+        );
+      } else {
+        const compatibleBodyguardIds = new Set(
+          dataset.bodyguardsAttachableFrom(unit.id).map(
+            (bodyguard) => bodyguard.id,
+          ),
+        );
+        if (
+          attachment.role !== "support" ||
+          !compatibleBodyguardIds.has(attachment.bodyguardUnitId)
+        ) {
+          violations.push(
+            issue(
+              "SUPPORT_ATTACHMENT_INVALID",
+              `${selection.name} is not linked to a compatible bodyguard datasheet.`,
+              "error",
+              selection.selectionId,
+            ),
+          );
+        } else if (!selectedUnitIds.has(attachment.bodyguardUnitId)) {
+          violations.push(
+            issue(
+              "SUPPORT_BODYGUARD_MISSING",
+              `${selection.name}'s linked bodyguard is not selected in this roster.`,
+              "error",
+              selection.selectionId,
+            ),
+          );
+        }
+      }
+    } else if (selection.leaderAttachment?.role === "support") {
+      violations.push(
+        issue(
+          "SUPPORT_ATTACHMENT_INVALID",
+          `${selection.name} is not a support attachment unit.`,
+          "error",
+          selection.selectionId,
+        ),
+      );
+    }
     if (unit?.raw.is_legend === true) {
       selectedLegends.push(selection);
       if (!legendBuildSupported(unit)) {
@@ -4210,7 +5580,7 @@ export function modifyRoster(
     next.forceDispositionName = dispositionName(operation.forceDispositionId);
   }
 
-  next = stampRosterDataIdentity(
+  next = stampSemanticRosterIdentity(
     recalculateDraft(next, next.units),
   );
   const validation = validateRoster(next);
@@ -4407,7 +5777,6 @@ export function explainRoster(
         generatorVersion: "beam-search-v1",
         scoreOrder: [
           "hard constraints and legality",
-          "New Recruit exportability",
           "points utilization",
           "mission readiness",
           "opponent-profile coverage",
