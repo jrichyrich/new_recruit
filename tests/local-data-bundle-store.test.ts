@@ -414,6 +414,42 @@ test("local bundle install atomically activates a fully verified snapshot and re
   });
 });
 
+test("active status verifies only the active bundle", async () => {
+  await withStoreDirectory("data-bundle-active-status", async (root) => {
+    const pair = await keyPair();
+    const first = await bundleFixture(pair, 71);
+    const second = await bundleFixture(pair, 72);
+    let validatedShards = 0;
+    const store = createLocalDataBundleStore({
+      rootDirectory: root,
+      trustedKeys: { "release-2026": pair.publicKey },
+      validateShardData: () => {
+        validatedShards += 1;
+      },
+    });
+    for (const fixture of [first, second]) {
+      await store.installBundle(
+        {
+          manifest: fixture.manifest,
+          shards: fixture.shards,
+          channelPointer: fixture.pointer,
+        },
+        { activate: true },
+      );
+    }
+
+    validatedShards = 0;
+    const status = await store.getActiveStatus();
+    assert.equal(status.state, "ready");
+    assert.equal(status.activeBundleId, second.manifest.bundleId);
+    assert.equal(
+      validatedShards,
+      second.manifest.shards.length,
+      "ordinary provider status must not re-verify retained archives",
+    );
+  });
+});
+
 test("an unsigned local-source bundle requires and exposes complete build evidence", async () => {
   await withStoreDirectory("local-source-bundle", async (root) => {
     const pair = await keyPair();

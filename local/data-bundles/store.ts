@@ -364,6 +364,8 @@ export type LocalDataBundleStatusEntry = {
   installedAt: string | null;
   trustOrigin: "signed-verified" | "locally-verified" | null;
   evidenceKind: "signed" | "local-receipt" | null;
+  rulesVersion: string | null;
+  newRecruitCommit: string | null;
   referencedBy: number;
   quarantine: LocalDataBundleQuarantineV1 | null;
   issue: string | null;
@@ -396,6 +398,27 @@ export type LocalDataBundleStoreStatus = {
   };
   issues: string[];
 };
+
+export type LocalDataBundleActiveStatus = {
+  state: "ready" | "degraded" | "empty";
+  activeBundleId: string | null;
+  stateRevision: number | null;
+  updatedAt: string | null;
+  trustOrigin: "signed-verified" | "locally-verified" | null;
+  evidenceKind: "signed" | "local-receipt" | null;
+  quarantines: LocalDataBundleQuarantineV1[];
+  rollbackHold: LocalDataBundleRollbackHoldV1 | null;
+  issues: string[];
+};
+
+export type LocalDataBundlePointerStatus = Pick<
+  LocalDataBundleActiveStatus,
+  | "activeBundleId"
+  | "stateRevision"
+  | "updatedAt"
+  | "quarantines"
+  | "rollbackHold"
+>;
 
 export type LocalDataBundleChannelCursorCompareAndSetResult = {
   committed: boolean;
@@ -1598,12 +1621,17 @@ export class LocalDataBundleStore {
         null;
       let evidenceKind: LocalDataBundleStatusEntry["evidenceKind"] =
         null;
+      let rulesVersion: string | null = null;
+      let newRecruitCommit: string | null = null;
       let issue: string | null = null;
       try {
         const verified = await this.#verifyInstalledBundle(bundleId);
         installedAt = verified.receipt.installedAt;
         trustOrigin = verified.trustOrigin;
         evidenceKind = verified.evidence.kind;
+        rulesVersion = verified.manifest.provenance.rules.version;
+        newRecruitCommit =
+          verified.manifest.provenance.newRecruit.commit;
       } catch (error) {
         integrity = "invalid";
         issue = String(error);
@@ -1624,6 +1652,8 @@ export class LocalDataBundleStore {
         installedAt,
         trustOrigin,
         evidenceKind,
+        rulesVersion,
+        newRecruitCommit,
         referencedBy: referenceCounts.get(bundleId) ?? 0,
         quarantine,
         issue,
@@ -1666,6 +1696,82 @@ export class LocalDataBundleStore {
       })),
       updateLease: await this.#readLeaseStatus(),
       issues,
+    };
+  }
+
+  /**
+   * Verifies the active immutable bundle without auditing every retained
+   * archive. Runtime startup and ordinary provider status only depend on this
+   * scope; Doctor and retention continue to use getStatus() for the exhaustive
+   * archive inventory.
+   */
+  async getActiveStatus(): Promise<LocalDataBundleActiveStatus> {
+    const issues: string[] = [];
+    let state: LocalDataBundleStoreStateV1 | null = null;
+    try {
+      state = await this.#readState();
+    } catch (error) {
+      issues.push(String(error));
+    }
+    if (!state) {
+      return {
+        state: "degraded",
+        activeBundleId: null,
+        stateRevision: null,
+        updatedAt: null,
+        trustOrigin: null,
+        evidenceKind: null,
+        quarantines: [],
+        rollbackHold: null,
+        issues,
+      };
+    }
+    if (!state.activeBundleId) {
+      return {
+        state: "empty",
+        activeBundleId: null,
+        stateRevision: state.revision,
+        updatedAt: state.updatedAt,
+        trustOrigin: null,
+        evidenceKind: null,
+        quarantines: state.quarantines,
+        rollbackHold: state.rollbackHold ?? null,
+        issues,
+      };
+    }
+    let trustOrigin: LocalDataBundleActiveStatus["trustOrigin"] = null;
+    let evidenceKind: LocalDataBundleActiveStatus["evidenceKind"] = null;
+    try {
+      const verified = await this.#verifyInstalledBundle(
+        state.activeBundleId,
+      );
+      trustOrigin = verified.trustOrigin;
+      evidenceKind = verified.evidence.kind;
+    } catch (error) {
+      issues.push(`Bundle "${state.activeBundleId}": ${String(error)}`);
+    }
+    return {
+      state: issues.length === 0 ? "ready" : "degraded",
+      activeBundleId: state.activeBundleId,
+      stateRevision: state.revision,
+      updatedAt: state.updatedAt,
+      trustOrigin,
+      evidenceKind,
+      quarantines: state.quarantines,
+      rollbackHold: state.rollbackHold ?? null,
+      issues,
+    };
+  }
+
+  /** Reads and authenticates only the durable active pointer state. */
+  async getActivePointerStatus(): Promise<LocalDataBundlePointerStatus> {
+    const state = await this.#readState();
+    return {
+      activeBundleId: state.activeBundleId,
+      stateRevision: state.revision,
+      updatedAt: state.updatedAt,
+      quarantines: state.quarantines,
+      rollbackHold: state.rollbackHold ?? null,
     };
   }
 

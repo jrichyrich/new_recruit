@@ -237,27 +237,19 @@ async function localControlStatus(): Promise<LocalDataUpdateControlStatus> {
     .sort((left, right) =>
       (right.installedAt ?? "").localeCompare(left.installedAt ?? ""),
     )) {
-    const installed = await bundleStore.loadBundle(entry.bundleId).catch(() => null);
-    try {
-      if (installed?.snapshot.trustOrigin === "locally-verified") {
-        const candidate = {
-          bundleId: installed.snapshot.bundleId,
-          rulesVersion:
-            installed.snapshot.manifest.provenance.rules.version,
-          newRecruitCommit:
-            installed.snapshot.manifest.provenance.newRecruit.commit,
-          certifiedAt: installed.snapshot.manifest.createdAt,
-        };
-        if (
-          !latestLocallyCertified ||
-          candidate.certifiedAt > latestLocallyCertified.certifiedAt
-        ) {
-          latestLocallyCertified = candidate;
-        }
+    if (entry.installedAt && entry.rulesVersion && entry.newRecruitCommit) {
+      const candidate = {
+        bundleId: entry.bundleId,
+        rulesVersion: entry.rulesVersion,
+        newRecruitCommit: entry.newRecruitCommit,
+        certifiedAt: entry.installedAt,
+      };
+      if (
+        !latestLocallyCertified ||
+        candidate.certifiedAt > latestLocallyCertified.certifiedAt
+      ) {
+        latestLocallyCertified = candidate;
       }
-    } catch {
-      // A corrupt archive is excluded from status and remains visible in the
-      // store integrity diagnostics.
     }
   }
   const registry = createServiceCompatibilityStore({

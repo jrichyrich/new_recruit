@@ -144,23 +144,22 @@ class LocalRuntimeDataBundleProvider
   async getStatus(): Promise<DataBundleProviderStatus> {
     const [runtime, local] = await Promise.all([
       this.#remote.getStatus(),
-      this.#store.getStatus(),
+      this.#store.getActiveStatus(),
     ]);
     const storedQuarantines = local.quarantines.map((entry) => ({
       scope: entry.scopes.join(",") || "bundle",
       bundleId: entry.bundleId,
       reason: entry.reason,
     }));
-    const activeStoredBundle = local.bundles.find(
-      (entry) => entry.bundleId === local.activeBundleId,
-    );
-    if (activeStoredBundle?.trustOrigin) {
-      this.#dataTrust = activeStoredBundle.trustOrigin;
+    if (local.trustOrigin) {
+      this.#dataTrust = local.trustOrigin;
     }
     return {
       ...runtime,
       state:
-        local.state === "degraded" && runtime.state === "ready"
+        (local.state === "degraded" ||
+          local.activeBundleId !== runtime.activeBundleId) &&
+        runtime.state === "ready"
           ? "degraded"
           : runtime.state,
       quarantinedScopes: [
@@ -242,7 +241,7 @@ export async function createLocalRuntimeDataBundleProvider(
   });
   let installed;
   try {
-    const status = await store.getStatus();
+    const status = await store.getActivePointerStatus();
     if (
       status.rollbackHold &&
       status.activeBundleId !== status.rollbackHold.bundleId
@@ -294,14 +293,14 @@ export async function createLocalRuntimeDataBundleProvider(
       }
     },
     loadActiveBundleId: async () =>
-      (await store.getStatus()).activeBundleId,
+      (await store.getActivePointerStatus()).activeBundleId,
     initialChannelCursor: await store.getChannelCursor(),
     loadChannelCursor: async () => store.getChannelCursor(),
     compareAndSetChannelCursor: async (input) =>
       store.compareAndSetChannelCursor(input),
-    initialRollbackHold: (await store.getStatus()).rollbackHold,
+    initialRollbackHold: (await store.getActivePointerStatus()).rollbackHold,
     loadRollbackHold: async () =>
-      (await store.getStatus()).rollbackHold,
+      (await store.getActivePointerStatus()).rollbackHold,
     persistRollbackHold: async (hold) => {
       await store.setRollbackHold(hold);
     },
@@ -322,7 +321,7 @@ export async function createLocalRuntimeDataBundleProvider(
       }
     },
     activate: async (snapshot) => {
-      const status = await store.getStatus();
+      const status = await store.getActivePointerStatus();
       const previousBundleId = status.activeBundleId;
       const previous = previousBundleId
         ? await store.loadBundle(previousBundleId)
