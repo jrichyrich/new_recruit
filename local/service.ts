@@ -44,6 +44,7 @@ export async function createLocalRosterPilotService(): Promise<RosterPilotServic
           resumeManifestPath: options.resumeManifestPath,
           profilePolicyPath: options.profilePolicyPath,
           forceRetry: options.forceRetry,
+          catalogueDriftMode: options.catalogueDriftMode,
           scenarioContract: options.backend === "local-engine"
             ? localTesseraScenarioContract(
                 10_000,
@@ -69,6 +70,7 @@ export async function createLocalRosterPilotService(): Promise<RosterPilotServic
               allowPointMismatch: options.allowPointMismatch,
               includeChangeCandidates: false,
               providerCompatibilityMode: "observe",
+              catalogueDriftMode: options.catalogueDriftMode,
             },
           )
         : analyzeRosterMatchup(
@@ -86,6 +88,7 @@ export async function createLocalRosterPilotService(): Promise<RosterPilotServic
               allowPointMismatch: options.allowPointMismatch,
               includeChangeCandidates: true,
               providerCompatibilityMode: "observe",
+              catalogueDriftMode: options.catalogueDriftMode,
               scenarioContract: options.backend === "local-engine"
                 ? localTesseraScenarioContract(
                     10_000,

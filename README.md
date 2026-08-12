@@ -46,7 +46,7 @@ npm run rosterpilot -- stress --roster <roster-ref> \
   --suite core-3 --strategy staged
 ```
 
-A Website stress run uses `--backend website`. It returns an action-required operation; confirm it with the operation ID, revision, and `tessera.stress.run` action. This prevents an LLM from uploading or starting remote work without explicit approval.
+A Website stress run uses `--backend website`. It returns an action-required operation; confirm it with the operation ID, revision, and `tessera.stress.run` action. This prevents an LLM from uploading or starting remote work without explicit approval. Catalogue drift is rejected by default; `options.catalogueDriftMode="diagnostic"` is the only opt-in exception, while `force` is refused. A confirmed Website action is consumed before execution and an uncertain browser outcome is recorded without an automatic retry.
 
 ## MCP contract
 

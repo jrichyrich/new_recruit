@@ -87,6 +87,17 @@ function comparisonDepthFlag(
   throw new Error("--comparison-depth must be standard or expanded.");
 }
 
+function catalogueDriftModeFlag(
+  args: Arguments,
+): "reject" | "diagnostic" | undefined {
+  const value = args.flags.get("catalogue-drift-mode");
+  if (value === undefined) return undefined;
+  if (value === "reject" || value === "diagnostic") return value;
+  throw new Error(
+    "--catalogue-drift-mode must be reject or diagnostic.",
+  );
+}
+
 function jsonObjectFlag(
   args: Arguments,
   name: string,
@@ -126,6 +137,7 @@ function buildOptions(args: Arguments): Record<string, unknown> | undefined {
     ["backend", stringFlag(args, "backend")],
     ["suite", stringFlag(args, "suite")],
     ["strategy", stringFlag(args, "strategy")],
+    ["catalogueDriftMode", catalogueDriftModeFlag(args)],
     ["resumeManifestPath", stringFlag(args, "resume-manifest")],
     ["profilePolicyPath", stringFlag(args, "profile-policy")],
     ["forceRetry", booleanFlag(args, "force-retry")],
@@ -179,6 +191,7 @@ Common run flags:
   --output <path> --overwrite --options '<json>'
   --backend <local-engine|website>
   --suite <core-3|diverse-9> --strategy <staged|full-all>
+  --catalogue-drift-mode <reject|diagnostic>
 
 Results are compact JSON. Full rosters and artifacts are returned as rosterpilot:// refs.`;
 }

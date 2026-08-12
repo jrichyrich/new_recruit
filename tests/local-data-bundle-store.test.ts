@@ -757,6 +757,12 @@ test("a long-lived provider follows an active pointer advanced by another proces
           bootstrap: installInput(first),
         });
 
+      const firstLease = await provider.acquireSnapshot();
+      assert.equal(
+        firstLease.snapshot.bundleId,
+        first.manifest.bundleId,
+      );
+
       await provider.getStore().installBundle(
         {
           ...installInput(second),
@@ -768,12 +774,27 @@ test("a long-lived provider follows an active pointer advanced by another proces
         { activate: true },
       );
 
-      const lease = await provider.acquireSnapshot();
+      const overlappingLease = await provider.acquireSnapshot();
       assert.equal(
-        lease.snapshot.bundleId,
+        overlappingLease.snapshot.bundleId,
+        first.manifest.bundleId,
+      );
+      await firstLease.release();
+
+      const finalOverlappingLease = await provider.acquireSnapshot();
+      assert.equal(
+        finalOverlappingLease.snapshot.bundleId,
+        first.manifest.bundleId,
+      );
+      await finalOverlappingLease.release();
+      await overlappingLease.release();
+
+      const nextLease = await provider.acquireSnapshot();
+      assert.equal(
+        nextLease.snapshot.bundleId,
         second.manifest.bundleId,
       );
-      await lease.release();
+      await nextLease.release();
       const status = await provider.getStatus();
       assert.equal(status.activeBundleId, second.manifest.bundleId);
       assert.equal(

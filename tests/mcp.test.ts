@@ -10,7 +10,10 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { RosterPilotService } from "../lib/rosterpilot/service";
+import {
+  RosterPilotService,
+  type StressRunner,
+} from "../lib/rosterpilot/service";
 import { createRosterPilotMcpServer } from "../mcp/server";
 
 const execFileAsync = promisify(execFile);
@@ -48,11 +51,12 @@ async function cliFailure(
   }
 }
 
-async function connected() {
+async function connected(options: { runStress?: StressRunner } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-mcp-"));
   const service = new RosterPilotService({
     rootDirectory: root,
     lease: async (operation) => operation(),
+    runStress: options.runStress,
   });
   const server = createRosterPilotMcpServer({ service });
   const client = new Client({ name: "rosterpilot-test", version: "1" });
@@ -113,6 +117,7 @@ test("keeps explicit CLI build flags aligned with MCP build options", async () =
       "--force-disposition",
       "--compare-opponent-options",
       "--comparison-depth",
+      "--catalogue-drift-mode",
     ]) {
       assert.match(help.stdout, new RegExp(flag));
     }
@@ -214,6 +219,14 @@ test("keeps explicit CLI build flags aligned with MCP build options", async () =
       ]),
       /--comparison-depth must be standard or expanded/,
     );
+    assert.match(
+      await cliFailure(cliRoot, [
+        "stress",
+        "--catalogue-drift-mode",
+        "force",
+      ]),
+      /--catalogue-drift-mode must be reject or diagnostic/,
+    );
   } finally {
     await context.client.close();
     await context.server.close();
@@ -279,34 +292,95 @@ test("returns compact structured results and resource links", async () => {
   }
 });
 
-test("stages Tessera website stress without making the external call", async () => {
+test("keeps Tessera website confirmation and drift policy at the MCP boundary", async () => {
   let calls = 0;
-  const root = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-mcp-stress-"));
-  const service = new RosterPilotService({
-    rootDirectory: root,
-    lease: async (operation) => operation(),
-    runStress: async () => {
+  const driftModes: string[] = [];
+  const context = await connected({
+    runStress: async (_roster, _faction, options) => {
       calls += 1;
-      return { ok: true, data: {}, violations: [], warnings: [] };
+      driftModes.push(options.catalogueDriftMode);
+      return {
+        ok: true,
+        data: { status: "complete", runId: `mcp-stress-${calls}` },
+        violations: [],
+        warnings: [],
+      };
     },
   });
   try {
-    const built = await service.run({
-      action: "build",
-      options: { faction: "adeptus-custodes", pointsLimit: 500 },
-    });
-    const staged = await service.run({
-      action: "stress",
-      rosterRef: built.roster!.rosterRef,
-      options: {
-        opponentFaction: "world-eaters",
-        backend: "website",
+    const built = await context.client.callTool({
+      name: "run",
+      arguments: {
+        action: "build",
+        options: { faction: "adeptus-custodes", pointsLimit: 500 },
       },
     });
+    const rosterRef = (built.structuredContent as {
+      roster: { rosterRef: string };
+    }).roster.rosterRef;
+    const stagedResult = await context.client.callTool({
+      name: "run",
+      arguments: {
+        action: "stress",
+        rosterRef,
+        options: {
+          opponentFaction: "world-eaters",
+          backend: "website",
+        },
+      },
+    });
+    const staged = stagedResult.structuredContent as {
+      operationId: string;
+      revision: number;
+      state: string;
+      nextActions: Array<{ actionId: string }>;
+    };
     assert.equal(staged.state, "action-required");
     assert.equal(staged.nextActions[0].actionId, "tessera.stress.run");
     assert.equal(calls, 0);
+
+    const forcedResult = await context.client.callTool({
+      name: "run",
+      arguments: {
+        action: "stress",
+        rosterRef,
+        options: {
+          opponentFaction: "world-eaters",
+          backend: "local-engine",
+          catalogueDriftMode: "force",
+        },
+      },
+    });
+    const forced = forcedResult.structuredContent as {
+      state: string;
+      violations: Array<{ code: string }>;
+    };
+    assert.equal(forced.state, "failed");
+    assert.equal(
+      forced.violations[0]?.code,
+      "STRESS_CATALOGUE_DRIFT_MODE_INVALID",
+    );
+    assert.equal(calls, 0);
+
+    const completedResult = await context.client.callTool({
+      name: "act",
+      arguments: {
+        operationId: staged.operationId,
+        expectedRevision: staged.revision,
+        actionId: "tessera.stress.run",
+        confirm: true,
+      },
+    });
+    const completed = completedResult.structuredContent as {
+      state: string;
+      result: { catalogueDriftMode: string };
+    };
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.result.catalogueDriftMode, "reject");
+    assert.deepEqual(driftModes, ["reject"]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await context.client.close();
+    await context.server.close();
+    await rm(context.root, { recursive: true, force: true });
   }
 });

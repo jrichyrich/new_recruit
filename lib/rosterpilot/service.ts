@@ -7,6 +7,7 @@ import {
   mkdir,
   readFile,
   rename,
+  rmdir,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -188,6 +189,7 @@ type StoredArtifactDocument = ArtifactReference & {
 
 type ServiceDirectories = {
   operations: string;
+  actionLocks: string;
   rosters: string;
   artifacts: string;
 };
@@ -202,6 +204,8 @@ export type MatchupRunner = (
   },
 ) => Promise<ResultEnvelope<LocalMatchupReport>>;
 
+export type StressCatalogueDriftMode = "reject" | "diagnostic";
+
 export type StressRunner = (
   playerRoster: RosterDraftV1,
   opponentFactionId: string,
@@ -214,6 +218,7 @@ export type StressRunner = (
     resumeManifestPath?: string;
     profilePolicyPath?: string;
     forceRetry: boolean;
+    catalogueDriftMode: StressCatalogueDriftMode;
   },
 ) => Promise<ResultEnvelope<unknown>>;
 
@@ -227,6 +232,7 @@ export type ExactStressRunner = (
     profilePolicyPath?: string;
     baselineReportPath?: string;
     allowPointMismatch: boolean;
+    catalogueDriftMode: StressCatalogueDriftMode;
   },
 ) => Promise<ResultEnvelope<unknown>>;
 
@@ -275,6 +281,107 @@ function text(value: unknown): string | undefined {
 
 function boolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+type StressConfiguration = {
+  options: Record<string, unknown>;
+  backend: "local-engine" | "website";
+  opponentFactionId: string | undefined;
+  exactOpponent: boolean;
+  suite: "core-3" | "diverse-9";
+  strategy: "staged" | "full-all";
+  catalogueDriftMode: StressCatalogueDriftMode;
+};
+
+type StressConfigurationResult =
+  | { ok: true; data: StressConfiguration }
+  | { ok: false; code: string; message: string };
+
+function parseStressConfiguration(
+  input: RunRequest,
+): StressConfigurationResult {
+  const options = record(input.options);
+  const backend = text(options.backend) ?? "local-engine";
+  if (backend !== "local-engine" && backend !== "website") {
+    return {
+      ok: false,
+      code: "STRESS_BACKEND_INVALID",
+      message: "Tessera stress backend must be local-engine or website.",
+    };
+  }
+  const opponentFactionId = text(options.opponentFaction);
+  const exactOpponent = Boolean(input.opponentRef);
+  if (exactOpponent && opponentFactionId) {
+    return {
+      ok: false,
+      code: "OPPONENT_SCOPE_CONFLICT",
+      message:
+        "Choose either opponentRef for an exact roster or options.opponentFaction for a faction portfolio, not both.",
+    };
+  }
+  if (!exactOpponent && !opponentFactionId) {
+    return {
+      ok: false,
+      code: "OPPONENT_FACTION_REQUIRED",
+      message:
+        "Tessera stress testing requires opponentRef or options.opponentFaction.",
+    };
+  }
+  const suite = text(options.suite) ?? "core-3";
+  if (!exactOpponent && suite !== "core-3" && suite !== "diverse-9") {
+    return {
+      ok: false,
+      code: "STRESS_SUITE_INVALID",
+      message: "Tessera stress suite must be core-3 or diverse-9.",
+    };
+  }
+  const strategy = text(options.strategy) ?? "staged";
+  if (!exactOpponent && strategy !== "staged" && strategy !== "full-all") {
+    return {
+      ok: false,
+      code: "STRESS_STRATEGY_INVALID",
+      message: "Tessera stress strategy must be staged or full-all.",
+    };
+  }
+  const requestedDriftMode = options.catalogueDriftMode;
+  const catalogueDriftMode = requestedDriftMode === undefined
+    ? "reject"
+    : requestedDriftMode;
+  if (
+    catalogueDriftMode !== "reject" &&
+    catalogueDriftMode !== "diagnostic"
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_CATALOGUE_DRIFT_MODE_INVALID",
+      message:
+        "Tessera catalogue drift mode must be reject or diagnostic; force is not supported.",
+    };
+  }
+  return {
+    ok: true,
+    data: {
+      options,
+      backend,
+      opponentFactionId,
+      exactOpponent,
+      suite: suite as "core-3" | "diverse-9",
+      strategy: strategy as "staged" | "full-all",
+      catalogueDriftMode,
+    },
+  };
+}
+
+function catalogueDriftWarnings(
+  mode: StressCatalogueDriftMode,
+): RosterIssue[] {
+  return mode === "diagnostic"
+    ? [issue(
+        "CATALOGUE_DRIFT_DIAGNOSTIC_REQUESTED",
+        "Verified catalogue drift may be accepted for this diagnostic run; treat its results as provisional.",
+        "warn",
+      )]
+    : [];
 }
 
 function number(value: unknown): number | undefined {
@@ -398,6 +505,11 @@ export class RosterPilotService {
     this.#rootDirectory = path.resolve(options.rootDirectory);
     this.#directories = {
       operations: path.join(this.#rootDirectory, "operations", "v1"),
+      actionLocks: path.join(
+        this.#rootDirectory,
+        "operations",
+        "action-locks",
+      ),
       rosters: path.join(this.#rootDirectory, "rosters", "v4"),
       artifacts: path.join(this.#rootDirectory, "artifacts", "v1"),
     };
@@ -471,22 +583,54 @@ export class RosterPilotService {
 
   async act(input: ActRequest): Promise<OperationSummary> {
     await this.initialize();
+    if (!isSafeId(input.operationId)) {
+      throw new Error("Operation ID is invalid.");
+    }
+    const actionLock = path.join(
+      this.#directories.actionLocks,
+      input.operationId,
+    );
+    try {
+      await mkdir(actionLock, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const operation = await this.#readOperation(input.operationId);
+      return this.#actionFailure(
+        operation,
+        "OPERATION_ACTION_IN_PROGRESS",
+        "Another process has already claimed this operation action.",
+      );
+    }
+    try {
+      return await this.#actLocked(input);
+    } finally {
+      await rmdir(actionLock).catch(() => undefined);
+    }
+  }
+
+  async #actLocked(input: ActRequest): Promise<OperationSummary> {
     const operation = await this.#readOperation(input.operationId);
     if (operation.revision !== input.expectedRevision) {
       return this.#failedRevision(operation, input.expectedRevision);
     }
     if (input.actionId === "tessera.stress.run") {
+      if (!operation.nextActions.some(
+        (action) => action.actionId === "tessera.stress.run"
+      )) {
+        return this.#actionFailure(
+          operation,
+          "ACTION_NOT_AVAILABLE",
+          "Tessera website stress is not available for this operation.",
+        );
+      }
       if (!input.confirm) {
-        const next = this.#nextRevision(operation, {
-          state: "action-required",
-          message: "Tessera website upload and stress execution require explicit confirmation.",
-          nextActions: [this.#stressAction()],
-        });
-        await this.#writeOperation(next);
-        return this.#publicSummary(next);
+        return this.#confirmationRequired(
+          operation,
+          "Tessera website upload and stress execution require explicit confirmation.",
+        );
       }
       if (operation.request?.action !== "stress") {
-        return this.#updateFailure(
+        return this.#actionFailure(
           operation,
           "STRESS_REQUEST_MISSING",
           "This operation does not contain a Tessera stress request.",
@@ -506,7 +650,7 @@ export class RosterPilotService {
       );
     }
     if (input.actionId !== "new-recruit.upload") {
-      return this.#updateFailure(
+      return this.#actionFailure(
         operation,
         "ACTION_NOT_SUPPORTED",
         `Action ${input.actionId} is not available.`,
@@ -515,20 +659,17 @@ export class RosterPilotService {
     if (!operation.nextActions.some(
       (action) => action.actionId === "new-recruit.upload"
     )) {
-      return this.#updateFailure(
+      return this.#actionFailure(
         operation,
         "ACTION_NOT_AVAILABLE",
         "New Recruit upload is not available for this operation or roster.",
       );
     }
     if (!input.confirm) {
-      const next = this.#nextRevision(operation, {
-        state: "action-required",
-        message: "New Recruit upload requires explicit confirmation.",
-        nextActions: [this.#uploadAction()],
-      });
-      await this.#writeOperation(next);
-      return this.#publicSummary(next);
+      return this.#confirmationRequired(
+        operation,
+        "New Recruit upload requires explicit confirmation.",
+      );
     }
     return this.#lease(() => this.#executeNewRecruitUpload(operation));
   }
@@ -1585,31 +1726,37 @@ export class RosterPilotService {
     operation: OperationDocument,
     input: RunRequest,
   ): Promise<OperationSummary> {
-    const options = record(input.options);
-    const backend = text(options.backend) ?? "local-engine";
-    if (backend !== "local-engine" && backend !== "website") {
+    if (!input.rosterRef) {
       return this.#updateFailure(
         operation,
-        "STRESS_BACKEND_INVALID",
-        "Tessera stress backend must be local-engine or website.",
+        "ROSTER_REFERENCE_REQUIRED",
+        "Tessera stress testing requires a rosterRef.",
       );
     }
-    const opponentFactionId = text(options.opponentFaction);
-    if (input.opponentRef && opponentFactionId) {
+    const parsed = parseStressConfiguration(input);
+    if (!parsed.ok) {
       return this.#updateFailure(
         operation,
-        "OPPONENT_SCOPE_CONFLICT",
-        "Choose either opponentRef for an exact roster or options.opponentFaction for a faction portfolio, not both.",
+        parsed.code,
+        parsed.message,
       );
     }
-    if (backend === "website") {
-      if (!input.rosterRef) {
-        return this.#updateFailure(
-          operation,
-          "ROSTER_REFERENCE_REQUIRED",
-          "Tessera stress testing requires a rosterRef.",
-        );
-      }
+    const configuration = parsed.data;
+    if (configuration.exactOpponent && !this.#runExactStress) {
+      return this.#updateFailure(
+        operation,
+        "TESSERA_EXACT_STRESS_UNAVAILABLE",
+        "Exact Tessera roster testing is not configured.",
+      );
+    }
+    if (!configuration.exactOpponent && !this.#runStress) {
+      return this.#updateFailure(
+        operation,
+        "TESSERA_STRESS_UNAVAILABLE",
+        "Tessera faction stress testing is not configured.",
+      );
+    }
+    if (configuration.backend === "website") {
       const roster = await this.#readRoster(input.rosterRef);
       const opponent = input.opponentRef
         ? await this.#readRoster(input.opponentRef)
@@ -1634,6 +1781,7 @@ export class RosterPilotService {
           ...(opponentValidation?.violations ?? []),
         ]),
         warnings: compactIssues([
+          ...catalogueDriftWarnings(configuration.catalogueDriftMode),
           ...validation.warnings,
           ...(opponentValidation?.warnings ?? []),
         ]),
@@ -1657,8 +1805,23 @@ export class RosterPilotService {
         "Tessera stress testing requires a rosterRef.",
       );
     }
-    const options = record(input.options);
-    const backend = text(options.backend) ?? "local-engine";
+    const parsed = parseStressConfiguration(input);
+    if (!parsed.ok) {
+      return this.#updateFailure(
+        operation,
+        parsed.code,
+        parsed.message,
+      );
+    }
+    const {
+      options,
+      backend,
+      opponentFactionId,
+      exactOpponent,
+      suite,
+      strategy,
+      catalogueDriftMode,
+    } = parsed.data;
     if (
       backend !== "local-engine" &&
       !(backend === "website" && confirmedWebsite)
@@ -1667,22 +1830,6 @@ export class RosterPilotService {
         operation,
         "TESSERA_WEB_CONFIRMATION_REQUIRED",
         "Tessera website execution requires explicit confirmation through act.",
-      );
-    }
-    const opponentFactionId = text(options.opponentFaction);
-    const exactOpponent = Boolean(input.opponentRef);
-    if (exactOpponent && opponentFactionId) {
-      return this.#updateFailure(
-        operation,
-        "OPPONENT_SCOPE_CONFLICT",
-        "Choose either opponentRef for an exact roster or options.opponentFaction for a faction portfolio, not both.",
-      );
-    }
-    if (!exactOpponent && !opponentFactionId) {
-      return this.#updateFailure(
-        operation,
-        "OPPONENT_FACTION_REQUIRED",
-        "Tessera stress testing requires opponentRef or options.opponentFaction.",
       );
     }
     if (exactOpponent && !this.#runExactStress) {
@@ -1697,22 +1844,6 @@ export class RosterPilotService {
         operation,
         "TESSERA_STRESS_UNAVAILABLE",
         "Tessera faction stress testing is not configured.",
-      );
-    }
-    const suite = text(options.suite) ?? "core-3";
-    const strategy = text(options.strategy) ?? "staged";
-    if (!exactOpponent && suite !== "core-3" && suite !== "diverse-9") {
-      return this.#updateFailure(
-        operation,
-        "STRESS_SUITE_INVALID",
-        "Tessera stress suite must be core-3 or diverse-9.",
-      );
-    }
-    if (!exactOpponent && strategy !== "staged" && strategy !== "full-all") {
-      return this.#updateFailure(
-        operation,
-        "STRESS_STRATEGY_INVALID",
-        "Tessera stress strategy must be staged or full-all.",
       );
     }
     const roster = await this.#readRoster(input.rosterRef);
@@ -1733,81 +1864,110 @@ export class RosterPilotService {
       "tessera-stress",
       operation.operationId,
     );
-    const result = opponent
-      ? await this.#runExactStress!(roster, opponent, {
-          outputDirectory,
-          overwrite: boolean(options.overwrite),
+    try {
+      const result = opponent
+        ? await this.#runExactStress!(roster, opponent, {
+            outputDirectory,
+            overwrite: boolean(options.overwrite),
+            backend,
+            profilePolicyPath: text(options.profilePolicyPath),
+            baselineReportPath: text(options.baselineReportPath),
+            allowPointMismatch: boolean(options.allowPointMismatch),
+            catalogueDriftMode,
+          })
+        : await this.#runStress!(roster, opponentFactionId!, {
+            outputDirectory,
+            overwrite: boolean(options.overwrite),
+            backend,
+            suite,
+            strategy,
+            resumeManifestPath: text(options.resumeManifestPath),
+            profilePolicyPath: text(options.profilePolicyPath),
+            forceRetry: boolean(options.forceRetry),
+            catalogueDriftMode,
+          });
+      const report = result.data;
+      const artifacts = report
+        ? await this.#storeStressArtifacts(
+            outputDirectory,
+            report,
+            opponent
+              ? `${safeFilename(roster.name)}-vs-${safeFilename(opponent.name)}-${backend}-exact-stress.json`
+              : `${safeFilename(roster.name)}-${backend}-stress.json`,
+            Array.isArray(record(report).revisedReports)
+              ? `${safeFilename(roster.name)}-revision.html`
+              : null,
+          )
+        : [];
+      const reportRecord = record(report);
+      const simulation = record(reportRecord.simulation);
+      const comparisonSummary = record(reportRecord.summary);
+      const findings = Array.isArray(reportRecord.findings)
+        ? reportRecord.findings.slice(0, 8)
+        : [];
+      const next = this.#nextRevision(running, {
+        state: result.ok ? "completed" : "failed",
+        message: result.ok
+          ? opponent
+            ? `Completed exact Tessera ${backend} testing for ${roster.name} against ${opponent.name}.`
+            : `Completed Tessera ${backend} stress testing against ${opponentFactionId}.`
+          : `Tessera ${backend} stress testing did not complete.`,
+        rosterRef: input.rosterRef,
+        opponentRef: input.opponentRef ?? null,
+        roster: this.#summarizeRoster(roster),
+        opponent: opponent ? this.#summarizeRoster(opponent) : null,
+        bundleId: roster.sourceData.bundleId,
+        result: {
           backend,
-          profilePolicyPath: text(options.profilePolicyPath),
-          baselineReportPath: text(options.baselineReportPath),
-          allowPointMismatch: boolean(options.allowPointMismatch),
-        })
-      : await this.#runStress!(roster, opponentFactionId!, {
-          outputDirectory,
-          overwrite: boolean(options.overwrite),
-          backend,
-          suite: suite as "core-3" | "diverse-9",
-          strategy: strategy as "staged" | "full-all",
-          resumeManifestPath: text(options.resumeManifestPath),
-          profilePolicyPath: text(options.profilePolicyPath),
-          forceRetry: boolean(options.forceRetry),
-        });
-    const report = result.data;
-    const artifacts = report
-      ? await this.#storeStressArtifacts(
-          outputDirectory,
-          report,
-          opponent
-            ? `${safeFilename(roster.name)}-vs-${safeFilename(opponent.name)}-${backend}-exact-stress.json`
-            : `${safeFilename(roster.name)}-${backend}-stress.json`,
-          Array.isArray(record(report).revisedReports)
-            ? `${safeFilename(roster.name)}-revision.html`
+          mode: opponent ? "exact" : "faction-portfolio",
+          suite: opponent ? null : suite,
+          strategy: opponent ? null : strategy,
+          catalogueDriftMode,
+          status: reportRecord.status ?? null,
+          runId: reportRecord.runId ?? null,
+          trustedMatrices: simulation.trustedMatrices ?? null,
+          matrices: Array.isArray(simulation.matrices)
+            ? simulation.matrices.length
             : null,
-        )
-      : [];
-    const reportRecord = record(report);
-    const simulation = record(reportRecord.simulation);
-    const comparisonSummary = record(reportRecord.summary);
-    const findings = Array.isArray(reportRecord.findings)
-      ? reportRecord.findings.slice(0, 8)
-      : [];
-    const next = this.#nextRevision(running, {
-      state: result.ok ? "completed" : "failed",
-      message: result.ok
-        ? opponent
-          ? `Completed exact Tessera ${backend} testing for ${roster.name} against ${opponent.name}.`
-          : `Completed Tessera ${backend} stress testing against ${opponentFactionId}.`
-        : `Tessera ${backend} stress testing did not complete.`,
-      rosterRef: input.rosterRef,
-      opponentRef: input.opponentRef ?? null,
-      roster: this.#summarizeRoster(roster),
-      opponent: opponent ? this.#summarizeRoster(opponent) : null,
-      bundleId: roster.sourceData.bundleId,
-      result: {
-        backend,
-        mode: opponent ? "exact" : "faction-portfolio",
-        suite: opponent ? null : suite,
-        strategy: opponent ? null : strategy,
-        status: reportRecord.status ?? null,
-        runId: reportRecord.runId ?? null,
-        trustedMatrices: simulation.trustedMatrices ?? null,
-        matrices: Array.isArray(simulation.matrices)
-          ? simulation.matrices.length
-          : null,
-        scenarios: Array.isArray(simulation.scenarios)
-          ? simulation.scenarios.length
-          : null,
-        conclusion: comparisonSummary.conclusion ?? null,
-        aggregateCounts: comparisonSummary.aggregateCounts ?? null,
-        findings,
-      },
-      artifacts,
-      violations: compactIssues(result.violations),
-      warnings: compactIssues(result.warnings),
-      nextActions: [],
-    });
-    await this.#writeOperation(next);
-    return this.#publicSummary(next);
+          scenarios: Array.isArray(simulation.scenarios)
+            ? simulation.scenarios.length
+            : null,
+          conclusion: comparisonSummary.conclusion ?? null,
+          aggregateCounts: comparisonSummary.aggregateCounts ?? null,
+          findings,
+        },
+        artifacts,
+        violations: compactIssues(result.violations),
+        warnings: compactIssues([
+          ...catalogueDriftWarnings(catalogueDriftMode),
+          ...result.warnings,
+        ]),
+        nextActions: [],
+      });
+      await this.#writeOperation(next);
+      return this.#publicSummary(next);
+    } catch (error) {
+      const website = backend === "website";
+      const message = website
+        ? "Tessera website execution stopped with an uncertain external outcome and will not be retried automatically."
+        : "Local Tessera execution failed.";
+      const failed = this.#nextRevision(running, {
+        state: "failed",
+        message,
+        violations: [issue(
+          website
+            ? "TESSERA_WEB_EXECUTION_UNCERTAIN"
+            : "TESSERA_LOCAL_EXECUTION_FAILED",
+          error instanceof Error ? error.message : message,
+        )],
+        warnings: compactIssues(
+          catalogueDriftWarnings(catalogueDriftMode),
+        ),
+        nextActions: [],
+      });
+      await this.#writeOperation(failed);
+      return this.#publicSummary(failed);
+    }
   }
 
   async #runSync(
@@ -2116,6 +2276,30 @@ export class RosterPilotService {
         "OPERATION_REVISION_MISMATCH",
         "Reload the operation before attempting another action.",
       )],
+    };
+  }
+
+  #actionFailure(
+    operation: OperationDocument,
+    code: string,
+    message: string,
+  ): OperationSummary {
+    return {
+      ...this.#publicSummary(operation),
+      state: "failed",
+      message,
+      violations: [issue(code, message)],
+    };
+  }
+
+  #confirmationRequired(
+    operation: OperationDocument,
+    message: string,
+  ): OperationSummary {
+    return {
+      ...this.#publicSummary(operation),
+      state: "action-required",
+      message,
     };
   }
 

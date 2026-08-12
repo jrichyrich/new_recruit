@@ -794,6 +794,7 @@ test("runs local stress directly and confirms website stress through act", async
     faction: string;
     outputDirectory: string;
     profilePolicyPath?: string;
+    catalogueDriftMode: string;
   }> = [];
   const runStress: StressRunner = async (_roster, faction, options) => {
     calls.push({
@@ -801,6 +802,7 @@ test("runs local stress directly and confirms website stress through act", async
       faction,
       outputDirectory: options.outputDirectory,
       profilePolicyPath: options.profilePolicyPath,
+      catalogueDriftMode: options.catalogueDriftMode,
     });
     return {
       ok: true,
@@ -836,6 +838,8 @@ test("runs local stress directly and confirms website stress through act", async
     assert.ok(Buffer.byteLength(JSON.stringify(local)) <= 4_096);
     assert.equal(calls[0].backend, "local-engine");
     assert.equal(calls[0].faction, "world-eaters");
+    assert.equal(calls[0].catalogueDriftMode, "reject");
+    assert.equal(local.result?.catalogueDriftMode, "reject");
     assert.match(calls[0].outputDirectory, new RegExp(`${local.operationId}$`));
 
     const staged = await service.run({
@@ -845,9 +849,14 @@ test("runs local stress directly and confirms website stress through act", async
         opponentFaction: "world-eaters",
         backend: "website",
         suite: "diverse-9",
+        catalogueDriftMode: "diagnostic",
       },
     });
     assert.equal(staged.state, "action-required");
+    assert.equal(
+      staged.warnings[0]?.code,
+      "CATALOGUE_DRIFT_DIAGNOSTIC_REQUESTED",
+    );
     assert.equal(calls.length, 1);
     const completed = await service.act({
       operationId: staged.operationId,
@@ -860,9 +869,183 @@ test("runs local stress directly and confirms website stress through act", async
     assert.equal(calls[1].backend, "website");
     assert.equal(calls[1].faction, "world-eaters");
     assert.equal(calls[1].profilePolicyPath, "profiles/world-eaters.json");
+    assert.equal(calls[1].catalogueDriftMode, "diagnostic");
+    assert.equal(completed.result?.catalogueDriftMode, "diagnostic");
     assert.match(calls[1].outputDirectory, new RegExp(`${staged.operationId}$`));
     assert.notEqual(calls[0].outputDirectory, calls[1].outputDirectory);
+
+    const replayed = await service.act({
+      operationId: completed.operationId,
+      expectedRevision: completed.revision,
+      actionId: "tessera.stress.run",
+      confirm: true,
+    });
+    assert.equal(replayed.state, "failed");
+    assert.equal(replayed.violations[0]?.code, "ACTION_NOT_AVAILABLE");
+    assert.equal(calls.length, 2);
+    const retained = await service.inspect({ ref: completed.operationId }) as {
+      state: string;
+      revision: number;
+    };
+    assert.equal(retained.state, "completed");
+    assert.equal(retained.revision, completed.revision);
+
+    const forced = await service.run({
+      action: "stress",
+      rosterRef: built.roster!.rosterRef,
+      options: {
+        opponentFaction: "world-eaters",
+        backend: "local-engine",
+        catalogueDriftMode: "force",
+      },
+    });
+    assert.equal(forced.state, "failed");
+    assert.equal(
+      forced.violations[0]?.code,
+      "STRESS_CATALOGUE_DRIFT_MODE_INVALID",
+    );
+    assert.equal(calls.length, 2);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("does not retry an uncertain Tessera website execution", async () => {
+  let calls = 0;
+  const runStress: StressRunner = async () => {
+    calls += 1;
+    throw new Error("Browser connection closed after submission.");
+  };
+  const { service, root } = await fixture({ runStress });
+  try {
+    const built = await build(service);
+    const missingOpponent = await service.run({
+      action: "stress",
+      rosterRef: built.roster!.rosterRef,
+      options: { backend: "website" },
+    });
+    assert.equal(missingOpponent.state, "failed");
+    assert.equal(
+      missingOpponent.violations[0]?.code,
+      "OPPONENT_FACTION_REQUIRED",
+    );
+
+    const staged = await service.run({
+      action: "stress",
+      rosterRef: built.roster!.rosterRef,
+      options: {
+        opponentFaction: "world-eaters",
+        backend: "website",
+      },
+    });
+    assert.equal(staged.state, "action-required");
+
+    const unconfirmed = await service.act({
+      operationId: staged.operationId,
+      expectedRevision: staged.revision,
+      actionId: "tessera.stress.run",
+      confirm: false,
+    });
+    assert.equal(unconfirmed.state, "action-required");
+    assert.equal(unconfirmed.revision, staged.revision);
+    assert.equal(calls, 0);
+
+    const failed = await service.act({
+      operationId: staged.operationId,
+      expectedRevision: staged.revision,
+      actionId: "tessera.stress.run",
+      confirm: true,
+    });
+    assert.equal(failed.state, "failed");
+    assert.equal(
+      failed.violations[0]?.code,
+      "TESSERA_WEB_EXECUTION_UNCERTAIN",
+    );
+    assert.equal(calls, 1);
+
+    const replayed = await service.act({
+      operationId: failed.operationId,
+      expectedRevision: failed.revision,
+      actionId: "tessera.stress.run",
+      confirm: true,
+    });
+    assert.equal(replayed.violations[0]?.code, "ACTION_NOT_AVAILABLE");
+    assert.equal(calls, 1);
+    const retained = await service.inspect({ ref: failed.operationId }) as {
+      state: string;
+      revision: number;
+      violations: Array<{ code: string }>;
+    };
+    assert.equal(retained.state, "failed");
+    assert.equal(retained.revision, failed.revision);
+    assert.equal(
+      retained.violations[0]?.code,
+      "TESSERA_WEB_EXECUTION_UNCERTAIN",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("claims a confirmed website action before external execution", async () => {
+  let calls = 0;
+  let markStarted!: () => void;
+  let releaseRunner!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    releaseRunner = resolve;
+  });
+  const runStress: StressRunner = async () => {
+    calls += 1;
+    markStarted();
+    await release;
+    return {
+      ok: true,
+      data: { status: "complete", runId: "claimed-once" },
+      violations: [],
+      warnings: [],
+    };
+  };
+  const { service, root } = await fixture({ runStress });
+  try {
+    const built = await build(service);
+    const staged = await service.run({
+      action: "stress",
+      rosterRef: built.roster!.rosterRef,
+      options: {
+        opponentFaction: "world-eaters",
+        backend: "website",
+      },
+    });
+    const first = service.act({
+      operationId: staged.operationId,
+      expectedRevision: staged.revision,
+      actionId: "tessera.stress.run",
+      confirm: true,
+    });
+    await started;
+
+    const concurrent = await service.act({
+      operationId: staged.operationId,
+      expectedRevision: staged.revision,
+      actionId: "tessera.stress.run",
+      confirm: true,
+    });
+    assert.equal(concurrent.state, "failed");
+    assert.equal(
+      concurrent.violations[0]?.code,
+      "OPERATION_ACTION_IN_PROGRESS",
+    );
+    assert.equal(calls, 1);
+
+    releaseRunner();
+    const completed = await first;
+    assert.equal(completed.state, "completed");
+    assert.equal(calls, 1);
+  } finally {
+    releaseRunner?.();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -875,6 +1058,7 @@ test("routes exact stress locally and confirms exact website stress through act"
     allowPointMismatch: boolean;
     profilePolicyPath?: string;
     baselineReportPath?: string;
+    catalogueDriftMode: string;
   }> = [];
   const runExactStress: ExactStressRunner = async (player, opponent, options) => {
     calls.push({
@@ -884,6 +1068,7 @@ test("routes exact stress locally and confirms exact website stress through act"
       allowPointMismatch: options.allowPointMismatch,
       profilePolicyPath: options.profilePolicyPath,
       baselineReportPath: options.baselineReportPath,
+      catalogueDriftMode: options.catalogueDriftMode,
     });
     const data = {
       schemaVersion: 4,
@@ -943,6 +1128,7 @@ test("routes exact stress locally and confirms exact website stress through act"
     assert.equal(calls.length, 1);
     assert.equal(calls[0].backend, "local-engine");
     assert.equal(calls[0].allowPointMismatch, true);
+    assert.equal(calls[0].catalogueDriftMode, "reject");
 
     const conflict = await service.run({
       action: "stress",
@@ -964,6 +1150,7 @@ test("routes exact stress locally and confirms exact website stress through act"
         backend: "website",
         allowPointMismatch: true,
         baselineReportPath: "reports/baseline.json",
+        catalogueDriftMode: "diagnostic",
       },
     });
     assert.equal(staged.state, "action-required");
@@ -983,6 +1170,7 @@ test("routes exact stress locally and confirms exact website stress through act"
     assert.equal(calls[1].backend, "website");
     assert.equal(calls[1].profilePolicyPath, "profiles/exact.json");
     assert.equal(calls[1].baselineReportPath, "reports/baseline.json");
+    assert.equal(calls[1].catalogueDriftMode, "diagnostic");
     assert.equal(completed.artifacts[0]?.filename, "exact-2-matchup.json");
     assert.equal(completed.artifacts[1]?.filename, "exact-2-matchup.html");
     assert.equal(completed.artifacts[1]?.mimeType, "text/html");
@@ -1146,6 +1334,22 @@ test("blocks stale actions and performs confirmed New Recruit upload once", asyn
     assert.equal(deliveries, 1);
     assert.equal(deliveryOptions[0].rootDir, root);
     assert.equal(deliveryOptions[0].outputDirectory, "new-recruit");
+
+    const replayed = await service.act({
+      operationId: uploaded.operationId,
+      expectedRevision: uploaded.revision,
+      actionId: "new-recruit.upload",
+      confirm: true,
+    });
+    assert.equal(replayed.state, "failed");
+    assert.equal(replayed.violations[0]?.code, "ACTION_NOT_AVAILABLE");
+    assert.equal(deliveries, 1);
+    const retained = await service.inspect({ ref: uploaded.operationId }) as {
+      state: string;
+      revision: number;
+    };
+    assert.equal(retained.state, "completed");
+    assert.equal(retained.revision, uploaded.revision);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
