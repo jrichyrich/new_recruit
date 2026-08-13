@@ -83,6 +83,8 @@ type DisplayPair = {
 
 type DisplayReport = {
   title: string;
+  playerLabel: string;
+  opponentLabels: Record<string, string>;
   status: string;
   source: string;
   generatedAt: string;
@@ -283,15 +285,19 @@ function scenarioCell(
   phase: string,
   direction: string,
 ): DisplayCell {
+  const displayUnit = (unit: TesseraScenarioCell["attacker"]): string => {
+    const name = safeText(unit.name, unit.label);
+    return unit.ordinal > 1 ? `${name} · Unit ${unit.ordinal}` : name;
+  };
   return {
     opponent: safeText(opponent, "Opponent"),
     phase: safeText(phase, "unspecified"),
     direction: safeText(direction, "unspecified"),
     confidence: safeText(cell.confidence, "review"),
     attackerId: safeText(cell.attacker.instanceId, cell.attacker.label),
-    attackerLabel: safeText(cell.attacker.label, cell.attacker.name),
+    attackerLabel: displayUnit(cell.attacker),
     targetId: safeText(cell.target.instanceId, cell.target.label),
-    targetLabel: safeText(cell.target.label, cell.target.name),
+    targetLabel: displayUnit(cell.target),
     values: metricValues(cell.values),
     uncertainty: metricUncertainty(cell),
     combatEnvelope: metricCombatEnvelope(cell),
@@ -772,13 +778,39 @@ function reportProvenance(report: TesseraMatchupReport): DisplayPair[] {
 function normalizeReport(report: TesseraMatchupReport): DisplayReport {
   const points = pointsComparisons(report);
   const cells = normalizedCells(report);
+  const playerLabel = safeText(
+    report.player.summary.factionName,
+    report.player.rosterName,
+  );
+  const opponentLabels = Object.fromEntries(
+    report.opponents.map((opponent) => {
+      const rosterName = safeText(opponent.rosterName, "Opponent");
+      const factionName = safeText(
+        opponent.summary.factionName,
+        opponent.rosterName,
+      );
+      return [
+        rosterName,
+        rosterName === "RosterPilot Draft" ? factionName : rosterName,
+      ];
+    }),
+  );
+  const opponentFactions = unique(
+    report.opponents.map((opponent) =>
+      safeText(opponent.summary.factionName, opponent.rosterName),
+    ),
+  );
   const comparisonClass =
     report.comparisonClass ??
     (points.length && points.every((comparison) => comparison.matched)
       ? "matched"
       : "unmatched");
   return {
-    title: `${safeText(report.player.rosterName, "Roster")} matchup report`,
+    title: opponentFactions.length === 1
+      ? `${playerLabel} vs ${opponentFactions[0]} combat heat maps`
+      : `${playerLabel} combat heat maps`,
+    playerLabel,
+    opponentLabels,
     status: safeText(report.status),
     source: safeText(report.source),
     generatedAt: safeText(report.generatedAt),
@@ -885,9 +917,12 @@ function selectOptions(
   values: string[],
   labels?: Record<string, string>,
   includeAll = true,
+  preferred?: string,
 ): string {
   const clean = unique(values);
-  const selected = clean[0] ?? "all";
+  const selected = preferred && clean.includes(preferred)
+    ? preferred
+    : clean[0] ?? "all";
   return [
     ...(includeAll
       ? [`<option value="all"${selected === "all" ? " selected" : ""}>All</option>`]
@@ -901,7 +936,10 @@ function selectOptions(
   ].join("");
 }
 
-function renderControls(cells: DisplayCell[]): string {
+function renderControls(
+  cells: DisplayCell[],
+  opponentLabels: Record<string, string>,
+): string {
   const availableMetrics = (
     Object.keys(metricLabels) as DisplayMetric[]
   ).filter((metric) =>
@@ -913,20 +951,19 @@ function renderControls(cells: DisplayCell[]): string {
   return `<form class="filters" id="matchup-filters">
 <label>Opponent<select id="opponent-filter">${selectOptions(
     cells.map((cell) => cell.opponent),
+    opponentLabels,
+    false,
   )}</select></label>
 <label>Phase<select id="phase-filter">${selectOptions(
     cells.map((cell) => cell.phase),
+    { shooting: "Shooting", fight: "Fight" },
+    false,
+    "fight",
   )}</select></label>
-<label>Metric<select id="metric-filter">${selectOptions(
+<label>Measure<select id="metric-filter">${selectOptions(
     availableMetrics,
     metricLabels,
     false,
-  )}</select></label>
-<label>Direction<select id="direction-filter">${selectOptions(
-    cells.map((cell) => cell.direction),
-  )}</select></label>
-<label>Confidence<select id="confidence-filter">${selectOptions(
-    cells.map((cell) => cell.confidence),
   )}</select></label>
 </form>`;
 }
@@ -935,16 +972,17 @@ function commonStyles(): string {
   return `<style>
 :root{color-scheme:light;--ink:#16202a;--muted:#647181;--line:#d8dee6;--panel:#f5f7fa;--accent:#3157d5;--good:#177245;--warn:#a54b00}
 *{box-sizing:border-box}body{margin:0;background:#eef1f5;color:var(--ink);font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-main{max-width:1180px;margin:0 auto;padding:32px 20px 72px}.hero,section{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px;margin-bottom:18px}
+main{max-width:1180px;margin:0 auto;overflow-x:clip;padding:32px 20px 72px}.hero,section{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px;margin-bottom:18px}
 h1,h2,h3{line-height:1.2;margin-top:0}h1{font-size:clamp(1.8rem,4vw,2.7rem);margin-bottom:8px}h2{font-size:1.3rem}h3{font-size:1rem;margin-bottom:8px}
 .kicker,.eyebrow{text-transform:uppercase;letter-spacing:.08em;font-size:.75rem;font-weight:700;color:var(--muted)}.meta{color:var(--muted)}
 .caution{border-left:4px solid var(--warn);background:#fff7e8;padding:12px 14px;margin:18px 0 0}.badge{display:inline-block;border-radius:999px;padding:3px 9px;font-size:.78rem;font-weight:700;background:#e7ebf2}.badge.good{background:#dff5e9;color:var(--good)}.badge.warn{background:#fff0dc;color:var(--warn)}
 .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:14px 0}.filters label{font-size:.78rem;font-weight:700;color:var(--muted)}select{display:block;width:100%;margin-top:4px;border:1px solid var(--line);border-radius:8px;padding:8px;background:#fff;color:var(--ink)}
-.table-scroll{overflow:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:660px}th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}thead th{position:sticky;top:0;background:#f0f3f7;z-index:1}tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}.heat-cell{text-align:center;font-variant-numeric:tabular-nums;min-width:88px}.heat-cell small{display:block;color:#485463}
+.table-scroll{contain:inline-size;max-width:100%;min-width:0;overflow:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:660px}th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}thead th{position:sticky;top:0;background:#f0f3f7;z-index:1}tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
+.heatmap-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:16px}.heatmap-panel{min-width:0}.heatmap-panel h3{font-size:1.15rem;margin-bottom:8px}.heatmap-panel .table-scroll{border:0;border-radius:0}.heatmap-panel table{min-width:420px;table-layout:fixed}.heatmap-panel th,.heatmap-panel td{border:3px solid #fff;padding:0}.heatmap-panel thead th{position:static;background:transparent;color:var(--muted);font-size:.72rem;font-weight:500;padding:4px;text-align:center}.heatmap-panel thead th:first-child{width:112px;text-align:left}.heatmap-panel tbody th{background:transparent;color:var(--muted);font-size:.75rem;font-weight:500;padding:7px;text-align:right;overflow-wrap:anywhere}.heat-cell{text-align:center;font-variant-numeric:tabular-nums;min-width:64px}.heat-cell button{appearance:none;border:0;border-radius:5px;background:transparent;color:inherit;cursor:pointer;font:600 .76rem/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:42px;padding:7px 3px;width:100%}.heat-cell button:hover,.heat-cell button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.heat-cell.empty{background:#f5f7fa}.heat-legend{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.72rem;margin-top:7px}.heat-legend span:nth-child(2){height:10px;flex:1;border:1px solid var(--line)}.heat-legend.player span:nth-child(2){background:linear-gradient(90deg,#f1f7fd,#70b7f5)}.heat-legend.opponent span:nth-child(2){background:linear-gradient(90deg,#fcf3f8,#e89ac7)}.cell-detail{border-top:1px solid var(--line);margin-top:16px;padding-top:12px;min-height:2.4rem}.directional-note{color:var(--muted);font-size:.8rem;margin-bottom:0}
 .pairs{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:0 24px;margin:0}.pairs div{display:grid;grid-template-columns:minmax(140px,1fr) 1.5fr;border-bottom:1px solid var(--line);padding:8px 0}.pairs dt{font-weight:700}.pairs dd{margin:0;overflow-wrap:anywhere}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}.card{border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--panel)}.card ul{padding-left:20px}.empty{color:var(--muted);font-style:italic}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#18202a;color:#f5f7fa;padding:12px;border-radius:8px}
 .delta-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.delta-stat{border:1px solid var(--line);border-radius:10px;padding:15px}.delta-stat strong{display:block;font-size:1.6rem}.improved{color:var(--good)}.worsened{color:#b42318}.ambiguous{color:var(--warn)}
-@media(max-width:820px){.filters{grid-template-columns:repeat(2,1fr)}.pairs{grid-template-columns:1fr}.delta-grid{grid-template-columns:repeat(2,1fr)}}@media print{body{background:#fff}.filters{display:none}.hero,section{break-inside:avoid;border-color:#bbb}}
+@media(max-width:820px){.filters{grid-template-columns:repeat(2,1fr)}.heatmap-grid{grid-template-columns:1fr}.pairs{grid-template-columns:1fr}.delta-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){main{padding-inline:10px}.hero,section{padding:16px}.filters{grid-template-columns:1fr}}@media print{body{background:#fff}.filters{display:none}.hero,section{break-inside:avoid;border-color:#bbb}}
 </style>`;
 }
 
@@ -964,7 +1002,7 @@ function commonScript(): string {
   const formatValue = (metric, value) => {
     if (value === null || typeof value !== "number") return "—";
     if (metric === "wipe-probability" || metric === "half-wipe-probability") {
-      return Math.round(value * 100) + "%";
+      return (value * 100).toFixed(1) + "%";
     }
     return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
   };
@@ -990,42 +1028,53 @@ function commonScript(): string {
       (value.sourceVariantCount === 1 ? "" : "s") +
       " · " + value.coverage + " · " + value.claimEligibility;
   };
-  const heat = (metric, value) => {
+  const heat = (metric, value, direction) => {
     if (value === null || typeof value !== "number") return "";
     const ratio = metric.includes("probability")
       ? Math.max(0, Math.min(1, value))
       : Math.max(0, Math.min(1, value / 20));
-    return "hsl(" + Math.round(12 + ratio * 120) + " 70% " + Math.round(96 - ratio * 28) + "%)";
+    const hue = direction === "player-to-opponent" ? 209 : 329;
+    return "hsl(" + hue + " 72% " + Math.round(97 - ratio * 28) + "%)";
   };
   const make = (name, textValue) => {
     const node = document.createElement(name);
     if (textValue !== undefined) node.textContent = textValue;
     return node;
   };
-  function renderHeatmap() {
-    const host = byId("heatmap");
-    if (!host) return;
-    host.replaceChildren();
-    const metric = selected("metric-filter");
-    const filtered = cells.filter((cell) =>
-      matches(cell.opponent, selected("opponent-filter")) &&
-      matches(cell.phase, selected("phase-filter")) &&
-      matches(cell.direction, selected("direction-filter")) &&
-      matches(cell.confidence, selected("confidence-filter"))
+  function panel(direction, filtered, metric) {
+    const opponent = selected("opponent-filter");
+    const playerLabel = typeof data.playerLabel === "string" ? data.playerLabel : "Player";
+    const opponentLabels = data.opponentLabels && typeof data.opponentLabels === "object"
+      ? data.opponentLabels
+      : {};
+    const opponentLabel = opponentLabels[opponent] || opponent || "Opponent";
+    const panel = make("div");
+    panel.className = "heatmap-panel";
+    panel.dataset.direction = direction;
+    panel.append(make("h3", direction === "player-to-opponent"
+      ? playerLabel + " attacks"
+      : opponentLabel + " attacks"));
+    const directionCells = filtered.filter((cell) =>
+      cell.direction === direction &&
+      typeof cell.values[metric] === "number"
     );
-    if (!filtered.length) {
-      host.append(make("p", "No cells match these filters."));
-      return;
+    if (!directionCells.length) {
+      panel.append(make("p", "No cells are available for this direction."));
+      return panel;
     }
-    const attackers = [...new Map(filtered.map((cell) => [cell.attackerId, cell.attackerLabel])).entries()];
-    const targets = [...new Map(filtered.map((cell) => [cell.targetId, cell.targetLabel])).entries()];
-    const values = new Map(filtered.map((cell) => [cell.attackerId + "\\u0000" + cell.targetId, cell]));
+    const attackers = [...new Map(directionCells.map((cell) => [cell.attackerId, cell.attackerLabel])).entries()];
+    const targets = [...new Map(directionCells.map((cell) => [cell.targetId, cell.targetLabel])).entries()];
+    const values = new Map();
+    for (const cell of directionCells) {
+      const key = cell.attackerId + "\\u0000" + cell.targetId;
+      if (!values.has(key)) values.set(key, cell);
+    }
     const wrapper = make("div");
     wrapper.className = "table-scroll";
     const table = make("table");
     const thead = make("thead");
     const headRow = make("tr");
-    headRow.append(make("th", "Attacker \\\\ Target"));
+    headRow.append(make("th", "Attacker ↓ / Target →"));
     for (const [, label] of targets) headRow.append(make("th", label));
     thead.append(headRow);
     table.append(thead);
@@ -1035,20 +1084,34 @@ function commonScript(): string {
       const rowHead = make("th", attackerLabel);
       rowHead.scope = "row";
       row.append(rowHead);
-      for (const [targetId] of targets) {
+      for (const [targetId, targetLabel] of targets) {
         const cell = values.get(attackerId + "\\u0000" + targetId);
         const td = make("td");
-        td.className = "heat-cell";
+        td.className = "heat-cell" + (cell ? "" : " empty");
         const value = cell ? cell.values[metric] : null;
-        td.textContent = formatValue(metric, value);
-        td.style.background = heat(metric, value);
+        td.style.background = heat(metric, value, direction);
         if (cell) {
-          const uncertainty = cell.uncertainty ? cell.uncertainty[metric] : null;
-          const envelope = cell.combatEnvelope ? cell.combatEnvelope[metric] : null;
-          const envelopeText = formatEnvelope(metric, envelope);
-          const detail = make("small", [cell.confidence, formatUncertainty(uncertainty), envelopeText].filter(Boolean).join(" · "));
-          td.append(detail);
-          td.title = [cell.phase, cell.direction, formatUncertainty(uncertainty), envelopeText, ...(envelope && Array.isArray(envelope.reasons) ? envelope.reasons : []), ...cell.warnings].filter(Boolean).join(" · ");
+          const button = make("button", formatValue(metric, value));
+          button.type = "button";
+          button.setAttribute("aria-label", attackerLabel + " into " + targetLabel + ": " + formatValue(metric, value));
+          button.addEventListener("click", () => {
+            const uncertainty = cell.uncertainty ? cell.uncertainty[metric] : null;
+            const envelope = cell.combatEnvelope ? cell.combatEnvelope[metric] : null;
+            const envelopeText = formatEnvelope(metric, envelope);
+            const detail = byId("cell-detail");
+            if (detail) {
+              detail.textContent = [
+                attackerLabel + " → " + targetLabel + ": " + formatValue(metric, value),
+                cell.confidence + " confidence",
+                formatUncertainty(uncertainty),
+                envelopeText,
+                ...cell.warnings,
+              ].filter(Boolean).join(" · ");
+            }
+          });
+          td.append(button);
+        } else {
+          td.textContent = "—";
         }
         row.append(td);
       }
@@ -1056,7 +1119,32 @@ function commonScript(): string {
     }
     table.append(tbody);
     wrapper.append(table);
-    host.append(wrapper);
+    panel.append(wrapper);
+    const legend = make("div");
+    legend.className = "heat-legend " + (direction === "player-to-opponent" ? "player" : "opponent");
+    legend.append(make("span", "0"), make("span"), make("span", metric.includes("probability") ? "100%" : "higher"));
+    panel.append(legend);
+    return panel;
+  }
+  function renderHeatmap() {
+    const host = byId("heatmaps");
+    if (!host) return;
+    host.replaceChildren();
+    const metric = selected("metric-filter");
+    const filtered = cells.filter((cell) =>
+      matches(cell.opponent, selected("opponent-filter")) &&
+      matches(cell.phase, selected("phase-filter"))
+    );
+    if (!filtered.length) {
+      host.append(make("p", "No cells match these filters."));
+      return;
+    }
+    host.append(
+      panel("player-to-opponent", filtered, metric),
+      panel("opponent-to-player", filtered, metric),
+    );
+    const detail = byId("cell-detail");
+    if (detail) detail.textContent = "Select any cell for the exact attacker-target value.";
   }
   function renderDeltas() {
     const host = byId("delta-table");
@@ -1108,15 +1196,20 @@ function commonScript(): string {
 }
 
 function reportSections(view: DisplayReport): string {
-  return `<section aria-labelledby="points-heading"><h2 id="points-heading">Points match</h2>${renderPoints(
-    view.points,
-  )}</section>
-<section aria-labelledby="matrix-heading"><h2 id="matrix-heading">Matchup heatmap</h2>
-${renderControls(view.cells)}
-<p class="meta">Filters affect the heatmap. Cells are directional combat outcomes, not game results.</p>
-<div id="heatmap" aria-live="polite"></div>
+  const directionalNote = view.points.length === 1 && !view.points[0].matched
+    ? `Directional case: ${view.points[0].playerPoints} points versus ${view.points[0].opponentPoints} points; explicitly allowed beyond Tessera's ${displayNumber(view.points[0].tolerancePercent)}% tolerance.`
+    : "Points are within the configured Tessera tolerance.";
+  return `<section aria-labelledby="matrix-heading"><h2 id="matrix-heading">Combat heat maps and probabilities</h2>
+${renderControls(view.cells, view.opponentLabels)}
+<p class="meta">Choose one phase and measure. Directions remain separate so values cannot be mixed or overwritten.</p>
+<div class="heatmap-grid" id="heatmaps" aria-live="polite"></div>
+<p class="cell-detail" id="cell-detail">Select any cell for the exact attacker-target value.</p>
+<p class="directional-note">${escapeHtml(directionalNote)}</p>
 <noscript><p class="caution">Enable JavaScript to use the interactive heatmap.</p></noscript>
 </section>
+<section aria-labelledby="points-heading"><h2 id="points-heading">Points match</h2>${renderPoints(
+    view.points,
+  )}</section>
 <section aria-labelledby="findings-heading"><h2 id="findings-heading">Evidence-backed findings</h2>${renderFindings(
     view.findings,
   )}</section>
@@ -1188,6 +1281,8 @@ export function renderTesseraMatchupReportHtml(
     reportSections(view),
     {
       cells: view.cells,
+      playerLabel: view.playerLabel,
+      opponentLabels: view.opponentLabels,
     },
   );
 }
@@ -1223,11 +1318,11 @@ function revisionControls(
 <label>Opponent<select id="opponent-filter">${selectOptions([
     ...deltas.map((delta) => delta.opponent),
     ...cells.map((cell) => cell.opponent),
-  ])}</select></label>
+  ], undefined, false)}</select></label>
 <label>Phase<select id="phase-filter">${selectOptions([
     ...deltas.map((delta) => delta.phase),
     ...cells.map((cell) => cell.phase),
-  ])}</select></label>
+  ], { shooting: "Shooting", fight: "Fight" }, false, "fight")}</select></label>
 <label>Metric<select id="metric-filter">${selectOptions(
     metrics,
     metricLabels,
@@ -1237,9 +1332,6 @@ function revisionControls(
     ...deltas.map((delta) => delta.direction),
     ...cells.map((cell) => cell.direction),
   ])}</select></label>
-<label>Confidence<select id="confidence-filter">${selectOptions(
-    cells.map((cell) => cell.confidence),
-  )}</select></label>
 <label>Delta result<select id="delta-result-filter">${selectOptions(
     deltas.map((delta) => delta.classification),
   )}</select></label>
@@ -1289,6 +1381,8 @@ export function renderTesseraRevisionComparisonHtml(
     ? normalizeReport(revised)
     : {
         title: "Revised roster",
+        playerLabel: "Player",
+        opponentLabels: {},
         status: "partial",
         source: "handoff-only",
         generatedAt: safeText(report.generatedAt),
@@ -1346,8 +1440,9 @@ ${revisionControls(view.cells, deltas)}
 <div id="delta-table" aria-live="polite"></div>
 <noscript><p class="caution">Enable JavaScript to inspect filtered deltas.</p></noscript>
 </section>
-<section aria-labelledby="matrix-heading"><h2 id="matrix-heading">Revised matchup heatmap</h2>
-<div id="heatmap" aria-live="polite"></div></section>
+<section aria-labelledby="matrix-heading"><h2 id="matrix-heading">Revised matchup heat maps</h2>
+<div class="heatmap-grid" id="heatmaps" aria-live="polite"></div>
+<p class="cell-detail" id="cell-detail">Select any cell for the exact attacker-target value.</p></section>
 <section aria-labelledby="findings-heading"><h2 id="findings-heading">Revised findings</h2>${renderFindings(
     view.findings,
   )}</section>
@@ -1383,5 +1478,7 @@ ${revisionControls(view.cells, deltas)}
   return documentShell(title, hero, `${summary}`, {
     cells: view.cells,
     deltas,
+    playerLabel: view.playerLabel,
+    opponentLabels: view.opponentLabels,
   });
 }
