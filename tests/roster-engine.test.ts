@@ -1023,6 +1023,37 @@ test("enumerates intermediate model counts inside ranged points tiers", () => {
   );
 });
 
+test("reserves room for every required unit before enlarging earlier units", () => {
+  const requiredUnitIds = [
+    "witchseekers",
+    "allarus-custodians",
+    "venatari-custodians",
+    "pallas-grav-attack",
+  ];
+  const built = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 500,
+    allowNamedCharacters: false,
+    requiredWarlordUnitId: "knight-centura",
+    requiredUnitIds,
+  });
+  assert.equal(
+    built.ok,
+    true,
+    built.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.ok(built.data);
+  assert.ok(built.data.totalPoints <= 500);
+  assert.ok(built.data.units.some((unit) =>
+    unit.unitId === "knight-centura" && unit.isWarlord
+  ));
+  for (const requiredUnitId of requiredUnitIds) {
+    assert.ok(built.data.units.some((unit) =>
+      unit.unitId === requiredUnitId
+    ));
+  }
+});
+
 test("combines independent wargear choices under a deterministic representative cap", () => {
   const baseInput: BuildRosterInput = {
     playerFaction: "astra-militarum",

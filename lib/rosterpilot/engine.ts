@@ -4189,21 +4189,68 @@ export function buildRoster(
   let totalPoints = selections[0].points;
   let copies = new Map<string, number>([[warlord.unit.id, 1]]);
 
-  for (const requiredUnitId of [...requiredUnitIds].sort()) {
-    if (requiredUnitId === warlord.unit.id) continue;
+  const orderedRequiredUnitIds = [...requiredUnitIds]
+    .filter((unitId) => unitId !== warlord.unit.id)
+    .sort();
+  for (
+    let requiredIndex = 0;
+    requiredIndex < orderedRequiredUnitIds.length;
+    requiredIndex += 1
+  ) {
+    const requiredUnitId = orderedRequiredUnitIds[requiredIndex];
     const unit = buildUnitPool.find(
       (candidate) => candidate.id === requiredUnitId,
     )!;
     const ordinal = (copies.get(unit.id) ?? 0) + 1;
     const requiredCandidates = staticBuildVariants(unit, ordinal)
       .filter(
-        (candidate) =>
-          selectionFitsCollection(
-            selections,
-            unit.id,
-            candidate.modelCount,
-          ) &&
-          totalPoints + candidate.points <= input.pointsLimit,
+        (candidate) => {
+          if (
+            !selectionFitsCollection(
+              selections,
+              unit.id,
+              candidate.modelCount,
+            ) ||
+            totalPoints + candidate.points > input.pointsLimit
+          ) {
+            return false;
+          }
+          const prospectiveSelections = [
+            ...selections,
+            candidate.selection,
+          ];
+          const minimumRemainingPoints = orderedRequiredUnitIds
+            .slice(requiredIndex + 1)
+            .reduce((sum, remainingUnitId) => {
+              if (!Number.isFinite(sum)) return sum;
+              const remainingUnit = buildUnitPool.find(
+                (entry) => entry.id === remainingUnitId,
+              )!;
+              const remainingOrdinal =
+                (copies.get(remainingUnitId) ?? 0) + 1;
+              const minimumPoints = staticBuildVariants(
+                remainingUnit,
+                remainingOrdinal,
+              )
+                .filter((remainingCandidate) =>
+                  selectionFitsCollection(
+                    prospectiveSelections,
+                    remainingUnitId,
+                    remainingCandidate.modelCount,
+                  )
+                )
+                .reduce(
+                  (minimum, remainingCandidate) =>
+                    Math.min(minimum, remainingCandidate.points),
+                  Number.POSITIVE_INFINITY,
+                );
+              return sum + minimumPoints;
+            }, 0);
+          return (
+            totalPoints + candidate.points + minimumRemainingPoints <=
+              input.pointsLimit
+          );
+        },
       )
       .map((candidate) => ({
         ...candidate,
