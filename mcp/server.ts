@@ -81,7 +81,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Run a RosterPilot workflow",
       description:
-        "Research, build, modify, export, sync, compare exact rosters, or run Tessera stress tests locally or on the website. Build options include playerFaction, opponentFaction, detachmentId, forceDispositionId, compareOpponentOptions, and comparisonDepth. Stress catalogueDriftMode defaults to reject and permits only reject or diagnostic. Pass references instead of full roster documents.",
+        "Research, build, modify, export, sync, compare exact rosters, or run Tessera stress tests locally or on the website. Build options include playerFaction, opponentFaction, detachmentId, forceDispositionId, compareOpponentOptions, and comparisonDepth. Exact local stress can select optional player abilities with selectedPlayerAbilityIds or inspect all optional activations with activationMode=envelope. Stress catalogueDriftMode defaults to reject and permits only reject or diagnostic. Pass references instead of full roster documents.",
       inputSchema: {
         action: z.enum([
           "research",

@@ -187,16 +187,20 @@ import {
   tesseraScenarioContractSha256,
 } from "./scenario-contract";
 import {
+  activationEnvelopeTesseraScenarioPolicyContractV2,
   assertTesseraScenarioPolicyContractV2Scope,
   canonicalTesseraScenarioPolicyContractV2,
   migrateTesseraScenarioContractV1ToV2,
+  selectedAbilitiesTesseraScenarioPolicyContractV2,
   selectedBaselineTesseraScenarioPolicyContractV2,
   tesseraScenarioPolicyContractV2Sha256,
   type TesseraScenarioPolicyContractV2,
 } from "./scenario-contract-v2";
 import {
+  activationEnvelopeTesseraScenarioPolicyContractV3,
   assertTesseraScenarioPolicyContractV3Scope,
   canonicalTesseraScenarioPolicyContractV3,
+  selectedAbilitiesTesseraScenarioPolicyContractV3,
   selectedBaselineTesseraScenarioPolicyContractV3,
   tesseraScenarioPolicyContractV3Sha256,
   type TesseraScenarioPolicyContractV3,
@@ -474,6 +478,10 @@ export type TesseraAnalysisOptions = WriteOptions & {
   scenarioPolicyContractV2?: TesseraScenarioPolicyContractV2;
   /** Physical player/opponent state and exact scalar/envelope conclusion policy. */
   scenarioPolicyContractV3?: TesseraScenarioPolicyContractV3;
+  /** Optional bundle-native activations to select for the player roster. */
+  selectedPlayerAbilityIds?: string[];
+  /** Explore all discovered optional combat activations instead of baseline. */
+  activationMode?: "baseline" | "envelope";
   /** Exact covering-suite case to seal into a paired local/Web parity report. */
   providerParityCase?: {
     coveringSuite: TesseraParityCoveringSuiteV2;
@@ -4127,8 +4135,21 @@ export async function analyzeRosterMatchup(
         ? canonicalTesseraScenarioPolicyContractV2(
             options.scenarioPolicyContractV2,
           )
-        : scenarioContract
-          ? migrateTesseraScenarioContractV1ToV2(scenarioContract)
+        : options.selectedPlayerAbilityIds?.length
+          ? selectedAbilitiesTesseraScenarioPolicyContractV2(
+              LOCAL_TESSERA_ENGINE_ITERATIONS,
+              options.selectedPlayerAbilityIds,
+              configuration.phases,
+              configuration.metrics,
+            )
+          : options.activationMode === "envelope"
+            ? activationEnvelopeTesseraScenarioPolicyContractV2(
+                LOCAL_TESSERA_ENGINE_ITERATIONS,
+                configuration.phases,
+                configuration.metrics,
+              )
+            : scenarioContract
+              ? migrateTesseraScenarioContractV1ToV2(scenarioContract)
           : selectedBaselineTesseraScenarioPolicyContractV2(
               LOCAL_TESSERA_ENGINE_ITERATIONS,
               configuration.phases,
@@ -4342,6 +4363,108 @@ export async function analyzeRosterMatchup(
             ...opponentValidation.warnings,
           ],
         };
+      }
+      if (
+        options.selectedPlayerAbilityIds?.length &&
+        operationDataBundleSnapshot
+      ) {
+        try {
+          const iterations =
+            scenarioPolicyContractV2?.scenarios[0]?.iterations ??
+            LOCAL_TESSERA_ENGINE_ITERATIONS;
+          const discoveryPolicy =
+            selectedBaselineTesseraScenarioPolicyContractV2(
+              iterations,
+              configuration.phases,
+              configuration.metrics,
+            );
+          const discoveryInput =
+            await compileCombatBridgeInputV2FromSnapshot({
+              snapshot: operationDataBundleSnapshot,
+              playerRoster,
+              opponentRoster: opponent.roster,
+              scenarioPolicy: discoveryPolicy,
+            });
+          const discoveryBridge = await compileCombatBridgeV2(
+            discoveryInput,
+          );
+          const available = new Set(
+            discoveryBridge.cells.flatMap((cell) =>
+              cell.availableActivationIds
+            ),
+          );
+          const resolvedActivationIds =
+            options.selectedPlayerAbilityIds.flatMap((abilityId) => {
+              const matches = [...available].filter((activationId) =>
+                activationId.startsWith(`attacker:${abilityId}:`) ||
+                activationId.startsWith(`target:${abilityId}:`)
+              );
+              if (matches.length === 0) {
+                throw Object.assign(
+                  new Error(
+                    `Selected player ability ${JSON.stringify(abilityId)} has no supported optional combat activation in the leased bundle.`,
+                  ),
+                  { code: "TESSERA_SELECTED_ABILITY_UNRESOLVED" },
+                );
+              }
+              return matches;
+            });
+          scenarioPolicyContractV2 =
+            selectedAbilitiesTesseraScenarioPolicyContractV2(
+              iterations,
+              options.selectedPlayerAbilityIds,
+              configuration.phases,
+              configuration.metrics,
+              resolvedActivationIds,
+            );
+          scenarioPolicyContractV2Sha256 =
+            tesseraScenarioPolicyContractV2Sha256(
+              scenarioPolicyContractV2,
+            );
+          scenarioPolicyContractV3 =
+            selectedAbilitiesTesseraScenarioPolicyContractV3(
+              iterations,
+              {
+                playerSelectionIds: playerRoster.units.map(
+                  (unit) => unit.selectionId,
+                ),
+                opponentSelectionIds: opponent.roster.units.map(
+                  (unit) => unit.selectionId,
+                ),
+              },
+              options.selectedPlayerAbilityIds.map((abilityId) => ({
+                ownerSide: "player",
+                abilityId,
+              })),
+              configuration.phases,
+              configuration.metrics,
+              resolvedActivationIds,
+            );
+          scenarioPolicyContractV3Sha256 =
+            tesseraScenarioPolicyContractV3Sha256(
+              scenarioPolicyContractV3,
+            );
+        } catch (error) {
+          return {
+            ok: false,
+            data: null,
+            violations: [{
+              code:
+                error &&
+                typeof error === "object" &&
+                "code" in error &&
+                typeof error.code === "string"
+                  ? error.code
+                  : "TESSERA_SELECTED_ABILITY_UNRESOLVED",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "The selected player ability could not be bound to the leased combat rules.",
+              severity: "error",
+            }],
+            warnings: playerValidation.warnings,
+          };
+        }
       }
     }
     let uploadedPreflight: UploadedRoszPreflight | null = null;
@@ -4651,6 +4774,26 @@ export async function analyzeRosterMatchup(
               ? canonicalTesseraScenarioPolicyContractV3(
                   options.scenarioPolicyContractV3,
                 )
+              : options.selectedPlayerAbilityIds?.length
+                ? selectedAbilitiesTesseraScenarioPolicyContractV3(
+                    scenarioPolicyContractV2.scenarios[0]?.iterations ??
+                      LOCAL_TESSERA_ENGINE_ITERATIONS,
+                    unitScope,
+                    options.selectedPlayerAbilityIds.map((abilityId) => ({
+                      ownerSide: "player",
+                      abilityId,
+                    })),
+                    configuration.phases,
+                    configuration.metrics,
+                  )
+                : options.activationMode === "envelope"
+                  ? activationEnvelopeTesseraScenarioPolicyContractV3(
+                      scenarioPolicyContractV2.scenarios[0]?.iterations ??
+                        LOCAL_TESSERA_ENGINE_ITERATIONS,
+                      unitScope,
+                      configuration.phases,
+                      configuration.metrics,
+                    )
               : selectedBaselineTesseraScenarioPolicyContractV3(
                   scenarioPolicyContractV2.scenarios[0]?.iterations ??
                     LOCAL_TESSERA_ENGINE_ITERATIONS,
@@ -5694,6 +5837,26 @@ export async function analyzeRosterMatchup(
               ? canonicalTesseraScenarioPolicyContractV3(
                   options.scenarioPolicyContractV3,
                 )
+              : options.selectedPlayerAbilityIds?.length
+                ? selectedAbilitiesTesseraScenarioPolicyContractV3(
+                    scenarioPolicyContractV2?.scenarios[0]?.iterations ??
+                      LOCAL_TESSERA_ENGINE_ITERATIONS,
+                    unitScope,
+                    options.selectedPlayerAbilityIds.map((abilityId) => ({
+                      ownerSide: "player",
+                      abilityId,
+                    })),
+                    configuration.phases,
+                    configuration.metrics,
+                  )
+                : options.activationMode === "envelope"
+                  ? activationEnvelopeTesseraScenarioPolicyContractV3(
+                      scenarioPolicyContractV2?.scenarios[0]?.iterations ??
+                        LOCAL_TESSERA_ENGINE_ITERATIONS,
+                      unitScope,
+                      configuration.phases,
+                      configuration.metrics,
+                    )
               : selectedBaselineTesseraScenarioPolicyContractV3(
                   scenarioPolicyContractV2?.scenarios[0]?.iterations ??
                     LOCAL_TESSERA_ENGINE_ITERATIONS,

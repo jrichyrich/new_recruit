@@ -609,6 +609,86 @@ export function selectedBaselineTesseraScenarioPolicyContractV2(
   });
 }
 
+export function selectedAbilitiesTesseraScenarioPolicyContractV2(
+  iterations: number,
+  abilityIds: readonly string[],
+  phases: readonly TesseraPhase[] = TESSERA_SCENARIO_PHASES,
+  metrics: readonly TesseraMetric[] = TESSERA_SCENARIO_METRICS,
+  resolvedActivationIds?: readonly string[],
+): TesseraScenarioPolicyContractV2 {
+  const baseline = selectedBaselineTesseraScenarioPolicyContractV2(
+    iterations,
+    phases,
+    metrics,
+  );
+  const activationIds = resolvedActivationIds
+    ? [...new Set(resolvedActivationIds)]
+    : [...new Set(abilityIds)].flatMap((abilityId) =>
+      (["attacker", "target"] as const).map((perspective) =>
+        `${perspective}:${abilityId}:${abilityId}`
+      )
+    );
+  const options = activationIds.map((id) => ({
+      id,
+      groupId: null,
+      resourceCost: 0,
+    }));
+  return canonicalTesseraScenarioPolicyContractV2({
+    ...baseline,
+    scenarios: baseline.scenarios.map((scenario) => ({
+      ...scenario,
+      engagement: {
+        ...scenario.engagement,
+        timing: "selected-abilities",
+        armyAbilityActive: true,
+      },
+    })),
+    policy: {
+      ...baseline.policy,
+      activations: {
+        mode: "selected",
+        options,
+        groups: [],
+        resourceBudget: 0,
+        selectedIds: options.map((option) => option.id),
+      },
+    },
+  });
+}
+
+export function activationEnvelopeTesseraScenarioPolicyContractV2(
+  iterations: number,
+  phases: readonly TesseraPhase[] = TESSERA_SCENARIO_PHASES,
+  metrics: readonly TesseraMetric[] = TESSERA_SCENARIO_METRICS,
+): TesseraScenarioPolicyContractV2 {
+  const baseline = selectedBaselineTesseraScenarioPolicyContractV2(
+    iterations,
+    phases,
+    metrics,
+  );
+  return canonicalTesseraScenarioPolicyContractV2({
+    ...baseline,
+    scenarios: baseline.scenarios.map((scenario) => ({
+      ...scenario,
+      engagement: {
+        ...scenario.engagement,
+        timing: "activation-envelope",
+        armyAbilityActive: "unknown",
+      },
+    })),
+    policy: {
+      ...baseline.policy,
+      activations: {
+        mode: "envelope",
+        options: [],
+        groups: [],
+        resourceBudget: null,
+        includeNoOptionsBaseline: true,
+      },
+    },
+  });
+}
+
 export function localTesseraScenarioPolicyContractV2(
   iterations: number,
   phases: readonly TesseraPhase[] = TESSERA_SCENARIO_PHASES,

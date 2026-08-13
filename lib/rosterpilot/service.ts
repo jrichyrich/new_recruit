@@ -233,6 +233,8 @@ export type ExactStressRunner = (
     baselineReportPath?: string;
     allowPointMismatch: boolean;
     catalogueDriftMode: StressCatalogueDriftMode;
+    selectedPlayerAbilityIds: string[];
+    activationMode: "baseline" | "envelope";
   },
 ) => Promise<ResultEnvelope<unknown>>;
 
@@ -291,6 +293,8 @@ type StressConfiguration = {
   suite: "core-3" | "diverse-9";
   strategy: "staged" | "full-all";
   catalogueDriftMode: StressCatalogueDriftMode;
+  selectedPlayerAbilityIds: string[];
+  activationMode: "baseline" | "envelope";
 };
 
 type StressConfigurationResult =
@@ -325,6 +329,76 @@ function parseStressConfiguration(
       code: "OPPONENT_FACTION_REQUIRED",
       message:
         "Tessera stress testing requires opponentRef or options.opponentFaction.",
+    };
+  }
+  const rawSelectedAbilityIds = options.selectedPlayerAbilityIds;
+  if (
+    rawSelectedAbilityIds !== undefined &&
+    (
+      !Array.isArray(rawSelectedAbilityIds) ||
+      rawSelectedAbilityIds.some(
+        (value) => typeof value !== "string" || !value.trim(),
+      )
+    )
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_SELECTED_ABILITIES_INVALID",
+      message:
+        "options.selectedPlayerAbilityIds must be an array of ability ids.",
+    };
+  }
+  const selectedPlayerAbilityIds = [
+    ...new Set(
+      (rawSelectedAbilityIds as string[] | undefined)?.map((value) =>
+        value.trim()
+      ) ?? [],
+    ),
+  ].sort();
+  const requestedActivationMode = text(options.activationMode) ?? "baseline";
+  if (
+    requestedActivationMode !== "baseline" &&
+    requestedActivationMode !== "envelope"
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_ACTIVATION_MODE_INVALID",
+      message: "options.activationMode must be baseline or envelope.",
+    };
+  }
+  if (
+    selectedPlayerAbilityIds.length > 0 &&
+    requestedActivationMode === "envelope"
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_ACTIVATION_SCOPE_CONFLICT",
+      message:
+        "Choose selectedPlayerAbilityIds for one exact choice or activationMode=envelope for all optional abilities.",
+    };
+  }
+  if (
+    (selectedPlayerAbilityIds.length > 0 ||
+      requestedActivationMode === "envelope") &&
+    (!exactOpponent || backend !== "local-engine")
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_ACTIVATION_PROVIDER_UNSUPPORTED",
+      message:
+        "Optional ability policies currently require an exact local-engine matchup.",
+    };
+  }
+  if (
+    (selectedPlayerAbilityIds.length > 0 ||
+      requestedActivationMode === "envelope") &&
+    text(options.baselineReportPath)
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_ACTIVATION_REVISION_UNSUPPORTED",
+      message:
+        "A paired revision reuses its baseline policy; start a fresh exact stress run to select abilities.",
     };
   }
   const suite = text(options.suite) ?? "core-3";
@@ -368,6 +442,8 @@ function parseStressConfiguration(
       suite: suite as "core-3" | "diverse-9",
       strategy: strategy as "staged" | "full-all",
       catalogueDriftMode,
+      selectedPlayerAbilityIds,
+      activationMode: requestedActivationMode,
     },
   };
 }
@@ -1821,6 +1897,8 @@ export class RosterPilotService {
       suite,
       strategy,
       catalogueDriftMode,
+      selectedPlayerAbilityIds,
+      activationMode,
     } = parsed.data;
     if (
       backend !== "local-engine" &&
@@ -1874,6 +1952,8 @@ export class RosterPilotService {
             baselineReportPath: text(options.baselineReportPath),
             allowPointMismatch: boolean(options.allowPointMismatch),
             catalogueDriftMode,
+            selectedPlayerAbilityIds,
+            activationMode,
           })
         : await this.#runStress!(roster, opponentFactionId!, {
             outputDirectory,
@@ -2193,6 +2273,45 @@ export class RosterPilotService {
         message: "The roster selection is missing or ambiguous.",
       };
     }
+    const modelCount = request.match(
+      /^(?:set|change)\s+(?:the\s+)?(.+?)(?:\s+unit)?\s+to\s+(?:exactly\s+)?(\d+)\s+models?\.?$/i,
+    );
+    if (modelCount) {
+      const selectionQuery = modelCount[1].trim();
+      const normalized = selectionQuery.toLocaleLowerCase();
+      const matches = roster.units.filter((unit) =>
+        unit.selectionId === selectionQuery ||
+        unit.name.toLocaleLowerCase().includes(normalized)
+      );
+      if (matches.length === 1) {
+        return {
+          operations: [{
+            type: "set-model-count",
+            selectionId: matches[0].selectionId,
+            modelCount: Number(modelCount[2]),
+          }],
+          violations: [],
+          nextActions: [],
+          message: `Resolved ${matches[0].name}.`,
+        };
+      }
+      return {
+        operations: [],
+        violations: [issue(
+          "SELECTION_AMBIGUOUS",
+          "The roster selection whose model count should change is missing or ambiguous.",
+        )],
+        nextActions: matches.length > 0
+          ? [{
+              actionId: "modify.choose-selection",
+              label: "Choose the selection to resize",
+              requiresConfirmation: false,
+              choices: matches.map((unit) => unit.selectionId),
+            }]
+          : [],
+        message: "The roster selection is missing or ambiguous.",
+      };
+    }
     const warlord = request.match(/^make\s+(.+?)\s+(?:the\s+)?warlord$/i);
     if (warlord) {
       const normalized = warlord[1].trim().toLocaleLowerCase();
@@ -2215,7 +2334,7 @@ export class RosterPilotService {
       operations: [],
       violations: [issue(
         "MODIFICATION_NOT_UNDERSTOOD",
-        "Use add, remove, or make … warlord, or provide a structured operation.",
+        "Use add, remove, set … to N models, or make … warlord, or provide a structured operation.",
       )],
       nextActions: [],
       message: "The requested roster modification was not understood.",

@@ -230,16 +230,8 @@ async function probeMcpDefault(server, timeoutMs = 5 * 60_000) {
       "RosterPilot MCP tools/list",
     );
     const names = listed.tools.map((tool) => tool.name);
-    for (const required of [
-      "build_roster",
-      "get_data_status",
-      "repair_tessera_web_compatibility",
-      "get_workflow_repair_history",
-      "get_reliability_summary",
-      "start_tessera_validation",
-      "get_tessera_validation_status",
-      "advance_tessera_validation",
-    ]) {
+    const requiredTools = ["run", "inspect", "act"];
+    for (const required of requiredTools) {
       if (!names.includes(required)) {
         throw new Error(
           `RosterPilot MCP tools/list omitted required tool: ${required}`,
@@ -249,16 +241,7 @@ async function probeMcpDefault(server, timeoutMs = 5 * 60_000) {
     return {
       ok: true,
       toolCount: names.length,
-      requiredTools: [
-        "build_roster",
-        "get_data_status",
-        "repair_tessera_web_compatibility",
-        "get_workflow_repair_history",
-        "get_reliability_summary",
-        "start_tessera_validation",
-        "get_tessera_validation_status",
-        "advance_tessera_validation",
-      ],
+      requiredTools,
     };
   } finally {
     await client.close().catch(async () => {

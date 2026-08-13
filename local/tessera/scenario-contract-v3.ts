@@ -1697,6 +1697,127 @@ export function selectedBaselineTesseraScenarioPolicyContractV3(
   });
 }
 
+export type TesseraSelectedAbilityActivationV3 = {
+  ownerSide: TesseraScenarioSide;
+  abilityId: string;
+};
+
+/**
+ * Exact selected-state math-hammer with explicitly chosen optional abilities.
+ * The bridge namespaces one outer activated ability for both rule
+ * perspectives. Selecting both ids lets the same physical choice follow its
+ * owner when that unit is attacking or defending; phase applicability remains
+ * bundle-authoritative.
+ */
+export function selectedAbilitiesTesseraScenarioPolicyContractV3(
+  iterations: number,
+  unitScope: TesseraScenarioPolicyContractV3UnitScope,
+  selections: readonly TesseraSelectedAbilityActivationV3[],
+  phases: readonly TesseraPhase[] = TESSERA_SCENARIO_PHASES,
+  metrics: readonly TesseraMetric[] = TESSERA_SCENARIO_METRICS,
+  resolvedActivationIds?: readonly string[],
+): TesseraScenarioPolicyContractV3 {
+  const baseline = selectedBaselineTesseraScenarioPolicyContractV3(
+    iterations,
+    unitScope,
+    phases,
+    metrics,
+  );
+  const uniqueSelections = [
+    ...new Map(
+      selections.map((selection) => [
+        `${selection.ownerSide}\u0000${selection.abilityId}`,
+        selection,
+      ]),
+    ).values(),
+  ];
+  const ownerForActivationId = (activationId: string): TesseraScenarioSide => {
+    const selection = uniqueSelections.find(({ abilityId }) =>
+      activationId.startsWith(`attacker:${abilityId}:`) ||
+      activationId.startsWith(`target:${abilityId}:`)
+    );
+    if (!selection) {
+      throw new TesseraScenarioPolicyContractV3Error(
+        "TESSERA_SCENARIO_POLICY_CONTRACT_V3_INVALID",
+        `Resolved activation ${JSON.stringify(activationId)} does not match a selected ability.`,
+      );
+    }
+    return selection.ownerSide;
+  };
+  const activationIds = resolvedActivationIds
+    ? [...new Set(resolvedActivationIds)]
+    : uniqueSelections.flatMap((selection) =>
+      (["attacker", "target"] as const).map((perspective) =>
+        `${perspective}:${selection.abilityId}:${selection.abilityId}`
+      )
+    );
+  const options = activationIds.map((id) => ({
+      id,
+      ownerSide: ownerForActivationId(id),
+      groupId: null,
+      phases: [...new Set(phases)],
+      directions: [...TESSERA_SCENARIO_DIRECTIONS],
+      costs: [],
+      prerequisites: [],
+    }));
+  return canonicalTesseraScenarioPolicyContractV3({
+    ...baseline,
+    scenarios: baseline.scenarios.map((scenario) => ({
+      ...scenario,
+      state: {
+        ...scenario.state,
+        timing: "selected-abilities",
+      },
+    })),
+    policy: {
+      ...baseline.policy,
+      activations: {
+        mode: "selected",
+        options,
+        groups: [],
+        selectedIds: options.map((option) => option.id),
+      },
+    },
+  });
+}
+
+/**
+ * Selected physical state with a bounded envelope over every optional combat
+ * activation discovered in the leased bundle.
+ */
+export function activationEnvelopeTesseraScenarioPolicyContractV3(
+  iterations: number,
+  unitScope: TesseraScenarioPolicyContractV3UnitScope,
+  phases: readonly TesseraPhase[] = TESSERA_SCENARIO_PHASES,
+  metrics: readonly TesseraMetric[] = TESSERA_SCENARIO_METRICS,
+): TesseraScenarioPolicyContractV3 {
+  const baseline = selectedBaselineTesseraScenarioPolicyContractV3(
+    iterations,
+    unitScope,
+    phases,
+    metrics,
+  );
+  return canonicalTesseraScenarioPolicyContractV3({
+    ...baseline,
+    scenarios: baseline.scenarios.map((scenario) => ({
+      ...scenario,
+      state: {
+        ...scenario.state,
+        timing: "activation-envelope",
+      },
+    })),
+    policy: {
+      ...baseline.policy,
+      activations: {
+        mode: "envelope",
+        options: [],
+        groups: [],
+        includeNoOptionsBaseline: true,
+      },
+    },
+  });
+}
+
 export function localTesseraScenarioPolicyContractV3(
   iterations: number,
   unitScope: TesseraScenarioPolicyContractV3UnitScope,

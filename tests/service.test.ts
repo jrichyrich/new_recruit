@@ -138,6 +138,49 @@ test("stores semantic roster variants under distinct collision-safe refs", async
   }
 });
 
+test("resolves a natural-language model-count modification", async () => {
+  const { service, root } = await fixture();
+  try {
+    const built = await service.run({
+      action: "build",
+      request: "Build Custodian Wardens.",
+      options: {
+        faction: "adeptus-custodes",
+        pointsLimit: 500,
+        requiredUnitIds: ["custodian-wardens"],
+      },
+    });
+    assert.equal(built.state, "completed", JSON.stringify(built.violations));
+    const original = await rosterDetails(service, built.roster!.rosterRef);
+    const wardens = original.units.find(
+      (unit) => unit.unitId === "custodian-wardens",
+    );
+    assert.ok(wardens);
+    const requestedModelCount = wardens.modelCount === 4 ? 5 : 4;
+
+    const modified = await service.run({
+      action: "modify",
+      rosterRef: built.roster!.rosterRef,
+      request:
+        `Set the Custodian Wardens unit to exactly ${requestedModelCount} models.`,
+    });
+
+    assert.equal(
+      modified.state,
+      "completed",
+      JSON.stringify(modified.violations),
+    );
+    assert.equal(
+      modified.roster?.units.find(
+        (unit) => unit.unitId === "custodian-wardens",
+      )?.models,
+      requestedModelCount,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("fails closed instead of overwriting a conflicting roster reference", async () => {
   const { service, root } = await fixture();
   try {
@@ -1059,6 +1102,8 @@ test("routes exact stress locally and confirms exact website stress through act"
     profilePolicyPath?: string;
     baselineReportPath?: string;
     catalogueDriftMode: string;
+    selectedPlayerAbilityIds: string[];
+    activationMode: string;
   }> = [];
   const runExactStress: ExactStressRunner = async (player, opponent, options) => {
     calls.push({
@@ -1069,6 +1114,8 @@ test("routes exact stress locally and confirms exact website stress through act"
       profilePolicyPath: options.profilePolicyPath,
       baselineReportPath: options.baselineReportPath,
       catalogueDriftMode: options.catalogueDriftMode,
+      selectedPlayerAbilityIds: options.selectedPlayerAbilityIds,
+      activationMode: options.activationMode,
     });
     const data = {
       schemaVersion: 4,
@@ -1120,6 +1167,7 @@ test("routes exact stress locally and confirms exact website stress through act"
       options: {
         backend: "local-engine",
         allowPointMismatch: true,
+        selectedPlayerAbilityIds: ["moment-shackle", "moment-shackle"],
       },
     });
     assert.equal(local.state, "completed");
@@ -1129,6 +1177,24 @@ test("routes exact stress locally and confirms exact website stress through act"
     assert.equal(calls[0].backend, "local-engine");
     assert.equal(calls[0].allowPointMismatch, true);
     assert.equal(calls[0].catalogueDriftMode, "reject");
+    assert.deepEqual(calls[0].selectedPlayerAbilityIds, ["moment-shackle"]);
+    assert.equal(calls[0].activationMode, "baseline");
+
+    const activationConflict = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "local-engine",
+        selectedPlayerAbilityIds: ["moment-shackle"],
+        activationMode: "envelope",
+      },
+    });
+    assert.equal(activationConflict.state, "failed");
+    assert.equal(
+      activationConflict.violations[0]?.code,
+      "STRESS_ACTIVATION_SCOPE_CONFLICT",
+    );
 
     const conflict = await service.run({
       action: "stress",

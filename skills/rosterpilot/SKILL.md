@@ -26,6 +26,7 @@ Pass `rosterpilot://` references between calls. Do not copy full roster or artif
 7. For Tessera stress testing, call `run stress` with `options.opponentFaction`, `suite` (`core-3` or `diverse-9`), `strategy` (`staged` or `full-all`), and:
    - `backend="local-engine"` to execute locally.
    - `backend="website"` to stage authenticated Web upload. Then call `act` with `tessera.stress.run` and `confirm=true` after explicit user approval.
+   - For an exact local matchup, pass `selectedPlayerAbilityIds` to apply named bundle-native optional abilities, or `activationMode="envelope"` to inspect every discovered optional activation. Do not combine them.
    Catalogue drift defaults to `reject`. Use `options.catalogueDriftMode="diagnostic"` only when the user explicitly requests a provisional diagnostic; `force` is not supported.
 8. Use `run sync` only when the user asks to refresh data now. A refresh affects future leases, never the snapshot already held by an operation.
 
