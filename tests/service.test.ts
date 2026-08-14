@@ -9,6 +9,7 @@ import {
   type ExactStressRunner,
   type StressRunner,
 } from "../lib/rosterpilot/service";
+import { modifyRoster } from "../lib/rosterpilot/engine";
 import { rosterStructuralFingerprint } from "../lib/rosterpilot/stress-portfolio";
 import type { RosterDraftV1 } from "../lib/rosterpilot/types";
 
@@ -862,6 +863,62 @@ test("exports through an artifact reference instead of inline content", async ()
   }
 });
 
+test("blocks export and upload actions for a stored over-copy roster", async () => {
+  const { service, root } = await fixture();
+  try {
+    const built = await service.run({
+      action: "build",
+      request: "Build a Blade Champion collection roster.",
+      options: {
+        faction: "adeptus-custodes",
+        pointsLimit: 2000,
+        allowNamedCharacters: false,
+        collectionUnitIds: ["blade-champion"],
+        requiredWarlordUnitId: "blade-champion",
+        detachmentId: "shield-host",
+      },
+    });
+    assert.equal(built.state, "completed", JSON.stringify(built.violations));
+    const roster = await rosterDetails(service, built.roster!.rosterRef);
+    assert.equal(
+      roster.units.filter((unit) => unit.unitId === "blade-champion").length,
+      3,
+    );
+    const invalid = modifyRoster(roster, {
+      type: "add",
+      unitId: "blade-champion",
+    });
+    assert.equal(invalid.ok, false);
+    assert.ok(invalid.data);
+    assert.ok(invalid.violations.some((violation) =>
+      violation.code === "UNIT_COPY_LIMIT_EXCEEDED"
+    ));
+    await writeFile(
+      path.join(root, "rosters", "v4", `${invalid.data.id}.json`),
+      `${JSON.stringify({
+        schemaVersion: 4,
+        storedAt: "2026-01-01T00:00:00.000Z",
+        importedFromSchemaVersion: invalid.data.schemaVersion,
+        roster: invalid.data,
+      }, null, 2)}\n`,
+    );
+
+    const exported = await service.run({
+      action: "export",
+      rosterRef: `rosterpilot://rosters/${invalid.data.id}`,
+      format: "rosz",
+    });
+    assert.equal(exported.state, "failed");
+    assert.ok(exported.violations.some((violation) =>
+      violation.code === "UNIT_COPY_LIMIT_EXCEEDED"
+    ));
+    assert.deepEqual(exported.artifacts, []);
+    assert.deepEqual(exported.nextActions, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("analyzes two exact rosters locally without claiming a win rate", async () => {
   const { service, root } = await fixture();
   try {
@@ -1421,6 +1478,7 @@ test("blocks stale actions and performs confirmed New Recruit upload once", asyn
         faction: "necrons",
         pointsLimit: 1000,
         allowNamedCharacters: false,
+        requiredUnitIds: ["tesseract-vault"],
       },
     });
     assert.equal(

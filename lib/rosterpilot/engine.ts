@@ -66,6 +66,7 @@ import {
   newRecruitEquipmentSignature,
   resolveNewRecruitUnit,
 } from "./new-recruit-resolver";
+import { resolveUnitCopyLimit } from "./copy-limits";
 import {
   getDataUpdateStatusSnapshot,
 } from "./data-operations";
@@ -4029,28 +4030,30 @@ export function buildRoster(
     exportable: boolean;
     matchup: MatchupContextComponents;
   };
-  const maximumCopiesByUnitId = new Map(
-    buildUnitPool.map((unit) => {
-      let rulesMaximumCopies = 3;
-      if (isNamedCharacter(unit) || isCharacterUnit(unit)) {
-        rulesMaximumCopies = 1;
-      } else if (
-        unit.raw.role === "battleline" ||
-        unit.raw.role === "dedicated-transport"
-      ) {
-        rulesMaximumCopies = 6;
-      } else if (input.pointsLimit <= 1000) {
-        rulesMaximumCopies = 2;
-      }
-      return [
-        unit.id,
-        Math.min(
-          rulesMaximumCopies,
-          ownedCollection?.get(unit.id)?.maxUnits ?? rulesMaximumCopies,
+  const maximumCopiesByUnitId = new Map<string, number>();
+  for (const unit of buildUnitPool) {
+    const copyLimit = resolveUnitCopyLimit(
+      unit.raw,
+      battleSize,
+      selectedDetachment,
+    );
+    if (copyLimit.status === "unresolved") {
+      return envelope<RosterDraftV1>(null, [
+        issue(
+          "UNIT_COPY_LIMIT_UNRESOLVED",
+          `${unit.name}'s datasheet copy limit could not be resolved: ${copyLimit.reason}`,
         ),
-      ];
-    }),
-  );
+      ]);
+    }
+    maximumCopiesByUnitId.set(
+      unit.id,
+      Math.min(
+        copyLimit.maximumCopies,
+        ownedCollection?.get(unit.id)?.maxUnits ??
+          copyLimit.maximumCopies,
+      ),
+    );
+  }
   const supportBodyguardIdsByUnitId = new Map(
     buildUnitPool
       .filter((unit) => unit.raw.attachment_role === "support")
@@ -5353,6 +5356,50 @@ export function validateRoster(
         `${draft.forceDispositionName} is not valid for ${draft.detachmentName}.`,
       ),
     );
+  }
+
+  if (
+    configuredDetachment &&
+    configuredDetachment.faction_id === draft.factionId
+  ) {
+    const selectionsByUnitId = new Map<string, DraftUnit[]>();
+    for (const selection of draft.units) {
+      const unit = resolveUnit(selection.unitId, draft.factionId);
+      if (!unit) continue;
+      const selections = selectionsByUnitId.get(unit.id) ?? [];
+      selections.push(selection);
+      selectionsByUnitId.set(unit.id, selections);
+    }
+    for (const [unitId, selections] of [...selectionsByUnitId].sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      const unit = resolveUnit(unitId, draft.factionId);
+      if (!unit) continue;
+      const copyLimit = resolveUnitCopyLimit(
+        unit.raw,
+        draft.battleSize,
+        configuredDetachment,
+      );
+      if (copyLimit.status === "unresolved") {
+        violations.push(
+          issue(
+            "UNIT_COPY_LIMIT_UNRESOLVED",
+            `${unit.name}'s datasheet copy limit could not be resolved: ${copyLimit.reason}`,
+            "error",
+            selections[0]?.selectionId,
+          ),
+        );
+      } else if (selections.length > copyLimit.maximumCopies) {
+        violations.push(
+          issue(
+            "UNIT_COPY_LIMIT_EXCEEDED",
+            `${unit.name} is selected ${selections.length} times; its ${copyLimit.basis} classification allows at most ${copyLimit.maximumCopies} at ${draft.battleSize}.`,
+            "error",
+            selections[copyLimit.maximumCopies]?.selectionId,
+          ),
+        );
+      }
+    }
   }
 
   const recalculated = recalculateDraft(draft, draft.units);

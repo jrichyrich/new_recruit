@@ -40,6 +40,7 @@ import {
 } from "../lib/rosterpilot/catalogue-summary";
 import { getNewRecruitFactionCatalogue } from "../lib/rosterpilot/catalogue";
 import type { DataConflict } from "../lib/rosterpilot/catalogue-types";
+import { resolveUnitCopyLimit } from "../lib/rosterpilot/copy-limits";
 import { resolveFactionIntent } from "../lib/rosterpilot/faction-intent";
 import {
   writeExportArtifact,
@@ -57,6 +58,38 @@ function installSyntheticConflict(conflict: DataConflict): () => void {
     const index = conflicts.indexOf(conflict);
     if (index >= 0) conflicts.splice(index, 1);
   };
+}
+
+function minimalCustodesRoster(
+  allowNamedCharacters = false,
+): RosterDraftV1 {
+  const built = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 2000,
+    allowNamedCharacters,
+    requiredWarlordUnitId: "blade-champion",
+    detachmentId: "shield-host",
+  });
+  assert.ok(
+    built.ok && built.data,
+    built.violations.map((violation) => violation.message).join("; "),
+  );
+  const warlord = built.data.units.find((selection) => selection.isWarlord);
+  assert.equal(warlord?.unitId, "blade-champion");
+  const reduced = modifyRosterBatch(
+    built.data,
+    built.data.units
+      .filter((selection) => selection.selectionId !== warlord.selectionId)
+      .map((selection) => ({
+        type: "remove" as const,
+        selectionId: selection.selectionId,
+      })),
+  );
+  assert.ok(
+    reduced.ok && reduced.data,
+    reduced.violations.map((violation) => violation.message).join("; "),
+  );
+  return reduced.data;
 }
 
 test("searches and builds real faction data across the supported catalog", () => {
@@ -1902,6 +1935,7 @@ test("separates non-Custodes canonical legality from generated-mapping preflight
     faction: "necrons",
     pointsLimit: 1000,
     allowNamedCharacters: false,
+    requiredUnitIds: ["tesseract-vault"],
   });
   assert.equal(
     built.ok,
@@ -2052,6 +2086,341 @@ test("uses model-count and army-ordinal pricing", () => {
       (unit) => unit.selectionId === praetors.selectionId,
     )?.points,
     215,
+  );
+});
+
+test("uses one rules copy-limit source for generic Character generation", () => {
+  for (const [pointsLimit, expectedCopies] of [
+    [1000, 2],
+    [2000, 3],
+  ] as const) {
+    const built = buildRoster({
+      playerFaction: "adeptus-custodes",
+      pointsLimit,
+      allowNamedCharacters: false,
+      collectionUnitIds: ["blade-champion"],
+      requiredWarlordUnitId: "blade-champion",
+      detachmentId: "shield-host",
+    });
+    assert.ok(
+      built.ok && built.data,
+      built.violations.map((violation) => violation.message).join("; "),
+    );
+    assert.equal(
+      built.data.units.filter(
+        (selection) => selection.unitId === "blade-champion",
+      ).length,
+      expectedCopies,
+    );
+  }
+});
+
+test("resolves copy limits from consistent construction roles and fails closed", () => {
+  assert.deepEqual(
+    resolveUnitCopyLimit(
+      {
+        role: "character",
+        keywords: ["Infantry", "Character"],
+      },
+      "strike-force",
+      null,
+    ),
+    {
+      status: "resolved",
+      maximumCopies: 3,
+      basis: "standard",
+    },
+  );
+  assert.deepEqual(
+    resolveUnitCopyLimit(
+      {
+        keywords: ["Vehicle", "Transport", "Coronus Grav-carrier"],
+      },
+      "strike-force",
+      null,
+    ),
+    {
+      status: "resolved",
+      maximumCopies: 3,
+      basis: "standard",
+    },
+  );
+  assert.deepEqual(
+    resolveUnitCopyLimit(
+      {
+        role: "dedicated-transport",
+        keywords: ["Vehicle", "Transport", "Dedicated Transport"],
+      },
+      "strike-force",
+      null,
+    ),
+    {
+      status: "resolved",
+      maximumCopies: 6,
+      basis: "dedicated-transport",
+    },
+  );
+  assert.deepEqual(
+    resolveUnitCopyLimit(
+      {
+        keywords: ["War Dog"],
+      },
+      "strike-force",
+      {
+        granted_keywords: [
+          {
+            keyword: "Battleline",
+            to_keywords: ["War Dog"],
+          },
+        ],
+      },
+    ),
+    {
+      status: "resolved",
+      maximumCopies: 6,
+      basis: "battleline",
+    },
+  );
+
+  const conflict = resolveUnitCopyLimit(
+    {
+      role: "character",
+      keywords: ["Character", "Epic Hero"],
+    },
+    "strike-force",
+    null,
+  );
+  assert.equal(conflict.status, "unresolved");
+
+  const legacyNamedCharacter = resolveUnitCopyLimit(
+    {
+      role: "character",
+      keywords: ["Character", "Named Character"],
+    },
+    "strike-force",
+    null,
+  );
+  assert.equal(legacyNamedCharacter.status, "unresolved");
+
+  const unknown = resolveUnitCopyLimit(
+    {
+      role: "unknown-runtime-role",
+      keywords: ["Infantry"],
+    },
+    "strike-force",
+    null,
+  );
+  assert.equal(unknown.status, "unresolved");
+
+  const conditionalGrant = resolveUnitCopyLimit(
+    {
+      keywords: ["War Dog"],
+    },
+    "strike-force",
+    {
+      granted_keywords: [
+        {
+          keyword: "Battleline",
+          to_keywords: ["War Dog"],
+          max_selected: 3,
+        },
+      ],
+    },
+  );
+  assert.equal(conditionalGrant.status, "unresolved");
+
+  assert.deepEqual(
+    resolveUnitCopyLimit(
+      {
+        role: "epic-hero",
+        keywords: ["Character", "Epic Hero", "War Dog"],
+      },
+      "strike-force",
+      {
+        granted_keywords: [
+          {
+            keyword: "Battleline",
+            to_keywords: ["War Dog"],
+            max_selected: 3,
+          },
+        ],
+      },
+    ),
+    {
+      status: "resolved",
+      maximumCopies: 1,
+      basis: "epic-hero",
+    },
+  );
+  assert.deepEqual(
+    resolveUnitCopyLimit(
+      {
+        role: "battleline",
+        keywords: ["Battleline", "Transport"],
+      },
+      "strike-force",
+      {
+        granted_keywords: [
+          {
+            keyword: "Dedicated Transport",
+            to_keywords: ["Transport"],
+            max_selected: 1,
+          },
+        ],
+      },
+    ),
+    {
+      status: "resolved",
+      maximumCopies: 6,
+      basis: "battleline",
+    },
+  );
+  assert.deepEqual(
+    resolveUnitCopyLimit(
+      {
+        keywords: ["Chosen Champion"],
+      },
+      "strike-force",
+      {
+        granted_keywords: [
+          {
+            keyword: "Epic Hero",
+            to_keywords: ["Chosen Champion"],
+          },
+        ],
+      },
+    ),
+    {
+      status: "resolved",
+      maximumCopies: 1,
+      basis: "epic-hero",
+    },
+  );
+});
+
+test("enforces generic, transport, and Epic Hero copy limits", async () => {
+  const genericBase = minimalCustodesRoster();
+  const threeChampions = modifyRosterBatch(genericBase, [
+    { type: "add", unitId: "blade-champion" },
+    { type: "add", unitId: "blade-champion" },
+  ]);
+  assert.ok(
+    threeChampions.ok && threeChampions.data,
+    threeChampions.violations
+      .map((violation) => violation.message)
+      .join("; "),
+  );
+  const fourChampions = modifyRoster(threeChampions.data, {
+    type: "add",
+    unitId: "blade-champion",
+  });
+  assert.equal(fourChampions.ok, false);
+  assert.ok(fourChampions.data);
+  assert.deepEqual(
+    fourChampions.violations.map((violation) => violation.code),
+    ["UNIT_COPY_LIMIT_EXCEEDED"],
+  );
+
+  const recovered = modifyRosterBatch(threeChampions.data, [
+    { type: "add", unitId: "blade-champion" },
+    {
+      type: "remove",
+      selectionId: threeChampions.data.units.find(
+        (selection) =>
+          selection.unitId === "blade-champion" && !selection.isWarlord,
+      )!.selectionId,
+    },
+  ]);
+  assert.ok(
+    recovered.ok && recovered.data,
+    recovered.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.equal(
+    recovered.data.units.filter(
+      (selection) => selection.unitId === "blade-champion",
+    ).length,
+    3,
+  );
+
+  const coronusBase = minimalCustodesRoster();
+  const threeCoronus = modifyRosterBatch(
+    coronusBase,
+    Array.from({ length: 3 }, () => ({
+      type: "add" as const,
+      unitId: "coronus-grav-carrier",
+    })),
+  );
+  assert.ok(
+    threeCoronus.ok && threeCoronus.data,
+    threeCoronus.violations
+      .map((violation) => violation.message)
+      .join("; "),
+  );
+  const fourCoronus = modifyRoster(threeCoronus.data, {
+    type: "add",
+    unitId: "coronus-grav-carrier",
+  });
+  assert.equal(fourCoronus.ok, false);
+  assert.ok(
+    fourCoronus.violations.some(
+      (violation) => violation.code === "UNIT_COPY_LIMIT_EXCEEDED",
+    ),
+  );
+
+  const rhinoBase = minimalCustodesRoster();
+  const sixRhinos = modifyRosterBatch(
+    rhinoBase,
+    Array.from({ length: 6 }, () => ({
+      type: "add" as const,
+      unitId: "anathema-psykana-rhino",
+    })),
+  );
+  assert.ok(
+    sixRhinos.ok && sixRhinos.data,
+    sixRhinos.violations
+      .map((violation) => violation.message)
+      .join("; "),
+  );
+  const sevenRhinos = modifyRoster(sixRhinos.data, {
+    type: "add",
+    unitId: "anathema-psykana-rhino",
+  });
+  assert.equal(sevenRhinos.ok, false);
+  assert.ok(
+    sevenRhinos.violations.some(
+      (violation) => violation.code === "UNIT_COPY_LIMIT_EXCEEDED",
+    ),
+  );
+
+  const epicBase = minimalCustodesRoster(true);
+  const firstTrajann = modifyRoster(epicBase, {
+    type: "add",
+    unitId: "trajann-valoris",
+  });
+  assert.ok(
+    firstTrajann.ok && firstTrajann.data,
+    firstTrajann.violations
+      .map((violation) => violation.message)
+      .join("; "),
+  );
+  const secondTrajann = modifyRoster(firstTrajann.data, {
+    type: "add",
+    unitId: "trajann-valoris",
+  });
+  assert.equal(secondTrajann.ok, false);
+  assert.ok(
+    secondTrajann.violations.some(
+      (violation) => violation.code === "UNIT_COPY_LIMIT_EXCEEDED",
+    ),
+  );
+
+  const exported = await exportRoster(fourChampions.data, "rosz");
+  assert.equal(exported.ok, false);
+  assert.equal(exported.data, null);
+  assert.ok(
+    exported.violations.some(
+      (violation) => violation.code === "UNIT_COPY_LIMIT_EXCEEDED",
+    ),
   );
 });
 
