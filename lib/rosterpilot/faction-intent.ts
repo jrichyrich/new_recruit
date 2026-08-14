@@ -461,7 +461,9 @@ export function resolveFactionIntent(
   ].sort();
   const structured = structuredMatches[0];
   let playerMentions = mentions.filter(
-    (mention) => mention.role === "player",
+    (mention) =>
+      mention.role === "player" &&
+      mention.factionId !== opponentMatch?.factionId,
   );
   const unclassified = mentions.filter(
     (mention) => mention.role === "unclassified",

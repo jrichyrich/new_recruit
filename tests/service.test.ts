@@ -255,14 +255,14 @@ test("continues to read legacy roster IDs", async () => {
   }
 });
 
-test("forwards structured build options and known-faction opponent scope", async () => {
+test("canonicalizes structured build names and known-faction opponent scope", async () => {
   const { service, root } = await fixture();
   try {
     const result = await service.run({
       action: "build",
       request: "Build a matched-play counter roster.",
       options: {
-        playerFaction: "adeptus-custodes",
+        playerFaction: "Adeptus Custodes",
         pointsLimit: 1000,
         name: "Structured Custodes Counter",
         preferences: ["mobility"],
@@ -275,7 +275,7 @@ test("forwards structured build options and known-faction opponent scope", async
         requiredWarlordUnitId: "shield-captain",
         detachmentId: "shield-host",
         forceDispositionId: "purge-the-foe",
-        opponentFaction: "world-eaters",
+        opponentFaction: "World Eaters",
         opponentAssumptions: {
           styleTags: ["aggressive", "melee"],
           source: "user-stated",
@@ -792,6 +792,55 @@ test("keeps faction-scoped research scoped to that faction", async () => {
   }
 });
 
+test("expands a faction-scoped list research request when literal search is empty", async () => {
+  const { service, root } = await fixture();
+  try {
+    const result = await service.run({
+      action: "research",
+      request:
+        "Find Adeptus Custodes aircraft, grav-tanks, transports, dreadnoughts, Sisters of Silence units, Wardens, Allarus, Vertus, Epic Heroes, and all current detachment-relevant options for designing unusual 2000 point armies.",
+      options: { faction: "adeptus-custodes", limit: 100 },
+    });
+
+    assert.equal(result.state, "completed");
+    assert.ok(Number(result.result?.unitMatchCount) > 0);
+    const units = result.result?.units as Array<{ id: string }>;
+    assert.ok(units.some((unit) => unit.id === "ares-gunship"));
+    assert.ok(units.some((unit) =>
+      unit.id === "custodian-wardens"
+    ));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reports remaining points only for the selected comparison roster", async () => {
+  const { service, root } = await fixture();
+  try {
+    const result = await service.run({
+      action: "build",
+      request:
+        "Build an Adeptus Custodes Golden Air Force with an Ares Gunship and Orion Assault Dropship.",
+      options: {
+        playerFaction: "adeptus-custodes",
+        opponentFaction: "world-eaters",
+        detachmentId: "shield-host",
+        pointsLimit: 1980,
+        requiredUnitIds: ["ares-gunship", "orion-assault-dropship"],
+        comparisonBuildLimit: 1,
+      },
+    });
+
+    assert.equal(result.state, "completed", JSON.stringify(result.violations));
+    assert.equal(result.roster?.points, "1980/1980");
+    assert.ok(!result.warnings.some((warning) =>
+      warning.code === "POINTS_REMAIN"
+    ));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("exports through an artifact reference instead of inline content", async () => {
   const { service, root } = await fixture();
   try {
@@ -948,6 +997,77 @@ test("runs local stress directly and confirms website stress through act", async
       "STRESS_CATALOGUE_DRIFT_MODE_INVALID",
     );
     assert.equal(calls.length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("retains a generated profile-policy scaffold from failed local stress", async () => {
+  const runStress: StressRunner = async (_roster, _faction, options) => {
+    const scaffoldPath = path.join(
+      options.outputDirectory,
+      "tessera-profile-policy.scaffold.json",
+    );
+    await mkdir(options.outputDirectory, { recursive: true });
+    await writeFile(
+      scaffoldPath,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        policyKind: "tessera-profile-policy",
+        entries: [{
+          faction: "World Eaters",
+          unit: "Daemon Prince of Khorne with Wings",
+          weaponGroup: "Hellforged weapons",
+          phase: "fight",
+          selectedProfile: "SELECT_ONE_OF: strike | sweep",
+          activeCount: 1,
+        }],
+      }, null, 2)}\n`,
+    );
+    return {
+      ok: false,
+      data: null,
+      violations: [{
+        code: "TESSERA_PROFILE_POLICY_REQUIRED",
+        message:
+          `Explicit weapon-profile choices are required before Tessera activity. ${"Ambiguous profile detail. ".repeat(8)}Complete the scaffold at ${scaffoldPath}.`,
+        severity: "error" as const,
+      }],
+      warnings: [],
+    };
+  };
+  const { service, root } = await fixture({ runStress });
+  try {
+    const built = await build(service);
+    const failed = await service.run({
+      action: "stress",
+      rosterRef: built.roster!.rosterRef,
+      options: {
+        opponentFaction: "world-eaters",
+        backend: "local-engine",
+        suite: "diverse-9",
+        strategy: "full-all",
+      },
+    });
+
+    assert.equal(failed.state, "failed");
+    assert.equal(
+      failed.violations[0]?.code,
+      "TESSERA_PROFILE_POLICY_REQUIRED",
+    );
+    assert.equal(failed.artifacts.length, 1);
+    assert.equal(
+      failed.artifacts[0]?.filename,
+      "tessera-profile-policy.scaffold.json",
+    );
+    assert.match(
+      failed.artifacts[0]?.uri ?? "",
+      /^rosterpilot:\/\/artifacts\/[a-f0-9]{64}$/,
+    );
+    const resource = await service.readResource(failed.artifacts[0]!.uri);
+    assert.ok("text" in resource);
+    assert.match(resource.text, /Daemon Prince of Khorne with Wings/);
+    assert.ok(Buffer.byteLength(JSON.stringify(failed)) <= 4_096);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

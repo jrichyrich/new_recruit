@@ -1592,6 +1592,19 @@ test("structured player faction ignores unclassified factions in a roster name",
   assert.equal(resolution.factionId, "adeptus-custodes");
 });
 
+test("structured opponent faction overrides a player-like prompt mention", () => {
+  const resolution = resolveFactionIntent({
+    prompt:
+      "Build an exactly 2000 point legal Adeptus Custodes Golden Air Force skew around both an Ares Gunship and an Orion Assault Dropship. Use Shield Host, retain enough infantry to embark or score, include cheap mission pieces if possible, and optimize for an unknown World Eaters list.",
+    playerFaction: "adeptus-custodes",
+    opponentFaction: "world-eaters",
+  });
+
+  assert.equal(resolution.status, "resolved");
+  assert.equal(resolution.factionId, "adeptus-custodes");
+  assert.deepEqual(resolution.opponentFactionIds, ["world-eaters"]);
+});
+
 test("honors prompt and structured hard unit constraints", () => {
   const result = buildRoster({
     prompt:

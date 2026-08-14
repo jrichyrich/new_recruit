@@ -477,6 +477,33 @@ function compactIssues(values: RosterIssue[]): RosterIssue[] {
   }));
 }
 
+function listResearchQueries(query: string): string[] {
+  if (!/[,;]/.test(query)) return [];
+  const normalized = query
+    .replace(/^\s*(?:find|research|list|show)\s+/i, "")
+    .replace(/\s+and\s+/gi, ",");
+  const leadingFaction = normalized.match(
+    /^(.+?)\s+(?:aircraft|vehicles?|transports?|dreadnoughts?|units?|wardens?|allarus|vertus|epic heroes?)\b/i,
+  )?.[1];
+  return [...new Set(
+    normalized
+      .split(/[,;]/)
+      .map((clause) => clause
+        .replace(/^\s*(?:and|all)\s+/i, "")
+        .replace(/^\s*(?:current\s+)?/i, "")
+        .replace(/^(.+?\s+of\s+.+?)\s+units?$/i, "$1")
+        .replace(/^(?!sisters?\s+of\s+silence$)(.+?)\s+units?$/i, "$1")
+        .replace(/\boptions?\b.*$/i, "")
+        .trim())
+      .map((clause) =>
+        leadingFaction && clause.startsWith(`${leadingFaction} `)
+          ? clause.slice(leadingFaction.length).trim()
+          : clause
+      )
+      .filter((clause) => clause.length >= 3 && clause.split(/\s+/).length <= 4),
+  )].slice(0, 12);
+}
+
 function compactText(value: string, maximumBytes = 640): string {
   if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
   const suffix = "...";
@@ -1027,7 +1054,7 @@ export class RosterPilotService {
       : faction
         ? compareFactions([faction])
         : searchFactions(query, number(options.limit) ?? 20);
-    const units = faction
+    let units = faction
       ? searchUnits({
           faction,
           query,
@@ -1035,6 +1062,31 @@ export class RosterPilotService {
           limit: number(options.limit) ?? 30,
         })
       : null;
+    if (units?.ok && units.data?.length === 0) {
+      const expandedQueries = listResearchQueries(query);
+      if (expandedQueries.length > 1) {
+        const expanded = expandedQueries.map((expandedQuery) =>
+          searchUnits({
+            faction,
+            query: expandedQuery,
+            includeLegends: boolean(options.includeLegends),
+            limit: number(options.limit) ?? 30,
+          })
+        );
+        units = {
+          ok: expanded.every((result) => result.ok),
+          data: [
+            ...new Map(
+              expanded
+                .flatMap((result) => result.data ?? [])
+                .map((unit) => [unit.id, unit]),
+            ).values(),
+          ].slice(0, Math.max(1, Math.min(number(options.limit) ?? 30, 100))),
+          violations: expanded.flatMap((result) => result.violations),
+          warnings: expanded.flatMap((result) => result.warnings),
+        };
+      }
+    }
     const violations = [
       ...factions.violations,
       ...(units?.violations ?? []),
@@ -1259,7 +1311,8 @@ export class RosterPilotService {
         : opponentFactionId
           ? {
               kind: "known-faction",
-              factionId: opponentFactionId,
+              factionId:
+                knownFactionPortfolio?.factionId ?? opponentFactionId,
               ...(frozenRepresentatives.length > 0 && opponentPortfolioHash
                 ? {
                     representativeRosters: frozenRepresentatives,
@@ -1542,8 +1595,12 @@ export class RosterPilotService {
       warnings: compactIssues([
         ...new Map(
           [
-            ...result.warnings,
-            ...comparisonWarnings,
+            ...result.warnings.filter(
+              (warning) => warning.code !== "POINTS_REMAIN",
+            ),
+            ...comparisonWarnings.filter(
+              (warning) => warning.code !== "POINTS_REMAIN",
+            ),
             ...explanation.warnings,
             ...handoff.warnings,
           ].map((warning) => [warning.code, warning]),
@@ -1978,7 +2035,10 @@ export class RosterPilotService {
               ? `${safeFilename(roster.name)}-revision.html`
               : null,
           )
-        : [];
+        : await this.#storeStressFailureArtifacts(
+            outputDirectory,
+            result.violations,
+          );
       const reportRecord = record(report);
       const simulation = record(reportRecord.simulation);
       const comparisonSummary = record(reportRecord.summary);
@@ -2704,6 +2764,42 @@ export class RosterPilotService {
       content: await readFile(htmlPath),
     });
     return [jsonArtifact, htmlArtifact];
+  }
+
+  async #storeStressFailureArtifacts(
+    outputDirectory: string,
+    violations: RosterIssue[],
+  ): Promise<ArtifactReference[]> {
+    const profilePolicyRequired = violations.some((violation) =>
+      violation.code === "TESSERA_PROFILE_POLICY_REQUIRED" ||
+      violation.code === "TESSERA_PROFILE_POLICY_REQUIRED_AFTER_ENRICHMENT"
+    );
+    if (!profilePolicyRequired) return [];
+    const scaffoldPath = path.join(
+      outputDirectory,
+      "tessera-profile-policy.scaffold.json",
+    );
+    if (!(await exists(scaffoldPath))) return [];
+    const content = await readFile(scaffoldPath);
+    let scaffold: Record<string, unknown>;
+    try {
+      scaffold = record(JSON.parse(content.toString("utf8")));
+    } catch {
+      return [];
+    }
+    if (
+      scaffold.schemaVersion !== 1 ||
+      scaffold.policyKind !== "tessera-profile-policy" ||
+      !Array.isArray(scaffold.entries)
+    ) {
+      return [];
+    }
+    return [await this.#storeArtifact({
+      filename: path.basename(scaffoldPath),
+      mimeType: "application/json",
+      encoding: "utf8",
+      content,
+    })];
   }
 
   async #storeArtifact(input: {
