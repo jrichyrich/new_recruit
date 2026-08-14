@@ -8,6 +8,7 @@ import {
 } from "../lib/rosterpilot/service";
 import type { ExportFormat } from "../lib/rosterpilot/types";
 import { createLocalRosterPilotService } from "../local/service";
+import { runAgentLifecycleCommand } from "./agent-lifecycle";
 
 const ACTIONS = new Set<RunAction>([
   "research",
@@ -180,6 +181,7 @@ Usage:
   rosterpilot act <operation-id> <action-id> --revision <n> --confirm
   rosterpilot import <roster.json>
   rosterpilot status
+  rosterpilot agent <install|status|ensure-current|restart|uninstall>
   rosterpilot mcp
 
 Common run flags:
@@ -213,6 +215,15 @@ async function main(): Promise<void> {
   }
 
   const args = parseArguments(raw);
+  if (command === "agent") {
+    const result = await runAgentLifecycleCommand(
+      args.positionals[0] ?? "status",
+    );
+    print(result, args.flags.has("pretty"));
+    if (!result.ok) process.exitCode = 2;
+    return;
+  }
+
   const service = await createLocalRosterPilotService();
   let result: unknown;
 

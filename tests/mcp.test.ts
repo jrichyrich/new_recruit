@@ -11,9 +11,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import {
+  runAgentLifecycleCommand,
+  type AgentLifecycleDependencies,
+} from "../cli/agent-lifecycle";
+import {
   RosterPilotService,
   type StressRunner,
 } from "../lib/rosterpilot/service";
+import type { LifecycleResult } from "../local/agent/lifecycle";
 import { createRosterPilotMcpServer } from "../mcp/server";
 
 const execFileAsync = promisify(execFile);
@@ -69,6 +74,53 @@ async function connected(options: { runStress?: StressRunner } = {}) {
   return { root, service, server, client };
 }
 
+test("routes documented local-agent lifecycle commands", async () => {
+  const calls: string[] = [];
+  const result = (action: string): LifecycleResult => ({
+    ok: true,
+    installed: action !== "uninstall",
+    running: action !== "uninstall",
+    launchAgentPath: `/agent/${action}.plist`,
+    brokerPath: `/broker/${action}`,
+    socketPath: `/socket/${action}`,
+  });
+  const dependency = (action: string) => async () => {
+    calls.push(action);
+    return result(action);
+  };
+  const dependencies: AgentLifecycleDependencies = {
+    install: dependency("install"),
+    status: dependency("status"),
+    ensureCurrent: dependency("ensure-current"),
+    restart: dependency("restart"),
+    uninstall: dependency("uninstall"),
+  };
+
+  for (const action of [
+    "install",
+    "status",
+    "ensure-current",
+    "restart",
+    "uninstall",
+  ]) {
+    assert.deepEqual(
+      await runAgentLifecycleCommand(action, dependencies),
+      result(action),
+    );
+  }
+  assert.deepEqual(calls, [
+    "install",
+    "status",
+    "ensure-current",
+    "restart",
+    "uninstall",
+  ]);
+  await assert.rejects(
+    runAgentLifecycleCommand("unknown", dependencies),
+    /Unknown agent command "unknown"/,
+  );
+});
+
 test("publishes exactly three token-efficient tools", async () => {
   const context = await connected();
   try {
@@ -121,6 +173,10 @@ test("keeps explicit CLI build flags aligned with MCP build options", async () =
     ]) {
       assert.match(help.stdout, new RegExp(flag));
     }
+    assert.match(
+      help.stdout,
+      /agent <install\|status\|ensure-current\|restart\|uninstall>/,
+    );
 
     const cliRun = await runCli(cliRoot, [
       "build",
