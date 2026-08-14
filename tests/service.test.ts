@@ -1577,7 +1577,10 @@ test("blocks stale actions and performs confirmed New Recruit upload once", asyn
     assert.equal(uploaded.state, "completed");
     assert.equal(deliveries, 1);
     assert.equal(deliveryOptions[0].rootDir, root);
-    assert.equal(deliveryOptions[0].outputDirectory, "new-recruit");
+    assert.equal(
+      deliveryOptions[0].outputDirectory,
+      path.join("new-recruit", built.operationId),
+    );
 
     const replayed = await service.act({
       operationId: uploaded.operationId,

@@ -858,7 +858,7 @@ export class RosterPilotService {
       const result = await this.#deliverToNewRecruit(roster, {
         downloadEnrichedRosz: true,
         downloadPrettyHtml: false,
-        outputDirectory: "new-recruit",
+        outputDirectory: path.join("new-recruit", operation.operationId),
         rootDir: this.#rootDirectory,
         overwrite: false,
       });
