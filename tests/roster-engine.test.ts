@@ -2560,7 +2560,16 @@ test("exports interoperable XML, zipped .rosz, JSON, text, and HTML", async () =
     const result = await exportRoster(built.data, format);
     assert.equal(result.ok, true, `${format} export should pass`);
     assert.ok(result.data);
-    if (format === "ros") {
+    if (format === "roster-json") {
+      const roundTripped = parseRosterDraft(
+        JSON.parse(result.data.content as string),
+      );
+      assert.equal(roundTripped.success, true);
+      assert.deepEqual(
+        roundTripped.success ? roundTripped.data : null,
+        built.data,
+      );
+    } else if (format === "ros") {
       const xml = result.data.content as string;
       assert.match(xml, /<roster\b/);
       assert.match(xml, /Adeptus Custodes/);

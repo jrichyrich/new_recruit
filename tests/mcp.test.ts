@@ -147,7 +147,7 @@ test("publishes exactly three token-efficient tools", async () => {
   }
 });
 
-test("keeps explicit CLI build flags aligned with MCP build options", async () => {
+test("keeps retained CLI routes and explicit build flags aligned with MCP options", async () => {
   const context = await connected();
   const cliRoot = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-cli-"));
   const expectedOptions = {
@@ -203,9 +203,11 @@ test("keeps explicit CLI build flags aligned with MCP build options", async () =
       operationId: string;
       state: string;
       roster: {
+        rosterRef: string;
         factionId: string;
         detachment: string;
         disposition: string;
+        units: Array<{ selectionId: string; warlord: boolean }>;
       };
     };
     assert.equal(cliSummary.state, "completed");
@@ -255,6 +257,57 @@ test("keeps explicit CLI build flags aligned with MCP build options", async () =
         disposition: mcpSummary.roster.disposition,
       },
     );
+
+    const warlord = cliSummary.roster.units.find((unit) => unit.warlord);
+    assert.ok(warlord);
+    const modified = JSON.parse((await runCli(cliRoot, [
+      "modify",
+      "--roster",
+      cliSummary.roster.rosterRef,
+      "--options",
+      JSON.stringify({
+        operation: {
+          type: "set-warlord",
+          selectionId: warlord.selectionId,
+        },
+      }),
+    ])).stdout) as {
+      state: string;
+      roster: { rosterRef: string };
+    };
+    assert.equal(modified.state, "completed");
+
+    const exportedPath = path.join(cliRoot, "adapter-parity-roster.json");
+    const exported = JSON.parse((await runCli(cliRoot, [
+      "export",
+      "--roster",
+      modified.roster.rosterRef,
+      "--format",
+      "roster-json",
+      "--output",
+      exportedPath,
+    ])).stdout) as { state: string; artifacts: Array<{ written?: string }> };
+    assert.equal(exported.state, "completed");
+    assert.equal(exported.artifacts[0]?.written, exportedPath);
+
+    const imported = JSON.parse((await runCli(cliRoot, [
+      "import",
+      exportedPath,
+    ])).stdout) as { state: string; roster: { factionId: string } };
+    assert.equal(imported.state, "completed");
+    assert.equal(imported.roster.factionId, "adeptus-custodes");
+
+    const research = JSON.parse((await runCli(cliRoot, [
+      "research",
+      "Custodes",
+    ])).stdout) as { state: string };
+    assert.equal(research.state, "completed");
+
+    const status = JSON.parse((await runCli(cliRoot, [
+      "status",
+    ])).stdout) as { data: { ok: boolean }; newRecruit: { ok: boolean } };
+    assert.equal(status.data.ok, true);
+    assert.equal(typeof status.newRecruit.ok, "boolean");
 
     assert.match(
       await cliFailure(cliRoot, [

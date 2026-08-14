@@ -21,7 +21,7 @@
     "homepage": "https://playtessera.gg"
   },
   "integration": {
-    "dependencySection": "devDependencies",
+    "dependencySection": "dependencies",
     "allowedUsage": "explicit-local-and-attested-personal-runtime",
     "explicitLocalRuntimeEnabled": true,
     "productionRuntimeEnabled": false

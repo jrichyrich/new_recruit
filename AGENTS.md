@@ -16,8 +16,10 @@ Authenticated New Recruit upload and Tessera Website stress runs require an expl
 
 - `npm ci` installs Node 22.13+ dependencies.
 - `npm run typecheck` checks the retained product.
+- `npm run wiring:check` checks package entrypoints, relative imports, script syntax, and the test-file cap.
 - `npm test` runs the focused Node test suite.
-- `npm run verify` runs type checks, tests, data checks, and plugin parity.
+- `npm run tessera:engine:check` verifies the pinned local Tessera engine and provenance.
+- `npm run verify` runs type checks, wiring, tests, Tessera provenance, data checks, and plugin parity.
 - `npm run rosterpilot -- status` exercises the CLI.
 - `npm run mcp` starts the stdio MCP server.
 - `npm run data:sync` requests an on-demand data refresh.

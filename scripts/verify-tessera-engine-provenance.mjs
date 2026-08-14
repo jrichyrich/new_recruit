@@ -37,7 +37,7 @@ export const EXPECTED_TESSERA_ENGINE_PROVENANCE = Object.freeze({
     homepage: "https://playtessera.gg",
   },
   integration: {
-    dependencySection: "devDependencies",
+    dependencySection: "dependencies",
     allowedUsage: "explicit-local-and-attested-personal-runtime",
     explicitLocalRuntimeEnabled: true,
     productionRuntimeEnabled: false,
@@ -248,22 +248,25 @@ export async function verifyTesseraEngineProvenance(options = {}) {
   );
 
   const dependencySpec =
-    rootPackage.devDependencies?.[manifest.package.name];
+    rootPackage[manifest.integration.dependencySection]?.[
+      manifest.package.name
+    ];
   invariant(
     dependencySpec === manifest.upstream.codeloadUrl,
-    "package.json does not pin the candidate in devDependencies",
+    `package.json does not pin the candidate in ${manifest.integration.dependencySection}`,
   );
   invariant(
-    rootPackage.dependencies?.[manifest.package.name] === undefined,
-    "the evaluation candidate must not be a production dependency",
+    rootPackage.devDependencies?.[manifest.package.name] === undefined,
+    "the runtime candidate must not also be duplicated in devDependencies",
   );
 
   const rootLockPackage = lock.packages?.[""];
   const lockEntry =
     lock.packages?.[`node_modules/${manifest.package.name}`];
   invariant(
-    rootLockPackage?.devDependencies?.[manifest.package.name] ===
-      manifest.upstream.codeloadUrl,
+    rootLockPackage?.[manifest.integration.dependencySection]?.[
+      manifest.package.name
+    ] === manifest.upstream.codeloadUrl,
     "the root lockfile dependency does not match the codeload URL",
   );
   invariant(Boolean(lockEntry), "the lockfile has no installed package entry");
@@ -278,8 +281,8 @@ export async function verifyTesseraEngineProvenance(options = {}) {
   invariant(
     lockEntry.version === manifest.package.version &&
       lockEntry.license === manifest.package.license &&
-      lockEntry.dev === true,
-    "the lockfile package, licence, or development-only metadata changed",
+      lockEntry.dev !== true,
+    "the lockfile package, licence, or runtime dependency metadata changed",
   );
 
   invariant(
@@ -346,7 +349,7 @@ export async function verifyTesseraEngineProvenance(options = {}) {
       name: installedPackage.name,
       version: installedPackage.version,
       license: installedPackage.license,
-      developmentOnly: lockEntry.dev,
+      developmentOnly: lockEntry.dev === true,
     },
     smoke,
   };

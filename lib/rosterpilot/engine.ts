@@ -6044,7 +6044,20 @@ export async function exportRoster(
         validation.warnings,
       );
     }
-    if (format === "roster-json" || format === "newrecruit-json") {
+    if (format === "roster-json") {
+      return envelope(
+        {
+          format,
+          filename: `${basename}.json`,
+          mimeType: "application/json",
+          encoding: "utf8",
+          content: `${JSON.stringify(draft, null, 2)}\n`,
+        },
+        [],
+        validation.warnings,
+      );
+    }
+    if (format === "newrecruit-json") {
       return envelope(
         {
           format,

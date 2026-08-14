@@ -229,8 +229,6 @@ async function main(): Promise<void> {
 
   if (command === "run" || ACTIONS.has(command as RunAction)) {
     result = await service.run(runRequest(args, command === "run" ? undefined : command));
-  } else if (command === "sync") {
-    result = await service.run({ action: "sync", options: buildOptions(args) });
   } else if (command === "inspect") {
     const request: InspectRequest = {
       ref: args.positionals[0] ?? stringFlag(args, "ref") ?? "data",

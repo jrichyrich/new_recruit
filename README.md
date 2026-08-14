@@ -5,7 +5,7 @@ RosterPilot is a local-first Warhammer 40,000 roster engine with two interfaces:
 ## What remains
 
 - Faction and unit research
-- Deterministic build, modify, rebase, validate, explain, and export
+- Deterministic build and modify workflows that automatically rebase stored inputs when required, validate every result, and return compact explanations
 - ROS, ROSZ, JSON, text, and printable HTML artifacts
 - Confirmed authenticated New Recruit upload
 - Exact-roster local matchup assessment
@@ -68,10 +68,12 @@ See [architecture](docs/architecture.md) and [data bundles](docs/data-bundles.md
 
 ```sh
 npm run typecheck
+npm run wiring:check
 npm test
+npm run tessera:engine:check
 npm run verify
 npm run data:check
 npm run companion:build
 ```
 
-The focused suite is limited to high-value service/MCP contracts, engine behavior, data snapshots and refresh, New Recruit mutation safety, and both Tessera execution foundations.
+The focused suite is limited to high-value service/MCP contracts, engine behavior, data snapshots and refresh, New Recruit mutation safety, and both Tessera execution foundations. `npm run verify` also checks every TypeScript script, repository wiring, the pinned Tessera engine provenance, and the 18-file test cap.

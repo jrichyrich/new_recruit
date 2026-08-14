@@ -26,6 +26,7 @@
     "lib/**/*.ts",
     "local/**/*.ts",
     "mcp/**/*.ts",
+    "scripts/**/*.ts",
     "tests/**/*.ts",
     "types/**/*.d.ts"
   ],
