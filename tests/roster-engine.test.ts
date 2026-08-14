@@ -227,6 +227,29 @@ test("keeps Warlord-only candidates structurally distinct and repeatable", () =>
   );
 });
 
+test("renames a roster without changing its army structure", () => {
+  const built = buildRoster({
+    playerFaction: "adeptus-custodes",
+    pointsLimit: 1000,
+  });
+  assert.ok(built.ok && built.data);
+
+  const originalFingerprint = rosterStructuralFingerprint(built.data);
+  const renamed = modifyRoster(built.data, {
+    type: "set-name",
+    name: "  Custodes Praetorian Spearhead  ",
+  });
+
+  assert.ok(renamed.ok && renamed.data);
+  assert.equal(renamed.data.name, "Custodes Praetorian Spearhead");
+  assert.equal(
+    rosterStructuralFingerprint(renamed.data),
+    originalFingerprint,
+  );
+  assert.notEqual(renamed.data.id, built.data.id);
+  assert.equal(validateRoster(renamed.data).ok, true);
+});
+
 test("builds against an exact opponent roster and records owned-model limits", () => {
   const opponent = buildRoster({
     playerFaction: "aeldari",

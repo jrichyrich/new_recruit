@@ -5569,7 +5569,9 @@ export function modifyRoster(
     issue(code, message),
   ]);
 
-  if (operation.type === "add" || operation.type === "replace") {
+  if (operation.type === "set-name") {
+    next.name = operation.name;
+  } else if (operation.type === "add" || operation.type === "replace") {
     const unit = resolveUnit(operation.unitId, draft.factionId);
     if (!unit || unit.raw.faction_id !== draft.factionId) {
       return fail("UNIT_NOT_FOUND", `Unit "${operation.unitId}" is not in ${draft.factionName}.`);

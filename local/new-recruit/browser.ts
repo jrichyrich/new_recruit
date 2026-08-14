@@ -55,7 +55,74 @@ type ImportRosterResult = {
   remoteOutcomeUnknown?: boolean;
 };
 
-const listUrlPattern = /\/app\/Lists\//i;
+const preExistingRosterRowAttribute =
+  "data-rosterpilot-pre-existing-list";
+
+function listIdentity(value: string, baseUrl = value): string | null {
+  try {
+    const url = new URL(value, baseUrl);
+    const match = url.pathname.match(/^\/app\/Lists\/([^/]+)\/?$/i);
+    return match ? `${url.origin}/app/Lists/${match[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+async function markPreExistingRosterRows(
+  page: Page,
+  rosterName: string,
+): Promise<Set<string>> {
+  const identities = new Set<string>();
+  const semanticRows = page
+    .locator("tr.listRow")
+    .filter({ hasText: rosterName });
+  const rows = (await semanticRows.count()) > 0
+    ? semanticRows
+    : page.getByText(rosterName, { exact: true });
+  for (let index = 0; index < (await rows.count()); index += 1) {
+    const href = await rows.nth(index).evaluate(
+      (element, attribute) => {
+        const row = element.matches("tr")
+          ? element
+          : element.closest("tr") ?? element;
+        row.setAttribute(attribute, "true");
+        return row
+          .querySelector('a[href*="/app/Lists/"]')
+          ?.getAttribute("href") ?? null;
+      },
+      preExistingRosterRowAttribute,
+    );
+    const identity = href ? listIdentity(href, page.url()) : null;
+    if (identity) identities.add(identity);
+  }
+  return identities;
+}
+
+async function rosterRowEvidence(
+  candidate: Locator,
+  baseUrl: string,
+): Promise<{ preExisting: boolean; identity: string | null }> {
+  const evidence = await candidate.evaluate(
+    (element, attribute) => {
+      const row = element.matches("tr.listRow")
+        ? element
+        : element.closest("tr") ?? element;
+      const anchor = row.querySelector('a[href*="/app/Lists/"]');
+      return {
+        preExisting:
+          row.hasAttribute(attribute) || element.hasAttribute(attribute),
+        href: anchor?.getAttribute("href") ?? null,
+      };
+    },
+    preExistingRosterRowAttribute,
+  );
+  return {
+    preExisting: evidence.preExisting,
+    identity: evidence.href
+      ? listIdentity(evidence.href, baseUrl)
+      : null,
+  };
+}
 
 /**
  * Wait for the possible veil overlay to disappear and then return a locator for the Export control.
@@ -398,6 +465,18 @@ async function importRoster(
     .waitFor({ state: "visible", timeout: 8_000 })
     .catch(() => undefined);
   const initialRosterCount = await rosterRows.count();
+  const initialListIdentity = listIdentity(page.url());
+  const preExistingListIdentities = await markPreExistingRosterRows(
+    page,
+    rosterName,
+  );
+  if (initialListIdentity) {
+    preExistingListIdentities.add(initialListIdentity);
+  }
+  const isNewListUrl = (value: string | URL): boolean => {
+    const identity = listIdentity(String(value));
+    return identity !== null && !preExistingListIdentities.has(identity);
+  };
   const fileChooserPromise = page
     .waitForEvent("filechooser", { timeout: 3_000 })
     .catch(() => null);
@@ -436,7 +515,7 @@ async function importRoster(
   let confirmClicked = false;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (listUrlPattern.test(page.url())) {
+    if (isNewListUrl(page.url())) {
       return { imported: true, listUrl: page.url() };
     }
 
@@ -453,12 +532,20 @@ async function importRoster(
       ) {
         const candidate = candidates.nth(index);
         if (!(await candidate.isVisible().catch(() => false))) continue;
+        const evidence = await rosterRowEvidence(candidate, page.url());
+        if (
+          evidence.preExisting ||
+          (evidence.identity !== null &&
+            preExistingListIdentities.has(evidence.identity))
+        ) {
+          continue;
+        }
         await candidate.scrollIntoViewIfNeeded().catch(() => undefined);
         await candidate.click({ timeout: 2_000 }).catch(() => undefined);
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) break;
         const opened = await page
-          .waitForURL(listUrlPattern, {
+          .waitForURL((url) => isNewListUrl(url), {
             timeout: Math.min(2_000, remainingMs),
           })
           .then(() => true)
@@ -493,7 +580,6 @@ async function importRoster(
     }
     await page.waitForTimeout(250);
   }
-  await page.screenshot({ path: "/Users/jasricha/.gemini/antigravity-ide/brain/847e3231-7dec-41d2-a532-ea65faea8ea7/scratch/timeout-screenshot.png", fullPage: true }).catch(() => undefined);
   return {
     imported: false,
     listUrl: null,

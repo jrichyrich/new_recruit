@@ -134,6 +134,29 @@ test("stores semantic roster variants under distinct collision-safe refs", async
         .find((unit) => unit.selectionId === wardens.selectionId)
         ?.equipment.some((entry) => entry.itemId === replacementItemId),
     );
+
+    const renamed = await service.run({
+      action: "modify",
+      rosterRef: built.roster.rosterRef,
+      options: {
+        operation: {
+          type: "set-name",
+          name: "Custodes Warden Test Cohort",
+        },
+      },
+    });
+    assert.equal(
+      renamed.state,
+      "completed",
+      JSON.stringify(renamed.violations),
+    );
+    assert.notEqual(renamed.roster?.rosterRef, built.roster.rosterRef);
+    const storedRenamed = await rosterDetails(
+      service,
+      renamed.roster!.rosterRef,
+    );
+    assert.equal(storedRenamed.name, "Custodes Warden Test Cohort");
+    assert.deepEqual(storedRenamed.units, original.units);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

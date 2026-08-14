@@ -503,6 +503,10 @@ export type BuildRosterInput = {
 
 export const ModifyRosterOperationSchema = z.discriminatedUnion("type", [
   z.object({
+    type: z.literal("set-name"),
+    name: z.string().trim().min(1).max(160),
+  }),
+  z.object({
     type: z.literal("add"),
     unitId: z.string().min(1),
     modelCount: z.number().int().positive().optional(),

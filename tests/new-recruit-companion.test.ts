@@ -162,14 +162,29 @@ function roster() {
     };
   };
 }
+function staleRoster() {
+  document.body.innerHTML = \`
+    <h1>Custodes Mobile Strike Force</h1>
+    <p>Imperium - Adeptus Custodes</p>
+    <p>500pts</p>
+    <p>1x Shield-Captain</p>\`;
+}
 function lists() {
   document.querySelector('meta[name="app-version"]').content = "fixture-authenticated-v1";
   document.body.innerHTML = '<a href="/app/Profile">Profile</a>' + (broken
     ? '<h1>My Lists</h1><button>Unknown action</button>'
     : '<h1>My Lists</h1><button id="import">Import List</button><input hidden id="file" type="file"><table><tbody id="lists">' +
-      (duplicateExisting ? '<tr><td><a href="/app/Lists/existing">Custodes Mobile Strike Force</a></td></tr>' : '') +
+      (duplicateExisting ? '<tr class="listRow" data-existing-list><td><a href="/app/Lists/existing">Custodes Mobile Strike Force</a></td></tr>' : '') +
       '</tbody></table>');
   if (broken) return;
+  const existingRow = document.querySelector('[data-existing-list]');
+  if (existingRow) {
+    existingRow.onclick = (event) => {
+      event.preventDefault();
+      history.pushState({}, "", "/app/Lists/existing");
+      staleRoster();
+    };
+  }
   document.querySelector("#import").onclick = () => {
     document.querySelector("#file").hidden = false;
   };
@@ -185,6 +200,18 @@ function lists() {
           };
         }, 750);
       }
+      return;
+    }
+    if (duplicateExisting) {
+      document.querySelector("#lists").insertAdjacentHTML(
+        "beforeend",
+        '<tr class="listRow" data-new-list><td><a href="/app/Lists/fixture">Custodes Mobile Strike Force</a></td></tr>',
+      );
+      document.querySelector('[data-new-list]').onclick = (event) => {
+        event.preventDefault();
+        history.pushState({}, "", "/app/Lists/fixture");
+        roster();
+      };
       return;
     }
     history.pushState({}, "", "/app/Lists/fixture");
@@ -1346,6 +1373,48 @@ test(
       assert.equal(result.imported, true);
       assert.match(result.listUrl ?? "", /\/app\/Lists\/fixture$/);
       assert.doesNotMatch(result.listUrl ?? "", /existing/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "browser companion ignores an initial same-name list route after import",
+  { skip: !runBrowserTests },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "rosterpilot-browser-stale-route-"),
+    );
+    try {
+      const roszPath = path.join(directory, "roster.rosz");
+      await writeFile(roszPath, "fixture");
+      const result = await runNewRecruitBrowserDelivery(
+        {
+          action: "deliver",
+          brokerPath: "/not-used",
+          profileDirectory: path.join(directory, "profile"),
+          roszPath,
+          prettyHtmlPath: null,
+          expected,
+        },
+        {
+          baseUrl:
+            "https://rosterpilot.test/app/Lists/existing?duplicate=1",
+          headless: true,
+          prepareContext: fixtureBrowserDependency(),
+          getCredentials: async () => {
+            throw new Error(
+              "An authenticated session must not request credentials.",
+            );
+          },
+        },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.imported, true);
+      assert.match(result.listUrl ?? "", /\/app\/Lists\/fixture$/);
+      assert.doesNotMatch(result.listUrl ?? "", /existing/);
+      assert.deepEqual(result.verification?.mismatches, []);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
