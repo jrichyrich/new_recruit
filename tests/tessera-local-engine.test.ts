@@ -20,8 +20,21 @@ import {
   localInputSha256,
   serializeLocalTesseraEngineInput,
   type LocalTesseraEngineInput,
+  type LocalTesseraEngineUnit,
 } from "../local/tessera/local-engine-input";
+import { composeSelectedLocalTesseraFormations } from
+  "../local/tessera/local-engine-formation";
 import { profilePolicyHash } from "../local/tessera/profile-policy";
+import {
+  activationEnvelopeTesseraScenarioPolicyContractV2,
+  withSelectedTesseraAttachmentBindingsV2,
+} from "../local/tessera/scenario-contract-v2";
+import {
+  activationEnvelopeTesseraScenarioPolicyContractV3,
+  withSelectedTesseraAttachmentBindingsV3,
+} from "../local/tessera/scenario-contract-v3";
+import { projectLocalTesseraScenarioV3Cell } from
+  "../local/tessera/scenario-v3-execution";
 
 function enrichedRosz(input: {
   rosterName: string;
@@ -111,6 +124,301 @@ test("strict local compiler preserves selected counts, profiles, and immutable i
   assert.deepEqual(compiled.units[0].keywords, ["INFANTRY"]);
   assert.equal(LOCAL_TESSERA_ENGINE_IDENTITY.promotion, "candidate");
   assert.equal(LOCAL_TESSERA_ENGINE_IDENTITY.licenseState, "evaluation-only");
+});
+
+test("selected attachment bindings preserve the activation envelope and exact side scope", () => {
+  const v2 = withSelectedTesseraAttachmentBindingsV2(
+    activationEnvelopeTesseraScenarioPolicyContractV2(
+      10,
+      ["shooting"],
+      ["mean-damage"],
+    ),
+    [{
+      leaderSelectionId: "opponent-leader",
+      bodyguardSelectionId: "opponent-bodyguard",
+      supportingSelectionIds: ["support-b", "support-a"],
+    }],
+  );
+  assert.equal(v2.policy.activations.mode, "envelope");
+  assert.deepEqual(v2.policy.attachments, {
+    mode: "selected",
+    bindings: [{
+      leaderSelectionId: "opponent-leader",
+      bodyguardSelectionId: "opponent-bodyguard",
+      supportingSelectionIds: ["support-a", "support-b"],
+    }],
+  });
+
+  const baselineV3 = activationEnvelopeTesseraScenarioPolicyContractV3(
+    10,
+    {
+      playerSelectionIds: ["player-unit"],
+      opponentSelectionIds: [
+        "opponent-leader",
+        "opponent-bodyguard",
+        "opponent-bodyguard-2",
+        "support-a",
+        "support-b",
+      ],
+    },
+    ["shooting"],
+    ["mean-damage"],
+  );
+  const v3 = withSelectedTesseraAttachmentBindingsV3(
+    baselineV3,
+    [{
+      side: "opponent",
+      leaderSelectionId: "opponent-leader",
+      bodyguardSelectionId: "opponent-bodyguard",
+      supportingSelectionIds: ["support-b", "support-a"],
+    }],
+  );
+  assert.equal(v3.policy.activations.mode, "envelope");
+  assert.deepEqual(v3.policy.attachments, {
+    mode: "selected",
+    bindings: [{
+      side: "opponent",
+      leaderSelectionId: "opponent-leader",
+      bodyguardSelectionId: "opponent-bodyguard",
+      supportingSelectionIds: ["support-a", "support-b"],
+    }],
+  });
+
+  assert.throws(
+    () =>
+      withSelectedTesseraAttachmentBindingsV3(baselineV3, [{
+        side: "player",
+        leaderSelectionId: "opponent-leader",
+        bodyguardSelectionId: "opponent-bodyguard",
+        supportingSelectionIds: [],
+      }]),
+    /is not declared on the player side/,
+  );
+  assert.throws(
+    () =>
+      withSelectedTesseraAttachmentBindingsV3(baselineV3, [
+        {
+          side: "opponent",
+          leaderSelectionId: "opponent-leader",
+          bodyguardSelectionId: "opponent-bodyguard",
+          supportingSelectionIds: [],
+        },
+        {
+          side: "opponent",
+          leaderSelectionId: "opponent-leader",
+          bodyguardSelectionId: "opponent-bodyguard-2",
+          supportingSelectionIds: [],
+        },
+      ]),
+    /occurs in bindings 0 and 1/,
+  );
+});
+
+test("selected attachment activation envelope executes one physical formation", async () => {
+  const directory = await mkdtemp(path.join(
+    os.tmpdir(),
+    "rosterpilot-local-engine-attached-state-",
+  ));
+  try {
+    const profilePolicy = {
+      schemaVersion: 1,
+      policyKind: "tessera-profile-policy",
+      entries: [],
+    } satisfies ProfilePolicyV1;
+    const bundleId = currentRosterSourceData("adeptus-custodes").bundleId;
+    const unit = (
+      selectionId: string,
+      label: string,
+      instance: number,
+    ): LocalTesseraEngineUnit => ({
+      instanceId: instance.toString(16).padStart(24, "0"),
+      selectionId,
+      occurrence: 1,
+      label,
+      name: label,
+      models: 1,
+      T: 4,
+      SV: 3,
+      W: 2,
+      INV: null,
+      FNP: null,
+      points: 100,
+      keywords: ["INFANTRY"],
+      weapons: [{
+        name: `${label} rifle`,
+        type: "ranged",
+        rangeInches: 24,
+        count: 1,
+        A: 1,
+        BS: 3,
+        S: 4,
+        AP: 0,
+        D: 1,
+        keywords: [],
+      }],
+    });
+    const playerUnit = unit("player-unit", "Player unit", 1);
+    const opponentLeader = unit("opponent-leader", "Opponent leader", 2);
+    const opponentBodyguard = unit(
+      "opponent-bodyguard",
+      "Opponent bodyguard",
+      3,
+    );
+    const input = (
+      rosterId: string,
+      rosterName: string,
+      units: LocalTesseraEngineUnit[],
+    ): LocalTesseraEngineInput => ({
+      schemaVersion: 1,
+      kind: "rosterpilot-local-engine-input",
+      compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      evaluationMode: "base-profile-evaluation",
+      bundleId,
+      rosterId,
+      rosterFingerprint: `${rosterId}-fingerprint`,
+      rosterName,
+      factionId: "adeptus-custodes",
+      factionName: "Adeptus Custodes",
+      totalPoints: units.reduce(
+        (sum, candidate) => sum + (candidate.points ?? 0),
+        0,
+      ),
+      profilePolicySha256: profilePolicyHash(profilePolicy),
+      profileRequirements: [],
+      units,
+      limitations: {
+        unmodeledSystems: ["fixture-only systems"],
+        omittedDatasheetAbilities: [],
+        omittedWargear: [],
+        omittedEnhancements: [],
+        unsupportedWeaponKeywords: [],
+        frozenChoices: [],
+      },
+    });
+    const playerInput = input("player", "Player", [playerUnit]);
+    const opponentInput = input("opponent", "Opponent", [
+      opponentLeader,
+      opponentBodyguard,
+    ]);
+    const scenarioPolicyContractV3 =
+      withSelectedTesseraAttachmentBindingsV3(
+        activationEnvelopeTesseraScenarioPolicyContractV3(
+          5,
+          {
+            playerSelectionIds: [playerUnit.selectionId],
+            opponentSelectionIds: opponentInput.units.map(
+              (candidate) => candidate.selectionId,
+            ),
+          },
+          ["shooting"],
+          ["mean-damage"],
+        ),
+        [{
+          side: "opponent",
+          leaderSelectionId: opponentLeader.selectionId,
+          bodyguardSelectionId: opponentBodyguard.selectionId,
+          supportingSelectionIds: [],
+        }],
+      );
+    const opponentFormation = composeSelectedLocalTesseraFormations({
+      rosterFingerprint: opponentInput.rosterFingerprint,
+      attachmentPlanId: "selected-attachment",
+      units: opponentInput.units,
+      bindings: scenarioPolicyContractV3.policy.attachments.bindings,
+    })[0]!;
+    assert.equal(opponentFormation.attachmentPlanId, "selected-attachment");
+    assert.notEqual(opponentFormation.attachmentPlanId, "unattached");
+    assert.deepEqual(opponentFormation.memberSelectionIds, [
+      "opponent-bodyguard",
+      "opponent-leader",
+    ]);
+
+    const playerToOpponent = scenarioPolicyContractV3.scenarios.find(
+      (scenario) => scenario.direction === "player-to-opponent",
+    )!;
+    const attachedProjection = projectLocalTesseraScenarioV3Cell({
+      scenario: playerToOpponent,
+      attacker: playerUnit,
+      target: opponentFormation,
+    });
+    const bodyguardOnlyProjection = projectLocalTesseraScenarioV3Cell({
+      scenario: playerToOpponent,
+      attacker: playerUnit,
+      target: opponentBodyguard,
+    });
+    assert.notEqual(
+      attachedProjection.combatStateSha256,
+      bodyguardOnlyProjection.combatStateSha256,
+      "formation membership must remain part of the combat-state identity",
+    );
+    const inconsistent = structuredClone(playerToOpponent);
+    inconsistent.state.pairs.find(
+      (pair) => pair.targetSelectionId === "opponent-leader",
+    )!.targetVisible = false;
+    assert.throws(
+      () =>
+        projectLocalTesseraScenarioV3Cell({
+          scenario: inconsistent,
+          attacker: playerUnit,
+          target: opponentFormation,
+        }),
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as Error & { code?: string }).code ===
+          "TESSERA_LOCAL_FORMATION_STATE_INCONSISTENT",
+    );
+
+    const playerContent = serializeLocalTesseraEngineInput(playerInput);
+    const opponentContent = serializeLocalTesseraEngineInput(opponentInput);
+    const playerPath = path.join(directory, "player.json");
+    const opponentPath = path.join(directory, "opponent.json");
+    await Promise.all([
+      writeFile(playerPath, playerContent),
+      writeFile(opponentPath, opponentContent),
+    ]);
+    const result = await runLocalTesseraEngineMatchup({
+      profileDirectory: directory,
+      playerRoszPath: playerPath,
+      playerName: playerInput.rosterName,
+      opponentRoszPath: opponentPath,
+      opponentName: opponentInput.rosterName,
+      playerSimulationInput: {
+        kind: "rosterpilot-local-engine-input",
+        path: playerPath,
+        sha256: localInputSha256(playerContent),
+        bundleId,
+        compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      },
+      opponentSimulationInput: {
+        kind: "rosterpilot-local-engine-input",
+        path: opponentPath,
+        sha256: localInputSha256(opponentContent),
+        bundleId,
+        compilerVersion: LOCAL_TESSERA_COMPILER_VERSION,
+      },
+      phases: ["shooting"],
+      metrics: ["mean-damage"],
+      profilePolicy,
+      scenarioPolicyContractV3,
+    });
+    assert.equal(result.scenarios.length, 2);
+    assert.equal(
+      result.scenarios.every((scenario) => scenario.cells.length === 1),
+      true,
+    );
+    assert.equal(
+      result.scenarios.some((scenario) =>
+        scenario.cells.some(
+          (cell) =>
+            cell.attacker === "Opponent bodyguard + Opponent leader" ||
+            cell.target === "Opponent bodyguard + Opponent leader",
+        )
+      ),
+      true,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("local compiler accepts New Recruit save casing, numeric invulnerable profiles, and frozen alternate names", () => {

@@ -206,6 +206,13 @@ export type MatchupRunner = (
 
 export type StressCatalogueDriftMode = "reject" | "diagnostic";
 
+export type ExactStressAttachmentBinding = {
+  side: "player" | "opponent";
+  leaderSelectionId: string;
+  bodyguardSelectionId: string;
+  supportingSelectionIds: string[];
+};
+
 export type StressRunner = (
   playerRoster: RosterDraftV1,
   opponentFactionId: string,
@@ -235,6 +242,7 @@ export type ExactStressRunner = (
     catalogueDriftMode: StressCatalogueDriftMode;
     selectedPlayerAbilityIds: string[];
     activationMode: "baseline" | "envelope";
+    selectedAttachmentBindings: ExactStressAttachmentBinding[];
   },
 ) => Promise<ResultEnvelope<unknown>>;
 
@@ -295,6 +303,7 @@ type StressConfiguration = {
   catalogueDriftMode: StressCatalogueDriftMode;
   selectedPlayerAbilityIds: string[];
   activationMode: "baseline" | "envelope";
+  selectedAttachmentBindings: ExactStressAttachmentBinding[];
 };
 
 type StressConfigurationResult =
@@ -355,6 +364,69 @@ function parseStressConfiguration(
       ) ?? [],
     ),
   ].sort();
+  const rawAttachmentBindings = options.selectedAttachmentBindings;
+  const attachmentBindingsRequested = rawAttachmentBindings !== undefined;
+  if (
+    attachmentBindingsRequested &&
+    (
+      !Array.isArray(rawAttachmentBindings) ||
+      rawAttachmentBindings.length > 32
+    )
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_ATTACHMENT_BINDINGS_INVALID",
+      message:
+        "options.selectedAttachmentBindings must be an array of at most 32 exact attachment bindings.",
+    };
+  }
+  const selectedAttachmentBindings: ExactStressAttachmentBinding[] = [];
+  const allowedAttachmentKeys = new Set([
+    "side",
+    "leaderSelectionId",
+    "bodyguardSelectionId",
+    "supportingSelectionIds",
+  ]);
+  const validSelectionId = (value: unknown): value is string =>
+    typeof value === "string" &&
+    Boolean(value.trim()) &&
+    value.trim().length <= 512 &&
+    !/[\u0000-\u001f\u007f]/u.test(value.trim());
+  for (
+    const rawBinding of
+      (rawAttachmentBindings as unknown[] | undefined) ?? []
+  ) {
+    const binding = record(rawBinding);
+    const supportingSelectionIds = binding.supportingSelectionIds ?? [];
+    if (
+      Object.keys(binding).some((key) => !allowedAttachmentKeys.has(key)) ||
+      (binding.side !== "player" && binding.side !== "opponent") ||
+      !validSelectionId(binding.leaderSelectionId) ||
+      !validSelectionId(binding.bodyguardSelectionId) ||
+      !Array.isArray(supportingSelectionIds) ||
+      supportingSelectionIds.some((value) => !validSelectionId(value))
+    ) {
+      return {
+        ok: false,
+        code: "STRESS_ATTACHMENT_BINDINGS_INVALID",
+        message:
+          "Each selected attachment binding must name player or opponent, exact leader/bodyguard selection ids, and optional supporting selection ids.",
+      };
+    }
+    selectedAttachmentBindings.push({
+      side: binding.side,
+      leaderSelectionId: binding.leaderSelectionId.trim(),
+      bodyguardSelectionId: binding.bodyguardSelectionId.trim(),
+      supportingSelectionIds: supportingSelectionIds
+        .map((value) => value.trim())
+        .sort(),
+    });
+  }
+  selectedAttachmentBindings.sort((left, right) => {
+    const leftKey = JSON.stringify(left);
+    const rightKey = JSON.stringify(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
   const requestedActivationMode = text(options.activationMode) ?? "baseline";
   if (
     requestedActivationMode !== "baseline" &&
@@ -401,6 +473,28 @@ function parseStressConfiguration(
         "A paired revision reuses its baseline policy; start a fresh exact stress run to select abilities.",
     };
   }
+  if (
+    attachmentBindingsRequested &&
+    (!exactOpponent || backend !== "local-engine")
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_ATTACHMENT_PROVIDER_UNSUPPORTED",
+      message:
+        "Selected attachment bindings require a fresh exact local-engine matchup.",
+    };
+  }
+  if (
+    attachmentBindingsRequested &&
+    text(options.baselineReportPath)
+  ) {
+    return {
+      ok: false,
+      code: "STRESS_ATTACHMENT_REVISION_UNSUPPORTED",
+      message:
+        "A paired revision reuses its baseline policy; start a fresh exact stress run to select attachment bindings.",
+    };
+  }
   const suite = text(options.suite) ?? "core-3";
   if (!exactOpponent && suite !== "core-3" && suite !== "diverse-9") {
     return {
@@ -444,6 +538,7 @@ function parseStressConfiguration(
       catalogueDriftMode,
       selectedPlayerAbilityIds,
       activationMode: requestedActivationMode,
+      selectedAttachmentBindings,
     },
   };
 }
@@ -1956,6 +2051,7 @@ export class RosterPilotService {
       catalogueDriftMode,
       selectedPlayerAbilityIds,
       activationMode,
+      selectedAttachmentBindings,
     } = parsed.data;
     if (
       backend !== "local-engine" &&
@@ -2011,6 +2107,7 @@ export class RosterPilotService {
             catalogueDriftMode,
             selectedPlayerAbilityIds,
             activationMode,
+            selectedAttachmentBindings,
           })
         : await this.#runStress!(roster, opponentFactionId!, {
             outputDirectory,
@@ -2775,31 +2872,34 @@ export class RosterPilotService {
       violation.code === "TESSERA_PROFILE_POLICY_REQUIRED_AFTER_ENRICHMENT"
     );
     if (!profilePolicyRequired) return [];
-    const scaffoldPath = path.join(
-      outputDirectory,
+    for (const filename of [
       "tessera-profile-policy.scaffold.json",
-    );
-    if (!(await exists(scaffoldPath))) return [];
-    const content = await readFile(scaffoldPath);
-    let scaffold: Record<string, unknown>;
-    try {
-      scaffold = record(JSON.parse(content.toString("utf8")));
-    } catch {
-      return [];
+      "profile-policy.scaffold.json",
+    ]) {
+      const scaffoldPath = path.join(outputDirectory, filename);
+      if (!(await exists(scaffoldPath))) continue;
+      const content = await readFile(scaffoldPath);
+      let scaffold: Record<string, unknown>;
+      try {
+        scaffold = record(JSON.parse(content.toString("utf8")));
+      } catch {
+        continue;
+      }
+      if (
+        scaffold.schemaVersion !== 1 ||
+        scaffold.policyKind !== "tessera-profile-policy" ||
+        !Array.isArray(scaffold.entries)
+      ) {
+        continue;
+      }
+      return [await this.#storeArtifact({
+        filename: path.basename(scaffoldPath),
+        mimeType: "application/json",
+        encoding: "utf8",
+        content,
+      })];
     }
-    if (
-      scaffold.schemaVersion !== 1 ||
-      scaffold.policyKind !== "tessera-profile-policy" ||
-      !Array.isArray(scaffold.entries)
-    ) {
-      return [];
-    }
-    return [await this.#storeArtifact({
-      filename: path.basename(scaffoldPath),
-      mimeType: "application/json",
-      encoding: "utf8",
-      content,
-    })];
+    return [];
   }
 
   async #storeArtifact(input: {

@@ -1153,6 +1153,77 @@ test("retains a generated profile-policy scaffold from failed local stress", asy
   }
 });
 
+test("retains a generated profile-policy scaffold from failed exact local stress", async () => {
+  const runExactStress: ExactStressRunner = async (
+    _player,
+    _opponent,
+    options,
+  ) => {
+    const scaffoldPath = path.join(
+      options.outputDirectory,
+      "profile-policy.scaffold.json",
+    );
+    await mkdir(options.outputDirectory, { recursive: true });
+    await writeFile(
+      scaffoldPath,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        policyKind: "tessera-profile-policy",
+        entries: [{
+          faction: "Adeptus Custodes",
+          unit: "Custodian Guard",
+          weaponGroup: "Guardian spear",
+          phase: "shooting",
+          selectedProfile: "SELECT_ONE_OF: ranged | melee",
+          activeCount: 1,
+        }],
+      }, null, 2)}\n`,
+    );
+    return {
+      ok: false,
+      data: null,
+      violations: [{
+        code: "TESSERA_PROFILE_POLICY_REQUIRED",
+        message:
+          `Explicit weapon-profile choices are required before Tessera activity. Complete ${scaffoldPath}.`,
+        severity: "error" as const,
+      }],
+      warnings: [],
+    };
+  };
+  const { service, root } = await fixture({ runExactStress });
+  try {
+    const player = await build(service, "adeptus-custodes");
+    const opponent = await build(service, "world-eaters");
+    const failed = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: { backend: "local-engine" },
+    });
+
+    assert.equal(failed.state, "failed");
+    assert.equal(
+      failed.violations[0]?.code,
+      "TESSERA_PROFILE_POLICY_REQUIRED",
+    );
+    assert.equal(failed.artifacts.length, 1);
+    assert.equal(
+      failed.artifacts[0]?.filename,
+      "profile-policy.scaffold.json",
+    );
+    assert.match(
+      failed.artifacts[0]?.uri ?? "",
+      /^rosterpilot:\/\/artifacts\/[a-f0-9]{64}$/,
+    );
+    const resource = await service.readResource(failed.artifacts[0]!.uri);
+    assert.ok("text" in resource);
+    assert.match(resource.text, /Custodian Guard/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("does not retry an uncertain Tessera website execution", async () => {
   let calls = 0;
   const runStress: StressRunner = async () => {
@@ -1304,6 +1375,12 @@ test("routes exact stress locally and confirms exact website stress through act"
     catalogueDriftMode: string;
     selectedPlayerAbilityIds: string[];
     activationMode: string;
+    selectedAttachmentBindings: Array<{
+      side: string;
+      leaderSelectionId: string;
+      bodyguardSelectionId: string;
+      supportingSelectionIds: string[];
+    }>;
   }> = [];
   const runExactStress: ExactStressRunner = async (player, opponent, options) => {
     calls.push({
@@ -1316,6 +1393,7 @@ test("routes exact stress locally and confirms exact website stress through act"
       catalogueDriftMode: options.catalogueDriftMode,
       selectedPlayerAbilityIds: options.selectedPlayerAbilityIds,
       activationMode: options.activationMode,
+      selectedAttachmentBindings: options.selectedAttachmentBindings,
     });
     const data = {
       schemaVersion: 4,
@@ -1368,6 +1446,12 @@ test("routes exact stress locally and confirms exact website stress through act"
         backend: "local-engine",
         allowPointMismatch: true,
         selectedPlayerAbilityIds: ["moment-shackle", "moment-shackle"],
+        selectedAttachmentBindings: [{
+          side: "opponent",
+          leaderSelectionId: " opponent-leader ",
+          bodyguardSelectionId: " opponent-bodyguard ",
+          supportingSelectionIds: ["support-b", "support-a"],
+        }],
       },
     });
     assert.equal(local.state, "completed");
@@ -1379,6 +1463,36 @@ test("routes exact stress locally and confirms exact website stress through act"
     assert.equal(calls[0].catalogueDriftMode, "reject");
     assert.deepEqual(calls[0].selectedPlayerAbilityIds, ["moment-shackle"]);
     assert.equal(calls[0].activationMode, "baseline");
+    assert.deepEqual(calls[0].selectedAttachmentBindings, [{
+      side: "opponent",
+      leaderSelectionId: "opponent-leader",
+      bodyguardSelectionId: "opponent-bodyguard",
+      supportingSelectionIds: ["support-a", "support-b"],
+    }]);
+
+    const attachedEnvelope = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "local-engine",
+        activationMode: "envelope",
+        selectedAttachmentBindings: [{
+          side: "opponent",
+          leaderSelectionId: "opponent-leader",
+          bodyguardSelectionId: "opponent-bodyguard",
+        }],
+      },
+    });
+    assert.equal(attachedEnvelope.state, "completed");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].activationMode, "envelope");
+    assert.deepEqual(calls[1].selectedAttachmentBindings, [{
+      side: "opponent",
+      leaderSelectionId: "opponent-leader",
+      bodyguardSelectionId: "opponent-bodyguard",
+      supportingSelectionIds: [],
+    }]);
 
     const activationConflict = await service.run({
       action: "stress",
@@ -1408,6 +1522,71 @@ test("routes exact stress locally and confirms exact website stress through act"
     assert.equal(conflict.state, "failed");
     assert.equal(conflict.violations[0]?.code, "OPPONENT_SCOPE_CONFLICT");
 
+    const malformedAttachment = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "local-engine",
+        selectedAttachmentBindings: [{
+          side: "opponent",
+          leaderSelectionId: "opponent-leader",
+        }],
+      },
+    });
+    assert.equal(malformedAttachment.state, "failed");
+    assert.equal(
+      malformedAttachment.violations[0]?.code,
+      "STRESS_ATTACHMENT_BINDINGS_INVALID",
+    );
+
+    const factionAttachment = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      options: {
+        backend: "local-engine",
+        opponentFaction: "world-eaters",
+        selectedAttachmentBindings: [],
+      },
+    });
+    assert.equal(factionAttachment.state, "failed");
+    assert.equal(
+      factionAttachment.violations[0]?.code,
+      "STRESS_ATTACHMENT_PROVIDER_UNSUPPORTED",
+    );
+
+    const websiteAttachment = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "website",
+        selectedAttachmentBindings: [],
+      },
+    });
+    assert.equal(websiteAttachment.state, "failed");
+    assert.equal(
+      websiteAttachment.violations[0]?.code,
+      "STRESS_ATTACHMENT_PROVIDER_UNSUPPORTED",
+    );
+
+    const revisionAttachment = await service.run({
+      action: "stress",
+      rosterRef: player.roster!.rosterRef,
+      opponentRef: opponent.roster!.rosterRef,
+      options: {
+        backend: "local-engine",
+        baselineReportPath: "reports/baseline.json",
+        selectedAttachmentBindings: [],
+      },
+    });
+    assert.equal(revisionAttachment.state, "failed");
+    assert.equal(
+      revisionAttachment.violations[0]?.code,
+      "STRESS_ATTACHMENT_REVISION_UNSUPPORTED",
+    );
+    assert.equal(calls.length, 2);
+
     const staged = await service.run({
       action: "stress",
       rosterRef: player.roster!.rosterRef,
@@ -1421,7 +1600,7 @@ test("routes exact stress locally and confirms exact website stress through act"
     });
     assert.equal(staged.state, "action-required");
     assert.equal(staged.opponent?.rosterId, opponent.roster!.rosterId);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
 
     const completed = await service.act({
       operationId: staged.operationId,
@@ -1432,21 +1611,21 @@ test("routes exact stress locally and confirms exact website stress through act"
     });
     assert.equal(completed.state, "completed");
     assert.equal(completed.result?.mode, "exact");
-    assert.equal(calls.length, 2);
-    assert.equal(calls[1].backend, "website");
-    assert.equal(calls[1].profilePolicyPath, "profiles/exact.json");
-    assert.equal(calls[1].baselineReportPath, "reports/baseline.json");
-    assert.equal(calls[1].catalogueDriftMode, "diagnostic");
-    assert.equal(completed.artifacts[0]?.filename, "exact-2-matchup.json");
-    assert.equal(completed.artifacts[1]?.filename, "exact-2-matchup.html");
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].backend, "website");
+    assert.equal(calls[2].profilePolicyPath, "profiles/exact.json");
+    assert.equal(calls[2].baselineReportPath, "reports/baseline.json");
+    assert.equal(calls[2].catalogueDriftMode, "diagnostic");
+    assert.equal(completed.artifacts[0]?.filename, "exact-3-matchup.json");
+    assert.equal(completed.artifacts[1]?.filename, "exact-3-matchup.html");
     assert.equal(completed.artifacts[1]?.mimeType, "text/html");
     const stored = await service.inspect({ ref: completed.artifacts[0]!.uri });
     const storedPath = (stored as { path: string }).path;
     const receipt = JSON.parse(await readFile(
-      path.join(path.dirname(storedPath), "exact-2-matchup.receipt.json"),
+      path.join(path.dirname(storedPath), "exact-3-matchup.receipt.json"),
       "utf8",
     )) as { reportFilename: string };
-    assert.equal(receipt.reportFilename, "exact-2-matchup.json");
+    assert.equal(receipt.reportFilename, "exact-3-matchup.json");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

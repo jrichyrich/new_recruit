@@ -194,6 +194,7 @@ import {
   selectedAbilitiesTesseraScenarioPolicyContractV2,
   selectedBaselineTesseraScenarioPolicyContractV2,
   tesseraScenarioPolicyContractV2Sha256,
+  withSelectedTesseraAttachmentBindingsV2,
   type TesseraScenarioPolicyContractV2,
 } from "./scenario-contract-v2";
 import {
@@ -203,6 +204,8 @@ import {
   selectedAbilitiesTesseraScenarioPolicyContractV3,
   selectedBaselineTesseraScenarioPolicyContractV3,
   tesseraScenarioPolicyContractV3Sha256,
+  withSelectedTesseraAttachmentBindingsV3,
+  type TesseraAttachmentBindingV3,
   type TesseraScenarioPolicyContractV3,
 } from "./scenario-contract-v3";
 import {
@@ -482,6 +485,8 @@ export type TesseraAnalysisOptions = WriteOptions & {
   selectedPlayerAbilityIds?: string[];
   /** Explore all discovered optional combat activations instead of baseline. */
   activationMode?: "baseline" | "envelope";
+  /** Explicit fresh-run attachment state, bound to exact roster selections. */
+  selectedAttachmentBindings?: TesseraAttachmentBindingV3[];
   /** Exact covering-suite case to seal into a paired local/Web parity report. */
   providerParityCase?: {
     coveringSuite: TesseraParityCoveringSuiteV2;
@@ -1973,6 +1978,103 @@ function enrichedUnits(
   });
 }
 
+export function selectedAttachmentReportingUnits(
+  units: readonly TesseraUnitInstance[],
+  side: TesseraUnitInstance["side"],
+  bindings: readonly TesseraAttachmentBindingV3[],
+): TesseraUnitInstance[] {
+  const unitsBySelectionId = new Map<string, TesseraUnitInstance>();
+  for (const unit of units) {
+    if (!unit.selectionId) continue;
+    if (unitsBySelectionId.has(unit.selectionId)) {
+      throw Object.assign(
+        new Error(
+          `Selection ${JSON.stringify(unit.selectionId)} occurs more than once in the ${side} report scope.`,
+        ),
+        { code: "TESSERA_ATTACHMENT_REPORT_SCOPE_INVALID" },
+      );
+    }
+    unitsBySelectionId.set(unit.selectionId, unit);
+  }
+  const bindingByBodyguard = new Map<
+    string,
+    TesseraAttachmentBindingV3
+  >();
+  const boundSelectionIds = new Set<string>();
+  for (const binding of bindings.filter((candidate) =>
+    candidate.side === side
+  )) {
+    const memberSelectionIds = [
+      binding.bodyguardSelectionId,
+      binding.leaderSelectionId,
+      ...binding.supportingSelectionIds,
+    ];
+    if (
+      memberSelectionIds.some((selectionId) =>
+        !unitsBySelectionId.has(selectionId)
+      ) ||
+      memberSelectionIds.some((selectionId) =>
+        boundSelectionIds.has(selectionId)
+      ) ||
+      bindingByBodyguard.has(binding.bodyguardSelectionId)
+    ) {
+      throw Object.assign(
+        new Error(
+          `Selected ${side} attachment ${JSON.stringify(binding.leaderSelectionId)} -> ${JSON.stringify(binding.bodyguardSelectionId)} cannot be composed into the report unit scope.`,
+        ),
+        { code: "TESSERA_ATTACHMENT_REPORT_SCOPE_INVALID" },
+      );
+    }
+    bindingByBodyguard.set(binding.bodyguardSelectionId, binding);
+    memberSelectionIds.forEach((selectionId) =>
+      boundSelectionIds.add(selectionId)
+    );
+  }
+
+  return units.flatMap((unit) => {
+    if (!unit.selectionId || !boundSelectionIds.has(unit.selectionId)) {
+      return [unit];
+    }
+    const binding = bindingByBodyguard.get(unit.selectionId);
+    if (!binding) return [];
+    const members = [
+      unit,
+      unitsBySelectionId.get(binding.leaderSelectionId)!,
+      ...binding.supportingSelectionIds.map((selectionId) =>
+        unitsBySelectionId.get(selectionId)!
+      ),
+    ];
+    const name = members.map((member) => member.name).join(" + ");
+    const modelCount = members.reduce(
+      (sum, member) => sum + member.modelCount,
+      0,
+    );
+    const points = members.every((member) => member.points !== null)
+      ? members.reduce((sum, member) => sum + member.points!, 0)
+      : null;
+    const instanceId = crypto
+      .createHash("sha256")
+      .update(canonicalJson({
+        schemaVersion: 1,
+        kind: "tessera-reporting-attachment-formation",
+        side,
+        memberSelectionIds: members.map((member) => member.selectionId),
+      }))
+      .digest("hex");
+    return [{
+      instanceId,
+      selectionId: unit.selectionId,
+      side,
+      name,
+      label: unitLabel(name, modelCount, points, unit.ordinal),
+      ordinal: unit.ordinal,
+      modelCount,
+      points,
+      tags: [...new Set(members.flatMap((member) => member.tags))].sort(),
+    }];
+  });
+}
+
 function summariesGameplayCompatible(
   left: EnrichedRoszSummary,
   right: EnrichedRoszSummary,
@@ -2896,7 +2998,13 @@ function matrixUnitForLabel(
       (unit) => unit.ordinal === ordinal,
     );
     if (matched.length === 1) return matched[0];
+    if (matched.length > 1) return null;
   }
+  const occurrenceMatched = candidates.filter(
+    (unit) => unit.ordinal === occurrence,
+  );
+  if (occurrenceMatched.length === 1) return occurrenceMatched[0];
+  if (occurrenceMatched.length > 1) return null;
   const occurrenceIndex = occurrence - 1;
   return occurrenceIndex >= 0 &&
     occurrenceIndex < candidates.length
@@ -3099,13 +3207,24 @@ export function aggregateWebsiteProviderEvidence(
   };
 }
 
-function consolidateBrowserScenarios(
+export function consolidateBrowserScenarios(
   result: TesseraBrowserResult,
   playerUnits: TesseraUnitInstance[],
   opponentUnits: TesseraUnitInstance[],
   opponentName: string,
   configuration: TesseraAnalysisConfiguration,
+  selectedAttachmentBindings: readonly TesseraAttachmentBindingV3[] = [],
 ): TesseraScenarioResult[] {
+  const reportingPlayerUnits = selectedAttachmentReportingUnits(
+    playerUnits,
+    "player",
+    selectedAttachmentBindings,
+  );
+  const reportingOpponentUnits = selectedAttachmentReportingUnits(
+    opponentUnits,
+    "opponent",
+    selectedAttachmentBindings,
+  );
   const rawScenarios = result.scenarios ?? [];
   const groups = new Map<
     string,
@@ -3164,9 +3283,13 @@ function consolidateBrowserScenarios(
     group.iterations ??= raw.iterations ?? null;
     Object.assign(group.settings, raw.settings ?? {});
     const attackers =
-      direction === "player-to-opponent" ? playerUnits : opponentUnits;
+      direction === "player-to-opponent"
+        ? reportingPlayerUnits
+        : reportingOpponentUnits;
     const targets =
-      direction === "player-to-opponent" ? opponentUnits : playerUnits;
+      direction === "player-to-opponent"
+        ? reportingOpponentUnits
+        : reportingPlayerUnits;
     const attackerImportWarnings =
       direction === "player-to-opponent"
         ? (result.importWarnings?.player ?? [])
@@ -3278,8 +3401,8 @@ function consolidateBrowserScenarios(
   return [...groups.values()].map((group) => {
     const expectedCellCount =
       group.direction === "player-to-opponent"
-        ? playerUnits.length * opponentUnits.length
-        : opponentUnits.length * playerUnits.length;
+        ? reportingPlayerUnits.length * reportingOpponentUnits.length
+        : reportingOpponentUnits.length * reportingPlayerUnits.length;
     const missingMetrics = configuration.metrics.filter(
       (metric) => !group.metrics.has(metric),
     );
@@ -4119,6 +4242,15 @@ export async function analyzeRosterMatchup(
       warnings: [],
     };
   }
+  const selectedAttachmentBindings =
+    options.selectedAttachmentBindings ?? [];
+  const selectedAttachmentBindingsV2 = selectedAttachmentBindings.map(
+    (binding) => ({
+      leaderSelectionId: binding.leaderSelectionId,
+      bodyguardSelectionId: binding.bodyguardSelectionId,
+      supportingSelectionIds: [...binding.supportingSelectionIds],
+    }),
+  );
   let scenarioPolicyContractV2: TesseraScenarioPolicyContractV2 | null = null;
   let scenarioPolicyContractV2Sha256: string | null = null;
   let scenarioPolicyContractV3: TesseraScenarioPolicyContractV3 | null = null;
@@ -4170,6 +4302,13 @@ export async function analyzeRosterMatchup(
           configuration.phases,
           configuration.metrics,
         );
+      if (selectedAttachmentBindingsV2.length > 0) {
+        scenarioPolicyContractV2 =
+          withSelectedTesseraAttachmentBindingsV2(
+            scenarioPolicyContractV2,
+            selectedAttachmentBindingsV2,
+          );
+      }
       if (scenarioContract && options.scenarioPolicyContractV2) {
         const migrated = migrateTesseraScenarioContractV1ToV2(
           scenarioContract,
@@ -4426,6 +4565,13 @@ export async function analyzeRosterMatchup(
               configuration.metrics,
               resolvedActivationIds,
             );
+          if (selectedAttachmentBindingsV2.length > 0) {
+            scenarioPolicyContractV2 =
+              withSelectedTesseraAttachmentBindingsV2(
+                scenarioPolicyContractV2,
+                selectedAttachmentBindingsV2,
+              );
+          }
           scenarioPolicyContractV2Sha256 =
             tesseraScenarioPolicyContractV2Sha256(
               scenarioPolicyContractV2,
@@ -4449,6 +4595,13 @@ export async function analyzeRosterMatchup(
               configuration.metrics,
               resolvedActivationIds,
             );
+          if (selectedAttachmentBindings.length > 0) {
+            scenarioPolicyContractV3 =
+              withSelectedTesseraAttachmentBindingsV3(
+                scenarioPolicyContractV3,
+                selectedAttachmentBindings,
+              );
+          }
           scenarioPolicyContractV3Sha256 =
             tesseraScenarioPolicyContractV3Sha256(
               scenarioPolicyContractV3,
@@ -4817,6 +4970,13 @@ export async function analyzeRosterMatchup(
               configuration.metrics,
               unitScope,
             );
+          if (selectedAttachmentBindings.length > 0) {
+            scenarioPolicyContractV3 =
+              withSelectedTesseraAttachmentBindingsV3(
+                scenarioPolicyContractV3,
+                selectedAttachmentBindings,
+              );
+          }
           scenarioPolicyContractV3Sha256 =
             tesseraScenarioPolicyContractV3Sha256(
               scenarioPolicyContractV3,
@@ -5880,6 +6040,13 @@ export async function analyzeRosterMatchup(
               configuration.metrics,
               unitScope,
             );
+          if (selectedAttachmentBindings.length > 0) {
+            scenarioPolicyContractV3 =
+              withSelectedTesseraAttachmentBindingsV3(
+                scenarioPolicyContractV3,
+                selectedAttachmentBindings,
+              );
+          }
           scenarioPolicyContractV3Sha256 =
             tesseraScenarioPolicyContractV3Sha256(
               scenarioPolicyContractV3,
@@ -6772,6 +6939,11 @@ export async function analyzeRosterMatchup(
                   enrichedUnits(prepared.summary, "opponent"),
                 prepared.rosterName,
                 configuration,
+                routed.selection.selectedBackend === "local-engine" &&
+                    scenarioPolicyContractV3?.policy.attachments.mode ===
+                      "selected"
+                  ? scenarioPolicyContractV3.policy.attachments.bindings
+                  : [],
               ),
             );
             simulationConnectorEvents.push({
