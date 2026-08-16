@@ -132,6 +132,9 @@ test("publishes exactly three token-efficient tools", async () => {
     ]);
     const runTool = listed.tools.find((tool) => tool.name === "run");
     assert.match(runTool?.description ?? "", /playerFaction/);
+    assert.match(runTool?.description ?? "", /pointsLimit \(not pointLimit\)/);
+    assert.match(runTool?.description ?? "", /preferences/);
+    assert.match(runTool?.description ?? "", /legendsPolicy/);
     assert.match(runTool?.description ?? "", /compareOpponentOptions/);
     assert.match(runTool?.description ?? "", /comparisonDepth/);
     assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= 16 * 1_024);
