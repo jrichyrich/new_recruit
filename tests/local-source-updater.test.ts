@@ -38,6 +38,7 @@ import type {
   LocalSourceObservationV1,
 } from "../local/data-bundles/local-source-candidate";
 import {
+  publishLocalSourceCandidate,
   verifyLocalSourceCandidate,
   writeLocalSourceBundleArtifacts,
 } from "../local/data-bundles/local-source-candidate";
@@ -224,15 +225,37 @@ async function createMinimalPipelineProject(root: string): Promise<void> {
     factions: {},
   };
   const files: Record<string, unknown> = {
-    "package.json": { name: "fixture", private: true },
-    "package-lock.json": { name: "fixture", lockfileVersion: 3 },
+    "package.json": {
+      name: "fixture",
+      private: true,
+      dependencies: {
+        "@alpaca-software/40kdc-data": "1.2.2",
+      },
+    },
+    "package-lock.json": {
+      name: "fixture",
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          dependencies: {
+            "@alpaca-software/40kdc-data": "1.2.2",
+          },
+        },
+        "node_modules/@alpaca-software/40kdc-data": {
+          version: "1.2.2",
+          resolved:
+            "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/40kdc-data-1.2.2.tgz",
+          integrity: NPM_INTEGRITY,
+        },
+      },
+    },
     "tsconfig.json": { compilerOptions: {} },
     "data/sources.json": {
       schemaVersion: 1,
       releaseId: "2026-07-31.1",
       rules: {
         package: "@alpaca-software/40kdc-data",
-        version: "1.2.1",
+        version: "1.2.2",
         edition: "11th",
         dataslate: "launch",
       },
@@ -830,6 +853,7 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
     timeoutMs: number;
   }> = [];
   let checkedOutCommit: string | undefined;
+  let installedRulesVersion = "1.2.2";
   const runner: BoundedCommandRunner = async (
     command,
     args,
@@ -855,7 +879,7 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
       output = Buffer.from(`${LATEST_BSDATA_COMMIT}\n`);
     } else if (command === "git" && values[0] === "checkout") {
       checkedOutCommit = values.at(-1);
-    } else if (command === "npm" && values[0] === "install") {
+    } else if (command === "npm" && values[0] === "ci") {
       const packageDirectory = path.join(
         options.cwd,
         "node_modules",
@@ -867,22 +891,7 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
         path.join(packageDirectory, "package.json"),
         `${JSON.stringify({
           name: "@alpaca-software/40kdc-data",
-          version: "1.2.2",
-        })}\n`,
-      );
-      await writeFile(
-        path.join(options.cwd, "package-lock.json"),
-        `${JSON.stringify({
-          name: "fixture",
-          lockfileVersion: 3,
-          packages: {
-            "node_modules/@alpaca-software/40kdc-data": {
-              version: "1.2.2",
-              resolved:
-                "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/40kdc-data-1.2.2.tgz",
-              integrity: NPM_INTEGRITY,
-            },
-          },
+          version: installedRulesVersion,
         })}\n`,
       );
     } else if (
@@ -924,11 +933,11 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
       return new Response(
         JSON.stringify({
           name: "@alpaca-software/40kdc-data",
-          version: "1.2.2",
+          version: "1.2.3",
           dist: {
-            integrity: NPM_INTEGRITY,
+            integrity: `sha512-${"B".repeat(86)}==`,
             tarball:
-              "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/40kdc-data-1.2.2.tgz",
+              "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/40kdc-data-1.2.3.tgz",
           },
         }),
       );
@@ -971,6 +980,16 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
     });
     assert.equal(result.kind, "candidate");
     assert.equal(result.officialReconciliation, "pending");
+    assert.equal(result.observation.rules.version, "1.2.2");
+    assert.equal(result.observation.rules.distIntegrity, NPM_INTEGRITY);
+    assert.equal(
+      result.observation.rules.observedLatest?.approval,
+      "review-required",
+    );
+    assert.equal(
+      result.observation.rules.observedLatest?.version,
+      "1.2.3",
+    );
     assert.equal(result.observation.newRecruit.commit, HISTORICAL_BSDATA_COMMIT);
     assert.equal(result.observation.newRecruit.latestCommit, LATEST_BSDATA_COMMIT);
     assert.equal(checkedOutCommit, HISTORICAL_BSDATA_COMMIT);
@@ -981,6 +1000,13 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
       "certifying",
       "certifying",
     ]);
+    assert.deepEqual(
+      seenCommands
+        .filter(({ command }) => command === "npm")
+        .map(({ args }) => args)
+        .filter((args) => args[0] === "ci" || args[0] === "install"),
+      [["ci", "--ignore-scripts", "--no-audit", "--no-fund"]],
+    );
     const certificationCommands = seenCommands.filter(
       ({ command, args }) =>
         command === "npm" &&
@@ -1032,6 +1058,35 @@ test("default pipeline stages allowlisted sources outside the checkout with a sa
       assert.equal(environment.npm_config_ignore_scripts, "true");
       assert.equal(environment.GIT_CONFIG_NOSYSTEM, "1");
     }
+    const substitutionCommandOffset = seenCommands.length;
+    installedRulesVersion = "9.9.9";
+    await assert.rejects(
+      pipeline.run({
+        jobId: "cfd953df-9aba-460b-90a4-06d561df40df",
+        jobDirectory: path.join(root, "substitution-job"),
+        projectRoot,
+        supportRoot: path.join(root, "substitution-support"),
+        latestCandidate: null,
+        bsDataCommitOverride: HISTORICAL_BSDATA_COMMIT,
+        onProgress: async () => {},
+      }),
+      /installed 40kdc package does not match/,
+    );
+    const substitutionCommands = seenCommands.slice(substitutionCommandOffset);
+    assert.ok(
+      substitutionCommands.some(
+        ({ command, args }) => command === "npm" && args[0] === "ci",
+      ),
+    );
+    assert.equal(
+      substitutionCommands.some(
+        ({ command, args }) =>
+          command === process.execPath &&
+          (args.includes("scripts/sync-bsdata.ts") ||
+            args.includes("scripts/build-local-source-candidate.ts")),
+      ),
+      false,
+    );
     await writeFile(
       path.join(projectRoot, "package.json"),
       `${JSON.stringify({ name: "tampered-builder" })}\n`,
@@ -1099,6 +1154,203 @@ test("default pipeline rejects a 40kdc tarball outside the allowlisted registry"
         error.code === "LOCAL_SOURCE_UPDATE_FAILED" &&
         /outside the allowlisted npm registry/.test(error.message),
     );
+    assert.equal(commandCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("default pipeline rejects invalid reviewed rules locks before commands", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "local-source-lock-"));
+  let commandCount = 0;
+  try {
+    for (const variant of ["range", "missing-entry", "manifest"] as const) {
+      const projectRoot = path.join(root, variant);
+      await createMinimalPipelineProject(projectRoot);
+      if (variant === "range") {
+        const packageJson = JSON.parse(
+          await readFile(path.join(projectRoot, "package.json"), "utf8"),
+        ) as { dependencies: Record<string, string> };
+        packageJson.dependencies["@alpaca-software/40kdc-data"] = "^1.2.2";
+        await writeFile(
+          path.join(projectRoot, "package.json"),
+          `${JSON.stringify(packageJson)}\n`,
+        );
+      } else if (variant === "missing-entry") {
+        const packageLock = JSON.parse(
+          await readFile(path.join(projectRoot, "package-lock.json"), "utf8"),
+        ) as { packages: Record<string, unknown> };
+        delete packageLock.packages[
+          "node_modules/@alpaca-software/40kdc-data"
+        ];
+        await writeFile(
+          path.join(projectRoot, "package-lock.json"),
+          `${JSON.stringify(packageLock)}\n`,
+        );
+      } else {
+        const sources = JSON.parse(
+          await readFile(
+            path.join(projectRoot, "data", "sources.json"),
+            "utf8",
+          ),
+        ) as { rules: { version: string } };
+        sources.rules.version = "1.2.1";
+        await writeFile(
+          path.join(projectRoot, "data", "sources.json"),
+          `${JSON.stringify(sources)}\n`,
+        );
+      }
+      const pipeline = createDefaultLocalSourceUpdatePipeline({
+        fetch: async () => {
+          throw new Error("must not fetch before validating the reviewed lock");
+        },
+        runCommand: async () => {
+          commandCount += 1;
+          throw new Error("must not run");
+        },
+        now: () => new Date("2026-08-02T12:00:00.000Z"),
+      });
+      await assert.rejects(
+        pipeline.run({
+          jobId:
+            variant === "range"
+              ? "7d0754dc-3c2b-4e34-af14-93a66a2ca3e5"
+              : variant === "missing-entry"
+                ? "45801d3c-7a91-4274-841e-cae70f57cfbc"
+                : "58636f65-7cf5-46c1-9be8-c12006518b68",
+          jobDirectory: path.join(root, `${variant}-job`),
+          projectRoot,
+          supportRoot: path.join(root, `${variant}-support`),
+          latestCandidate: null,
+          bsDataCommitOverride: null,
+          onProgress: async () => {},
+        }),
+        /do not bind one exact 40kdc rules source/,
+      );
+    }
+    assert.equal(commandCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("default pipeline never executes unreviewed rules identities", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "local-source-approval-"));
+  const projectRoot = path.join(root, "project");
+  await createMinimalPipelineProject(projectRoot);
+  let commandCount = 0;
+  try {
+    const checkedAt = "2026-08-02T12:00:00.000Z";
+    const artifactsDirectory = path.join(root, "artifacts");
+    await writeLocalSourceBundleArtifacts(
+      await pipelineFixtureBuild(checkedAt),
+      artifactsDirectory,
+    );
+    const evidencePath = path.join(root, "approved-evidence.json");
+    await writeFile(evidencePath, "{}\n");
+    const latestCandidate = await publishLocalSourceCandidate({
+      artifactsDirectory,
+      destinationRoot: path.join(root, "candidates"),
+      sources: observation(checkedAt),
+      builderRoot: projectRoot,
+      builderFiles: ["package.json", "package-lock.json"],
+      validation: {
+        classification: "bootstrap",
+        affectedFactions: [],
+        plan: {
+          runDataCheck: false,
+          syncCertificationManifest: false,
+          certificationFactions: [],
+          fullCertification: false,
+          includePortfolio: false,
+        },
+        evidenceFiles: [
+          { stage: "fetch", filename: evidencePath },
+        ],
+      },
+      now: () => new Date(checkedAt),
+    });
+    const cases = [
+      {
+        name: "version",
+        version: "1.2.3",
+        integrity: `sha512-${"B".repeat(86)}==`,
+        tarball:
+          "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/40kdc-data-1.2.3.tgz",
+      },
+      {
+        name: "integrity",
+        version: "1.2.2",
+        integrity: `sha512-${"B".repeat(86)}==`,
+        tarball:
+          "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/40kdc-data-1.2.2.tgz",
+      },
+      {
+        name: "tarball",
+        version: "1.2.2",
+        integrity: NPM_INTEGRITY,
+        tarball:
+          "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/substituted-1.2.2.tgz",
+      },
+    ];
+    for (const [index, latest] of cases.entries()) {
+      const fetchImpl: typeof fetch = async (input) => {
+        const url = String(input);
+        if (url.includes("registry.npmjs.org")) {
+          return new Response(
+            JSON.stringify({
+              name: "@alpaca-software/40kdc-data",
+              version: latest.version,
+              dist: {
+                integrity: latest.integrity,
+                tarball: latest.tarball,
+              },
+            }),
+          );
+        }
+        if (url.includes("api.github.com")) {
+          return new Response(JSON.stringify({ sha: LATEST_BSDATA_COMMIT }));
+        }
+        return new Response("<h2>v1.2</h2>");
+      };
+      const pipeline = createDefaultLocalSourceUpdatePipeline({
+        fetch: fetchImpl,
+        runCommand: async () => {
+          commandCount += 1;
+          throw new Error("must not run");
+        },
+        now: () => new Date(checkedAt),
+      });
+      const result = await pipeline.run({
+        jobId: [
+          "d2bc181d-1861-49b5-bf49-f42ae8892279",
+          "02b5cdb4-0c56-4cca-be74-0fd7dded2e80",
+          "fbf161d4-1682-4f55-a028-e792849cc649",
+        ][index]!,
+        jobDirectory: path.join(root, `job-${latest.name}`),
+        projectRoot,
+        supportRoot: path.join(root, "support"),
+        latestCandidate,
+        bsDataCommitOverride: null,
+        onProgress: async () => {},
+      });
+      assert.equal(result.kind, "current");
+      assert.equal(result.observation.rules.version, "1.2.2");
+      assert.equal(
+        result.observation.rules.distIntegrity,
+        NPM_INTEGRITY,
+      );
+      assert.equal(
+        result.observation.rules.tarballUrl,
+        "https://registry.npmjs.org/@alpaca-software/40kdc-data/-/40kdc-data-1.2.2.tgz",
+      );
+      assert.deepEqual(result.observation.rules.observedLatest, {
+        version: latest.version,
+        distIntegrity: latest.integrity,
+        tarballUrl: latest.tarball,
+        approval: "review-required",
+      });
+    }
     assert.equal(commandCount, 0);
   } finally {
     await rm(root, { recursive: true, force: true });

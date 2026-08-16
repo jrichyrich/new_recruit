@@ -652,6 +652,15 @@ export async function getTesseraConnectionStatus(): Promise<
             severity: "warn",
           },
         ]
+      : provider?.credentialState === "disabled"
+        ? [
+            {
+              code: "CREDENTIAL_RELEASE_DISABLED",
+              message:
+                "Tessera Website credential release is disabled until an authenticated native consumer is available. The explicit local-engine route remains available.",
+              severity: "warn",
+            },
+          ]
       : available
         ? [
             {

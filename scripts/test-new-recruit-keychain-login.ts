@@ -1,13 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-
-import type { BrokerCredentials } from "../local/new-recruit/contracts";
-import {
-  NewRecruitAutomationError,
-  runNewRecruitAuthenticationCheck,
-} from "../local/new-recruit/browser";
 
 const brokerPath = path.resolve(
   "native",
@@ -15,9 +7,11 @@ const brokerPath = path.resolve(
   "rosterpilot-keychain",
 );
 
-async function retrieveCredentials(): Promise<BrokerCredentials> {
+async function assertCredentialReleaseDisabled(
+  provider: "new-recruit" | "tessera",
+): Promise<void> {
   const payload = await new Promise<string>((resolve, reject) => {
-    const child = spawn(brokerPath, ["retrieve"], {
+    const child = spawn(brokerPath, ["retrieve", provider], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
@@ -33,32 +27,30 @@ async function retrieveCredentials(): Promise<BrokerCredentials> {
   });
   const parsed = JSON.parse(payload) as {
     ok: boolean;
-    username?: string;
-    password?: string;
+    configured?: boolean;
     code?: string;
     message?: string;
+    username?: unknown;
+    password?: unknown;
+    licenseKey?: unknown;
   };
-  if (!parsed.ok || !parsed.username || !parsed.password) {
-    throw new NewRecruitAutomationError(
-      parsed.code ?? "KEYCHAIN_READ_FAILED",
-      parsed.message ?? "The Keychain broker did not return a credential.",
+  if (
+    parsed.ok ||
+    parsed.code !== "CREDENTIAL_RELEASE_DISABLED" ||
+    "username" in parsed ||
+    "password" in parsed ||
+    "licenseKey" in parsed
+  ) {
+    throw new Error(
+      `The ${provider} broker did not fail closed without secret fields: ${payload}`,
     );
   }
-  return {
-    username: parsed.username,
-    password: parsed.password,
-  };
 }
 
-const temporaryProfile = await mkdtemp(
-  path.join(os.tmpdir(), "rosterpilot-auth-check-"),
+await Promise.all([
+  assertCredentialReleaseDisabled("new-recruit"),
+  assertCredentialReleaseDisabled("tessera"),
+]);
+process.stdout.write(
+  `${JSON.stringify({ ok: true, credentialRelease: "disabled" }, null, 2)}\n`,
 );
-try {
-  const result = await runNewRecruitAuthenticationCheck(temporaryProfile, {
-    getCredentials: retrieveCredentials,
-  });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  if (!result.ok) process.exitCode = 2;
-} finally {
-  await rm(temporaryProfile, { recursive: true, force: true });
-}

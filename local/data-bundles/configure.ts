@@ -323,7 +323,10 @@ async function localControlStatus(): Promise<LocalDataUpdateControlStatus> {
     localUpdate: updateJobProjection(job),
     sourceStatus: {
       latestUpstream: {
-        rulesVersion: observation?.rules.version ?? null,
+        rulesVersion:
+          observation?.rules.observedLatest?.version ??
+          observation?.rules.version ??
+          null,
         newRecruitCommit:
           observation?.newRecruit.commit ?? null,
         officialContentSha256:
@@ -721,7 +724,7 @@ export async function ensureLocalServiceCompatibility(input: {
     compatibleBundleId: null,
     jobId: queued.job?.jobId ?? null,
     message:
-      "RosterPilot found the exact historical BSData identity and queued an isolated compatibility build using the newest certified rules source. It will not replace the globally active snapshot.",
+      "RosterPilot found the exact historical BSData identity and queued an isolated compatibility build using the reviewed, lock-approved rules source. It will not replace the globally active snapshot.",
   };
 }
 

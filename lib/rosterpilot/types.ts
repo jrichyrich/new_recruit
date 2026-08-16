@@ -603,6 +603,7 @@ export type NewRecruitConnectionStatus = {
     | "not-configured"
     | "keychain-locked"
     | "authorization-required"
+    | "disabled"
     | "unavailable";
   browserState: "ready" | "unavailable";
 };
@@ -1362,6 +1363,7 @@ export type TesseraConnectionStatus = {
     | "not-configured"
     | "keychain-locked"
     | "authorization-required"
+    | "disabled"
     | "unavailable";
   experimental: true;
   url: "https://playtessera.gg/";

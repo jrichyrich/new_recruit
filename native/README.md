@@ -1,28 +1,23 @@
 # RosterPilot Keychain broker
 
-`NewRecruitKeychainBroker.swift` is the macOS-only credential boundary for the
-RosterPilot local agent, New Recruit companion, and Tessera adapter.
+`NewRecruitKeychainBroker.swift` is the macOS-only Keychain boundary retained
+for the RosterPilot local agent, New Recruit companion, and Tessera adapter.
 
-- It uses the traditional macOS login Keychain so the local command-line
-  companion does not require Apple developer provisioning.
-- Each provider has a dedicated service identifier and application ACL that
-  trusts the installed broker itself for restricted reads.
-- Configuration uses an AppKit secure text field.
-- Only the isolated browser worker invokes `retrieve`; MCP and CLI responses
-  never contain the returned credential.
-- The broker does not perform network requests or browser automation.
+- Reusable credential release is disabled until a separately authenticated,
+  sealed native consumer exists.
+- `configure`, `status`, and `retrieve` return
+  `CREDENTIAL_RELEASE_DISABLED`; `status` may report whether a legacy item is
+  present, but no command requests or serializes its value.
+- `forget` remains available so an existing New Recruit or Tessera item can be
+  removed.
+- The response schema has no username, password, or licence-key field, and the
+  broker never requests `kSecReturnData`.
 
-The supported first-time installation is:
-
-```bash
-npm run setup -- --profile new-recruit
-# Or use --profile tessera when both browser-backed providers are needed.
-```
-
-Build the broker alone with:
+Build and install the fail-closed broker with:
 
 ```bash
 npm run companion:build
+npm run rosterpilot -- agent install
 ```
 
 The ignored staging executable is written to
@@ -31,13 +26,10 @@ The ignored staging executable is written to
 `~/Library/Application Support/RosterPilot/bin/rosterpilot-keychain`, writes
 the per-user LaunchAgent, and starts the local service.
 
-After the checkout or runtime changes, use
-`npm run rosterpilot -- agent ensure-current`. Inspect provider readiness with
-`npm run rosterpilot -- new-recruit status` and
-`npm run rosterpilot -- tessera status`; personal-plugin verification is a
-separate Codex integration check.
+After the checkout or runtime changes, use `npm run rosterpilot -- agent
+ensure-current`. Provider status reports credential state `disabled` while
+local roster work and the explicit Tessera local-engine backend remain
+available.
 
-The broker may be used directly only for manual `configure` and `forget`
-commands. Automated roster work calls the local agent, which invokes
-`retrieve` inside its short-lived browser worker and never returns the
-credential through its socket.
+The installed broker retains explicit `forget new-recruit` and `forget tessera`
+commands so legacy stored items can be removed without reading their values.

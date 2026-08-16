@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,10 @@ import {
 
 import { buildRoster, exportRoster } from "../lib/rosterpilot";
 import { LocalAgentError } from "../local/agent/client";
+import {
+  ensureCurrentLocalAgent,
+  type LifecycleResult,
+} from "../local/agent/lifecycle";
 import { runNewRecruitBrowserDelivery } from "../local/new-recruit/browser";
 import {
   deliverRosterToNewRecruit,
@@ -28,6 +33,117 @@ const chrome =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const runBrowserTests =
   process.env.ROSTERPILOT_BROWSER_TESTS === "1" && (await chromeAvailable());
+
+async function runTestProcess(
+  command: string,
+  args: string[],
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: path.resolve("."),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({
+        code: code ?? 1,
+        stdout: Buffer.concat(stdout).toString("utf8").trim(),
+        stderr: Buffer.concat(stderr).toString("utf8").trim(),
+      });
+    });
+  });
+}
+
+test("Keychain broker never releases reusable credentials", async () => {
+  const source = await readFile(
+    path.resolve("native", "NewRecruitKeychainBroker.swift"),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /kSecReturnData/);
+  assert.doesNotMatch(
+    source,
+    /let (?:username|password|licenseKey): String\?/,
+  );
+  assert.match(source, /CREDENTIAL_RELEASE_DISABLED/);
+  assert.match(
+    source,
+    /case "retrieve":\s*credentialReleaseDisabled\(provider\)/,
+  );
+});
+
+test(
+  "compiled Keychain broker rejects every credential retrieval",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const build = await runTestProcess(process.execPath, [
+      "scripts/build-new-recruit-companion.mjs",
+    ]);
+    assert.equal(build.code, 0, build.stderr);
+    const broker = path.resolve(
+      "native",
+      ".build",
+      "rosterpilot-keychain",
+    );
+    for (const provider of ["new-recruit", "tessera"] as const) {
+      const result = await runTestProcess(broker, ["retrieve", provider]);
+      assert.equal(result.code, 5, result.stderr);
+      const response = JSON.parse(result.stdout) as Record<string, unknown>;
+      assert.deepEqual(Object.keys(response).sort(), ["code", "message", "ok"]);
+      assert.equal(response.ok, false);
+      assert.equal(response.code, "CREDENTIAL_RELEASE_DISABLED");
+      assert.equal(typeof response.message, "string");
+    }
+  },
+);
+
+test("local-agent installation always rebuilds the Keychain broker", async () => {
+  const source = await readFile(
+    path.resolve("local", "agent", "lifecycle.ts"),
+    "utf8",
+  );
+  const installStart = source.indexOf("export async function installLocalAgent");
+  const copyStart = source.indexOf(
+    "  const broker = installedBrokerPath();",
+    installStart,
+  );
+  assert.ok(installStart >= 0 && copyStart > installStart);
+  const installPreparation = source.slice(installStart, copyStart);
+  assert.doesNotMatch(
+    installPreparation,
+    /if \(!\(await exists\(staged\)\)\) \{\s*await run\(process\.execPath/,
+  );
+  assert.match(
+    installPreparation,
+    /await run\(process\.execPath, \[\s*path\.join\(projectRoot, "scripts", "build-new-recruit-companion\.mjs"\)/,
+  );
+});
+
+test("ensure-current reinstalls even when the TypeScript agent is current", async () => {
+  const current: LifecycleResult = {
+    ok: true,
+    installed: true,
+    running: true,
+    launchAgentPath: "/fixture/agent.plist",
+    brokerPath: "/fixture/old-broker",
+    socketPath: "/fixture/agent.sock",
+  };
+  let installs = 0;
+  const result = await ensureCurrentLocalAgent({
+    status: async () => current,
+    install: async () => {
+      installs += 1;
+      return { ...current, brokerPath: "/fixture/rebuilt-broker" };
+    },
+    restart: async () => assert.fail("restart must not replace installation"),
+  });
+  assert.equal(installs, 1);
+  assert.deepEqual(result.repairActions, ["install"]);
+  assert.equal(result.brokerPath, "/fixture/rebuilt-broker");
+});
 
 async function chromeAvailable(): Promise<boolean> {
   try {

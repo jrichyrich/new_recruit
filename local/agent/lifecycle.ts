@@ -348,11 +348,12 @@ export async function installLocalAgent(): Promise<LifecycleResult> {
     };
   }
   const staged = stagedBrokerPath();
-  if (!(await exists(staged))) {
-    await run(process.execPath, [
-      path.join(projectRoot, "scripts", "build-new-recruit-companion.mjs"),
-    ]);
-  }
+  // The staged executable is ignored build output and may predate the checked
+  // in Swift source. Rebuild on every install so ensure-current can never copy
+  // an obsolete secret-returning broker into the active LaunchAgent.
+  await run(process.execPath, [
+    path.join(projectRoot, "scripts", "build-new-recruit-companion.mjs"),
+  ]);
   const broker = installedBrokerPath();
   const brokerDirectory = path.dirname(broker);
   const logs = localAgentLogDirectory();
@@ -589,11 +590,25 @@ export async function ensureCurrentLocalAgent(
         ]
       : []);
   if (initial.ok) {
+    // A running TypeScript agent can be current while its separately installed
+    // native broker predates this checkout (for example after a launchd restart
+    // following a source update). Reinstall to rebuild and compare that binary
+    // instead of trusting agent protocol/build provenance alone.
+    const reinstalled = await dependencies.install();
     return {
-      ...initial,
+      ...reinstalled,
       initialIssues,
-      repairActions: [],
-      nextSteps: [],
+      repairActions: ["install"],
+      nextSteps: reinstalled.ok
+        ? []
+        : reinstalled.nextSteps?.length
+          ? reinstalled.nextSteps
+          : [
+              'Review "npm run doctor -- --profile tessera --refresh skip", then rerun "npm run rosterpilot -- agent ensure-current".',
+            ],
+      message: reinstalled.ok
+        ? "The local agent and native broker are current after reinstall."
+        : reinstalled.message,
     };
   }
 

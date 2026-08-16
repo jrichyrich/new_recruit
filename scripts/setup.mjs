@@ -634,182 +634,68 @@ function configureManagedSkill({ doctor, results }, dependencies) {
 }
 
 async function configureNewRecruit(
-  { doctor, interactive, results },
+  { doctor, results },
   dependencies,
 ) {
   ensureNewRecruitPrerequisites(dependencies);
-  if (!doctor) {
-    const build = runNpmScript("companion:build", [], dependencies);
-    assertCommand("New Recruit companion build", build);
-    const installed = parseJsonCommand(
+  const lifecycle = !doctor
+    ? parseJsonCommand(
       "RosterPilot local-agent installation",
       runRosterPilot(["agent", "install"], dependencies),
-    );
-    if (!installed.ok || !installed.running) {
-      throw new SetupError(
-        installed.message ?? "The RosterPilot local agent did not start.",
-      );
-    }
-  } else {
-    const agent = parseJsonCommand(
+    )
+    : parseJsonCommand(
       "RosterPilot local-agent status",
       runRosterPilot(["agent", "status"], dependencies),
     );
-    if (!agent.ok || !agent.running) {
-      throw new SetupError(
-        agent.message ??
-          "The RosterPilot local agent is not installed or running.",
-      );
-    }
+  if (!lifecycle.ok || !lifecycle.running || !lifecycle.status) {
+    throw new SetupError(
+      lifecycle.message ??
+        "The RosterPilot local agent is not installed or running.",
+    );
   }
-
-  let status = parseJsonCommand(
-    "New Recruit status",
-    runRosterPilot(["new-recruit", "status"], dependencies),
+  const provider = lifecycle.status.providers?.find(
+    (item) => item.providerId === "new-recruit",
   );
-  if (
-    status.data?.platform !== "darwin" ||
-    !status.data?.agentAvailable ||
-    !status.data?.browserAvailable ||
-    !status.data?.brokerAvailable ||
-    !status.data?.protocolCompatible ||
-    !status.data?.installationCurrent ||
-    status.data?.runtimeCompatible === false
-  ) {
+  if (provider?.credentialState !== "disabled") {
     throw new SetupError(
-      "The New Recruit companion is unavailable after prerequisite checks.",
-    );
-  }
-
-  if (status.data.credentialsConfigured) {
-    addResult(
-      results,
-      "New Recruit",
-      "ready",
-      "local agent and Keychain credential are configured",
-    );
-    return;
-  }
-  if (doctor) {
-    throw new SetupError(
-      "The New Recruit companion is built, but its Keychain credential is not configured.",
-    );
-  }
-
-  const configure = interactive
-    ? await askYesNo(
-        "Open the secure macOS credential dialog now? [y/N] ",
-        dependencies,
-      )
-    : false;
-  if (!configure) {
-    addResult(
-      results,
-      "New Recruit",
-      "warning",
-      "local agent installed; run npm run rosterpilot -- new-recruit configure to add the Keychain credential",
-    );
-    return;
-  }
-
-  const configured = parseJsonCommand(
-    "New Recruit credential configuration",
-    runRosterPilot(["new-recruit", "configure"], dependencies),
-  );
-  if (!configured.ok) {
-    throw new SetupError(
-      configured.message ?? "New Recruit credential configuration failed.",
-    );
-  }
-  status = parseJsonCommand(
-    "New Recruit status",
-    runRosterPilot(["new-recruit", "status"], dependencies),
-  );
-  if (!status.data?.credentialsConfigured) {
-    throw new SetupError(
-      "The secure dialog completed, but the New Recruit credential is not configured.",
+      "The installed New Recruit broker did not report the required fail-closed credential contract. Run agent ensure-current before continuing.",
     );
   }
   addResult(
     results,
     "New Recruit",
-    "ready",
-    "local agent and Keychain credential are configured",
+    "warning",
+    "new Keychain credential release and sign-in are disabled pending an authenticated native consumer; local exports remain available and an existing browser session may remain active",
   );
 }
 
 async function configureTessera(
-  { doctor, interactive, results },
+  { results },
   dependencies,
 ) {
-  let status = parseJsonCommand(
-    "Tessera status",
-    runRosterPilot(["tessera", "status"], dependencies),
+  const lifecycle = parseJsonCommand(
+    "RosterPilot local-agent status",
+    runRosterPilot(["agent", "status"], dependencies),
   );
-  if (
-    !status.data?.agentAvailable ||
-    !status.data?.browserAvailable ||
-    !status.data?.brokerAvailable ||
-    !status.data?.protocolCompatible
-  ) {
+  if (!lifecycle.ok || !lifecycle.running || !lifecycle.status) {
     throw new SetupError(
-      "The Tessera companion is unavailable after local automation setup.",
+      lifecycle.message ??
+        "The RosterPilot local agent is not installed or running.",
     );
   }
-  if (status.data.credentialsConfigured) {
-    addResult(
-      results,
-      "Tessera",
-      "ready",
-      "local agent and Tessera licence key are configured",
-    );
-    return;
-  }
-  if (doctor) {
-    throw new SetupError(
-      "The Tessera companion is installed, but its licence key is not configured.",
-    );
-  }
-
-  const configure = interactive
-    ? await askYesNo(
-        "Open the secure macOS Tessera licence-key dialog now? [y/N] ",
-        dependencies,
-      )
-    : false;
-  if (!configure) {
-    addResult(
-      results,
-      "Tessera",
-      "warning",
-      "local agent installed; run npm run rosterpilot -- tessera configure to add the licence key",
-    );
-    return;
-  }
-
-  const configured = parseJsonCommand(
-    "Tessera licence-key configuration",
-    runRosterPilot(["tessera", "configure"], dependencies),
+  const provider = lifecycle.status.providers?.find(
+    (item) => item.providerId === "tessera",
   );
-  if (!configured.ok) {
+  if (provider?.credentialState !== "disabled") {
     throw new SetupError(
-      configured.message ?? "Tessera licence-key configuration failed.",
-    );
-  }
-  status = parseJsonCommand(
-    "Tessera status",
-    runRosterPilot(["tessera", "status"], dependencies),
-  );
-  if (!status.data?.credentialsConfigured) {
-    throw new SetupError(
-      "The secure dialog completed, but the Tessera licence key is not configured.",
+      "The installed Tessera broker did not report the required fail-closed credential contract. Run agent ensure-current before continuing.",
     );
   }
   addResult(
     results,
     "Tessera",
-    "ready",
-    "local agent and Tessera licence key are configured",
+    "warning",
+    "Tessera Website credential release is disabled pending an authenticated native consumer; use the local-engine backend",
   );
 }
 
@@ -1141,6 +1027,8 @@ function diagnoseLocalAutomation(profile, dependencies, results) {
       : ["Install Google Chrome in /Applications, then rerun Doctor."],
   );
 
+  let agentStatus = null;
+  let agentReady = false;
   const agentResponse = diagnosticJson(
     "RosterPilot local-agent status",
     runRosterPilot(["agent", "status"], dependencies),
@@ -1155,7 +1043,8 @@ function diagnoseLocalAutomation(profile, dependencies, results) {
     );
   } else {
     const agent = agentResponse.value;
-    const agentReady = agent.ok === true && agent.running === true;
+    agentReady = agent.ok === true && agent.running === true;
+    agentStatus = agent.status ?? null;
     const buildId = agent.status?.runtime?.buildId;
     addResult(
       results,
@@ -1187,89 +1076,40 @@ function diagnoseLocalAutomation(profile, dependencies, results) {
     }
   }
 
-  const newRecruitResponse = diagnosticJson(
-    "New Recruit status",
-    runRosterPilot(["new-recruit", "status"], dependencies),
+  const newRecruitProvider = agentStatus?.providers?.find(
+    (item) => item.providerId === "new-recruit",
   );
-  if (!newRecruitResponse.ok) {
-    addResult(
-      results,
-      "New Recruit",
-      "error",
-      newRecruitResponse.detail,
-      [
-        'Run "npm run rosterpilot -- new-recruit status" after repairing the local agent.',
-      ],
-    );
-  } else {
-    const status = newRecruitResponse.value.data;
-    const ready =
-      newRecruitResponse.value.ok === true && status?.available === true;
-    const localAutomationBroken =
-      status?.agentAvailable === false ||
-      status?.protocolCompatible === false ||
-      status?.installationCurrent === false ||
-      status?.runtimeCompatible === false ||
-      status?.browserAvailable === false ||
-      status?.brokerAvailable === false;
-    addResult(
-      results,
-      "New Recruit",
-      ready ? "ready" : "error",
-      ready
-        ? "browser automation and the Keychain credential are ready"
-        : `automation is unavailable${status?.credentialState ? `; credential state is ${status.credentialState}` : ""}`,
-      ready
-        ? []
-        : [
-            localAutomationBroken || status?.credentialsConfigured
-              ? ensureCurrentNextStep
-              : 'Run "npm run rosterpilot -- new-recruit configure" to securely configure the credential.',
-          ],
-    );
-  }
+  const newRecruitDisabled =
+    newRecruitProvider?.credentialState === "disabled";
+  const newRecruitReady = agentReady && newRecruitProvider?.ready === true;
+  addResult(
+    results,
+    "New Recruit",
+    newRecruitReady ? "ready" : newRecruitDisabled ? "warning" : "error",
+    newRecruitReady
+      ? "browser automation and the Keychain credential are ready"
+      : newRecruitDisabled
+        ? "new Keychain credential release and sign-in are disabled pending an authenticated native consumer; local exports remain available and an existing browser session may remain active"
+        : `automation is unavailable${newRecruitProvider?.credentialState ? `; credential state is ${newRecruitProvider.credentialState}` : ""}`,
+    newRecruitReady || newRecruitDisabled ? [] : [ensureCurrentNextStep],
+  );
 
   if (profile !== "tessera") return;
-  const tesseraResponse = diagnosticJson(
-    "Tessera status",
-    runRosterPilot(["tessera", "status"], dependencies),
+  const tesseraProvider = agentStatus?.providers?.find(
+    (item) => item.providerId === "tessera",
   );
-  if (!tesseraResponse.ok) {
-    addResult(
-      results,
-      "Tessera",
-      "error",
-      tesseraResponse.detail,
-      [
-        'Run "npm run rosterpilot -- tessera status" after repairing the local agent.',
-      ],
-    );
-    return;
-  }
-  const status = tesseraResponse.value.data;
-  const ready =
-    tesseraResponse.value.ok === true && status?.available === true;
-  const localAutomationBroken =
-    status?.agentAvailable === false ||
-    status?.protocolCompatible === false ||
-    status?.installationCurrent === false ||
-    status?.runtimeCompatible === false ||
-    status?.browserAvailable === false ||
-    status?.brokerAvailable === false;
+  const tesseraDisabled = tesseraProvider?.credentialState === "disabled";
+  const tesseraReady = agentReady && tesseraProvider?.ready === true;
   addResult(
     results,
     "Tessera",
-    ready ? "ready" : "error",
-    ready
+    tesseraReady ? "ready" : tesseraDisabled ? "warning" : "error",
+    tesseraReady
       ? "browser automation and the Tessera licence key are ready"
-      : `automation is unavailable${status?.credentialState ? `; credential state is ${status.credentialState}` : ""}`,
-    ready
-      ? []
-      : [
-          localAutomationBroken || status?.credentialsConfigured
-            ? ensureCurrentNextStep
-            : 'Run "npm run rosterpilot -- tessera configure" to securely configure the licence key.',
-        ],
+      : tesseraDisabled
+        ? "Tessera Website credential release is disabled pending an authenticated native consumer; the local-engine backend remains available"
+      : `automation is unavailable${tesseraProvider?.credentialState ? `; credential state is ${tesseraProvider.credentialState}` : ""}`,
+    tesseraReady || tesseraDisabled ? [] : [ensureCurrentNextStep],
   );
 }
 

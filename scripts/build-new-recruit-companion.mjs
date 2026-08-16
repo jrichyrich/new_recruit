@@ -22,8 +22,6 @@ const built = spawnSync(
     "-o",
     output,
     "-framework",
-    "AppKit",
-    "-framework",
     "Security",
   ],
   { cwd: root, encoding: "utf8" },
