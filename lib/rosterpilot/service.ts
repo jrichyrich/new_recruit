@@ -2254,6 +2254,7 @@ export class RosterPilotService {
       ok: status.ok && update.ok,
       active: status.data
         ? {
+            releaseId: status.data.sources.releaseId,
             edition: status.data.edition,
             rulesVersion: status.data.sources.rules.version,
             newRecruitCommit: status.data.sources.newRecruit.commit,

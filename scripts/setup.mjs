@@ -828,6 +828,37 @@ function locallyCertifiedMatchesUpstream(sourceStatus) {
   );
 }
 
+function rosterEngineFromStatus(status) {
+  const inspect = status?.data;
+  if (
+    inspect &&
+    typeof inspect === "object" &&
+    (status?.newRecruit !== undefined || inspect.active !== undefined)
+  ) {
+    const active = inspect.active;
+    const update = inspect.update ?? {};
+    return {
+      ready: inspect.ok === true && Boolean(active?.releaseId || active),
+      releaseId: active?.releaseId ?? null,
+      dataBundle: {
+        activeBundleId: active?.bundleId ?? null,
+        dataTrust: update.dataTrust,
+        providerMode: update.providerMode,
+        localUpdate: update.localUpdate,
+        sourceStatus: {
+          latestUpstream: update.latestUpstream ?? null,
+          latestLocallyCertified: update.latestLocallyCertified ?? null,
+        },
+      },
+    };
+  }
+  return {
+    ready: status?.ok === true && Boolean(status?.data?.sources?.releaseId),
+    releaseId: status?.data?.sources?.releaseId ?? null,
+    dataBundle: status?.data?.dataBundle,
+  };
+}
+
 function addDataBundleReadiness(results, status) {
   const bundle = status?.dataBundle;
   const activeIdentity = shortIdentity(bundle?.activeBundleId);
@@ -1298,18 +1329,15 @@ async function runDoctor(options, dependencies, results) {
       "RosterPilot status",
       runRosterPilot(["status"], dependencies),
     );
-    if (
-      statusResponse.ok &&
-      statusResponse.value.ok &&
-      statusResponse.value.data
-    ) {
+    const engine = rosterEngineFromStatus(statusResponse.value);
+    if (statusResponse.ok && engine.ready) {
       addResult(
         results,
         "Roster engine",
         "ready",
-        `release ${statusResponse.value.data.sources.releaseId} validated`,
+        `release ${engine.releaseId} validated`,
       );
-      addDataBundleReadiness(results, statusResponse.value.data);
+      addDataBundleReadiness(results, { dataBundle: engine.dataBundle });
     } else {
       addResult(
         results,
@@ -1527,16 +1555,17 @@ export async function runSetup(rawOptions, overrides = {}) {
     "RosterPilot status",
     runRosterPilot(["status"], dependencies),
   );
-  if (!status.ok || !status.data) {
+  const engine = rosterEngineFromStatus(status);
+  if (!engine.ready) {
     throw new SetupError("RosterPilot status did not report a ready data release.");
   }
   addResult(
     results,
     "Roster engine",
     "ready",
-    `release ${status.data.sources.releaseId} validated`,
+    `release ${engine.releaseId} validated`,
   );
-  addDataBundleReadiness(results, status.data);
+  addDataBundleReadiness(results, { dataBundle: engine.dataBundle });
 
   if (profileIncludesMcp(options.profile)) {
     configureManagedSkill({ doctor: false, results }, dependencies);

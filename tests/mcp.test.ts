@@ -308,8 +308,14 @@ test("keeps retained CLI routes and explicit build flags aligned with MCP option
 
     const status = JSON.parse((await runCli(cliRoot, [
       "status",
-    ])).stdout) as { data: { ok: boolean }; newRecruit: { ok: boolean } };
+    ])).stdout) as {
+      data: { ok: boolean; active: { releaseId: string } | null };
+      newRecruit: { ok: boolean };
+    };
     assert.equal(status.data.ok, true);
+    assert.ok(status.data.active);
+    assert.equal(typeof status.data.active.releaseId, "string");
+    assert.ok(status.data.active.releaseId.length > 0);
     assert.equal(typeof status.newRecruit.ok, "boolean");
 
     assert.match(
