@@ -44,8 +44,10 @@ import {
 import { prepareRosterForTessera } from "../local/tessera/companion";
 import {
   compareRoszGameplaySnapshots,
+  countTesseraWebsiteImportUnits,
   flattenRoszUnitCompositionWrappers,
   inspectRoszGameplaySnapshot,
+  prepareRoszForTesseraImport,
 } from "../local/tessera/rosz-integrity";
 import {
   createWorkflowReliabilityEventStore,
@@ -206,6 +208,73 @@ test("accepts only catalogue-completed equipment encoded by the parent model", (
   );
 });
 
+test("gameplay compare treats New Recruit composition wrappers and kit leftovers as catalogue completion", () => {
+  const source = zipSync({
+    "krieg.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<roster gameSystemId="system" gameSystemRevision="8">
+  <costs><cost name="pts" value="205" /></costs>
+  <forces><force catalogueId="am" catalogueRevision="1">
+    <selections>
+      <selection entryId="dk" name="Death Korps of Krieg" number="1" type="unit">
+        <selections>
+          <selection entryId="size" name="2 Death Korps Watchmaster and 18 Death Korps Troopers" number="1" type="upgrade" />
+          <selection entryId="wm" name="Death Korps Watchmaster" number="2" type="model"></selection>
+          <selection entryId="tr" name="Death Korps Trooper" number="18" type="model"></selection>
+        </selections>
+      </selection>
+      <selection entryId="cmd" name="Krieg Command Squad" number="1" type="unit">
+        <selections>
+          <selection entryId="warlord" name="Warlord" number="1" type="upgrade"></selection>
+          <selection entryId="commissar" name="Lord Commissar" number="1" type="model"></selection>
+          <selection entryId="alchemist" name="Veteran Guardsman w/ Alchemyk counteragents" number="1" type="model"></selection>
+        </selections>
+      </selection>
+    </selections>
+  </force></forces>
+</roster>`),
+  });
+  const enriched = zipSync({
+    "krieg.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<roster gameSystemId="system" gameSystemRevision="9">
+  <costs><cost name="pts" value="205" /></costs>
+  <forces><force catalogueId="am" catalogueRevision="1">
+    <selections>
+      <selection entryId="dk" name="Death Korps of Krieg" number="1" type="unit">
+        <selections>
+          <selection entryId="size" name="2 Death Korps Watchmaster and 18 Death Korps Troopers" number="1" type="upgrade" group="Unit Composition">
+            <selections>
+              <selection entryId="wm" name="Death Korps Watchmaster" number="2" type="model"></selection>
+              <selection entryId="tr" name="Death Korps Trooper" number="18" type="model"></selection>
+            </selections>
+          </selection>
+        </selections>
+      </selection>
+      <selection entryId="cmd" name="Krieg Command Squad" number="1" type="unit">
+        <selections>
+          <selection entryId="commissar" name="Lord Commissar" number="1" type="model">
+            <selections><selection entryId="warlord" name="Warlord" number="1" type="upgrade"></selection></selections>
+          </selection>
+          <selection entryId="alchemist" name="Veteran Guardsman w/ Alchemyk counteragents" number="1" type="model">
+            <selections>
+              <selection entryId="scribes" name="Servo-scribes" number="1" type="upgrade"></selection>
+              <selection entryId="alch" name="Alchemyk counteragents" number="1" type="upgrade"></selection>
+            </selections>
+          </selection>
+        </selections>
+      </selection>
+    </selections>
+  </force></forces>
+</roster>`),
+  });
+  assert.deepEqual(
+    compareRoszGameplaySnapshots(
+      inspectRoszGameplaySnapshot(source),
+      inspectRoszGameplaySnapshot(enriched),
+    ),
+    ["game-system"],
+  );
+});
+
 test("Tessera import flattens New Recruit unit-composition wrappers onto the parent unit", () => {
   const archive = zipSync({
     "krieg.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
@@ -281,6 +350,79 @@ test("Tessera import flattens New Recruit unit-composition wrappers onto the par
     inspectRoszGameplaySnapshot(again).selections,
     inspectRoszGameplaySnapshot(flattened).selections,
   );
+});
+
+test("Tessera import keeps a nested Command Squad character attached instead of splitting it", () => {
+  const archive = zipSync({
+    "krieg.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<roster gameSystemId="system" gameSystemRevision="8" generatedBy="https://www.newrecruit.eu">
+  <costs><cost name="pts" value="105" /></costs>
+  <forces><force catalogueId="am" catalogueRevision="1">
+    <selections>
+      <selection entryId="cmd" name="Krieg Command Squad" number="1" type="unit">
+        <selections>
+          <selection entryId="commissar" name="Lord Commissar" number="1" type="model">
+            <profiles>
+              <profile name="Lord Commissar" typeName="Unit"></profile>
+            </profiles>
+            <categories>
+              <category name="Character" />
+              <category name="Officer" />
+            </categories>
+          </selection>
+          <selection entryId="vet" name="Veteran Guardsman" number="5" type="model">
+            <profiles>
+              <profile name="Veteran Guardsman" typeName="Unit"></profile>
+            </profiles>
+          </selection>
+        </selections>
+        <categories>
+          <category name="Character" />
+          <category name="Infantry" />
+          <category name="Leader" />
+        </categories>
+      </selection>
+      <selection entryId="eng" name="Tech-Priest Enginseer" number="1" type="model">
+        <profiles>
+          <profile name="Tech-Priest Enginseer" typeName="Unit"></profile>
+        </profiles>
+        <categories>
+          <category name="Character" />
+        </categories>
+      </selection>
+    </selections>
+  </force></forces>
+</roster>`),
+  });
+  const xml = strFromU8(
+    Object.entries(unzipSync(archive)).find(([name]) =>
+      name.toLocaleLowerCase().endsWith(".ros"),
+    )![1],
+  );
+  assert.equal(countTesseraWebsiteImportUnits(xml), 3);
+  const prepared = prepareRoszForTesseraImport(archive);
+  const preparedXml = strFromU8(
+    Object.entries(unzipSync(prepared)).find(([name]) =>
+      name.toLocaleLowerCase().endsWith(".ros"),
+    )![1],
+  );
+  assert.equal(countTesseraWebsiteImportUnits(preparedXml), 2);
+  assert.match(
+    preparedXml,
+    /name="Lord Commissar"[\s\S]*?<category name="Character"/,
+  );
+  const squadSlice = preparedXml.slice(
+    preparedXml.indexOf('name="Krieg Command Squad"'),
+    preparedXml.indexOf('name="Tech-Priest Enginseer"'),
+  );
+  const parentCategories = [...squadSlice.matchAll(
+    /<categories>([\s\S]*?)<\/categories>/g,
+  )].at(-1)?.[1];
+  assert.ok(parentCategories);
+  assert.doesNotMatch(parentCategories, /name="Character"/i);
+  assert.match(parentCategories, /name="Infantry"/);
+  const summary = inspectEnrichedRosz(prepared);
+  assert.equal(summary.units.length, 2);
 });
 
 async function withSupportDirectory(

@@ -75,12 +75,12 @@ test("Keychain broker releases credentials only to the local-agent consumer", as
   );
 });
 
-test("Tessera website import flattens unit-composition wrappers before upload", async () => {
+test("Tessera website import prepares New Recruit archives before upload", async () => {
   const source = await readFile(
     path.resolve("local", "tessera", "browser.ts"),
     "utf8",
   );
-  assert.match(source, /flattenRoszUnitCompositionWrappers/);
+  assert.match(source, /prepareRoszForTesseraImport/);
   assert.match(source, /materializeTesseraImportRosz/);
 });
 

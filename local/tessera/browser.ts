@@ -51,7 +51,7 @@ import {
   tesseraImportedArmySemanticEvidenceIncompleteReasons,
   tesseraImportedArmySemanticSnapshotIncompleteReasons,
 } from "./website-semantic-evidence";
-import { flattenRoszUnitCompositionWrappers } from "./rosz-integrity";
+import { prepareRoszForTesseraImport } from "./rosz-integrity";
 
 export const TESSERA_URL = "https://playtessera.gg/" as const;
 export const TESSERA_WEBSITE_ADAPTER_VERSION =
@@ -1827,15 +1827,15 @@ async function materializeTesseraImportRosz(filename: string): Promise<string> {
     }
     throw error;
   }
-  const flattened = flattenRoszUnitCompositionWrappers(original);
-  if (Buffer.from(flattened).equals(original)) {
+  const prepared = prepareRoszForTesseraImport(original);
+  if (Buffer.from(prepared).equals(original)) {
     return filename;
   }
   const importPath = path.join(
     os.tmpdir(),
     `rosterpilot-tessera-import-${randomUUID()}.rosz`,
   );
-  await writeFile(importPath, flattened);
+  await writeFile(importPath, prepared);
   return importPath;
 }
 
