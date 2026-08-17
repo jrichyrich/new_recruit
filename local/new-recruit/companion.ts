@@ -72,6 +72,12 @@ const projectRoot = path.resolve(
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
+function credentialsAllowSessionReuse(
+  state: string | undefined,
+): boolean {
+  return state === "ready" || state === "disabled";
+}
+
 export async function recordVerifiedServiceObservation(
   draft: RosterDraftV1,
   delivery: NewRecruitDelivery,
@@ -307,7 +313,7 @@ export async function getNewRecruitConnectionStatus(): Promise<
     runtimeCompatible &&
     agentStatus.browserAvailable &&
     agentStatus.brokerAvailable &&
-    newRecruitProvider?.credentialState === "ready";
+    credentialsAllowSessionReuse(newRecruitProvider?.credentialState);
   const statusWarning = agentError
       ? {
           code: agentError.code,
@@ -363,7 +369,7 @@ export async function getNewRecruitConnectionStatus(): Promise<
           {
             code: "CREDENTIAL_RELEASE_DISABLED",
             message:
-              "Reusable Keychain credential release is disabled until an authenticated native consumer is available. Local exports remain available.",
+              "Reusable Keychain credential release is disabled. Authenticated New Recruit delivery can still reuse an existing browser session; a login prompt cannot retrieve a stored password.",
             severity: "warn",
           },
         ]

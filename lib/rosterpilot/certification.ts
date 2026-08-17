@@ -22,8 +22,11 @@ import {
   newRecruitCatalogue,
 } from "./catalogue-summary";
 import { getCachedDataFreshness } from "./freshness";
-import { newRecruitRos } from "./new-recruit";
-import { resolveNewRecruitUnit } from "./new-recruit-resolver";
+import { newRecruitRos, unitSizeLoadoutChoices } from "./new-recruit";
+import {
+  isUnitSizeLoadoutChoice,
+  resolveNewRecruitUnit,
+} from "./new-recruit-resolver";
 import {
   buildExportableRosterCandidate,
   legacyProvenanceBoundRosterExecutionFingerprint,
@@ -2242,6 +2245,16 @@ function childSelections(
   return containers[0].children;
 }
 
+function descendantSelections(
+  node: CanonicalXmlNode,
+  context: string,
+): CanonicalXmlNode[] {
+  return childSelections(node, context).flatMap((child) => [
+    child,
+    ...descendantSelections(child, `${context} child`),
+  ]);
+}
+
 function selectionNumber(
   node: CanonicalXmlNode,
   context: string,
@@ -2325,6 +2338,29 @@ function assertSelectionReference(
     code,
     `The canonical ROS ${context} does not match its pinned catalogue reference.`,
   );
+}
+
+function equipmentWithoutUnitSizeChoices(
+  equipment: Array<{
+    count: number;
+    reference: CatalogueSelectionReference;
+  }>,
+): Array<{
+  count: number;
+  reference: CatalogueSelectionReference;
+}> {
+  return equipment.map((item) => {
+    const choice = item.reference.loadoutChoice;
+    if (!choice || !isUnitSizeLoadoutChoice(choice.name)) return item;
+    return {
+      ...item,
+      reference: {
+        ...item.reference,
+        loadoutChoiceId: undefined,
+        loadoutChoice: undefined,
+      },
+    };
+  });
 }
 
 function assertEquipmentSelections(
@@ -2626,9 +2662,10 @@ export function validateCanonicalRoszArchive(
     );
     const warlordEntryId = unitMapping.warlord?.entryId;
     const warlordSelections = warlordEntryId
-      ? unitChildren.filter(
-          (child) => child.attributes.entryId === warlordEntryId,
-        )
+      ? descendantSelections(
+          actualUnit,
+          `unit ${index + 1} (${unit.name})`,
+        ).filter((child) => child.attributes.entryId === warlordEntryId)
       : [];
     assertion(
       warlordSelections.length === (unit.isWarlord ? 1 : 0),
@@ -2685,9 +2722,36 @@ export function validateCanonicalRoszArchive(
       "CERTIFICATION_ROSZ_EQUIPMENT_MISMATCH",
       `The canonical roster loadout for unit ${index + 1} (${unit.name}) cannot be resolved against the pinned catalogue.`,
     );
-    const modelSelections = unitChildren.filter(
-      (child) => child.attributes.type === "model",
+    const sizeChoices = unitSizeLoadoutChoices(resolution.models);
+    const sizeChoiceIds = new Set(
+      sizeChoices.map((choice) => choice.entryId),
     );
+    const sizeSelections = unitChildren.filter((child) =>
+      sizeChoiceIds.has(child.attributes.entryId ?? ""),
+    );
+    assertion(
+      sizeSelections.length === sizeChoices.length,
+      "CERTIFICATION_ROSZ_EQUIPMENT_MISMATCH",
+      `The canonical ROS unit-size selection for unit ${index + 1} (${unit.name}) does not match the pinned catalogue.`,
+    );
+    for (const [sizeIndex, choice] of sizeChoices.entries()) {
+      assertSelectionReference(
+        sizeSelections[sizeIndex],
+        choice,
+        1,
+        "CERTIFICATION_ROSZ_EQUIPMENT_MISMATCH",
+        `unit ${index + 1} (${unit.name}) unit-size ${sizeIndex + 1}`,
+      );
+    }
+    const modelSelections = [
+      ...unitChildren.filter((child) => child.attributes.type === "model"),
+      ...sizeSelections.flatMap((sizeSelection) =>
+        childSelections(
+          sizeSelection,
+          `unit ${index + 1} (${unit.name}) unit-size`,
+        ).filter((child) => child.attributes.type === "model"),
+      ),
+    ];
     assertion(
       modelSelections.length === resolution.models.length,
       "CERTIFICATION_ROSZ_MODEL_COUNT_MISMATCH",
@@ -2711,10 +2775,10 @@ export function validateCanonicalRoszArchive(
       const modelEquipment = childSelections(
         actualModel,
         `unit ${index + 1} (${unit.name}) model ${modelIndex + 1}`,
-      );
+      ).filter((child) => child.attributes.entryId !== warlordEntryId);
       assertEquipmentSelections(
         modelEquipment,
-        model.equipment,
+        equipmentWithoutUnitSizeChoices(model.equipment),
         `unit ${index + 1} (${unit.name}) model ${modelIndex + 1}`,
       );
       equipmentSelectionCount += modelEquipment.length;
@@ -2741,6 +2805,7 @@ export function validateCanonicalRoszArchive(
       ...modelSelections,
       ...warlordSelections,
       ...enhancementSelections,
+      ...sizeSelections,
     ]);
     const directEquipment = unitChildren.filter(
       (child) => !reservedSelections.has(child),

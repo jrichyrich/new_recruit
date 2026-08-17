@@ -7,8 +7,13 @@ import type {
   CatalogueSelectionReference,
   NewRecruitFactionCatalogue,
 } from "./catalogue-types";
-import { resolveNewRecruitUnit } from "./new-recruit-resolver";
-import { factions, units } from "./runtime-dataset";
+import {
+  isUnitSizeLoadoutChoice,
+  normalizeNewRecruitName,
+  resolveNewRecruitUnit,
+  type ResolvedModelReference,
+} from "./new-recruit-resolver";
+import { dataset, factions, units } from "./runtime-dataset";
 import type { DraftUnit, RosterDraftV1 } from "./types";
 
 type XmlNode = Record<string, unknown>;
@@ -94,9 +99,28 @@ type ResolvedEquipment = {
   reference: CatalogueSelectionReference;
 };
 
+export function unitSizeLoadoutChoices(
+  models: ResolvedModelReference[],
+): CatalogueSelectionReference[] {
+  const choices = new Map<string, CatalogueSelectionReference>();
+  for (const model of models) {
+    for (const item of model.equipment) {
+      const choice = item.reference.loadoutChoice;
+      if (!choice || !isUnitSizeLoadoutChoice(choice.name)) continue;
+      choices.set(choice.entryId, choice);
+    }
+  }
+  return [...choices.values()].sort(
+    (left, right) =>
+      left.normalizedName.localeCompare(right.normalizedName) ||
+      left.entryId.localeCompare(right.entryId),
+  );
+}
+
 function equipmentSelections(
   equipment: ResolvedEquipment[],
   idParts: Array<string | number>,
+  omitChoiceIds: ReadonlySet<string> = new Set(),
 ): XmlNode[] {
   const result: XmlNode[] = [];
   const choices = new Map<
@@ -113,7 +137,7 @@ function equipmentSelections(
       item.count,
     );
     const choice = item.reference.loadoutChoice;
-    if (!choice) {
+    if (!choice || omitChoiceIds.has(choice.entryId)) {
       result.push(child);
       continue;
     }
@@ -134,6 +158,32 @@ function equipmentSelections(
     });
   }
   return result;
+}
+
+function uniqueLeaderModelIndex(
+  unitId: string,
+  models: ResolvedModelReference[],
+): number {
+  const unit = units.getAny(unitId);
+  const composition = unit
+    ? dataset.unitCompositionOf(unit.raw)
+    : undefined;
+  const leaderNames = (composition?.models ?? [])
+    .filter((model) => model.is_leader_model === true)
+    .map((model) => normalizeNewRecruitName(model.name));
+  if (leaderNames.length === 0) return -1;
+  const indexes = models.flatMap((model, index) => {
+    const actual = normalizeNewRecruitName(model.reference.name);
+    return leaderNames.some(
+      (expected) =>
+        actual === expected ||
+        actual.startsWith(`${expected} `) ||
+        expected.startsWith(`${actual} `),
+    )
+      ? [index]
+      : [];
+  });
+  return indexes.length === 1 ? indexes[0] : -1;
 }
 
 function unitInFactionAncestry(
@@ -164,20 +214,18 @@ function rosterUnitSelection(
   }
 
   const children: XmlNode[] = [];
-  if (selection.isWarlord) {
-    if (!mapping.warlord) {
-      throw new Error(
-        `New Recruit Warlord mapping is unavailable for ${selection.name}.`,
-      );
-    }
-    children.push(
-      selectionFromReference(
+  if (selection.isWarlord && !mapping.warlord) {
+    throw new Error(
+      `New Recruit Warlord mapping is unavailable for ${selection.name}.`,
+    );
+  }
+  const warlordSelection = selection.isWarlord && mapping.warlord
+    ? selectionFromReference(
         mapping.warlord,
         deterministicId([selection.selectionId, "warlord"]),
         1,
-      ),
-    );
-  }
+      )
+    : null;
   if (selection.enhancementId) {
     const enhancement = mapping.enhancements[selection.enhancementId];
     if (!enhancement) {
@@ -204,8 +252,12 @@ function rosterUnitSelection(
   if (!resolution.ok) {
     throw new Error(resolution.reason);
   }
-  children.push(
-    ...resolution.models.map((model, modelIndex) => ({
+  const sizeChoices = unitSizeLoadoutChoices(resolution.models);
+  const sizeChoiceIds = new Set(
+    sizeChoices.map((choice) => choice.entryId),
+  );
+  const modelNodes: XmlNode[] = resolution.models.map(
+    (model, modelIndex) => ({
       ...selectionFromReference(
         model.reference,
         deterministicId([
@@ -219,11 +271,57 @@ function rosterUnitSelection(
       selections: equipmentSelections(
         model.equipment,
         [selection.selectionId, "model-equipment", modelIndex],
+        sizeChoiceIds,
       ),
-    })),
+    }),
+  );
+  const leaderIndex = uniqueLeaderModelIndex(
+    selection.unitId,
+    resolution.models,
+  );
+  if (warlordSelection && leaderIndex >= 0) {
+    const leader = modelNodes[leaderIndex];
+    const existing = Array.isArray(leader.selections)
+      ? leader.selections
+      : [];
+    leader.selections = [warlordSelection, ...existing];
+  } else if (warlordSelection) {
+    children.push(warlordSelection);
+  }
+  if (sizeChoices.length === 1) {
+    children.push({
+      ...selectionFromReference(
+        sizeChoices[0],
+        deterministicId([
+          selection.selectionId,
+          "unit-size",
+          sizeChoices[0].entryId,
+        ]),
+        1,
+      ),
+      selections: modelNodes,
+    });
+  } else {
+    children.push(
+      ...sizeChoices.map((choice) =>
+        selectionFromReference(
+          choice,
+          deterministicId([
+            selection.selectionId,
+            "unit-size",
+            choice.entryId,
+          ]),
+          1,
+        ),
+      ),
+      ...modelNodes,
+    );
+  }
+  children.push(
     ...equipmentSelections(
       resolution.directEquipment,
       [selection.selectionId, "direct-equipment"],
+      sizeChoiceIds,
     ),
   );
 

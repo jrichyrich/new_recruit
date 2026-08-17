@@ -759,7 +759,7 @@ export async function startLocalAgent(
     sessionId: string | undefined,
     fallbackRoot: string,
   ): Promise<string> {
-    if (!sessionId) return path.join(fallbackRoot, "profile");
+    if (!sessionId) return newRecruitProfileDirectory();
     return (await tesseraSession(sessionId)).directory;
   }
 
@@ -1412,8 +1412,9 @@ export async function startLocalAgent(
   function queuedTessera(
     payload: LocalAgentTesseraPayload,
   ): Promise<LocalAgentTesseraResult> {
-    return enqueueBrowserOperation("tessera", () =>
-      performTessera(payload),
+    return enqueueBrowserOperation(
+      payload.sessionId ? "tessera" : "new-recruit",
+      () => performTessera(payload),
     );
   }
 

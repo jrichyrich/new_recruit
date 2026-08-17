@@ -412,6 +412,28 @@ function resolveCoherentEquipmentSet(
   };
 }
 
+function modelRoleAndVariant(name: string): {
+  role: string;
+  variant: string;
+} {
+  const trimmed = name.trim();
+  const parenthetical = trimmed.match(/^(.*)\(([^)]+)\)\s*$/);
+  if (parenthetical) {
+    return {
+      role: normalizeNewRecruitName(parenthetical[1]),
+      variant: normalizeNewRecruitName(parenthetical[2]),
+    };
+  }
+  const withVariant = trimmed.match(/^(.*?)\s+(?:w\/|with)\s+(.*)$/i);
+  if (withVariant) {
+    return {
+      role: normalizeNewRecruitName(withVariant[1]),
+      variant: normalizeNewRecruitName(withVariant[2]),
+    };
+  }
+  return { role: normalizeNewRecruitName(trimmed), variant: "" };
+}
+
 function modelNameRank(
   modelName: string | null,
   reference: CatalogueModelReference,
@@ -420,6 +442,15 @@ function modelNameRank(
   const expected = normalizeNewRecruitName(modelName);
   const actual = normalizeNewRecruitName(reference.name);
   if (actual === expected) return 0;
+  const expectedParts = modelRoleAndVariant(modelName);
+  const actualParts = modelRoleAndVariant(reference.name);
+  if (
+    expectedParts.role === actualParts.role &&
+    expectedParts.variant &&
+    expectedParts.variant === actualParts.variant
+  ) {
+    return 0;
+  }
   if (
     actual.startsWith(`${expected} `) ||
     expected.startsWith(`${actual} `) ||
@@ -434,8 +465,21 @@ function modelNameRank(
 
 function looksLikeLeaderModel(name: string): boolean {
   return /\b(alpha|champion|exarch|huntmaster|leader|master|princeps|sergeant|superior|watchmaster)\b/.test(
-    normalizeNewRecruitName(name),
+    modelRoleAndVariant(name).role,
   );
+}
+
+/**
+ * BSData encodes 10- vs 20-model (and similar) squads as a unit-level size
+ * selection such as "2 Watchmasters and 18 Troopers" or "10 models". Weapon
+ * pairings like "1 Splinter pistol and 1 Power weapon" stay on the model.
+ */
+export function isUnitSizeLoadoutChoice(name: string): boolean {
+  const trimmed = name.trim();
+  if (/^\d+\s+models?$/i.test(trimmed)) return true;
+  const composed = /^(?:0-)?(\d+)\s+.+?\s+and\s+(\d+)\s+/.exec(trimmed);
+  if (!composed) return false;
+  return Math.max(Number(composed[1]), Number(composed[2])) >= 3;
 }
 
 function equipmentGroups(
@@ -669,10 +713,17 @@ export function resolveNewRecruitUnit(
 
   const models: ResolvedModelReference[] = [];
   const directEquipment: ResolvedEquipmentReference[] = [];
+  const usedEntryIds = new Set<string>();
   for (const group of groups) {
     const candidates = mapping.models
       .map((model) => candidateForGroup(mapping, model, group))
       .filter((candidate): candidate is ModelCandidate => candidate !== null)
+      .filter((candidate) => {
+        if (!usedEntryIds.has(candidate.model.entryId)) return true;
+        // Same-name catalogue entries (two Watchmasters) may reuse one entry.
+        // Distinct named specialists (Master Vox vs Regimental Standard) may not.
+        return modelNameRank(group.modelName, candidate.model) === 0;
+      })
       .sort(compareCandidates);
     const eligible =
       group.isLeaderModel === true
@@ -702,6 +753,7 @@ export function resolveNewRecruitUnit(
       count: group.count,
       equipment: best.modelEquipment,
     });
+    usedEntryIds.add(best.model.entryId);
     directEquipment.push(...best.directEquipment);
   }
 

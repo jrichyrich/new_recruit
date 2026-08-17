@@ -17,7 +17,10 @@ import {
   ensureCurrentLocalAgent,
   type LifecycleResult,
 } from "../local/agent/lifecycle";
-import { runNewRecruitBrowserDelivery } from "../local/new-recruit/browser";
+import {
+  newRecruitUnitLabelMatches,
+  runNewRecruitBrowserDelivery,
+} from "../local/new-recruit/browser";
 import {
   deliverRosterToNewRecruit,
   probeNewRecruitLiveUi,
@@ -72,6 +75,29 @@ test("Keychain broker releases credentials only to the local-agent consumer", as
   assert.match(
     source,
     /guard authorizedKeychainConsumer\(\) else \{\s*credentialReleaseDisabled\(provider\)/,
+  );
+});
+
+test("Tessera website worker defers premium-key retrieval until unlock is required", async () => {
+  const source = await readFile(
+    path.resolve("local", "tessera", "worker.ts"),
+    "utf8",
+  );
+  assert.match(source, /getLicenseKey:/);
+  assert.doesNotMatch(
+    source,
+    /(?:const|let) licenseKey = await retrieveLicenseKey/,
+  );
+});
+
+test("default Tessera website profile reuses the authenticated New Recruit Chrome session", async () => {
+  const source = await readFile(
+    path.resolve("local", "agent", "server.ts"),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /if \(!sessionId\) return newRecruitProfileDirectory\(\);/,
   );
 });
 
@@ -421,6 +447,36 @@ const expected = {
     { name: "Pallas Grav-attack", modelCount: 1 },
   ],
 };
+
+test("New Recruit unit labels accept unit wrappers and Squad catalogue aliases", () => {
+  const reivers = { name: "Reiver Squad", modelCount: 10 };
+  assert.equal(
+    newRecruitUnitLabelMatches("1x Reiver Squad\n1x Reiver Sergeant\n9x Reivers", reivers),
+    true,
+  );
+  assert.equal(
+    newRecruitUnitLabelMatches("10x Reivers\n1x Reiver Sergeant", reivers),
+    true,
+  );
+  assert.equal(
+    newRecruitUnitLabelMatches("Reiver Squad\nReiver Sergeant\nReivers", reivers),
+    true,
+  );
+  assert.equal(
+    newRecruitUnitLabelMatches(
+      "1x Lieutenant in Reiver Armour\n10x Blood Claws",
+      reivers,
+    ),
+    false,
+  );
+  assert.equal(
+    newRecruitUnitLabelMatches("1x Blade Champ…", {
+      name: "Blade Champion",
+      modelCount: 1,
+    }),
+    false,
+  );
+});
 
 test("New Recruit UI identity is deterministic, change-sensitive, and hash-only", () => {
   const secret = "signed-secret-that-must-not-leak";

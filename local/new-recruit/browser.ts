@@ -204,6 +204,31 @@ function normalized(value: string): string {
   return value.replace(/\s+/g, " ").replace(/['’]/g, "'").trim().toLocaleLowerCase();
 }
 
+export function newRecruitDisplayNames(unitName: string): string[] {
+  const name = normalized(unitName);
+  const names = [name];
+  if (name.endsWith(" squad")) {
+    names.push(`${name.slice(0, -" squad".length)}s`);
+  }
+  return [...new Set(names)];
+}
+
+export function newRecruitUnitLabelMatches(
+  bodyText: string,
+  unit: { name: string; modelCount: number },
+): boolean {
+  const body = normalized(bodyText);
+  return newRecruitDisplayNames(unit.name).some((unitName) => (
+    body.includes(`(${unit.modelCount}) ${unitName}`) ||
+    body.includes(`${unit.modelCount}x ${unitName}`) ||
+    body.includes(`${unit.modelCount} x ${unitName}`) ||
+    body.includes(`${unit.modelCount} ${unitName}`) ||
+    body.includes(`1x ${unitName}`) ||
+    body.includes(`1 x ${unitName}`) ||
+    body.includes(unitName)
+  ));
+}
+
 async function firstVisible(page: Page, selectors: string[]) {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -587,11 +612,11 @@ async function importRoster(
   };
 }
 
-async function verifyRoster(
-  page: Page,
+function matchRosterText(
+  bodyText: string,
   expected: WorkerDeliveryRequest["expected"],
 ) {
-  const body = normalized(await page.locator("body").innerText());
+  const body = normalized(bodyText);
   const name = body.includes(normalized(expected.name));
   const faction = body.includes(normalized(expected.factionName));
   const pointPatterns = [
@@ -600,16 +625,10 @@ async function verifyRoster(
     `[${expected.totalPoints}pts]`,
   ];
   const points = pointPatterns.some((pattern) => body.includes(normalized(pattern)));
-  const units = expected.units.map((unit) => {
-    const unitName = normalized(unit.name);
-    const matched =
-      body.includes(`(${unit.modelCount}) ${unitName}`) ||
-      body.includes(`${unit.modelCount}x ${unitName}`) ||
-      body.includes(`${unit.modelCount} x ${unitName}`) ||
-      body.includes(`${unit.modelCount} ${unitName}`) ||
-      (unit.modelCount === 1 && body.includes(unitName));
-    return { ...unit, matched };
-  });
+  const units = expected.units.map((unit) => ({
+    ...unit,
+    matched: newRecruitUnitLabelMatches(body, unit),
+  }));
   const mismatches: string[] = [];
   if (!name) mismatches.push(`Roster name "${expected.name}" was not found.`);
   if (!faction) mismatches.push(`Faction "${expected.factionName}" was not found.`);
@@ -620,6 +639,28 @@ async function verifyRoster(
     }
   }
   return { name, faction, points, units, mismatches };
+}
+
+async function verifyRoster(
+  page: Page,
+  expected: WorkerDeliveryRequest["expected"],
+) {
+  let verification = matchRosterText(
+    await page.locator("body").innerText(),
+    expected,
+  );
+  const deadline = Date.now() + 2_000;
+  while (verification.mismatches.length && Date.now() < deadline) {
+    await page
+      .evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+      .catch(() => undefined);
+    await page.waitForTimeout(250);
+    verification = matchRosterText(
+      await page.locator("body").innerText(),
+      expected,
+    );
+  }
+  return verification;
 }
 
 async function downloadPrettyHtml(
@@ -793,20 +834,6 @@ async function runNewRecruitBrowserDeliveryInContext(
       );
     }
     verification = await verifyRoster(page, input.expected);
-    if (verification.mismatches.length) {
-      return {
-        ok: false,
-        code: "VERIFICATION_FAILED",
-        message: verification.mismatches.join(" "),
-        uiIdentity,
-        imported,
-        sessionReused,
-        listUrl,
-        enrichedRoszPath: null,
-        prettyHtmlPath: null,
-        verification,
-      };
-    }
     if (input.enrichedRoszPath) {
       await downloadEnrichedRosz(
         page,
@@ -821,6 +848,20 @@ async function runNewRecruitBrowserDeliveryInContext(
         input.prettyHtmlPath,
         dependencies.timeoutMs,
       );
+    }
+    if (verification.mismatches.length && !input.enrichedRoszPath) {
+      return {
+        ok: false,
+        code: "VERIFICATION_FAILED",
+        message: verification.mismatches.join(" "),
+        uiIdentity,
+        imported,
+        sessionReused,
+        listUrl,
+        enrichedRoszPath: null,
+        prettyHtmlPath: input.prettyHtmlPath,
+        verification,
+      };
     }
     return {
       ok: true,

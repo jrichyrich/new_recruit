@@ -2779,6 +2779,76 @@ test("exports mixed model compositions using canonical unit roles and loadouts",
   );
 });
 
+test("exports Death Korps 20-model size as a unit-level New Recruit selection", async () => {
+  const built = buildRoster({
+    playerFaction: "astra-militarum",
+    pointsLimit: 500,
+    requiredUnitIds: ["death-korps-of-krieg"],
+    requiredWarlordUnitId: "krieg-command-squad",
+    detachmentId: "siege-regiment",
+  });
+  assert.ok(
+    built.ok && built.data,
+    built.violations.map((violation) => violation.message).join("; "),
+  );
+  const infantry = built.data.units.find(
+    (selection) => selection.unitId === "death-korps-of-krieg",
+  );
+  const warlord = built.data.units.find((selection) => selection.isWarlord);
+  assert.ok(infantry);
+  assert.ok(warlord);
+  const keep = new Set([infantry.selectionId, warlord.selectionId]);
+  const reduced = modifyRosterBatch(
+    {
+      ...built.data,
+      pointsLimit: 1000,
+    },
+    built.data.units
+      .filter((selection) => !keep.has(selection.selectionId))
+      .map((selection) => ({
+        type: "remove" as const,
+        selectionId: selection.selectionId,
+      })),
+  );
+  assert.ok(
+    reduced.ok && reduced.data,
+    reduced.violations.map((violation) => violation.message).join("; "),
+  );
+  const remaining = reduced.data.units.find(
+    (selection) => selection.unitId === "death-korps-of-krieg",
+  );
+  assert.ok(remaining);
+  const sized =
+    remaining.modelCount === 20
+      ? reduced.data
+      : modifyRoster(reduced.data, {
+          type: "set-model-count",
+          selectionId: remaining.selectionId,
+          modelCount: 20,
+        }).data;
+  assert.ok(sized);
+  const blob = sized.units.find(
+    (selection) => selection.unitId === "death-korps-of-krieg",
+  );
+  assert.equal(blob?.modelCount, 20);
+  const exported = await exportRoster(sized, "ros");
+  assert.equal(
+    exported.ok,
+    true,
+    exported.violations.map((item) => item.message).join("; "),
+  );
+  assert.ok(exported.data);
+  const xml = exported.data.content as string;
+  assert.match(
+    xml,
+    /name="2 Death Korps Watchmaster and 18 Death Korps Troopers"[\s\S]*name="Death Korps Trooper"/,
+  );
+  assert.doesNotMatch(
+    xml,
+    /name="Death Korps Trooper"[^>]+type="model"[^>]*>[\s\S]*?name="2 Death Korps Watchmaster and 18 Death Korps Troopers"/,
+  );
+});
+
 test("exports legal mixed weapon choices as separate New Recruit model groups", async () => {
   const built = buildRoster({
     faction: "adeptus-custodes",

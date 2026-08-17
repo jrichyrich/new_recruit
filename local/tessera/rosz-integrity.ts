@@ -110,6 +110,35 @@ function nameTokens(value: string): string[] {
     .filter((token) => token.length > 1);
 }
 
+/**
+ * Catalogue identity pairs that New Recruit still emits after a specialist
+ * kit was renamed. Token matching alone cannot treat "Servo-scribes" as the
+ * same kit as "Alchemyk counteragents".
+ */
+const CATALOGUE_IDENTITY_ALIASES: ReadonlyArray<readonly [string, string]> = [
+  ["servo-scribes", "alchemyk"],
+];
+
+function expandedIdentityTokens(name: string): string[] {
+  const tokens = nameTokens(name);
+  const expanded = [...tokens];
+  for (const [left, right] of CATALOGUE_IDENTITY_ALIASES) {
+    const leftTokens = nameTokens(left);
+    const rightTokens = nameTokens(right);
+    const hasLeft = leftTokens.length > 0 &&
+      leftTokens.every((token) =>
+        tokens.some((candidate) => oneEditApart(token, candidate))
+      );
+    const hasRight = rightTokens.length > 0 &&
+      rightTokens.every((token) =>
+        tokens.some((candidate) => oneEditApart(token, candidate))
+      );
+    if (hasRight) expanded.push(...leftTokens);
+    if (hasLeft) expanded.push(...rightTokens);
+  }
+  return expanded;
+}
+
 function implicitCatalogueCompletions(
   expected: RoszGameplaySnapshot,
   observed: RoszGameplaySnapshot,
@@ -156,7 +185,9 @@ function implicitCatalogueCompletions(
         candidate.number === selection.number,
     );
     if (!observedParent || !expectedParent) continue;
-    const parentTokens = nameTokens(parentName || observedParent.name);
+    const parentTokens = expandedIdentityTokens(
+      parentName || observedParent.name,
+    );
     const childTokens = nameTokens(selection.name);
     if (
       childTokens.length > 0 &&

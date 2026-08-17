@@ -17,6 +17,7 @@ async function fixture(options: {
   runStress?: StressRunner;
   runExactStress?: ExactStressRunner;
   deliver?: ConstructorParameters<typeof RosterPilotService>[0]["deliverToNewRecruit"];
+  reconcileNewRecruitMutation?: ConstructorParameters<typeof RosterPilotService>[0]["reconcileNewRecruitMutation"];
   lease?: ConstructorParameters<typeof RosterPilotService>[0]["lease"];
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "rosterpilot-service-"));
@@ -30,6 +31,7 @@ async function fixture(options: {
     runStress: options.runStress,
     runExactStress: options.runExactStress,
     deliverToNewRecruit: options.deliver,
+    reconcileNewRecruitMutation: options.reconcileNewRecruitMutation,
   });
   await service.initialize();
   return { service, root };
@@ -1801,6 +1803,58 @@ test("blocks stale actions and performs confirmed New Recruit upload once", asyn
     };
     assert.equal(retained.state, "completed");
     assert.equal(retained.revision, uploaded.revision);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("offers New Recruit reconciliation when a prior upload is uncertain", async () => {
+  let reconciled: string | null = null;
+  const { service, root } = await fixture({
+    deliver: async () => ({
+      ok: false,
+      data: null,
+      violations: [{
+        code: "NEW_RECRUIT_MUTATION_RECONCILIATION_REQUIRED",
+        message: "Attempt prior is uncertain.",
+        severity: "error",
+      }],
+      warnings: [],
+    }),
+    reconcileNewRecruitMutation: async (input) => {
+      reconciled = input.outcome;
+    },
+  });
+  try {
+    const built = await build(service);
+    const uploaded = await service.act({
+      operationId: built.operationId,
+      expectedRevision: built.revision,
+      actionId: "new-recruit.upload",
+      confirm: true,
+    });
+    assert.equal(uploaded.state, "action-required");
+    assert.equal(
+      uploaded.violations[0]?.code,
+      "NEW_RECRUIT_MUTATION_RECONCILIATION_REQUIRED",
+    );
+    assert.equal(
+      uploaded.nextActions[0]?.actionId,
+      "new-recruit.reconcile-outcome",
+    );
+    const reconciledOperation = await service.act({
+      operationId: uploaded.operationId,
+      expectedRevision: uploaded.revision,
+      actionId: "new-recruit.reconcile-outcome",
+      choice: "created",
+      confirm: true,
+    });
+    assert.equal(reconciled, "created");
+    assert.equal(reconciledOperation.state, "action-required");
+    assert.equal(
+      reconciledOperation.nextActions[0]?.actionId,
+      "new-recruit.upload",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

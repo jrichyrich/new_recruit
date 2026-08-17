@@ -1603,12 +1603,21 @@ function unresolvedAttempt(
   );
 }
 
-function createdAttempt(
+function createdAttemptForSource(
   receipt: NewRecruitMutationReceipt,
+  expectedSourceRoszSha256: string | null,
 ): NewRecruitMutationAttempt | undefined {
-  return receipt.attempts.find(
-    (attempt) => attempt.outcome === "created",
-  );
+  return receipt.attempts.find((attempt) => {
+    if (attempt.outcome !== "created") return false;
+    if (!attempt.recoveryArtifact) return false;
+    if (attempt.expectedSourceRoszSha256 === expectedSourceRoszSha256) {
+      return true;
+    }
+    return (
+      attempt.expectedSourceRoszSha256 === null ||
+      expectedSourceRoszSha256 === null
+    );
+  });
 }
 
 async function recordMutationFinalizationReliability(input: {
@@ -1953,7 +1962,10 @@ async function beginMutationReceipt(input: {
         `New Recruit attempt ${unresolved.attemptId} from run ${unresolved.runId} is ${unresolved.outcome}. Reconcile it before another delivery for ${input.descriptor.rosterName}.`,
       );
     }
-    const created = createdAttempt(receipt);
+    const created = createdAttemptForSource(
+      receipt,
+      input.descriptor.expectedSourceRoszSha256,
+    );
     if (created) {
       throw failClosed(
         "NEW_RECRUIT_MUTATION_ALREADY_CREATED",
@@ -2189,6 +2201,70 @@ async function reconcileMutationReceipt(input: {
   } finally {
     await release();
   }
+}
+
+export async function reconcileUncertainNewRecruitMutation(input: {
+  roster: RosterDraftV1;
+  outcome: "created" | "not-created";
+  message: string;
+}): Promise<NewRecruitMutationReceipt> {
+  const receipt = await readNewRecruitMutationReceipt(input.roster);
+  if (!receipt) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_RECEIPT_MISSING",
+      `No durable New Recruit mutation receipt exists for ${input.roster.name}.`,
+    );
+  }
+  const attempt = unresolvedAttempt(receipt);
+  if (!attempt) {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_ATTEMPT_MISSING",
+      "No pending or uncertain New Recruit mutation attempt exists to reconcile.",
+    );
+  }
+  if (input.outcome === "created") {
+    const event = attempt.connectorEvent;
+    if (!event?.remoteId || event.origin !== "new-remote") {
+      throw failClosed(
+        "NEW_RECRUIT_MUTATION_CREATED_EVIDENCE_MISSING",
+        "A created outcome requires an observed New Recruit list URL.",
+      );
+    }
+    return reconcileNewRecruitMutationReceipt({
+      roster: input.roster,
+      runId: attempt.runId,
+      attemptId: attempt.attemptId,
+      resolution: {
+        outcome: "created",
+        connectorEvent: {
+          ...event,
+          outcome: "verified",
+        },
+        message: input.message,
+      },
+    });
+  }
+  if (attempt.connectorEvent?.origin === "new-remote") {
+    throw failClosed(
+      "NEW_RECRUIT_MUTATION_FINALIZATION_INVALID",
+      "A not-created outcome cannot be used when the connector may have mutated New Recruit.",
+    );
+  }
+  return reconcileNewRecruitMutationReceipt({
+    roster: input.roster,
+    runId: attempt.runId,
+    attemptId: attempt.attemptId,
+    resolution: {
+      outcome: "not-created",
+      connectorEvent: attempt.connectorEvent
+        ? {
+            ...attempt.connectorEvent,
+            outcome: "failed",
+          }
+        : null,
+      message: input.message,
+    },
+  });
 }
 
 export async function reconcileNewRecruitMutationReceipt(input: {

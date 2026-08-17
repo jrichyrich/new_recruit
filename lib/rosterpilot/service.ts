@@ -257,6 +257,12 @@ export type NewRecruitDeliverer = (
   },
 ) => Promise<ResultEnvelope<NewRecruitDelivery>>;
 
+export type NewRecruitUncertainReconciler = (input: {
+  roster: RosterDraftV1;
+  outcome: "created" | "not-created";
+  message: string;
+}) => Promise<void>;
+
 export type RosterPilotServiceOptions = {
   rootDirectory: string;
   now?: () => Date;
@@ -265,6 +271,7 @@ export type RosterPilotServiceOptions = {
   runStress?: StressRunner;
   runExactStress?: ExactStressRunner;
   deliverToNewRecruit?: NewRecruitDeliverer;
+  reconcileNewRecruitMutation?: NewRecruitUncertainReconciler;
   newRecruitStatus?: () => Promise<ResultEnvelope<NewRecruitConnectionStatus>>;
   lease?: <T>(operation: () => Promise<T> | T) => Promise<T>;
 };
@@ -696,6 +703,7 @@ export class RosterPilotService {
   readonly #runStress?: StressRunner;
   readonly #runExactStress?: ExactStressRunner;
   readonly #deliverToNewRecruit?: NewRecruitDeliverer;
+  readonly #reconcileNewRecruitMutation?: NewRecruitUncertainReconciler;
   readonly #newRecruitStatus?: () => Promise<ResultEnvelope<NewRecruitConnectionStatus>>;
   readonly #lease: <T>(operation: () => Promise<T> | T) => Promise<T>;
 
@@ -717,6 +725,7 @@ export class RosterPilotService {
     this.#runStress = options.runStress;
     this.#runExactStress = options.runExactStress;
     this.#deliverToNewRecruit = options.deliverToNewRecruit;
+    this.#reconcileNewRecruitMutation = options.reconcileNewRecruitMutation;
     this.#newRecruitStatus = options.newRecruitStatus;
     this.#lease = options.lease ?? ((operation) =>
       withDataBundleSnapshotLease(operation));
@@ -847,6 +856,26 @@ export class RosterPilotService {
         this.#executeStress(operation, stressRequest, true)
       );
     }
+    if (input.actionId === "new-recruit.reconcile-outcome") {
+      if (!operation.nextActions.some(
+        (action) => action.actionId === "new-recruit.reconcile-outcome"
+      )) {
+        return this.#actionFailure(
+          operation,
+          "ACTION_NOT_AVAILABLE",
+          "New Recruit mutation reconciliation is not available for this operation.",
+        );
+      }
+      if (!input.confirm) {
+        return this.#confirmationRequired(
+          operation,
+          "New Recruit mutation reconciliation requires explicit confirmation.",
+        );
+      }
+      return this.#lease(() =>
+        this.#executeNewRecruitReconcile(operation, input.choice)
+      );
+    }
     if (input.actionId !== "new-recruit.upload") {
       return this.#actionFailure(
         operation,
@@ -893,11 +922,18 @@ export class RosterPilotService {
       operation.newRecruitMutation?.status === "started" ||
       operation.newRecruitMutation?.status === "uncertain"
     ) {
-      return this.#updateFailure(
-        operation,
-        "NEW_RECRUIT_RETRY_BLOCKED",
-        "The prior upload outcome is uncertain and will not be retried automatically.",
-      );
+      const next = this.#nextRevision(operation, {
+        state: "action-required",
+        message:
+          "The prior upload outcome is uncertain and will not be retried automatically.",
+        violations: [issue(
+          "NEW_RECRUIT_RETRY_BLOCKED",
+          "The prior upload outcome is uncertain and will not be retried automatically.",
+        )],
+        nextActions: this.#reconcileAction(),
+      });
+      await this.#writeOperation(next);
+      return this.#publicSummary(next);
     }
     const roster = await this.#readRoster(operation.rosterRef);
     const validation = validateRoster(roster);
@@ -958,15 +994,23 @@ export class RosterPilotService {
         overwrite: false,
       });
       if (!result.ok || !result.data) {
+        const violationCodes = result.violations.map((violation) => violation.code);
+        const reconciliationRequired = violationCodes.includes(
+          "NEW_RECRUIT_MUTATION_RECONCILIATION_REQUIRED",
+        );
         const failedBeforeMutation = result.violations.length > 0 &&
           result.violations.every((violation) =>
-            violation.code === "FILE_COLLISION"
+            violation.code === "FILE_COLLISION" ||
+            violation.code === "NEW_RECRUIT_MUTATION_RECONCILIATION_REQUIRED"
           );
         started = this.#nextRevision(started, {
-          state: "failed",
-          message: "New Recruit upload did not produce a verified result.",
+          state: reconciliationRequired ? "action-required" : "failed",
+          message: reconciliationRequired
+            ? "A prior New Recruit upload is uncertain and must be reconciled before another delivery."
+            : "New Recruit upload did not produce a verified result.",
           violations: compactIssues(result.violations),
           warnings: compactIssues(result.warnings),
+          nextActions: reconciliationRequired ? this.#reconcileAction() : [],
           newRecruitMutation: {
             status: failedBeforeMutation
               ? "failed-before-mutation"
@@ -1016,6 +1060,78 @@ export class RosterPilotService {
       await this.#writeOperation(next);
       return this.#publicSummary(next);
     }
+  }
+
+  async #executeNewRecruitReconcile(
+    operation: OperationDocument,
+    choice?: string,
+  ): Promise<OperationSummary> {
+    if (!operation.rosterRef) {
+      return this.#updateFailure(
+        operation,
+        "ROSTER_REFERENCE_REQUIRED",
+        "This operation does not contain a roster to reconcile.",
+      );
+    }
+    if (!this.#reconcileNewRecruitMutation) {
+      return this.#updateFailure(
+        operation,
+        "NEW_RECRUIT_UNAVAILABLE",
+        "New Recruit mutation reconciliation is not configured.",
+      );
+    }
+    const outcome = choice === "not-created" ? "not-created" : choice === "created"
+      ? "created"
+      : null;
+    if (!outcome) {
+      return this.#actionFailure(
+        operation,
+        "RECONCILE_CHOICE_REQUIRED",
+        "Choose created or not-created from observed New Recruit evidence.",
+      );
+    }
+    const roster = await this.#readRoster(operation.rosterRef);
+    try {
+      await this.#reconcileNewRecruitMutation({
+        roster,
+        outcome,
+        message: outcome === "created"
+          ? `Observed New Recruit list evidence was reconciled as created for ${roster.name}.`
+          : `Observed New Recruit evidence proved no list was created for ${roster.name}.`,
+      });
+    } catch (error) {
+      const code =
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        typeof error.code === "string"
+          ? error.code
+          : "NEW_RECRUIT_MUTATION_RECONCILIATION_FAILED";
+      return this.#updateFailure(
+        operation,
+        code,
+        error instanceof Error
+          ? error.message
+          : "The New Recruit mutation could not be reconciled.",
+      );
+    }
+    const handoff = await this.#newRecruitHandoffAvailability(roster);
+    const next = this.#nextRevision(operation, {
+      state: "action-required",
+      message: outcome === "created"
+        ? "The uncertain New Recruit upload was reconciled as created. A later export can be uploaded if its source ROSZ changed."
+        : "The uncertain New Recruit upload was reconciled as not created. Upload can be retried.",
+      violations: [],
+      nextActions: handoff.nextActions,
+      newRecruitMutation: {
+        status: outcome === "created" ? "verified" : "failed-before-mutation",
+        startedAt: operation.newRecruitMutation?.startedAt ?? null,
+        completedAt: this.#timestamp(),
+        listUrl: null,
+      },
+    });
+    await this.#writeOperation(next);
+    return this.#publicSummary(next);
   }
 
   async importRoster(value: unknown): Promise<OperationSummary> {
@@ -2644,6 +2760,15 @@ export class RosterPilotService {
       label: "Upload this roster to New Recruit",
       requiresConfirmation: true,
     };
+  }
+
+  #reconcileAction(): NextAction[] {
+    return [{
+      actionId: "new-recruit.reconcile-outcome",
+      label: "Reconcile the uncertain New Recruit upload from observed evidence",
+      requiresConfirmation: true,
+      choices: ["created", "not-created"],
+    }];
   }
 
   async #newRecruitHandoffAvailability(

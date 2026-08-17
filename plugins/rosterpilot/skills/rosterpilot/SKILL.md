@@ -21,7 +21,7 @@ Pass `rosterpilot://` references between calls. Do not copy full roster or artif
 2. Use `run build` with the player's faction, point limit, collection, and preferences. Treat an opponent named in prose as opponent context, not the player's faction.
 3. Use the returned `rosterRef` for modifications, matchup analysis, stress tests, and exports. RosterPilot validates after every build or change.
 4. Use `run export` only with a validated roster. Prefer ROSZ for New Recruit editing; use HTML for printing.
-5. New Recruit upload is a side effect. Select the returned `new-recruit.upload` action with `act`, the exact operation revision, and `confirm=true` only after the user explicitly asks to upload.
+5. New Recruit upload is a side effect. Select the returned `new-recruit.upload` action with `act`, the exact operation revision, and `confirm=true` only after the user explicitly asks to upload. If upload is uncertain, select `new-recruit.reconcile-outcome` from observed evidence before another delivery.
 6. For deterministic exact-roster composition analysis, call `run matchup` with player and opponent roster refs.
 7. For Tessera stress testing, call `run stress` with `options.opponentFaction`, `suite` (`core-3` or `diverse-9`), `strategy` (`staged` or `full-all`), and:
    - `backend="local-engine"` to execute locally.

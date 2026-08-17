@@ -33,8 +33,61 @@ function resultText(value: Record<string, unknown>): string {
   return `${message}${operationId}`;
 }
 
-function resultContent(value: unknown, isError = false) {
-  const structured = object(value);
+const MCP_RESULT_BUDGET = 4_096;
+
+function compactStructured(value: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(value);
+  if (Array.isArray(next.artifacts)) {
+    next.artifacts = next.artifacts.map((candidate) => {
+      const artifact = object(candidate);
+      return {
+        uri: artifact.uri,
+        filename: artifact.filename,
+        mimeType: artifact.mimeType,
+        bytes: artifact.bytes,
+      };
+    });
+  }
+  const result = next.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const comparison = (result as {
+      opponentComparison?: Record<string, unknown>;
+    }).opponentComparison;
+    if (comparison) {
+      const portfolio = comparison.portfolio;
+      if (portfolio && typeof portfolio === "object" && !Array.isArray(portfolio)) {
+        delete (portfolio as { hash?: unknown }).hash;
+      }
+      if (Array.isArray(comparison.alternatives)) {
+        comparison.alternatives = comparison.alternatives.map((entry) => {
+          const alternative = object(entry);
+          return {
+            contrast: alternative.contrast,
+            floor: alternative.floor,
+          };
+        });
+      }
+      const recommended = comparison.recommended;
+      const roster = next.roster;
+      if (
+        recommended &&
+        typeof recommended === "object" &&
+        roster &&
+        typeof roster === "object" &&
+        (recommended as { rosterRef?: unknown }).rosterRef ===
+          (roster as { rosterRef?: unknown }).rosterRef
+      ) {
+        delete (recommended as { rosterRef?: unknown }).rosterRef;
+      }
+    }
+  }
+  return next;
+}
+
+function resultEnvelope(
+  structured: Record<string, unknown>,
+  isError: boolean,
+) {
   const resources = Array.isArray(structured.artifacts)
     ? structured.artifacts.flatMap((candidate) => {
         const artifact = object(candidate);
@@ -48,7 +101,7 @@ function resultContent(value: unknown, isError = false) {
                 typeof artifact.mimeType === "string"
                   ? artifact.mimeType
                   : undefined,
-              description: "Full RosterPilot artifact; read only when needed.",
+              description: "Full artifact.",
             }]
           : [];
       })
@@ -61,6 +114,22 @@ function resultContent(value: unknown, isError = false) {
     structuredContent: structured,
     isError,
   };
+}
+
+function resultContent(value: unknown, isError = false) {
+  const structured = compactStructured(object(value));
+  const envelope = resultEnvelope(structured, isError);
+  if (Buffer.byteLength(JSON.stringify(envelope)) <= MCP_RESULT_BUDGET) {
+    return envelope;
+  }
+  const roster = structured.roster;
+  if (roster && typeof roster === "object" && !Array.isArray(roster)) {
+    const units = (roster as { units?: unknown[] }).units;
+    if (Array.isArray(units) && units.length > 4) {
+      (roster as { units: unknown[] }).units = units.slice(0, 4);
+    }
+  }
+  return resultEnvelope(structured, isError);
 }
 
 function operationResult(operation: OperationSummary) {

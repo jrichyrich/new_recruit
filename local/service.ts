@@ -10,6 +10,7 @@ import {
   deliverRosterToNewRecruit,
   getNewRecruitConnectionStatus,
 } from "./new-recruit/companion";
+import { reconcileUncertainNewRecruitMutation } from "./new-recruit/cache";
 import {
   analyzeRosterMatchup,
   compareRosterRevision,
@@ -27,6 +28,9 @@ export async function createLocalRosterPilotService(): Promise<RosterPilotServic
     rootDirectory: path.join(rosterPilotSupportDirectory(), "lean-v1"),
     newRecruitStatus: getNewRecruitConnectionStatus,
     deliverToNewRecruit: deliverRosterToNewRecruit,
+    reconcileNewRecruitMutation: async (input) => {
+      await reconcileUncertainNewRecruitMutation(input);
+    },
     runStress: (roster, opponentFactionId, options) =>
       runRosterStressTest(
         roster,

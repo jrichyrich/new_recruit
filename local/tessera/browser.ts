@@ -494,6 +494,12 @@ export type TesseraBrowserInput = {
   playerSimulationInput?: TesseraPreparedRoster["simulationInput"];
   opponentSimulationInput?: TesseraPreparedRoster["simulationInput"];
   licenseKey?: string;
+  /**
+   * Resolve the premium key only if the live session still shows Army vs
+   * Army as locked. An already unlocked Chrome session must not retrieve
+   * Keychain credentials.
+   */
+  getLicenseKey?: () => Promise<string>;
   analysisMode?: TesseraAnalysisMode;
   phases?: readonly TesseraPhase[];
   metrics?: readonly TesseraMetric[];
@@ -2026,7 +2032,7 @@ async function unlockPremium(
       .first();
     if (await matrix.isVisible().catch(() => false)) {
       const label = await matrix.innerText().catch(() => "");
-      if (!/🔒|locked|premium/i.test(label)) {
+      if (!armyMatrixLooksLocked(label)) {
         unlocked = true;
         break;
       }
@@ -2086,9 +2092,26 @@ async function ensureRosterPage(
   });
 }
 
+async function resolveTesseraLicenseKey(
+  license: Pick<TesseraBrowserInput, "licenseKey" | "getLicenseKey"> | undefined,
+): Promise<string> {
+  const existing = license?.licenseKey?.trim();
+  if (existing) return existing;
+  const resolved = (await license?.getLicenseKey?.())?.trim();
+  if (resolved) return resolved;
+  throw new TesseraAutomationError(
+    "TESSERA_PREMIUM_KEY_ABSENT",
+    "Tessera Army vs Army requires a configured premium key.",
+  );
+}
+
+function armyMatrixLooksLocked(label: string): boolean {
+  return /🔒/.test(label) || /\blocked\b/i.test(label);
+}
+
 async function openArmyMatrix(
   page: Page,
-  licenseKey?: string,
+  license: Pick<TesseraBrowserInput, "licenseKey" | "getLicenseKey"> | undefined,
   allowedOrigin = new URL(TESSERA_URL).origin,
   unlockAttempted = false,
 ): Promise<void> {
@@ -2097,13 +2120,8 @@ async function openArmyMatrix(
     .first();
   if (await direct.isVisible().catch(() => false)) {
     const label = await direct.innerText().catch(() => "");
-    if (/🔒|locked|premium/i.test(label)) {
-      if (!licenseKey) {
-        throw new TesseraAutomationError(
-          "TESSERA_PREMIUM_KEY_ABSENT",
-          "Tessera Army vs Army requires a configured premium key.",
-        );
-      }
+    if (armyMatrixLooksLocked(label)) {
+      const licenseKey = await resolveTesseraLicenseKey(license);
       if (unlockAttempted) {
         throw new TesseraAutomationError(
           "TESSERA_PREMIUM_STILL_LOCKED",
@@ -2112,7 +2130,7 @@ async function openArmyMatrix(
       }
       await direct.click();
       await unlockPremium(page, licenseKey, allowedOrigin);
-      return openArmyMatrix(page, licenseKey, allowedOrigin, true);
+      return openArmyMatrix(page, license, allowedOrigin, true);
     }
     await direct.click();
     return;
@@ -2130,13 +2148,8 @@ async function openArmyMatrix(
     );
   }
   const label = await matrix.innerText().catch(() => "");
-  if (/🔒|locked|premium/i.test(label)) {
-    if (!licenseKey) {
-      throw new TesseraAutomationError(
-        "TESSERA_PREMIUM_KEY_ABSENT",
-        "Tessera Army vs Army requires a configured premium key.",
-      );
-    }
+  if (armyMatrixLooksLocked(label)) {
+    const licenseKey = await resolveTesseraLicenseKey(license);
     if (unlockAttempted) {
       throw new TesseraAutomationError(
         "TESSERA_PREMIUM_STILL_LOCKED",
@@ -2145,7 +2158,7 @@ async function openArmyMatrix(
     }
     await matrix.click();
     await unlockPremium(page, licenseKey, allowedOrigin);
-    return openArmyMatrix(page, licenseKey, allowedOrigin, true);
+    return openArmyMatrix(page, license, allowedOrigin, true);
   }
   await matrix.click();
 }
@@ -3652,7 +3665,7 @@ export async function runTesseraBrowserMatchup(
     if (preparedSavedListReuse) {
       await openArmyMatrix(
         page,
-        input.licenseKey,
+        input,
         matrixOrigin,
       );
       let inspection = await inspectSavedListReuse(
@@ -3674,7 +3687,7 @@ export async function runTesseraBrowserMatchup(
         await ensureRosterPage(page, timeout);
         await openArmyMatrix(
           page,
-          input.licenseKey,
+          input,
           matrixOrigin,
         );
         const refreshed = await inspectSavedListReuse(
@@ -3744,7 +3757,7 @@ export async function runTesseraBrowserMatchup(
               );
         await openArmyMatrix(
           page,
-          input.licenseKey,
+          input,
           matrixOrigin,
         );
       } else {
@@ -3803,7 +3816,7 @@ export async function runTesseraBrowserMatchup(
       );
       await openArmyMatrix(
         page,
-        input.licenseKey,
+        input,
         matrixOrigin,
       );
     }
@@ -3836,7 +3849,7 @@ export async function runTesseraBrowserMatchup(
       await page.reload({ waitUntil: "domcontentloaded", timeout });
       await openArmyMatrix(
         page,
-        input.licenseKey,
+        input,
         matrixOrigin,
       );
       let recovered = false;
@@ -3925,7 +3938,7 @@ export async function runTesseraBrowserMatchup(
           }
           await openArmyMatrix(
             page,
-            input.licenseKey,
+            input,
             matrixOrigin,
           );
         }

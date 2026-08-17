@@ -32,6 +32,7 @@ import {
   readNewRecruitRunInventory,
   reconcileNewRecruitMutationReceipt,
   reconcileNewRecruitRoszMutationReceipt,
+  reconcileUncertainNewRecruitMutation,
   recordNewRecruitReuseReceipt,
   restoreNewRecruitMutationArtifactFromTesseraRun,
   storeNewRecruitCache,
@@ -179,29 +180,36 @@ test("attributes nested enhancement points to the owning character", () => {
 });
 
 test("accepts only catalogue-completed equipment encoded by the parent model", () => {
-  const archive = (childName?: string) => zipSync({
-    "venatari.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+  const archive = (modelName: string, childName?: string) => zipSync({
+    "completed.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
 <roster gameSystemId="system" gameSystemRevision="8">
   <costs><cost name="pts" value="150" /></costs>
   <forces><force catalogueId="custodes" catalogueRevision="7">
-    <selections><selection entryId="venatari" name="Venatari Custodians" number="1" type="unit">
-      <selections><selection entryId="buckler-model" name="Venatari Custodian (Kinetic Destroyer &amp; Tarsus Buckler)" number="3" type="model">
+    <selections><selection entryId="unit" name="Specialists" number="1" type="unit">
+      <selections><selection entryId="specialist-model" name="${modelName}" number="1" type="model">
         ${childName
-          ? `<selections><selection entryId="catalogue-child" name="${childName}" number="3" type="upgrade"></selection></selections>`
+          ? `<selections><selection entryId="catalogue-child" name="${childName}" number="1" type="upgrade"></selection></selections>`
           : ""}
       </selection></selections>
     </selection></selections>
   </force></forces>
 </roster>`),
   });
-  const source = inspectRoszGameplaySnapshot(archive());
-  const completed = inspectRoszGameplaySnapshot(archive("Tarsis buckler"));
-  const unrelated = inspectRoszGameplaySnapshot(archive("Teleport homer"));
+  const venatari = "Venatari Custodian (Kinetic Destroyer &amp; Tarsus Buckler)";
+  const alchemyk = "Veteran Guardsman w/ Alchemyk counteragents";
+  const source = inspectRoszGameplaySnapshot(archive(venatari));
+  const completed = inspectRoszGameplaySnapshot(archive(venatari, "Tarsis buckler"));
+  const unrelated = inspectRoszGameplaySnapshot(archive(venatari, "Teleport homer"));
+  const renamedKit = inspectRoszGameplaySnapshot(archive(alchemyk, "Servo-scribes"));
 
   assert.deepEqual(compareRoszGameplaySnapshots(source, completed), []);
   assert.deepEqual(
     compareRoszGameplaySnapshots(source, unrelated),
     ["selection-tree"],
+  );
+  assert.deepEqual(
+    compareRoszGameplaySnapshots(inspectRoszGameplaySnapshot(archive(alchemyk)), renamedKit),
+    [],
   );
 });
 
@@ -516,20 +524,22 @@ test("created-artifact retention failure seals evidence and releases its lease",
               error.code === "ENOENT",
           ),
       );
-      await assert.rejects(
-        beginNewRecruitMutationReceipt({
-          roster: candidate,
-          runId: "must-not-redeliver",
+      const retry = await beginNewRecruitMutationReceipt({
+        roster: candidate,
+        runId: "recover-missing-artifact",
+        expectedSourceRoszSha256: sourceSha256,
+      });
+      assert.equal(retry.runId, "recover-missing-artifact");
+      await retry.finalize({
+        outcome: "not-created",
+        connectorEvent: connectorEvent({
+          id: "recover-missing-artifact-event",
+          origin: "in-memory",
+          outcome: "failed",
         }),
-        (error: unknown) =>
-          Boolean(
-            error &&
-              typeof error === "object" &&
-              "code" in error &&
-              error.code ===
-                "NEW_RECRUIT_MUTATION_ALREADY_CREATED",
-          ),
-      );
+        message:
+          "A created list without a retained artifact must not deadlock a later delivery.",
+      });
     },
   );
 });
@@ -1515,6 +1525,125 @@ test("uncertain receipts block redelivery until guided reconciliation", async ()
                 "NEW_RECRUIT_MUTATION_ALREADY_CREATED",
           ),
       );
+    },
+  );
+});
+
+test("a created receipt allows a later delivery when the source ROSZ hash changes", async () => {
+  await withSupportDirectory(
+    "new-recruit-source-hash-redeliver",
+    async () => {
+      const candidate = roster();
+      const first = await beginNewRecruitMutationReceipt({
+        roster: candidate,
+        runId: "hash-a-run",
+        expectedSourceRoszSha256: "a".repeat(64),
+      });
+      await first.finalize({
+        outcome: "created",
+        connectorEvent: connectorEvent({
+          id: "hash-a-event",
+          origin: "new-remote",
+          outcome: "verified",
+          remoteId: "https://www.newrecruit.eu/app/Lists/hash-a",
+        }),
+        message: "Created the first source ROSZ.",
+      });
+      const sameHashWithoutArtifact =
+        await beginNewRecruitMutationReceipt({
+          roster: candidate,
+          runId: "hash-a-retry-without-artifact",
+          expectedSourceRoszSha256: "a".repeat(64),
+        });
+      assert.equal(
+        sameHashWithoutArtifact.runId,
+        "hash-a-retry-without-artifact",
+      );
+      await sameHashWithoutArtifact.finalize({
+        outcome: "not-created",
+        connectorEvent: connectorEvent({
+          id: "hash-a-retry-event",
+          origin: "in-memory",
+          outcome: "failed",
+        }),
+        message:
+          "A created list without a retained artifact must not deadlock a later delivery.",
+      });
+      const second = await beginNewRecruitMutationReceipt({
+        roster: candidate,
+        runId: "hash-b-run",
+        expectedSourceRoszSha256: "b".repeat(64),
+      });
+      assert.equal(second.runId, "hash-b-run");
+      await second.finalize({
+        outcome: "not-created",
+        connectorEvent: connectorEvent({
+          id: "hash-b-event",
+          origin: "in-memory",
+          outcome: "failed",
+        }),
+        message: "The changed source ROSZ was allowed to start a new attempt.",
+      });
+    },
+  );
+});
+
+test("uncertain remote lists can be reconciled as created from observed evidence", async () => {
+  await withSupportDirectory(
+    "new-recruit-uncertain-created-reconcile",
+    async () => {
+      const candidate = roster();
+      const first = await beginNewRecruitMutationReceipt({
+        roster: candidate,
+        runId: "uncertain-created-run",
+        expectedSourceRoszSha256: "a".repeat(64),
+      });
+      await first.finalize({
+        outcome: "uncertain",
+        connectorEvent: connectorEvent({
+          id: "uncertain-created-event",
+          origin: "new-remote",
+          outcome: "uncertain",
+          remoteId:
+            "https://www.newrecruit.eu/app/Lists/observed",
+        }),
+        message: "10x Reiver Squad was not found.",
+      });
+      await assert.rejects(
+        reconcileUncertainNewRecruitMutation({
+          roster: candidate,
+          outcome: "not-created",
+          message: "Must not deny a remote list that already exists.",
+        }),
+        (error: unknown) =>
+          Boolean(
+            error &&
+              typeof error === "object" &&
+              "code" in error &&
+              error.code === "NEW_RECRUIT_MUTATION_FINALIZATION_INVALID",
+          ),
+      );
+      const reconciled = await reconcileUncertainNewRecruitMutation({
+        roster: candidate,
+        outcome: "created",
+        message: "Inspected the existing New Recruit list URL.",
+      });
+      assert.equal(reconciled.attempts[0]?.outcome, "created");
+      const retry = await beginNewRecruitMutationReceipt({
+        roster: candidate,
+        runId: "corrected-rosz-run",
+        expectedSourceRoszSha256: "b".repeat(64),
+      });
+      assert.equal(retry.runId, "corrected-rosz-run");
+      await retry.finalize({
+        outcome: "not-created",
+        connectorEvent: connectorEvent({
+          id: "corrected-rosz-event",
+          origin: "in-memory",
+          outcome: "failed",
+        }),
+        message: "Changed source ROSZ was allowed after created reconciliation.",
+      });
     },
   );
 });

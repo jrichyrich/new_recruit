@@ -130,14 +130,13 @@ function failure(error: unknown): WorkerFailure {
 
 async function analyzeOnce(input: WorkerRequest): Promise<TesseraBrowserResult> {
   await validateWorkerInputs(input);
-  const licenseKey = await retrieveLicenseKey(input.brokerPath);
   return runTesseraBrowserMatchup({
     profileDirectory: input.profileDirectory,
     playerRoszPath: input.playerRoszPath,
     playerName: input.playerName,
     opponentRoszPath: input.opponentRoszPath,
     opponentName: input.opponentName,
-    licenseKey,
+    getLicenseKey: () => retrieveLicenseKey(input.brokerPath),
     analysisMode: input.analysisMode,
     phases: input.phases,
     metrics: input.metrics,
@@ -236,7 +235,6 @@ async function runPersistentWorker(): Promise<void> {
         profileDirectory = input.profileDirectory;
         semanticSnapshotCacheDirectory =
           input.semanticSnapshotCacheDirectory ?? null;
-        licenseKey ??= await retrieveLicenseKey(input.brokerPath);
         const data = await runTesseraBrowserMatchup(
           {
             profileDirectory: input.profileDirectory,
@@ -244,7 +242,10 @@ async function runPersistentWorker(): Promise<void> {
             playerName: input.playerName,
             opponentRoszPath: input.opponentRoszPath,
             opponentName: input.opponentName,
-            licenseKey,
+            getLicenseKey: async () => {
+              licenseKey ??= await retrieveLicenseKey(input.brokerPath);
+              return licenseKey;
+            },
             analysisMode: input.analysisMode,
             phases: input.phases,
             metrics: input.metrics,

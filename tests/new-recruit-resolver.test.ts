@@ -408,6 +408,56 @@ test("duplicate same-name catalogue models are not treated as ambiguous", () => 
   assert.equal(modelCounts.get("Death Korps Trooper w/ Meltagun"), 1);
 });
 
+test("Krieg Command Squad keeps Master Vox distinct from Regimental Standard", () => {
+  const mapping =
+    newRecruitCatalogueMappings.factions["astra-militarum"].units[
+      "krieg-command-squad"
+    ];
+  assert.ok(mapping);
+  const resolved = resolveNewRecruitUnit(mapping, {
+    unitId: "krieg-command-squad",
+    name: "Krieg Command Squad",
+    modelCount: 6,
+    equipment: [
+      { itemId: "boltgun-krieg-command-squad", name: "Boltgun", count: 1 },
+      {
+        itemId: "chainsword-krieg-command-squad",
+        name: "Chainsword",
+        count: 1,
+      },
+      {
+        itemId: "close-combat-weapon-krieg-command-squad",
+        name: "Close combat weapon",
+        count: 4,
+      },
+      { itemId: "lasgun", name: "Lasgun", count: 2 },
+      {
+        itemId: "laspistol-krieg-command-squad",
+        name: "Laspistol",
+        count: 3,
+      },
+      {
+        itemId: "power-weapon-krieg-command-squad",
+        name: "Power weapon",
+        count: 1,
+      },
+    ],
+  });
+  assert.equal(resolved.ok, true, resolved.ok ? undefined : resolved.reason);
+  if (!resolved.ok) return;
+  const names = resolved.models.map((model) => model.reference.name);
+  assert.equal(names.length, 6);
+  assert.equal(
+    names.filter((name) => name === "Veteran Guardsman w/ Master vox").length,
+    1,
+  );
+  assert.equal(
+    names.filter((name) => name === "Veteran Guardsman w/ Regimental standard")
+      .length,
+    1,
+  );
+});
+
 test("Reiver Squad maps regular models to Reivers instead of extra Sergeants", () => {
   const mapping =
     newRecruitCatalogueMappings.factions["adeptus-astartes"].units[

@@ -541,6 +541,12 @@ async function exists(filename: string): Promise<boolean> {
   }
 }
 
+function credentialsAllowSessionReuse(
+  state: string | undefined,
+): boolean {
+  return state === "ready" || state === "disabled";
+}
+
 export async function getTesseraConnectionStatus(): Promise<
   ResultEnvelope<TesseraConnectionStatus>
 > {
@@ -581,7 +587,7 @@ export async function getTesseraConnectionStatus(): Promise<
     agentStatus.protocolCompatible &&
     installationCurrent &&
     runtimeCompatible &&
-    provider?.credentialState === "ready";
+    credentialsAllowSessionReuse(provider?.credentialState);
   return {
     ok: true,
     data: {
@@ -662,7 +668,7 @@ export async function getTesseraConnectionStatus(): Promise<
             {
               code: "CREDENTIAL_RELEASE_DISABLED",
               message:
-                "Tessera Website credential release is disabled until an authenticated native consumer is available. The explicit local-engine route remains available.",
+                "Tessera Website credential release is disabled. Website stress can still reuse an already authenticated browser session; a login or premium unlock cannot retrieve a stored key.",
               severity: "warn",
             },
           ]
