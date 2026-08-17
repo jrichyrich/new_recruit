@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 
 export type RoszGameplaySnapshot = {
   schemaVersion: 1;
@@ -363,4 +363,112 @@ export function compareRoszGameplaySnapshots(
     mismatches.push("selection-tree");
   }
   return mismatches;
+}
+
+type CompositionFrame = {
+  start: number;
+  selfClosing: boolean;
+  type: string;
+  group: string;
+  childTypes: string[];
+};
+
+function isUnitCompositionWrapper(
+  frame: CompositionFrame,
+  parentType: string | undefined,
+): boolean {
+  if (frame.type !== "upgrade" || parentType !== "unit") return false;
+  if (frame.group === "unit composition") return true;
+  return (
+    frame.childTypes.length > 0 &&
+    frame.childTypes.every((child) => child === "model")
+  );
+}
+
+function compositionChildSelections(wrapperXml: string): string {
+  const openEnd = wrapperXml.indexOf(">") + 1;
+  const closeStart = wrapperXml.lastIndexOf("</selection>");
+  if (openEnd <= 0 || closeStart < openEnd) return "";
+  const body = wrapperXml.slice(openEnd, closeStart).trim();
+  const wrapped = body.match(/^<selections>([\s\S]*)<\/selections>$/i);
+  return wrapped ? wrapped[1] : body;
+}
+
+/**
+ * New Recruit often nests models under a costless "Unit Composition" upgrade.
+ * Tessera's website parser counts that wrapper as another unit, so website
+ * import hoists the models and removes the wrapper before upload.
+ */
+export function flattenRosXmlUnitCompositionWrappers(xml: string): string {
+  let current = xml;
+  for (;;) {
+    const hoisted = hoistFirstUnitCompositionWrapper(current);
+    if (hoisted === null) return current;
+    current = hoisted;
+  }
+}
+
+function hoistFirstUnitCompositionWrapper(xml: string): string | null {
+  const tokenRe = /<selection\b[^>]*\/>|<selection\b[^>]*>|<\/selection>/g;
+  const stack: CompositionFrame[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = tokenRe.exec(xml))) {
+    const token = match[0];
+    if (token === "</selection>") {
+      const frame = stack.pop();
+      if (!frame) continue;
+      const parent = stack.at(-1);
+      if (isUnitCompositionWrapper(frame, parent?.type)) {
+        const end = match.index + token.length;
+        return (
+          xml.slice(0, frame.start) +
+          compositionChildSelections(xml.slice(frame.start, end)) +
+          xml.slice(end)
+        );
+      }
+      parent?.childTypes.push(frame.type);
+      continue;
+    }
+    const attrs = attributes(token);
+    const frame: CompositionFrame = {
+      start: match.index,
+      selfClosing: token.endsWith("/>"),
+      type: normalized(attrs.type),
+      group: normalized(attrs.group),
+      childTypes: [],
+    };
+    if (frame.selfClosing) {
+      const parent = stack.at(-1);
+      if (isUnitCompositionWrapper(frame, parent?.type)) {
+        return xml.slice(0, frame.start) + xml.slice(match.index + token.length);
+      }
+      parent?.childTypes.push(frame.type);
+      continue;
+    }
+    stack.push(frame);
+  }
+  return null;
+}
+
+export function flattenRoszUnitCompositionWrappers(
+  content: Uint8Array,
+): Uint8Array {
+  let entries: Record<string, Uint8Array>;
+  try {
+    entries = unzipSync(content);
+  } catch {
+    return content;
+  }
+  const rosterEntries = Object.entries(entries).filter(([name]) =>
+    name.toLocaleLowerCase().endsWith(".ros"),
+  );
+  if (rosterEntries.length !== 1) return content;
+  const [name, bytes] = rosterEntries[0];
+  const xml = strFromU8(bytes);
+  const flattened = flattenRosXmlUnitCompositionWrappers(xml);
+  if (flattened === xml) return content;
+  return zipSync({
+    ...entries,
+    [name]: strToU8(flattened),
+  });
 }

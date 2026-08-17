@@ -44,6 +44,7 @@ import {
 import { prepareRosterForTessera } from "../local/tessera/companion";
 import {
   compareRoszGameplaySnapshots,
+  flattenRoszUnitCompositionWrappers,
   inspectRoszGameplaySnapshot,
 } from "../local/tessera/rosz-integrity";
 import {
@@ -202,6 +203,83 @@ test("accepts only catalogue-completed equipment encoded by the parent model", (
   assert.deepEqual(
     compareRoszGameplaySnapshots(source, unrelated),
     ["selection-tree"],
+  );
+});
+
+test("Tessera import flattens New Recruit unit-composition wrappers onto the parent unit", () => {
+  const archive = zipSync({
+    "krieg.ros": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<roster gameSystemId="system" gameSystemRevision="8" generatedBy="https://www.newrecruit.eu">
+  <costs><cost name="pts" value="190" /></costs>
+  <forces><force catalogueId="am" catalogueRevision="1">
+    <selections>
+      <selection entryId="dk" name="Death Korps of Krieg" number="1" type="unit">
+        <selections>
+          <selection entryId="size" name="2 Death Korps Watchmaster and 18 Death Korps Troopers" number="1" type="upgrade" group="Unit Composition">
+            <selections>
+              <selection entryId="wm" name="Death Korps Watchmaster" number="2" type="model">
+                <selections><selection entryId="pistol" name="Laspistol" number="2" type="upgrade"></selection></selections>
+              </selection>
+              <selection entryId="tr" name="Death Korps Trooper" number="18" type="model"></selection>
+            </selections>
+          </selection>
+        </selections>
+      </selection>
+      <selection entryId="eng" name="Tech-Priest Enginseer" number="1" type="model"></selection>
+    </selections>
+  </force></forces>
+</roster>`),
+  });
+  const flattened = flattenRoszUnitCompositionWrappers(archive);
+  const xml = strFromU8(
+    Object.entries(unzipSync(flattened)).find(([name]) =>
+      name.toLocaleLowerCase().endsWith(".ros"),
+    )![1],
+  );
+  assert.doesNotMatch(xml, /Unit Composition/i);
+  assert.match(xml, /name="Laspistol"/);
+  const parsed = inspectRoszGameplaySnapshot(flattened).selections.map(
+    (entry) => JSON.parse(entry) as {
+      ancestry: string[];
+      name: string;
+      type: string;
+      group: string;
+      number: number | null;
+    },
+  );
+  assert.equal(
+    parsed.filter((selection) => selection.group === "unit composition").length,
+    0,
+  );
+  const models = parsed
+    .filter(
+      (selection) =>
+        selection.type === "model" &&
+        selection.name.startsWith("death korps"),
+    )
+    .sort((left, right) => left.name.localeCompare(right.name));
+  assert.equal(models.length, 2);
+  assert.deepEqual(
+    models.map((model) => [
+      model.name,
+      model.number,
+      model.ancestry.map((entry) => entry.split("|")[1]),
+    ]),
+    [
+      ["death korps trooper", 18, ["death korps of krieg"]],
+      ["death korps watchmaster", 2, ["death korps of krieg"]],
+    ],
+  );
+  const summary = inspectEnrichedRosz(flattened);
+  assert.equal(summary.units.length, 2);
+  assert.equal(
+    summary.units.find((unit) => unit.name === "Death Korps of Krieg")?.modelCount,
+    20,
+  );
+  const again = flattenRoszUnitCompositionWrappers(flattened);
+  assert.deepEqual(
+    inspectRoszGameplaySnapshot(again).selections,
+    inspectRoszGameplaySnapshot(flattened).selections,
   );
 });
 

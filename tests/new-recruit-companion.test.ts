@@ -75,6 +75,15 @@ test("Keychain broker releases credentials only to the local-agent consumer", as
   );
 });
 
+test("Tessera website import flattens unit-composition wrappers before upload", async () => {
+  const source = await readFile(
+    path.resolve("local", "tessera", "browser.ts"),
+    "utf8",
+  );
+  assert.match(source, /flattenRoszUnitCompositionWrappers/);
+  assert.match(source, /materializeTesseraImportRosz/);
+});
+
 test(
   "compiled Keychain broker rejects retrieve without the local-agent consumer token",
   { skip: process.platform !== "darwin" },
