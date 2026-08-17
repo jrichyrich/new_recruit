@@ -367,6 +367,8 @@ test("canonicalizes structured build names and known-faction opponent scope", as
     assert.ok(roster.units.some((unit) =>
       unit.unitId === "shield-captain" && unit.isWarlord
     ));
+    assert.ok((result.roster?.units.length ?? 0) > 1);
+    assert.equal(result.roster?.units.length, result.roster?.unitCount);
     assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 4_096);
     const comparison = result.result?.opponentComparison as {
       status: "complete" | "bounded" | "degraded";

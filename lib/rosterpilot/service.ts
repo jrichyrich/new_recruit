@@ -1675,7 +1675,7 @@ export class RosterPilotService {
       state: "completed",
       message: completionMessage,
       rosterRef: stored,
-      roster: this.#summarizeRoster(selectedRoster, comparison ? 1 : 12),
+      roster: this.#summarizeRoster(selectedRoster),
       opponentRef: input.opponentRef ?? null,
       opponent: opponent ? this.#summarizeRoster(opponent, 0) : null,
       result: explanation.data

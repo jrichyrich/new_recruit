@@ -7,6 +7,7 @@ import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 
 import {
+  buildRoster,
   currentRosterSourceData,
   type ProfilePolicyV1,
 } from "../lib/rosterpilot";
@@ -16,6 +17,7 @@ import {
   runLocalTesseraEngineMatchup,
 } from "../local/tessera/local-engine";
 import {
+  compileRosterForLocalTesseraEngine,
   LOCAL_TESSERA_COMPILER_VERSION,
   localInputSha256,
   serializeLocalTesseraEngineInput,
@@ -24,7 +26,11 @@ import {
 } from "../local/tessera/local-engine-input";
 import { composeSelectedLocalTesseraFormations } from
   "../local/tessera/local-engine-formation";
-import { profilePolicyHash } from "../local/tessera/profile-policy";
+import {
+  aggregateProfileRequirements,
+  profilePolicyHash,
+  profilePolicyScaffold,
+} from "../local/tessera/profile-policy";
 import {
   activationEnvelopeTesseraScenarioPolicyContractV2,
   withSelectedTesseraAttachmentBindingsV2,
@@ -822,4 +828,47 @@ test("local runner rejects unknown frozen settings", async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("compiles Krieg Command Squad wargear variants onto datasheet profiles", () => {
+  const built = buildRoster({
+    playerFaction: "astra-militarum",
+    pointsLimit: 500,
+    requiredUnitIds: ["krieg-command-squad"],
+    name: "Krieg command compile",
+    allowNamedCharacters: false,
+  });
+  assert.equal(
+    built.ok,
+    true,
+    built.violations.map((violation) => violation.message).join("; "),
+  );
+  const command = built.data?.units.find(
+    (unit) => unit.unitId === "krieg-command-squad",
+  );
+  assert.ok(command);
+  const isolated = {
+    ...built.data!,
+    units: [{ ...command, isWarlord: true }],
+    totalPoints: command.points,
+  };
+  const policy = profilePolicyScaffold(
+    aggregateProfileRequirements([isolated]),
+  );
+  const frozen = {
+    ...policy,
+    entries: policy.entries.map((entry) => ({
+      ...entry,
+      selectedProfile: entry.selectedProfile
+        .replace(/^SELECT_ONE_OF:\s*/u, "")
+        .split("|")[0]
+        .trim(),
+    })),
+  };
+  const compiled = compileRosterForLocalTesseraEngine(isolated, frozen);
+  assert.ok(
+    compiled.units.some((unit) =>
+      unit.name.toLocaleLowerCase().includes("krieg command")
+    ),
+  );
 });

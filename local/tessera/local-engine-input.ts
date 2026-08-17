@@ -433,6 +433,35 @@ function normalized(value: string): string {
   return normalizeProfileIdentity(value);
 }
 
+function compositionModelProfileIndex(
+  model: { name: string; profile_name?: string | null },
+  profileIndexByName: Map<string, number>,
+): number | undefined {
+  const candidates = [
+    model.profile_name,
+    model.name,
+    model.name.replace(/\s*\([^)]*\)\s*$/u, ""),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate?.trim()) continue;
+    const index = profileIndexByName.get(normalized(candidate));
+    if (index !== undefined) return index;
+  }
+  const modelKey = normalized(model.profile_name || model.name);
+  let best: { index: number; length: number } | undefined;
+  for (const [profileName, index] of profileIndexByName) {
+    if (
+      modelKey === profileName ||
+      modelKey.startsWith(`${profileName} `)
+    ) {
+      if (!best || profileName.length > best.length) {
+        best = { index, length: profileName.length };
+      }
+    }
+  }
+  return best?.index;
+}
+
 function canonicalKeyword(input: {
   keywordId: string;
   name: string;
@@ -603,12 +632,11 @@ function defensiveProfiles(input: {
   const profileIndexForModel = (
     model: (typeof modelRules)[number],
   ): number => {
-    const profileName = model.profile_name ?? model.name;
-    const index = profileIndexByName.get(normalized(profileName));
+    const index = compositionModelProfileIndex(model, profileIndexByName);
     if (index === undefined) {
       throw codedError(
         "TESSERA_LOCAL_MIXED_DEFENSIVE_PROFILE_UNRESOLVED",
-        `${input.selection.name} composition model ${model.name} maps to unknown defensive profile ${profileName}.`,
+        `${input.selection.name} composition model ${model.name} maps to unknown defensive profile ${model.profile_name ?? model.name}.`,
       );
     }
     return index;
@@ -722,7 +750,7 @@ function defensiveProfiles(input: {
       count === 0 ? [`${profiles[index].name} x0`] : [],
     ),
     reason:
-      "Model-profile counts were uniquely resolved from the active bundle's explicit profile_name mappings and buildable composition tier.",
+      "Model-profile counts were uniquely resolved from the active bundle's composition models, datasheet profiles, and buildable composition tier.",
   });
   return { base: toBaseEngine(baseEntry.profile), extras };
 }

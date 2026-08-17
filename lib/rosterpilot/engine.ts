@@ -552,6 +552,10 @@ function resolveDetachment(detachmentId: string, factionId: string) {
   return undefined;
 }
 
+function isMatchedPlayUnit(unit: UnitView): boolean {
+  return !unit.raw.game_modes || unit.raw.game_modes.includes("matched-play");
+}
+
 function isBuildableFaction(factionId: string): boolean {
   return (
     factionUnits(factionId).some(
@@ -2014,6 +2018,8 @@ export function searchUnits(input: {
   const desiredTags = new Set(input.tags ?? []);
   const matches = inventory.data
     .filter((unit) => {
+      const raw = resolveUnit(unit.id, input.faction);
+      if (raw && !isMatchedPlayUnit(raw)) return false;
       const textMatch =
         !normalized ||
         normalizeName(
@@ -5573,7 +5579,7 @@ export function modifyRoster(
     next.name = operation.name;
   } else if (operation.type === "add" || operation.type === "replace") {
     const unit = resolveUnit(operation.unitId, draft.factionId);
-    if (!unit || unit.raw.faction_id !== draft.factionId) {
+    if (!unit) {
       return fail("UNIT_NOT_FOUND", `Unit "${operation.unitId}" is not in ${draft.factionName}.`);
     }
     const count =
