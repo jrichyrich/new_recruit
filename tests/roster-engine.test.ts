@@ -1300,7 +1300,8 @@ test("builds required support units with legal canonical bodyguard links", () =>
     const support = built.data.units.find(
       (selection) => selection.unitId === testCase.supportUnitId,
     );
-    assert.deepEqual(support?.leaderAttachment, {
+    assert.ok(support);
+    assert.deepEqual(support.leaderAttachment, {
       bodyguardUnitId: testCase.bodyguardUnitId,
       role: "support",
       provisional: false,
@@ -1324,6 +1325,27 @@ test("builds required support units with legal canonical bodyguard links", () =>
       (selection) => selection.unitId === testCase.bodyguardUnitId,
     );
     assert.ok(bodyguard);
+    const rebound = modifyRoster(built.data, {
+      type: "replace",
+      selectionId: support.selectionId,
+      unitId: testCase.supportUnitId,
+    });
+    assert.ok(
+      rebound.ok && rebound.data,
+      `${testCase.supportUnitId} replace: ${rebound.violations
+        .map((violation) => violation.message)
+        .join("; ")}`,
+    );
+    assert.deepEqual(
+      rebound.data.units.find(
+        (selection) => selection.selectionId === support.selectionId,
+      )?.leaderAttachment,
+      {
+        bodyguardUnitId: testCase.bodyguardUnitId,
+        role: "support",
+        provisional: false,
+      },
+    );
     const staleAttachment = modifyRoster(built.data, {
       type: "remove",
       selectionId: bodyguard.selectionId,

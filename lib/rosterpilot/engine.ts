@@ -1229,6 +1229,7 @@ function attachRequiredSupportSelections(
   return selections.map((selection) => {
     const unit = resolveUnit(selection.unitId, factionId);
     if (unit?.raw.attachment_role !== "support") return selection;
+    if (selection.leaderAttachment) return selection;
     const eligibleBodyguardIds = new Set(
       dataset.bodyguardsAttachableFrom(unit.id).map((bodyguard) => bodyguard.id),
     );
@@ -5682,6 +5683,7 @@ export function modifyRoster(
     next.forceDispositionName = dispositionName(operation.forceDispositionId);
   }
 
+  next.units = attachRequiredSupportSelections(next.units, draft.factionId);
   next = stampSemanticRosterIdentity(
     recalculateDraft(next, next.units),
   );
