@@ -37,10 +37,12 @@ const runBrowserTests =
 async function runTestProcess(
   command: string,
   args: string[],
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: path.resolve("."),
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
@@ -58,25 +60,23 @@ async function runTestProcess(
   });
 }
 
-test("Keychain broker never releases reusable credentials", async () => {
+test("Keychain broker releases credentials only to the local-agent consumer", async () => {
   const source = await readFile(
     path.resolve("native", "NewRecruitKeychainBroker.swift"),
     "utf8",
   );
-  assert.doesNotMatch(source, /kSecReturnData/);
-  assert.doesNotMatch(
-    source,
-    /let (?:username|password|licenseKey): String\?/,
-  );
+  assert.match(source, /kSecReturnData/);
+  assert.match(source, /ROSTERPILOT_KEYCHAIN_CONSUMER_TOKEN/);
+  assert.match(source, /authorizedKeychainConsumer/);
   assert.match(source, /CREDENTIAL_RELEASE_DISABLED/);
   assert.match(
     source,
-    /case "retrieve":\s*credentialReleaseDisabled\(provider\)/,
+    /guard authorizedKeychainConsumer\(\) else \{\s*credentialReleaseDisabled\(provider\)/,
   );
 });
 
 test(
-  "compiled Keychain broker rejects every credential retrieval",
+  "compiled Keychain broker rejects retrieve without the local-agent consumer token",
   { skip: process.platform !== "darwin" },
   async () => {
     const build = await runTestProcess(process.execPath, [
@@ -88,14 +88,27 @@ test(
       ".build",
       "rosterpilot-keychain",
     );
-    for (const provider of ["new-recruit", "tessera"] as const) {
-      const result = await runTestProcess(broker, ["retrieve", provider]);
-      assert.equal(result.code, 5, result.stderr);
-      const response = JSON.parse(result.stdout) as Record<string, unknown>;
-      assert.deepEqual(Object.keys(response).sort(), ["code", "message", "ok"]);
-      assert.equal(response.ok, false);
-      assert.equal(response.code, "CREDENTIAL_RELEASE_DISABLED");
-      assert.equal(typeof response.message, "string");
+    const unauthorized = [
+      undefined,
+      {
+        ...process.env,
+        ROSTERPILOT_KEYCHAIN_CONSUMER_TOKEN: "0".repeat(64),
+      },
+    ];
+    for (const env of unauthorized) {
+      for (const provider of ["new-recruit", "tessera"] as const) {
+        const result = await runTestProcess(
+          broker,
+          ["retrieve", provider],
+          env,
+        );
+        assert.equal(result.code, 5, result.stderr);
+        const response = JSON.parse(result.stdout) as Record<string, unknown>;
+        assert.deepEqual(Object.keys(response).sort(), ["code", "message", "ok"]);
+        assert.equal(response.ok, false);
+        assert.equal(response.code, "CREDENTIAL_RELEASE_DISABLED");
+        assert.equal(typeof response.message, "string");
+      }
     }
   },
 );
@@ -120,6 +133,8 @@ test("local-agent installation always rebuilds the Keychain broker", async () =>
     installPreparation,
     /await run\(process\.execPath, \[\s*path\.join\(projectRoot, "scripts", "build-new-recruit-companion\.mjs"\)/,
   );
+  assert.match(source, /ensureKeychainConsumerToken/);
+  assert.match(source, /ROSTERPILOT_KEYCHAIN_CONSUMER_TOKEN/);
 });
 
 test("ensure-current reinstalls even when the TypeScript agent is current", async () => {
@@ -137,6 +152,46 @@ test("ensure-current reinstalls even when the TypeScript agent is current", asyn
     install: async () => {
       installs += 1;
       return { ...current, brokerPath: "/fixture/rebuilt-broker" };
+    },
+    restart: async () => assert.fail("restart must not replace installation"),
+  });
+  assert.equal(installs, 1);
+  assert.deepEqual(result.repairActions, ["install"]);
+  assert.equal(result.brokerPath, "/fixture/rebuilt-broker");
+});
+
+test("ensure-current reinstalls a stale local agent instead of restarting", async () => {
+  const stale: LifecycleResult = {
+    ok: false,
+    installed: true,
+    running: true,
+    launchAgentPath: "/fixture/agent.plist",
+    brokerPath: "/fixture/old-broker",
+    socketPath: "/fixture/agent.sock",
+    code: "LOCAL_AGENT_RUNTIME_STALE",
+    assessment: {
+      current: false,
+      checkoutCurrent: true,
+      buildCurrent: false,
+      protocolCurrent: true,
+      agentRuntimeFresh: false,
+      localRuntimeFresh: true,
+      issues: [
+        {
+          code: "LOCAL_AGENT_RUNTIME_STALE",
+          message: "RosterPilot source files changed after the local agent started.",
+          repair: "restart",
+          nextStep: 'Run "npm run rosterpilot -- agent ensure-current" from this checkout.',
+        },
+      ],
+    },
+  };
+  let installs = 0;
+  const result = await ensureCurrentLocalAgent({
+    status: async () => stale,
+    install: async () => {
+      installs += 1;
+      return { ...stale, ok: true, brokerPath: "/fixture/rebuilt-broker" };
     },
     restart: async () => assert.fail("restart must not replace installation"),
   });
