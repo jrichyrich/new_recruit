@@ -7,16 +7,20 @@ RosterPilot is a local-first Warhammer 40,000 roster engine with two interfaces:
 - Faction and unit research
 - Deterministic build and modify workflows that automatically rebase stored inputs when required, validate every result, and return compact explanations
 - ROS, ROSZ, JSON, text, and printable HTML artifacts
-- Confirmed authenticated New Recruit upload
+- New Recruit export and handoff artifacts
 - Exact-roster local matchup assessment
-- Tessera stress testing with either the local engine or authenticated Website upload
+- Tessera stress testing with the local engine
 - Daily/on-demand Games Workshop, 40kdc, and BSData refresh support
 
 The retired hosted web application, REST surface, Cloudflare worker, optimizers, certification runners, parity rollout tools, and durable Tessera job variants are intentionally absent.
 
 ## Install and run
 
-Requirements: Node.js 22.13 or newer, macOS for browser/keychain automation, and Google Chrome for authenticated Website workflows.
+Requirements: Node.js 22.13 or newer. New Keychain credential release and
+browser sign-in are temporarily unavailable because the broker fails closed
+until an authenticated native consumer exists. A previously authenticated New
+Recruit browser profile may remain active, so revoke that session separately
+if a full browser shutdown is required.
 
 ```sh
 npm ci
@@ -46,7 +50,9 @@ npm run rosterpilot -- stress --roster <roster-ref> \
   --suite core-3 --strategy staged
 ```
 
-A Website stress run uses `--backend website`. It returns an action-required operation; confirm it with the operation ID, revision, and `tessera.stress.run` action. This prevents an LLM from uploading or starting remote work without explicit approval. Catalogue drift is rejected by default; `options.catalogueDriftMode="diagnostic"` is the only opt-in exception, while `force` is refused. A confirmed Website action is consumed before execution and an uncertain browser outcome is recorded without an automatic retry.
+The retained Website adapter still enforces revision-checked confirmation and
+catalogue-drift policy, but its credential gate currently reports `disabled`.
+Use `--backend local-engine`; it requires no remote upload or reusable secret.
 
 ## MCP contract
 

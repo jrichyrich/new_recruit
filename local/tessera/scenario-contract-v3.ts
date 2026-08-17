@@ -756,6 +756,8 @@ export type TesseraStateResolutionPolicyV3 = z.infer<
 export type TesseraAttachmentPolicyV3 = z.infer<
   typeof TesseraAttachmentPolicyV3Schema
 >;
+export type TesseraAttachmentBindingV3 =
+  TesseraAttachmentPolicyV3["bindings"][number];
 export type TesseraCombatPolicyV3 = z.infer<
   typeof TesseraCombatPolicyV3Schema
 >;
@@ -1388,6 +1390,27 @@ export function canonicalTesseraScenarioPolicyContractV3(
     ),
     policy: canonicalPolicy(parsed.data.policy),
   };
+}
+
+export function withSelectedTesseraAttachmentBindingsV3(
+  value: TesseraScenarioPolicyContractV3,
+  bindings: readonly TesseraAttachmentBindingV3[],
+): TesseraScenarioPolicyContractV3 {
+  const contract = canonicalTesseraScenarioPolicyContractV3(value);
+  return canonicalTesseraScenarioPolicyContractV3({
+    ...contract,
+    policy: {
+      ...contract.policy,
+      modelingMode: "rules-aware",
+      attachments: {
+        mode: "selected",
+        bindings: bindings.map((binding) => ({
+          ...binding,
+          supportingSelectionIds: [...binding.supportingSelectionIds],
+        })),
+      },
+    },
+  });
 }
 
 export function tesseraScenarioPolicyContractV3Sha256(

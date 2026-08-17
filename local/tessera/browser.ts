@@ -5,7 +5,9 @@ import {
   type Page,
 } from "playwright-core";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
   ProfilePolicyV1,
   TesseraCellUncertainty,
@@ -49,6 +51,7 @@ import {
   tesseraImportedArmySemanticEvidenceIncompleteReasons,
   tesseraImportedArmySemanticSnapshotIncompleteReasons,
 } from "./website-semantic-evidence";
+import { prepareRoszForTesseraImport } from "./rosz-integrity";
 
 export const TESSERA_URL = "https://playtessera.gg/" as const;
 export const TESSERA_WEBSITE_ADAPTER_VERSION =
@@ -1808,6 +1811,42 @@ function missingExactSelectionSide(
     : null;
 }
 
+async function materializeTesseraImportRosz(filename: string): Promise<string> {
+  let original: Buffer;
+  try {
+    original = await readFile(filename);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /enoent|no such file|does not exist/i.test(error.message)
+    ) {
+      throw new TesseraAutomationError(
+        "TESSERA_ROSTER_FILE_MISSING",
+        `The roster archive "${filename}" could not be read.`,
+      );
+    }
+    throw error;
+  }
+  const prepared = prepareRoszForTesseraImport(original);
+  if (Buffer.from(prepared).equals(original)) {
+    return filename;
+  }
+  const importPath = path.join(
+    os.tmpdir(),
+    `rosterpilot-tessera-import-${randomUUID()}.rosz`,
+  );
+  await writeFile(importPath, prepared);
+  return importPath;
+}
+
+async function releaseTesseraImportRosz(
+  originalPath: string,
+  importPath: string,
+): Promise<void> {
+  if (importPath === originalPath) return;
+  await unlink(importPath).catch(() => undefined);
+}
+
 async function importRosz(
   page: Page,
   filename: string,
@@ -1846,20 +1885,22 @@ async function importRosz(
       "Tessera did not expose exactly one file input that explicitly accepts .rosz files.",
     );
   }
+  const importPath = await materializeTesseraImportRosz(filename);
   try {
-    await fileInputs.first().setInputFiles(filename);
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      /enoent|no such file|does not exist/i.test(error.message)
-    ) {
-      throw new TesseraAutomationError(
-        "TESSERA_ROSTER_FILE_MISSING",
-        `The roster archive "${filename}" could not be read.`,
-      );
+    try {
+      await fileInputs.first().setInputFiles(importPath);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /enoent|no such file|does not exist/i.test(error.message)
+      ) {
+        throw new TesseraAutomationError(
+          "TESSERA_ROSTER_FILE_MISSING",
+          `The roster archive "${filename}" could not be read.`,
+        );
+      }
+      throw error;
     }
-    throw error;
-  }
   const listName = page.getByRole("textbox", {
     name: "Save to list (army name)",
     exact: true,
@@ -1981,6 +2022,9 @@ async function importRosz(
     );
   }
   return { warnings, issues, unitCount, semanticSnapshot };
+  } finally {
+    await releaseTesseraImportRosz(filename, importPath);
+  }
 }
 
 async function unlockPremium(

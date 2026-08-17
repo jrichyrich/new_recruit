@@ -88,6 +88,17 @@ export const LocalSourceObservationV1Schema = z
           .string()
           .regex(/^sha512-[A-Za-z0-9+/]{86}==$/),
         tarballUrl: z.string().url(),
+        observedLatest: z
+          .object({
+            version: z.string().min(1).max(128),
+            distIntegrity: z
+              .string()
+              .regex(/^sha512-[A-Za-z0-9+/]{86}==$/),
+            tarballUrl: z.string().url(),
+            approval: z.enum(["approved", "review-required"]),
+          })
+          .strict()
+          .optional(),
       })
       .strict(),
     newRecruit: z

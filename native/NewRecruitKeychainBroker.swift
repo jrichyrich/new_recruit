@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import Security
 
 private enum Provider: String {
@@ -136,6 +137,49 @@ private func emitKeychainFailure(_ status: OSStatus, operation: String) -> Never
     )
 }
 
+private func credentialReleaseDisabled(_ provider: Provider) -> Never {
+    emit(
+        BrokerResponse(
+            ok: false,
+            code: "CREDENTIAL_RELEASE_DISABLED",
+            message:
+                "Reusable \(provider.rawValue) credential release is disabled until RosterPilot has an authenticated native consumer. Local workflows remain available."
+        ),
+        exitCode: 5
+    )
+}
+
+private func constantTimeEquals(_ left: String, _ right: String) -> Bool {
+    let leftBytes = Array(left.utf8)
+    let rightBytes = Array(right.utf8)
+    var difference = leftBytes.count ^ rightBytes.count
+    let limit = min(leftBytes.count, rightBytes.count)
+    if limit > 0 {
+        for index in 0..<limit {
+            difference |= Int(leftBytes[index] ^ rightBytes[index])
+        }
+    }
+    return difference == 0
+}
+
+private func authorizedKeychainConsumer() -> Bool {
+    let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        .resolvingSymlinksInPath()
+    let tokenURL = executable.appendingPathExtension("consumer")
+    guard
+        let expected = try? String(contentsOf: tokenURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+        !expected.isEmpty,
+        let provided = ProcessInfo.processInfo.environment[
+            "ROSTERPILOT_KEYCHAIN_CONSUMER_TOKEN"
+        ]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !provided.isEmpty
+    else {
+        return false
+    }
+    return constantTimeEquals(expected, provided)
+}
+
 private func configure(_ provider: Provider) -> Never {
     let initialStatus = keychainStatus(provider)
     guard initialStatus == errSecSuccess || initialStatus == errSecItemNotFound else {
@@ -249,6 +293,9 @@ private func configure(_ provider: Provider) -> Never {
 }
 
 private func retrieve(_ provider: Provider) -> Never {
+    guard authorizedKeychainConsumer() else {
+        credentialReleaseDisabled(provider)
+    }
     var query = baseQuery(provider)
     query[kSecReturnData as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitOne

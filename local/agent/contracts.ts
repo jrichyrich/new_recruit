@@ -18,8 +18,8 @@ import type {
   TesseraSavedListReuse,
 } from "../tessera/saved-list-reuse";
 
-export const LOCAL_AGENT_PROTOCOL_VERSION = 11;
-export const LOCAL_AGENT_VERSION = "1.10.0";
+export const LOCAL_AGENT_PROTOCOL_VERSION = 12;
+export const LOCAL_AGENT_VERSION = "1.11.0";
 export const LOCAL_AGENT_MAX_FRAME_BYTES = 32 * 1024 * 1024;
 
 export type CredentialState =
@@ -27,6 +27,7 @@ export type CredentialState =
   | "not-configured"
   | "keychain-locked"
   | "authorization-required"
+  | "disabled"
   | "unavailable";
 
 export type LocalAgentProviderStatus = {

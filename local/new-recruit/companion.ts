@@ -358,6 +358,15 @@ export async function getNewRecruitConnectionStatus(): Promise<
             severity: "warn",
           },
         ]
+      : newRecruitProvider?.credentialState === "disabled"
+        ? [
+          {
+            code: "CREDENTIAL_RELEASE_DISABLED",
+            message:
+              "Reusable Keychain credential release is disabled until an authenticated native consumer is available. Local exports remain available.",
+            severity: "warn",
+          },
+        ]
       : available
         ? []
         : [

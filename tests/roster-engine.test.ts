@@ -105,6 +105,23 @@ test("searches and builds real faction data across the supported catalog", () =>
   assert.equal(unitResult.ok, true);
   assert.ok(unitResult.data?.some((unit) => unit.id === "vertus-praetors"));
 
+  const spaceWolves = searchUnits({
+    faction: "space-wolves",
+    query: "Intercessor",
+    limit: 30,
+  });
+  assert.equal(spaceWolves.ok, true);
+  assert.ok(spaceWolves.data?.some((unit) => unit.id === "intercessor-squad"));
+  assert.ok(
+    spaceWolves.data?.every((unit) => unit.pointsFrom > 0),
+    "Combat Patrol-only datasheets leaked into matched-play research",
+  );
+  assert.ok(
+    spaceWolves.data?.every((unit) =>
+      !/assault force|sanguinary spearhead|vengeful brethren/i.test(unit.name)
+    ),
+  );
+
   const aeldari = buildRoster({
     faction: "aeldari",
     pointsLimit: 1000,
@@ -114,6 +131,49 @@ test("searches and builds real faction data across the supported catalog", () =>
   assert.equal(aeldari.data?.factionId, "aeldari");
   assert.ok((aeldari.data?.totalPoints ?? 0) >= 980);
   assert.ok(aeldari.data?.units.some((unit) => unit.tags.includes("mobility")));
+});
+
+test("adds a parent-catalogue unit onto a successor-faction roster", () => {
+  const built = buildRoster({
+    playerFaction: "space-wolves",
+    pointsLimit: 1_000,
+    requiredUnitIds: ["blood-claws"],
+    name: "Fenris parent catalogue add",
+  });
+  assert.equal(
+    built.ok,
+    true,
+    built.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.ok(built.data);
+  let current = built.data;
+  for (const unit of [...current.units].reverse()) {
+    if (current.totalPoints + 80 <= current.pointsLimit) break;
+    if (unit.unitId === "blood-claws" || unit.isWarlord) continue;
+    const removed = modifyRoster(current, {
+      type: "remove",
+      selectionId: unit.selectionId,
+    });
+    assert.equal(
+      removed.ok,
+      true,
+      removed.violations.map((violation) => violation.message).join("; "),
+    );
+    current = removed.data!;
+  }
+  const added = modifyRoster(current, {
+    type: "add",
+    unitId: "intercessor-squad",
+    modelCount: 5,
+  });
+  assert.equal(
+    added.ok,
+    true,
+    added.violations.map((violation) => violation.message).join("; "),
+  );
+  assert.ok(
+    added.data?.units.some((unit) => unit.unitId === "intercessor-squad"),
+  );
 });
 
 test("distinguishes the player faction from an opponent in prose", () => {
@@ -1240,7 +1300,8 @@ test("builds required support units with legal canonical bodyguard links", () =>
     const support = built.data.units.find(
       (selection) => selection.unitId === testCase.supportUnitId,
     );
-    assert.deepEqual(support?.leaderAttachment, {
+    assert.ok(support);
+    assert.deepEqual(support.leaderAttachment, {
       bodyguardUnitId: testCase.bodyguardUnitId,
       role: "support",
       provisional: false,
@@ -1264,6 +1325,27 @@ test("builds required support units with legal canonical bodyguard links", () =>
       (selection) => selection.unitId === testCase.bodyguardUnitId,
     );
     assert.ok(bodyguard);
+    const rebound = modifyRoster(built.data, {
+      type: "replace",
+      selectionId: support.selectionId,
+      unitId: testCase.supportUnitId,
+    });
+    assert.ok(
+      rebound.ok && rebound.data,
+      `${testCase.supportUnitId} replace: ${rebound.violations
+        .map((violation) => violation.message)
+        .join("; ")}`,
+    );
+    assert.deepEqual(
+      rebound.data.units.find(
+        (selection) => selection.selectionId === support.selectionId,
+      )?.leaderAttachment,
+      {
+        bodyguardUnitId: testCase.bodyguardUnitId,
+        role: "support",
+        provisional: false,
+      },
+    );
     const staleAttachment = modifyRoster(built.data, {
       type: "remove",
       selectionId: bodyguard.selectionId,

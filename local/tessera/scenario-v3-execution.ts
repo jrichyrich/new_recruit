@@ -102,6 +102,29 @@ function oneFormationValue<T>(
   return first;
 }
 
+type TesseraFormationPairPhysicalState = Omit<
+  TesseraPairPhysicalStateV3,
+  | "attackerSide"
+  | "attackerSelectionId"
+  | "targetSide"
+  | "targetSelectionId"
+>;
+
+function formationPairPhysicalState(
+  pair: TesseraPairPhysicalStateV3,
+): TesseraFormationPairPhysicalState {
+  return {
+    distanceInches: pair.distanceInches,
+    withinRange: pair.withinRange,
+    withinRapidFireRange: pair.withinRapidFireRange,
+    withinMeltaRange: pair.withinMeltaRange,
+    withinConversionRange: pair.withinConversionRange,
+    targetVisible: pair.targetVisible,
+    indirectFire: pair.indirectFire,
+    targetCondition: pair.targetCondition,
+  };
+}
+
 function keywordMatches(keyword: string, name: string): boolean {
   const normalized = keyword.trim().toLocaleUpperCase();
   return normalized === name || normalized.startsWith(`${name} `);
@@ -370,7 +393,10 @@ export function projectLocalTesseraScenarioV3Cell(input: {
       ),
     ),
   );
-  const pair = oneFormationValue(pairStates, "attacker/target pair state");
+  const pair = oneFormationValue(
+    pairStates.map(formationPairPhysicalState),
+    "attacker/target pair state",
+  );
   if (typeof pair.distanceInches !== "number") {
     executionError(
       "TESSERA_LOCAL_ENGAGEMENT_UNRESOLVED",

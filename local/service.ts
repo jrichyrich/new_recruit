@@ -92,6 +92,8 @@ export async function createLocalRosterPilotService(): Promise<RosterPilotServic
               selectedPlayerAbilityIds:
                 options.selectedPlayerAbilityIds,
               activationMode: options.activationMode,
+              selectedAttachmentBindings:
+                options.selectedAttachmentBindings,
               scenarioContract: options.backend === "local-engine"
                 ? localTesseraScenarioContract(
                     10_000,

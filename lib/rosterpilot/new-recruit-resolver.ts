@@ -587,8 +587,8 @@ function candidateForGroup(
 
 function compareCandidates(left: ModelCandidate, right: ModelCandidate): number {
   return (
-    left.nameRank - right.nameRank ||
     left.leaderRank - right.leaderRank ||
+    left.nameRank - right.nameRank ||
     right.modelEquipmentCount - left.modelEquipmentCount ||
     left.extraEquipmentCount - right.extraEquipmentCount ||
     left.model.normalizedName.localeCompare(right.model.normalizedName) ||
@@ -605,7 +605,8 @@ function candidatesAreTied(
       left.nameRank === right.nameRank &&
       left.leaderRank === right.leaderRank &&
       left.modelEquipmentCount === right.modelEquipmentCount &&
-      left.extraEquipmentCount === right.extraEquipmentCount,
+      left.extraEquipmentCount === right.extraEquipmentCount &&
+      left.model.normalizedName !== right.model.normalizedName,
   );
 }
 
@@ -669,15 +670,15 @@ export function resolveNewRecruitUnit(
   const models: ResolvedModelReference[] = [];
   const directEquipment: ResolvedEquipmentReference[] = [];
   for (const group of groups) {
-    const bestNameRank = Math.min(
-      ...mapping.models.map((model) => modelNameRank(group.modelName, model)),
-    );
     const candidates = mapping.models
       .map((model) => candidateForGroup(mapping, model, group))
       .filter((candidate): candidate is ModelCandidate => candidate !== null)
-      .filter((candidate) => candidate.nameRank === bestNameRank)
       .sort(compareCandidates);
-    const best = candidates[0];
+    const eligible =
+      group.isLeaderModel === true
+        ? candidates.filter((candidate) => candidate.nameRank === 0)
+        : candidates;
+    const best = eligible[0];
     if (!best) {
       return {
         ok: false,
@@ -686,8 +687,8 @@ export function resolveNewRecruitUnit(
         } with the selected equipment.`,
       };
     }
-    if (candidatesAreTied(best, candidates[1])) {
-      const names = candidates
+    if (candidatesAreTied(best, eligible[1])) {
+      const names = eligible
         .filter((candidate) => candidatesAreTied(best, candidate))
         .map((candidate) => candidate.model.name)
         .join(", ");

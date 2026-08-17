@@ -71,6 +71,9 @@ const STATE_FILENAME = "state.json";
 const JOB_FILENAME = "job.json";
 const NPM_REGISTRY_URL =
   "https://registry.npmjs.org/@alpaca-software%2F40kdc-data/latest";
+const RULES_PACKAGE = "@alpaca-software/40kdc-data";
+const RULES_LOCK_PATH =
+  "node_modules/@alpaca-software/40kdc-data";
 const BSDATA_REPOSITORY = "BSData/wh40k-11e";
 const BSDATA_URL = "https://github.com/BSData/wh40k-11e.git";
 const BSDATA_BRANCH = "main";
@@ -392,6 +395,8 @@ type DefaultPipelineOptions = {
   }>;
 };
 
+type ApprovedRulesSource = LocalSourceObservationV1["rules"];
+
 function stableJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
@@ -436,6 +441,84 @@ async function atomicWriteJson(
 
 async function readJson(filename: string): Promise<unknown> {
   return JSON.parse(await readFile(filename, "utf8")) as unknown;
+}
+
+async function readApprovedRulesSource(
+  projectRoot: string,
+  source: SourceManifest,
+): Promise<ApprovedRulesSource> {
+  const packageJson = await readJson(
+    path.join(projectRoot, "package.json"),
+  ) as {
+    dependencies?: Record<string, unknown>;
+  };
+  const packageLock = await readJson(
+    path.join(projectRoot, "package-lock.json"),
+  ) as {
+    lockfileVersion?: unknown;
+    packages?: Record<
+      string,
+      {
+        dependencies?: Record<string, unknown>;
+        version?: unknown;
+        resolved?: unknown;
+        integrity?: unknown;
+      }
+    >;
+  };
+  const packageVersion = packageJson.dependencies?.[RULES_PACKAGE];
+  const lockRootVersion =
+    packageLock.packages?.[""]?.dependencies?.[RULES_PACKAGE];
+  const lockEntry = packageLock.packages?.[RULES_LOCK_PATH];
+  if (
+    packageLock.lockfileVersion !== 3 ||
+    typeof packageVersion !== "string" ||
+    typeof lockRootVersion !== "string" ||
+    source.rules.package !== RULES_PACKAGE ||
+    source.rules.version !== packageVersion ||
+    packageVersion !== lockRootVersion ||
+    typeof lockEntry?.version !== "string" ||
+    packageVersion !== lockEntry.version ||
+    typeof lockEntry.resolved !== "string" ||
+    typeof lockEntry.integrity !== "string"
+  ) {
+    throw new LocalSourcePipelineError(
+      "LOCAL_SOURCE_RULES_APPROVAL_INVALID",
+      "The reviewed data source manifest, package.json, and package-lock.json do not bind one exact 40kdc rules source.",
+      { retryable: false },
+    );
+  }
+  let tarball: URL;
+  try {
+    tarball = new URL(lockEntry.resolved);
+  } catch {
+    throw new LocalSourcePipelineError(
+      "LOCAL_SOURCE_RULES_APPROVAL_INVALID",
+      "The reviewed 40kdc package-lock tarball URL is invalid.",
+      { retryable: false },
+    );
+  }
+  if (
+    tarball.protocol !== "https:" ||
+    tarball.hostname !== "registry.npmjs.org" ||
+    tarball.username !== "" ||
+    tarball.password !== "" ||
+    tarball.search !== "" ||
+    tarball.hash !== ""
+  ) {
+    throw new LocalSourcePipelineError(
+      "LOCAL_SOURCE_RULES_APPROVAL_INVALID",
+      "The reviewed 40kdc package-lock tarball is outside the allowlisted npm registry.",
+      { retryable: false },
+    );
+  }
+  return LocalSourceObservationV1Schema.shape.rules.parse({
+    package: RULES_PACKAGE,
+    version: lockEntry.version,
+    registryUrl: NPM_REGISTRY_URL,
+    distIntegrity: lockEntry.integrity,
+    tarballUrl: lockEntry.resolved,
+  });
 }
 
 function processIsAlive(pid: number): boolean {
@@ -761,6 +844,7 @@ async function discoverLocalSources(
   const source = JSON.parse(
     await readFile(path.join(projectRoot, "data", "sources.json"), "utf8"),
   ) as SourceManifest;
+  const approvedRules = await readApprovedRulesSource(projectRoot, source);
   const [npmText, bsdataText, officialResult] = await Promise.all([
     fetchBoundedText(fetchImpl, NPM_REGISTRY_URL, 15_000),
     fetchBoundedText(fetchImpl, BSDATA_API_URL, 15_000, {
@@ -789,7 +873,7 @@ async function discoverLocalSources(
     dist?: { integrity?: string; tarball?: string };
   };
   if (
-    npmPayload.name !== "@alpaca-software/40kdc-data" ||
+    npmPayload.name !== RULES_PACKAGE ||
     !npmPayload.version ||
     !npmPayload.dist?.integrity ||
     !npmPayload.dist.tarball
@@ -803,6 +887,12 @@ async function discoverLocalSources(
   ) {
     throw new Error("The 40kdc tarball is outside the allowlisted npm registry.");
   }
+  // Registry "latest" is change detection only. Executable rules remain
+  // selected from the independently reviewed dependency lock.
+  const latestRequiresReview =
+    npmPayload.version !== approvedRules.version ||
+    npmPayload.dist.integrity !== approvedRules.distIntegrity ||
+    npmPayload.dist.tarball !== approvedRules.tarballUrl;
   const bsdataPayload = JSON.parse(bsdataText) as { sha?: string };
   if (!bsdataPayload.sha?.match(/^[a-f0-9]{40}$/)) {
     throw new Error("The allowlisted BSData branch did not return an exact commit.");
@@ -815,11 +905,15 @@ async function discoverLocalSources(
   return LocalSourceObservationV1Schema.parse({
     checkedAt,
     rules: {
-      package: "@alpaca-software/40kdc-data",
-      version: npmPayload.version,
-      registryUrl: NPM_REGISTRY_URL,
-      distIntegrity: npmPayload.dist.integrity,
-      tarballUrl: npmPayload.dist.tarball,
+      ...approvedRules,
+      observedLatest: {
+        version: npmPayload.version,
+        distIntegrity: npmPayload.dist.integrity,
+        tarballUrl: npmPayload.dist.tarball,
+        approval: latestRequiresReview
+          ? "review-required"
+          : "approved",
+      },
     },
     newRecruit: {
       repository: BSDATA_REPOSITORY,
@@ -1258,16 +1352,6 @@ export function createDefaultLocalSourceUpdatePipeline(
             latestVerified = null;
           }
         }
-        if (input.bsDataCommitOverride && latestVerified) {
-          // Historical service repair must not pair an old catalogue with an
-          // unreviewed rules release. Reuse the newest rules identity that
-          // already completed local certification; the exact tarball and npm
-          // integrity remain re-fetched and reverified below.
-          observation = LocalSourceObservationV1Schema.parse({
-            ...observation,
-            rules: latestVerified.buildEvidence.sources.rules,
-          });
-        }
         const latestSources = latestVerified?.buildEvidence.sources;
         let builderChanged = false;
         if (latestVerified && input.force) {
@@ -1487,12 +1571,10 @@ export function createDefaultLocalSourceUpdatePipeline(
         );
         await runEvidence(
           "fetch",
-          "npm-install-exact-rules-source",
+          "npm-ci-reviewed-dependency-lock",
           "npm",
           [
-            "install",
-            `${observation.rules.package}@${observation.rules.version}`,
-            "--save-exact",
+            "ci",
             "--ignore-scripts",
             "--no-audit",
             "--no-fund",

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
   access,
@@ -37,6 +37,7 @@ import {
 
 const run = promisify(execFile);
 export const LOCAL_AGENT_LABEL = "com.jasonricha.rosterpilot.agent";
+const CONSUMER_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const ENSURE_CURRENT_NEXT_STEP =
   'Run "npm run rosterpilot -- agent ensure-current" from this checkout.';
 
@@ -214,6 +215,7 @@ export function renderLaunchAgent(options: {
   dataChannelUrl?: string;
   dataTrustedKeysFile?: string;
   bootstrapDataBundleDirectory?: string;
+  keychainConsumerToken: string;
 }): string {
   const loader = path.join(
     options.projectDirectory,
@@ -269,6 +271,8 @@ ${argumentsXml}
     <dict>
       <key>ROSTERPILOT_KEYCHAIN_BROKER</key>
       <string>${xml(options.brokerPath)}</string>
+      <key>ROSTERPILOT_KEYCHAIN_CONSUMER_TOKEN</key>
+      <string>${xml(options.keychainConsumerToken)}</string>
       <key>ROSTERPILOT_LOCAL_AGENT_SOCKET</key>
       <string>${xml(options.socketPath)}</string>
       <key>ROSTERPILOT_NEW_RECRUIT_PROFILE</key>
@@ -312,6 +316,23 @@ function launchDomain(): string {
   return `gui/${uid}`;
 }
 
+async function ensureKeychainConsumerToken(brokerPath: string): Promise<string> {
+  const tokenPath = `${brokerPath}.consumer`;
+  try {
+    const existing = (await readFile(tokenPath, "utf8")).trim();
+    if (CONSUMER_TOKEN_PATTERN.test(existing)) {
+      await chmod(tokenPath, 0o600);
+      return existing;
+    }
+  } catch {
+    // Create a fresh token when the companion file is absent or unreadable.
+  }
+  const token = randomBytes(32).toString("hex");
+  await writeFile(tokenPath, `${token}\n`, { mode: 0o600 });
+  await chmod(tokenPath, 0o600);
+  return token;
+}
+
 // Loading and re-verifying a large locally built bundle can take well over a
 // minute on first start. Lifecycle commands must wait for the same bounded
 // startup window as ordinary agent clients instead of reporting a false
@@ -348,11 +369,12 @@ export async function installLocalAgent(): Promise<LifecycleResult> {
     };
   }
   const staged = stagedBrokerPath();
-  if (!(await exists(staged))) {
-    await run(process.execPath, [
-      path.join(projectRoot, "scripts", "build-new-recruit-companion.mjs"),
-    ]);
-  }
+  // The staged executable is ignored build output and may predate the checked
+  // in Swift source. Rebuild on every install so ensure-current never copies
+  // an obsolete broker into the active LaunchAgent.
+  await run(process.execPath, [
+    path.join(projectRoot, "scripts", "build-new-recruit-companion.mjs"),
+  ]);
   const broker = installedBrokerPath();
   const brokerDirectory = path.dirname(broker);
   const logs = localAgentLogDirectory();
@@ -376,6 +398,7 @@ export async function installLocalAgent(): Promise<LifecycleResult> {
     ((await exists(dataBundle.bootstrapDirectory))
       ? dataBundle.bootstrapDirectory
       : undefined);
+  const keychainConsumerToken = await ensureKeychainConsumerToken(broker);
   const plistContent = renderLaunchAgent({
     nodeExecutable: process.execPath,
     projectDirectory: projectRoot,
@@ -385,6 +408,7 @@ export async function installLocalAgent(): Promise<LifecycleResult> {
     stdoutPath: path.join(logs, "agent.stdout.log"),
     stderrPath: path.join(logs, "agent.stderr.log"),
     bootstrapDataBundleDirectory,
+    keychainConsumerToken,
   });
   await writeFile(plist, plistContent, { mode: 0o600 });
   await launchctl(["bootout", launchDomain(), plist], true);
@@ -588,42 +612,24 @@ export async function ensureCurrentLocalAgent(
           } satisfies LocalAgentReadinessIssue,
         ]
       : []);
-  if (initial.ok) {
-    return {
-      ...initial,
-      initialIssues,
-      repairActions: [],
-      nextSteps: [],
-    };
-  }
-
-  const repairActions: Array<"install" | "restart"> = [];
-  const firstRepair = requiredRepair(initial);
-  repairActions.push(firstRepair);
-  let repaired =
-    firstRepair === "install"
-      ? await dependencies.install()
-      : await dependencies.restart();
-
-  if (!repaired.ok && firstRepair === "restart") {
-    repairActions.push("install");
-    repaired = await dependencies.install();
-  }
-
+  // Restarting a stale TypeScript agent is not enough: the native broker is a
+  // separately installed binary, and retrieve is gated on the LaunchAgent
+  // consumer token written during install.
+  const reinstalled = await dependencies.install();
   return {
-    ...repaired,
+    ...reinstalled,
     initialIssues,
-    repairActions,
-    nextSteps: repaired.ok
+    repairActions: ["install"],
+    nextSteps: reinstalled.ok
       ? []
-      : repaired.nextSteps?.length
-        ? repaired.nextSteps
+      : reinstalled.nextSteps?.length
+        ? reinstalled.nextSteps
         : [
             'Review "npm run doctor -- --profile tessera --refresh skip", then rerun "npm run rosterpilot -- agent ensure-current".',
           ],
-    message: repaired.ok
-      ? `The local agent is current after ${repairActions.join(" then ")}.`
-      : repaired.message,
+    message: reinstalled.ok
+      ? "The local agent and native broker are current after reinstall."
+      : reinstalled.message,
   };
 }
 
@@ -636,6 +642,7 @@ export async function uninstallLocalAgent(): Promise<LifecycleResult> {
   await rm(localAgentSpoolDirectory(), { recursive: true, force: true });
   await rm(plist, { force: true });
   await rm(installedBrokerPath(), { force: true });
+  await rm(`${installedBrokerPath()}.consumer`, { force: true });
   await rmdir(path.dirname(installedBrokerPath())).catch(
     (error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;

@@ -33,8 +33,71 @@ function resultText(value: Record<string, unknown>): string {
   return `${message}${operationId}`;
 }
 
+function compactMcpArtifacts(value: Record<string, unknown>) {
+  if (!Array.isArray(value.artifacts)) return value;
+  return {
+    ...value,
+    artifacts: value.artifacts.flatMap((candidate) => {
+      const artifact = object(candidate);
+      return typeof artifact.uri === "string" &&
+          typeof artifact.filename === "string"
+        ? [{
+            uri: artifact.uri,
+            filename: artifact.filename,
+            mimeType: artifact.mimeType,
+          }]
+        : [];
+    }),
+  };
+}
+
+function compactMcpComparison(value: Record<string, unknown>) {
+  const result = object(value.result);
+  const comparison = object(result.opponentComparison);
+  if (Object.keys(comparison).length === 0) return value;
+  const rosterRef = object(value.roster).rosterRef;
+  const recommended = object(comparison.recommended);
+  const portfolio = object(comparison.portfolio);
+  const alternatives = Array.isArray(comparison.alternatives)
+    ? comparison.alternatives.map((candidate) => {
+        const alternative = object(candidate);
+        return {
+          contrast: alternative.contrast,
+          floor: alternative.floor,
+        };
+      })
+    : [];
+  return {
+    ...value,
+    result: {
+      ...result,
+      opponentComparison: {
+        status: comparison.status,
+        scope: comparison.scope,
+        portfolio: {
+          ready: portfolio.ready,
+          intended: portfolio.intended,
+          complete: portfolio.complete,
+        },
+        coverage: comparison.coverage,
+        recommended: {
+          applied: recommended.applied,
+          ...(recommended.rosterRef !== rosterRef
+            ? { rosterRef: recommended.rosterRef }
+            : {}),
+          anchors: recommended.anchors,
+          floor: recommended.floor,
+          median: recommended.median,
+        },
+        alternatives,
+        artifact: comparison.artifact,
+      },
+    },
+  };
+}
+
 function resultContent(value: unknown, isError = false) {
-  const structured = object(value);
+  const structured = compactMcpComparison(compactMcpArtifacts(object(value)));
   const resources = Array.isArray(structured.artifacts)
     ? structured.artifacts.flatMap((candidate) => {
         const artifact = object(candidate);
@@ -48,7 +111,7 @@ function resultContent(value: unknown, isError = false) {
                 typeof artifact.mimeType === "string"
                   ? artifact.mimeType
                   : undefined,
-              description: "Full RosterPilot artifact; read only when needed.",
+              description: "Full artifact.",
             }]
           : [];
       })
@@ -81,7 +144,7 @@ export function createRosterPilotMcpServer(
     {
       title: "Run a RosterPilot workflow",
       description:
-        "Research, build, modify, export, sync, compare exact rosters, or run Tessera stress tests locally or on the website. Build options use pointsLimit (not pointLimit) and include playerFaction, opponentFaction, preferences, legendsPolicy, collectionProfile, opponentAssumptions, detachmentId, forceDispositionId, compareOpponentOptions, and comparisonDepth. Exact local stress can select optional player abilities with selectedPlayerAbilityIds or inspect all optional activations with activationMode=envelope. Stress catalogueDriftMode defaults to reject and permits only reject or diagnostic. Pass references instead of full roster documents.",
+        "Research, build, modify, export, sync, compare exact rosters, or run Tessera stress tests locally or on the website. Build options use pointsLimit (not pointLimit) and include playerFaction, opponentFaction, preferences, legendsPolicy, collectionProfile, opponentAssumptions, detachmentId, forceDispositionId, compareOpponentOptions, and comparisonDepth. Fresh exact local stress can select optional player abilities with selectedPlayerAbilityIds, inspect all optional activations with activationMode=envelope, and bind explicit leader/bodyguard selection IDs with selectedAttachmentBindings. Stress catalogueDriftMode defaults to reject and permits only reject or diagnostic. Pass references instead of full roster documents.",
       inputSchema: {
         action: z.enum([
           "research",

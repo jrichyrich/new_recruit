@@ -476,6 +476,9 @@ function startPersistentTesseraWorker(
 function credentialState(response: BrokerResponse | null): CredentialState {
   if (!response) return "unavailable";
   if (response.ok) return response.configured ? "ready" : "not-configured";
+  if (response.code === "CREDENTIAL_RELEASE_DISABLED") {
+    return "disabled";
+  }
   if (response.code === "AUTHENTICATION_CANCELLED") {
     return "authorization-required";
   }

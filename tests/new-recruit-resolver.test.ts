@@ -350,3 +350,94 @@ test("bounds combinatorial loadout resolution consistently across forced GC", ()
     v8.setFlagsFromString("--no-expose-gc");
   }
 });
+
+test("duplicate same-name catalogue models are not treated as ambiguous", () => {
+  const mapping =
+    newRecruitCatalogueMappings.factions["astra-militarum"].units[
+      "death-korps-of-krieg"
+    ];
+  assert.ok(mapping);
+  const watchmasters = mapping.models.filter(
+    (model) => model.name === "Death Korps Watchmaster",
+  );
+  assert.ok(
+    watchmasters.length >= 2,
+    "fixture requires duplicate Watchmaster catalogue entries",
+  );
+
+  const resolved = resolveNewRecruitUnit(mapping, {
+    unitId: "death-korps-of-krieg",
+    name: "Death Korps of Krieg",
+    modelCount: 20,
+    equipment: [
+      {
+        itemId: "bolt-pistol-death-korps-of-krieg",
+        name: "Bolt pistol",
+        count: 1,
+      },
+      {
+        itemId: "boltgun-death-korps-of-krieg",
+        name: "Boltgun",
+        count: 1,
+      },
+      {
+        itemId: "chainsword-death-korps-of-krieg",
+        name: "Chainsword",
+        count: 1,
+      },
+      {
+        itemId: "close-combat-weapon-death-korps-of-krieg",
+        name: "Close combat weapon",
+        count: 19,
+      },
+      { itemId: "lasgun", name: "Lasgun", count: 17 },
+      { itemId: "meltagun", name: "Meltagun", count: 1 },
+    ],
+  });
+  assert.equal(resolved.ok, true, resolved.ok ? undefined : resolved.reason);
+  if (!resolved.ok) return;
+  const modelCounts = new Map<string, number>();
+  for (const model of resolved.models) {
+    modelCounts.set(
+      model.reference.name,
+      (modelCounts.get(model.reference.name) ?? 0) + model.count,
+    );
+  }
+  assert.equal(modelCounts.get("Death Korps Watchmaster"), 2);
+  assert.equal(modelCounts.get("Death Korps Trooper"), 17);
+  assert.equal(modelCounts.get("Death Korps Trooper w/ Meltagun"), 1);
+});
+
+test("Reiver Squad maps regular models to Reivers instead of extra Sergeants", () => {
+  const mapping =
+    newRecruitCatalogueMappings.factions["adeptus-astartes"].units[
+      "reiver-squad"
+    ];
+  assert.ok(mapping);
+  const resolved = resolveNewRecruitUnit(mapping, {
+    unitId: "reiver-squad",
+    name: "Reiver Squad",
+    modelCount: 10,
+    equipment: [
+      { itemId: "combat-knife", name: "Combat knife", count: 10 },
+      { itemId: "reiver-grav-chute", name: "Reiver grav-chute", count: 1 },
+      {
+        itemId: "special-issue-bolt-pistol-reiver-squad",
+        name: "Special-issue bolt pistol",
+        count: 10,
+      },
+    ],
+  });
+  assert.equal(resolved.ok, true, resolved.ok ? undefined : resolved.reason);
+  if (!resolved.ok) return;
+  assert.deepEqual(
+    resolved.models.map((model) => ({
+      name: model.reference.name,
+      count: model.count,
+    })),
+    [
+      { name: "Reiver Sergeant", count: 1 },
+      { name: "Reivers", count: 9 },
+    ],
+  );
+});
