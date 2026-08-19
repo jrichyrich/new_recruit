@@ -18,15 +18,15 @@ Pass `rosterpilot://` references between calls. Do not copy full roster or artif
 ## Workflow
 
 1. Use `run research` when faction or unit identity is unclear.
-2. Use `run build` with the player's faction, point limit, collection, and preferences. Treat an opponent named in prose as opponent context, not the player's faction.
+2. Use `run build` with the player's faction, point limit, collection, and preferences. Preferences are only `mobility`, `durability`, `objective`, `shooting`, `melee`, `elite`, or `horde`; keep other intent in `request`. `opponentAssumptions` is `{ styleTags, source: "user-stated" }`. Treat an opponent named in prose as opponent context, not the player's faction.
 3. Use the returned `rosterRef` for modifications, matchup analysis, stress tests, and exports. RosterPilot validates after every build or change.
 4. Use `run export` only with a validated roster. Prefer ROSZ for New Recruit editing; use HTML for printing.
 5. New Recruit upload is a side effect. Select the returned `new-recruit.upload` action with `act`, the exact operation revision, and `confirm=true` only after the user explicitly asks to upload.
 6. For deterministic exact-roster composition analysis, call `run matchup` with player and opponent roster refs.
-7. For Tessera stress testing, call `run stress` with `options.opponentFaction`, `suite` (`core-3` or `diverse-9`), `strategy` (`staged` or `full-all`), and:
+7. For faction-portfolio Tessera stress testing, call `run stress` with `options.opponentFaction`, `suite` (`core-3` or `diverse-9`), `strategy` (`staged` or `full-all`), and:
    - `backend="local-engine"` to execute locally.
    - `backend="website"` to stage authenticated Web upload. Then call `act` with `tessera.stress.run` and `confirm=true` after explicit user approval.
-   - For an exact local matchup, pass `selectedPlayerAbilityIds` to apply named bundle-native optional abilities, or `activationMode="envelope"` to inspect every discovered optional activation. Do not combine them. Use `selectedAttachmentBindings` with `side` and exact leader/bodyguard/support selection IDs when the source list explicitly declares an attachment; never infer an ambiguous binding.
+   - For an exact local matchup, pass `opponentRef` and omit `options.opponentFaction`; the scopes are mutually exclusive. Pass `selectedPlayerAbilityIds` to apply named bundle-native optional abilities, or `activationMode="envelope"` to inspect every discovered optional activation. Do not combine them. Use `selectedAttachmentBindings` with `side` and exact leader/bodyguard/support selection IDs when the source list explicitly declares an attachment; never infer an ambiguous binding.
    Catalogue drift defaults to `reject`. Use `options.catalogueDriftMode="diagnostic"` only when the user explicitly requests a provisional diagnostic; `force` is not supported.
 8. After exact Tessera stress completes, present its `matchup-html` artifact for heat maps and probabilities. Prefer this durable report over constructing a one-off visualization; it preserves phase, direction, points tolerance, uncertainty, provenance, warnings, and limitations.
 9. Use `run sync` only when the user asks to refresh data now. A refresh affects future leases, never the snapshot already held by an operation.
