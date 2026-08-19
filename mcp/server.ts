@@ -52,14 +52,20 @@ function compactMcpArtifacts(value: Record<string, unknown>) {
 }
 
 function compactMcpComparison(value: Record<string, unknown>) {
-  const result = object(value.result);
-  const comparison = object(result.opponentComparison);
-  if (Object.keys(comparison).length === 0) return value;
+  const result = value.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return value;
+  }
+  const comparison = (result as Record<string, unknown>).opponentComparison;
+  if (!comparison || typeof comparison !== "object" || Array.isArray(comparison)) {
+    return value;
+  }
   const rosterRef = object(value.roster).rosterRef;
-  const recommended = object(comparison.recommended);
-  const portfolio = object(comparison.portfolio);
-  const alternatives = Array.isArray(comparison.alternatives)
-    ? comparison.alternatives.map((candidate) => {
+  const comparisonRecord = comparison as Record<string, unknown>;
+  const recommended = object(comparisonRecord.recommended);
+  const portfolio = object(comparisonRecord.portfolio);
+  const alternatives = Array.isArray(comparisonRecord.alternatives)
+    ? comparisonRecord.alternatives.map((candidate) => {
         const alternative = object(candidate);
         return {
           contrast: alternative.contrast,
@@ -72,14 +78,14 @@ function compactMcpComparison(value: Record<string, unknown>) {
     result: {
       ...result,
       opponentComparison: {
-        status: comparison.status,
-        scope: comparison.scope,
+        status: comparisonRecord.status,
+        scope: comparisonRecord.scope,
         portfolio: {
           ready: portfolio.ready,
           intended: portfolio.intended,
           complete: portfolio.complete,
         },
-        coverage: comparison.coverage,
+        coverage: comparisonRecord.coverage,
         recommended: {
           applied: recommended.applied,
           ...(recommended.rosterRef !== rosterRef
@@ -90,7 +96,7 @@ function compactMcpComparison(value: Record<string, unknown>) {
           median: recommended.median,
         },
         alternatives,
-        artifact: comparison.artifact,
+        artifact: comparisonRecord.artifact,
       },
     },
   };

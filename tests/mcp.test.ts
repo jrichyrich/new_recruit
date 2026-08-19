@@ -371,9 +371,12 @@ test("returns compact structured results and resource links", async () => {
     });
     assert.ok(built.structuredContent);
     assert.ok(Buffer.byteLength(JSON.stringify(built)) <= 4_096);
-    const rosterRef = (built.structuredContent as {
+    const builtPayload = built.structuredContent as {
       roster: { rosterRef: string };
-    }).roster.rosterRef;
+      result?: { opponentComparison?: unknown };
+    };
+    assert.equal(builtPayload.result?.opponentComparison, undefined);
+    const rosterRef = builtPayload.roster.rosterRef;
 
     const exported = await context.client.callTool({
       name: "run",
@@ -382,6 +385,11 @@ test("returns compact structured results and resource links", async () => {
     const content = exported.content as Array<{ type: string }>;
     assert.ok(content.some((entry) => entry.type === "resource_link"));
     assert.ok(Buffer.byteLength(JSON.stringify(exported)) <= 4_096);
+    const exportedPayload = exported.structuredContent as {
+      result?: { opponentComparison?: unknown; value?: unknown };
+    };
+    assert.equal(exportedPayload.result?.opponentComparison, undefined);
+    assert.equal(exportedPayload.result?.value, undefined);
 
     const compared = await context.client.callTool({
       name: "run",
@@ -403,6 +411,15 @@ test("returns compact structured results and resource links", async () => {
       ),
     );
     assert.ok(Buffer.byteLength(JSON.stringify(compared)) <= 4_096);
+    const comparison = (
+      compared.structuredContent as {
+        result?: {
+          opponentComparison?: { status?: unknown; coverage?: unknown };
+        };
+      }
+    ).result?.opponentComparison;
+    assert.equal(typeof comparison?.status, "string");
+    assert.equal(typeof comparison?.coverage, "object");
   } finally {
     await context.client.close();
     await context.server.close();

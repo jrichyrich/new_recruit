@@ -2010,8 +2010,14 @@ export function searchUnits(input: {
   includeLegends?: boolean;
   limit?: number;
 }): ResultEnvelope<UnitSummary[]> {
+  const faction = resolveFaction(input.faction);
+  if (!faction) {
+    return envelope<UnitSummary[]>(null, [
+      issue("FACTION_NOT_FOUND", `No faction matched "${input.faction ?? ""}".`),
+    ]);
+  }
   const inventory = internalFactionUnitInventory({
-    faction: input.faction,
+    faction: faction.id,
     includeLegends: input.includeLegends,
   });
   if (!inventory.ok || !inventory.data) return inventory;
@@ -2019,7 +2025,7 @@ export function searchUnits(input: {
   const desiredTags = new Set(input.tags ?? []);
   const matches = inventory.data
     .filter((unit) => {
-      const raw = resolveUnit(unit.id, input.faction);
+      const raw = resolveUnit(unit.id, faction.id);
       if (raw && !isMatchedPlayUnit(raw)) return false;
       const textMatch =
         !normalized ||

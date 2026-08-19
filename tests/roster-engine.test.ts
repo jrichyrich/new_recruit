@@ -122,6 +122,24 @@ test("searches and builds real faction data across the supported catalog", () =>
     ),
   );
 
+  const spaceWolvesByName = searchUnits({
+    faction: "Space Wolves",
+    query: "",
+    limit: 100,
+  });
+  assert.equal(spaceWolvesByName.ok, true);
+  assert.ok(
+    spaceWolvesByName.data?.every((unit) => unit.pointsFrom > 0),
+    "Combat Patrol-only datasheets leaked into name-based matched-play research",
+  );
+  assert.ok(
+    spaceWolvesByName.data?.every((unit) =>
+      !/askar|assault force|sanguinary spearhead|vengeful brethren/i.test(
+        unit.name,
+      )
+    ),
+  );
+
   const aeldari = buildRoster({
     faction: "aeldari",
     pointsLimit: 1000,

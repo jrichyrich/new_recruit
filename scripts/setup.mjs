@@ -21,6 +21,16 @@ const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const ensureCurrentNextStep =
   'Run "npm run rosterpilot -- agent ensure-current" from this checkout.';
+const newRecruitConfigureNextStep =
+  'Run "npm run rosterpilot -- new-recruit configure" to securely configure the credential.';
+const tesseraConfigureNextStep =
+  'Run "npm run rosterpilot -- tessera configure" to securely configure the licence key.';
+
+function providerAutomationNextSteps(provider, configureNextStep) {
+  return provider?.credentialState === "not-configured"
+    ? [configureNextStep]
+    : [ensureCurrentNextStep];
+}
 
 export class SetupError extends Error {}
 
@@ -1122,7 +1132,12 @@ function diagnoseLocalAutomation(profile, dependencies, results) {
       : newRecruitDisabled
         ? "new Keychain credential release and sign-in are disabled pending an authenticated native consumer; local exports remain available and an existing browser session may remain active"
         : `automation is unavailable${newRecruitProvider?.credentialState ? `; credential state is ${newRecruitProvider.credentialState}` : ""}`,
-    newRecruitReady || newRecruitDisabled ? [] : [ensureCurrentNextStep],
+    newRecruitReady || newRecruitDisabled
+      ? []
+      : providerAutomationNextSteps(
+        newRecruitProvider,
+        newRecruitConfigureNextStep,
+      ),
   );
 
   if (profile !== "tessera") return;
@@ -1140,7 +1155,12 @@ function diagnoseLocalAutomation(profile, dependencies, results) {
       : tesseraDisabled
         ? "Tessera Website credential release is disabled pending an authenticated native consumer; the local-engine backend remains available"
       : `automation is unavailable${tesseraProvider?.credentialState ? `; credential state is ${tesseraProvider.credentialState}` : ""}`,
-    tesseraReady || tesseraDisabled ? [] : [ensureCurrentNextStep],
+    tesseraReady || tesseraDisabled
+      ? []
+      : providerAutomationNextSteps(
+        tesseraProvider,
+        tesseraConfigureNextStep,
+      ),
   );
 }
 
