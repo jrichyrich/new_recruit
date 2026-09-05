@@ -47,7 +47,6 @@ import {
   type TesseraStressFrozenOpponentArtifact,
   type TesseraStressFinding,
   type TesseraStressPortfolio,
-  type TesseraStressPortfolioPreview,
   type TesseraStressPortfolioItem,
   type TesseraStressRepresentative,
   type TesseraStressPreparationFailureReport,
@@ -223,11 +222,6 @@ export type TesseraStressOptions = WriteOptions & {
   retryOwner?: "stress-workflow" | "durable-job";
   /** Internal outer durable-job attempt number (1..5). */
   durableAttemptNumber?: number;
-  /**
-   * Frozen local preview supplied by the build-and-stress workflow. It is
-   * revalidated below and prevents preview/execution regeneration drift.
-   */
-  portfolioPreview?: TesseraStressPortfolioPreview;
   /** Caller-supplied full deterministic contract for the stress workflow. */
   scenarioContract?: TesseraFrozenScenarioContract[];
 };
@@ -9420,45 +9414,20 @@ export async function runRosterStressTest(
       }
     }
   } else {
-    const frozenPreview = options.portfolioPreview;
-    if (
-      frozenPreview &&
-      (
-        frozenPreview.portfolio.factionId !== opponent.factionId ||
-        frozenPreview.portfolio.pointsLimit !==
-          playerRoster.pointsLimit ||
-        frozenPreview.portfolio.suite !== configuration.suite
-      )
-    ) {
-      return failure(
-        "TESSERA_STRESS_FROZEN_PORTFOLIO_MISMATCH",
-        "The frozen portfolio preview does not match the requested opponent faction, points limit, or suite.",
-        validation.warnings,
-      );
-    }
-    const generated = frozenPreview
-      ? {
-          ok: true,
-          data: frozenPreview.portfolio,
-          violations: [],
-          warnings: [],
-        }
-      : generateFactionStressPortfolio({
-          faction: opponent.factionId,
-          pointsLimit: playerRoster.pointsLimit,
-          suite: configuration.suite,
-          pointsTolerancePercent:
-            configuration.pointsTolerancePercent,
-          allowLegends: false,
-          artifactMode:
-            selectedSimulationBackend(
-              simulationBackend,
-              dependencies.personalLocalAttestation,
-            ) ===
-            "local-engine"
-              ? "canonical"
-              : "new-recruit",
-        });
+    const generated = generateFactionStressPortfolio({
+      faction: opponent.factionId,
+      pointsLimit: playerRoster.pointsLimit,
+      suite: configuration.suite,
+      pointsTolerancePercent: configuration.pointsTolerancePercent,
+      allowLegends: false,
+      artifactMode:
+        selectedSimulationBackend(
+          simulationBackend,
+          dependencies.personalLocalAttestation,
+        ) === "local-engine"
+          ? "canonical"
+          : "new-recruit",
+    });
     if (!generated.ok || !generated.data) {
       return {
         ok: false,
